@@ -359,9 +359,9 @@ pub const SystemReport = struct {
         // Storage info
         self.collectStorageInfo();
 
-        // GPU info (Windows only via DXGI)
+        // GPU info (Windows only via Registry, like OSHI)
         if (builtin.os.tag == .windows) {
-            self.collectGpuInfo();
+            self.collectGpuInfoFromRegistry();
         }
     }
 
@@ -613,6 +613,17 @@ pub const SystemReport = struct {
 
     extern "advapi32" fn RegCloseKey(hKey: HKEY) callconv(.winapi) i32;
 
+    extern "advapi32" fn RegEnumKeyExA(
+        hKey: HKEY,
+        dwIndex: u32,
+        lpName: [*]u8,
+        lpcchName: *u32,
+        lpReserved: ?*u32,
+        lpClass: ?[*]u8,
+        lpcchClass: ?*u32,
+        lpftLastWriteTime: ?*anyopaque,
+    ) callconv(.winapi) i32;
+
     fn getWindowsRegistryFrequency() ?u32 {
         const KEY_READ = 0x20019;
         var hKey: HKEY = undefined;
@@ -645,6 +656,110 @@ pub const SystemReport = struct {
         }
 
         return freq_mhz;
+    }
+
+    // ==================== Registry-based GPU Info (like OSHI) ====================
+    fn collectGpuInfoFromRegistry(self: *Self) void {
+        const KEY_READ = 0x20019;
+        const GPU_CLASS_GUID = "SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}";
+
+        var hClassKey: HKEY = undefined;
+        if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, GPU_CLASS_GUID, 0, KEY_READ, &hClassKey) != 0) {
+            return;
+        }
+        defer _ = RegCloseKey(hClassKey);
+
+        var gpu_index: u32 = 0;
+        var subkey_index: u32 = 0;
+
+        while (subkey_index < 32) : (subkey_index += 1) { // Max 32 subkeys to check
+            var subkey_name: [16]u8 = undefined;
+            var name_len: u32 = subkey_name.len;
+
+            if (RegEnumKeyExA(hClassKey, subkey_index, &subkey_name, &name_len, null, null, null, null) != 0) {
+                break;
+            }
+
+            // Build full subkey path
+            var full_path: [256]u8 = undefined;
+            const path_len = std.fmt.bufPrint(&full_path, "{s}\\{s}", .{ GPU_CLASS_GUID, subkey_name[0..name_len] }) catch continue;
+            full_path[path_len.len] = 0;
+
+            var hDevKey: HKEY = undefined;
+            if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, @ptrCast(full_path[0..path_len.len :0]), 0, KEY_READ, &hDevKey) != 0) {
+                continue;
+            }
+            defer _ = RegCloseKey(hDevKey);
+
+            // Read DriverDesc (GPU name)
+            var name_buf: [256]u8 = undefined;
+            var name_size: u32 = name_buf.len;
+            var reg_type: u32 = 0;
+
+            if (RegQueryValueExA(hDevKey, "DriverDesc", null, &reg_type, @ptrCast(&name_buf), &name_size) != 0) {
+                continue; // Skip entries without DriverDesc (not a real GPU)
+            }
+
+            // We found a GPU
+            const gpu_name = std.fmt.allocPrint(self.allocator, "{s}", .{name_buf[0 .. name_size - 1]}) catch continue;
+            self.allocated_values.append(self.allocator, gpu_name) catch {
+                self.allocator.free(gpu_name);
+                continue;
+            };
+
+            // Build keys for this GPU
+            const key_name = std.fmt.allocPrint(self.allocator, "Graphics card #{d} name", .{gpu_index}) catch continue;
+            const key_vendor = std.fmt.allocPrint(self.allocator, "Graphics card #{d} vendor", .{gpu_index}) catch continue;
+            const key_vram = std.fmt.allocPrint(self.allocator, "Graphics card #{d} VRAM (MiB)", .{gpu_index}) catch continue;
+            const key_driver = std.fmt.allocPrint(self.allocator, "Graphics card #{d} versionInfo", .{gpu_index}) catch continue;
+
+            self.allocated_values.append(self.allocator, key_name) catch {};
+            self.allocated_values.append(self.allocator, key_vendor) catch {};
+            self.allocated_values.append(self.allocator, key_vram) catch {};
+            self.allocated_values.append(self.allocator, key_driver) catch {};
+
+            self.setDetail(key_name, gpu_name);
+
+            // Read ProviderName (Vendor)
+            var vendor_buf: [128]u8 = undefined;
+            var vendor_size: u32 = vendor_buf.len;
+            if (RegQueryValueExA(hDevKey, "ProviderName", null, null, @ptrCast(&vendor_buf), &vendor_size) == 0 and vendor_size > 1) {
+                const vendor = std.fmt.allocPrint(self.allocator, "{s}", .{vendor_buf[0 .. vendor_size - 1]}) catch "Unknown";
+                self.allocated_values.append(self.allocator, vendor) catch {};
+                self.setDetail(key_vendor, vendor);
+            } else {
+                self.setDetail(key_vendor, "Unknown");
+            }
+
+            // Read DriverVersion
+            var driver_buf: [64]u8 = undefined;
+            var driver_size: u32 = driver_buf.len;
+            if (RegQueryValueExA(hDevKey, "DriverVersion", null, null, @ptrCast(&driver_buf), &driver_size) == 0 and driver_size > 1) {
+                const driver = std.fmt.allocPrint(self.allocator, "{s}", .{driver_buf[0 .. driver_size - 1]}) catch "Unknown";
+                self.allocated_values.append(self.allocator, driver) catch {};
+                self.setDetail(key_driver, driver);
+            }
+
+            // Read VRAM - try qwMemorySize (QWORD) first, then HardwareInformation.MemorySize (DWORD)
+            var vram_bytes: u64 = 0;
+            var vram_size: u32 = @sizeOf(u64);
+            var vram_type: u32 = 0;
+
+            if (RegQueryValueExA(hDevKey, "HardwareInformation.qwMemorySize", null, &vram_type, @ptrCast(&vram_bytes), &vram_size) == 0) {
+                const vram_mib = vram_bytes / (1024 * 1024);
+                self.setDetailFmt(key_vram, "{d:.2}", .{@as(f64, @floatFromInt(vram_mib))});
+            } else {
+                // Try 32-bit value
+                var vram_dword: u32 = 0;
+                vram_size = @sizeOf(u32);
+                if (RegQueryValueExA(hDevKey, "HardwareInformation.MemorySize", null, null, @ptrCast(&vram_dword), &vram_size) == 0) {
+                    const vram_mib = vram_dword / (1024 * 1024);
+                    self.setDetailFmt(key_vram, "{d:.2}", .{@as(f64, @floatFromInt(vram_mib))});
+                }
+            }
+
+            gpu_index += 1;
+        }
     }
 
     // ==================== WMI for Memory Slot Info ====================
@@ -1222,151 +1337,6 @@ pub const SystemReport = struct {
         Data3: u16,
         Data4: [8]u8,
     };
-
-    const IID_IDXGIFactory = GUID{
-        .Data1 = 0x7b7166ec,
-        .Data2 = 0x21c7,
-        .Data3 = 0x44ae,
-        .Data4 = .{ 0xb2, 0x1a, 0xc9, 0xae, 0x32, 0x1a, 0xe3, 0x69 },
-    };
-
-    const DXGI_ADAPTER_DESC = extern struct {
-        Description: [128]u16,
-        VendorId: u32,
-        DeviceId: u32,
-        SubSysId: u32,
-        Revision: u32,
-        DedicatedVideoMemory: usize,
-        DedicatedSystemMemory: usize,
-        SharedSystemMemory: usize,
-        AdapterLuid: extern struct { LowPart: u32, HighPart: i32 },
-    };
-
-    const IDXGIAdapter = extern struct {
-        vtable: *const VTable,
-
-        const VTable = extern struct {
-            // IUnknown
-            QueryInterface: *const fn (*IDXGIAdapter, *const GUID, *?*anyopaque) callconv(.winapi) i32,
-            AddRef: *const fn (*IDXGIAdapter) callconv(.winapi) u32,
-            Release: *const fn (*IDXGIAdapter) callconv(.winapi) u32,
-            // IDXGIObject
-            SetPrivateData: *const anyopaque,
-            SetPrivateDataInterface: *const anyopaque,
-            GetPrivateData: *const anyopaque,
-            GetParent: *const anyopaque,
-            // IDXGIAdapter
-            EnumOutputs: *const anyopaque,
-            GetDesc: *const fn (*IDXGIAdapter, *DXGI_ADAPTER_DESC) callconv(.winapi) i32,
-        };
-
-        fn Release(self: *IDXGIAdapter) void {
-            _ = self.vtable.Release(self);
-        }
-
-        fn GetDesc(self: *IDXGIAdapter, desc: *DXGI_ADAPTER_DESC) i32 {
-            return self.vtable.GetDesc(self, desc);
-        }
-    };
-
-    const IDXGIFactory = extern struct {
-        vtable: *const VTable,
-
-        const VTable = extern struct {
-            // IUnknown
-            QueryInterface: *const fn (*IDXGIFactory, *const GUID, *?*anyopaque) callconv(.winapi) i32,
-            AddRef: *const fn (*IDXGIFactory) callconv(.winapi) u32,
-            Release: *const fn (*IDXGIFactory) callconv(.winapi) u32,
-            // IDXGIObject
-            SetPrivateData: *const anyopaque,
-            SetPrivateDataInterface: *const anyopaque,
-            GetPrivateData: *const anyopaque,
-            GetParent: *const anyopaque,
-            // IDXGIFactory
-            EnumAdapters: *const fn (*IDXGIFactory, u32, *?*IDXGIAdapter) callconv(.winapi) i32,
-        };
-
-        fn Release(self: *IDXGIFactory) void {
-            _ = self.vtable.Release(self);
-        }
-
-        fn EnumAdapters(self: *IDXGIFactory, index: u32, adapter: *?*IDXGIAdapter) i32 {
-            return self.vtable.EnumAdapters(self, index, adapter);
-        }
-    };
-
-    extern "dxgi" fn CreateDXGIFactory(riid: *const GUID, ppFactory: *?*IDXGIFactory) callconv(.winapi) i32;
-
-    fn collectGpuInfo(self: *Self) void {
-        var factory: ?*IDXGIFactory = null;
-        const hr = CreateDXGIFactory(&IID_IDXGIFactory, &factory);
-
-        if (hr < 0 or factory == null) {
-            self.setDetail("Graphics", "Failed to create DXGI factory");
-            return;
-        }
-        defer factory.?.Release();
-
-        var gpu_index: u32 = 0;
-        while (gpu_index < 8) : (gpu_index += 1) { // Max 8 GPUs
-            var adapter: ?*IDXGIAdapter = null;
-            const enum_hr = factory.?.EnumAdapters(gpu_index, &adapter);
-
-            if (enum_hr < 0 or adapter == null) break;
-            defer adapter.?.Release();
-
-            var desc: DXGI_ADAPTER_DESC = undefined;
-            if (adapter.?.GetDesc(&desc) >= 0) {
-                // Convert wide string (UTF-16) to UTF-8
-                var name_buf: [256]u8 = undefined;
-                var name_len: usize = 0;
-                for (desc.Description) |c| {
-                    if (c == 0) break;
-                    if (c < 128) {
-                        if (name_len < name_buf.len - 1) {
-                            name_buf[name_len] = @truncate(c);
-                            name_len += 1;
-                        }
-                    }
-                }
-
-                // Allocate GPU name on heap (stack buffer becomes invalid after loop)
-                const gpu_name = std.fmt.allocPrint(self.allocator, "{s}", .{name_buf[0..name_len]}) catch continue;
-                self.allocated_values.append(self.allocator, gpu_name) catch {
-                    self.allocator.free(gpu_name);
-                    continue;
-                };
-
-                const vram_mib = desc.DedicatedVideoMemory / (1024 * 1024);
-
-                // Get vendor name from VendorId
-                const vendor = switch (desc.VendorId) {
-                    0x10DE => "NVIDIA",
-                    0x1002 => "AMD",
-                    0x8086 => "Intel",
-                    0x1414 => "Microsoft",
-                    else => "Unknown",
-                };
-
-                // Build key names with GPU index - must allocate to avoid stack issues
-                const key_name_str = std.fmt.allocPrint(self.allocator, "Graphics card #{d} name", .{gpu_index}) catch continue;
-                const key_vendor_str = std.fmt.allocPrint(self.allocator, "Graphics card #{d} vendor", .{gpu_index}) catch continue;
-                const key_vram_str = std.fmt.allocPrint(self.allocator, "Graphics card #{d} VRAM (MiB)", .{gpu_index}) catch continue;
-                const key_device_str = std.fmt.allocPrint(self.allocator, "Graphics card #{d} deviceId", .{gpu_index}) catch continue;
-
-                // Track allocated keys for cleanup
-                self.allocated_values.append(self.allocator, key_name_str) catch {};
-                self.allocated_values.append(self.allocator, key_vendor_str) catch {};
-                self.allocated_values.append(self.allocator, key_vram_str) catch {};
-                self.allocated_values.append(self.allocator, key_device_str) catch {};
-
-                self.setDetail(key_name_str, gpu_name);
-                self.setDetail(key_vendor_str, vendor);
-                self.setDetailFmt(key_vram_str, "{d}", .{vram_mib});
-                self.setDetailFmt(key_device_str, "0x{X:0>4}", .{desc.DeviceId});
-            }
-        }
-    }
 
     // Windows MEMORYSTATUSEX structure
     const MEMORYSTATUSEX = extern struct {
