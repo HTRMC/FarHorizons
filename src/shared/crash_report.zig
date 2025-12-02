@@ -299,14 +299,19 @@ pub const CrashReportCategory = struct {
 pub const SystemReport = struct {
     const Self = @This();
 
+    const Entry = struct {
+        key: []const u8,
+        value: []const u8,
+    };
+
     allocator: std.mem.Allocator,
-    entries: std.StringHashMap([]const u8),
+    entries: std.ArrayListUnmanaged(Entry),
     allocated_values: std.ArrayListUnmanaged([]const u8),
 
     pub fn init(allocator: std.mem.Allocator) Self {
         var self = Self{
             .allocator = allocator,
-            .entries = std.StringHashMap([]const u8).init(allocator),
+            .entries = .{},
             .allocated_values = .{},
         };
         self.collectSystemInfo();
@@ -319,7 +324,7 @@ pub const SystemReport = struct {
             self.allocator.free(value);
         }
         self.allocated_values.deinit(self.allocator);
-        self.entries.deinit();
+        self.entries.deinit(self.allocator);
     }
 
     fn collectSystemInfo(self: *Self) void {
@@ -345,6 +350,11 @@ pub const SystemReport = struct {
 
         // Memory info
         self.collectMemoryInfo();
+
+        // Memory slot info (Windows WMI)
+        if (builtin.os.tag == .windows) {
+            self.collectMemorySlotInfo();
+        }
 
         // Storage info
         self.collectStorageInfo();
@@ -404,16 +414,781 @@ pub const SystemReport = struct {
     }
 
     fn collectCpuInfo(self: *Self) void {
-        const cpu_count = std.Thread.getCpuCount() catch 0;
-        self.setDetailFmt("CPUs", "{d}", .{cpu_count});
+        // On x86/x86_64, use CPUID for detailed info
+        if (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .x86) {
+            self.collectCpuidInfo();
+        } else {
+            // Fallback for other architectures
+            const cpu_count = std.Thread.getCpuCount() catch 0;
+            self.setDetailFmt("CPUs", "{d}", .{cpu_count});
+            self.setDetail("CPU Architecture", @tagName(builtin.cpu.arch));
+        }
+    }
 
-        // CPU info from builtin
-        self.setDetail("CPU Architecture", @tagName(builtin.cpu.arch));
+    fn collectCpuidInfo(self: *Self) void {
+        // CPUID function 0: Get vendor string
+        const vendor_result = cpuid(0, 0);
+        var vendor_buf: [12]u8 = undefined;
+        @memcpy(vendor_buf[0..4], @as(*const [4]u8, @ptrCast(&vendor_result.ebx)));
+        @memcpy(vendor_buf[4..8], @as(*const [4]u8, @ptrCast(&vendor_result.edx)));
+        @memcpy(vendor_buf[8..12], @as(*const [4]u8, @ptrCast(&vendor_result.ecx)));
 
-        // On x86_64, try to get more info via std library
-        if (builtin.cpu.arch == .x86_64) {
-            const cpu_model = builtin.cpu.model;
-            self.setDetail("CPU Model", cpu_model.name);
+        const vendor_str = std.fmt.allocPrint(self.allocator, "{s}", .{vendor_buf[0..12]}) catch "Unknown";
+        self.allocated_values.append(self.allocator, vendor_str) catch {};
+        self.setDetail("Processor Vendor", vendor_str);
+
+        // CPUID function 1: Get family, model, stepping
+        const info_result = cpuid(1, 0);
+        const stepping = info_result.eax & 0xF;
+        const base_model = (info_result.eax >> 4) & 0xF;
+        const base_family = (info_result.eax >> 8) & 0xF;
+        const ext_model = (info_result.eax >> 16) & 0xF;
+        const ext_family = (info_result.eax >> 20) & 0xFF;
+
+        var family: u32 = base_family;
+        var model: u32 = base_model;
+
+        if (base_family == 0xF) {
+            family = base_family + ext_family;
+        }
+        if (base_family == 0x6 or base_family == 0xF) {
+            model = base_model + (ext_model << 4);
+        }
+
+        const identifier = std.fmt.allocPrint(
+            self.allocator,
+            "{s} Family {d} Model {d} Stepping {d}",
+            .{ vendor_buf[0..12], family, model, stepping },
+        ) catch "Unknown";
+        self.allocated_values.append(self.allocator, identifier) catch {};
+        self.setDetail("Identifier", identifier);
+
+        // CPUID function 0x80000002-0x80000004: Get processor brand string
+        const max_ext = cpuid(0x80000000, 0).eax;
+        if (max_ext >= 0x80000004) {
+            var brand_buf: [48]u8 = undefined;
+            const brand2 = cpuid(0x80000002, 0);
+            const brand3 = cpuid(0x80000003, 0);
+            const brand4 = cpuid(0x80000004, 0);
+
+            @memcpy(brand_buf[0..4], @as(*const [4]u8, @ptrCast(&brand2.eax)));
+            @memcpy(brand_buf[4..8], @as(*const [4]u8, @ptrCast(&brand2.ebx)));
+            @memcpy(brand_buf[8..12], @as(*const [4]u8, @ptrCast(&brand2.ecx)));
+            @memcpy(brand_buf[12..16], @as(*const [4]u8, @ptrCast(&brand2.edx)));
+            @memcpy(brand_buf[16..20], @as(*const [4]u8, @ptrCast(&brand3.eax)));
+            @memcpy(brand_buf[20..24], @as(*const [4]u8, @ptrCast(&brand3.ebx)));
+            @memcpy(brand_buf[24..28], @as(*const [4]u8, @ptrCast(&brand3.ecx)));
+            @memcpy(brand_buf[28..32], @as(*const [4]u8, @ptrCast(&brand3.edx)));
+            @memcpy(brand_buf[32..36], @as(*const [4]u8, @ptrCast(&brand4.eax)));
+            @memcpy(brand_buf[36..40], @as(*const [4]u8, @ptrCast(&brand4.ebx)));
+            @memcpy(brand_buf[40..44], @as(*const [4]u8, @ptrCast(&brand4.ecx)));
+            @memcpy(brand_buf[44..48], @as(*const [4]u8, @ptrCast(&brand4.edx)));
+
+            // Trim leading spaces and find null terminator
+            var start: usize = 0;
+            while (start < brand_buf.len and brand_buf[start] == ' ') : (start += 1) {}
+            var end: usize = brand_buf.len;
+            for (brand_buf, 0..) |c, i| {
+                if (c == 0) {
+                    end = i;
+                    break;
+                }
+            }
+
+            if (end > start) {
+                const name = std.fmt.allocPrint(self.allocator, "{s}", .{brand_buf[start..end]}) catch "Unknown";
+                self.allocated_values.append(self.allocator, name) catch {};
+                self.setDetail("Processor Name", name);
+            }
+        }
+
+        // Get microarchitecture with pretty name
+        self.setDetail("Microarchitecture", getPrettyMicroarchName(builtin.cpu.model.name));
+
+        // Get CPU frequency
+        self.collectCpuFrequency();
+
+        // Logical CPU count
+        const logical_cpus = std.Thread.getCpuCount() catch 0;
+        self.setDetailFmt("Number of logical CPUs", "{d}", .{logical_cpus});
+
+        // Try to get physical core count (Windows-specific)
+        if (builtin.os.tag == .windows) {
+            self.collectWindowsCpuTopology();
+        }
+    }
+
+    fn collectCpuFrequency(self: *Self) void {
+        // Method 1: Try CPUID leaf 0x16 (Intel Skylake+, some AMD)
+        // This leaf returns base frequency, max frequency, and bus frequency in MHz
+        const max_leaf = cpuid(0, 0).eax;
+
+        if (max_leaf >= 0x16) {
+            const freq_leaf = cpuid(0x16, 0);
+            const base_freq_mhz = freq_leaf.eax & 0xFFFF; // Base frequency in MHz
+            const max_freq_mhz = freq_leaf.ebx & 0xFFFF; // Max frequency in MHz
+
+            if (base_freq_mhz > 0) {
+                const freq_ghz = @as(f64, @floatFromInt(base_freq_mhz)) / 1000.0;
+                self.setDetailFmt("Frequency (GHz)", "{d:.2}", .{freq_ghz});
+                return;
+            }
+
+            // Some CPUs report max but not base
+            if (max_freq_mhz > 0) {
+                const freq_ghz = @as(f64, @floatFromInt(max_freq_mhz)) / 1000.0;
+                self.setDetailFmt("Frequency (GHz)", "{d:.2}", .{freq_ghz});
+                return;
+            }
+        }
+
+        // Method 2: Parse frequency from brand string (like OSHI does)
+        // Look for patterns like "@ 2.00GHz" or "2.39 GHz" in the processor name
+        const max_ext = cpuid(0x80000000, 0).eax;
+        if (max_ext >= 0x80000004) {
+            var brand_buf: [48]u8 = undefined;
+            const brand2 = cpuid(0x80000002, 0);
+            const brand3 = cpuid(0x80000003, 0);
+            const brand4 = cpuid(0x80000004, 0);
+
+            @memcpy(brand_buf[0..4], @as(*const [4]u8, @ptrCast(&brand2.eax)));
+            @memcpy(brand_buf[4..8], @as(*const [4]u8, @ptrCast(&brand2.ebx)));
+            @memcpy(brand_buf[8..12], @as(*const [4]u8, @ptrCast(&brand2.ecx)));
+            @memcpy(brand_buf[12..16], @as(*const [4]u8, @ptrCast(&brand2.edx)));
+            @memcpy(brand_buf[16..20], @as(*const [4]u8, @ptrCast(&brand3.eax)));
+            @memcpy(brand_buf[20..24], @as(*const [4]u8, @ptrCast(&brand3.ebx)));
+            @memcpy(brand_buf[24..28], @as(*const [4]u8, @ptrCast(&brand3.ecx)));
+            @memcpy(brand_buf[28..32], @as(*const [4]u8, @ptrCast(&brand3.edx)));
+            @memcpy(brand_buf[32..36], @as(*const [4]u8, @ptrCast(&brand4.eax)));
+            @memcpy(brand_buf[36..40], @as(*const [4]u8, @ptrCast(&brand4.ebx)));
+            @memcpy(brand_buf[40..44], @as(*const [4]u8, @ptrCast(&brand4.ecx)));
+            @memcpy(brand_buf[44..48], @as(*const [4]u8, @ptrCast(&brand4.edx)));
+
+            // Find null terminator
+            var brand_len: usize = brand_buf.len;
+            for (brand_buf, 0..) |c, i| {
+                if (c == 0) {
+                    brand_len = i;
+                    break;
+                }
+            }
+
+            // Parse frequency from brand string
+            if (parseFrequencyFromBrand(brand_buf[0..brand_len])) |freq_ghz| {
+                self.setDetailFmt("Frequency (GHz)", "{d:.2}", .{freq_ghz});
+                return;
+            }
+        }
+
+        // Method 3: Windows Registry (fallback for AMD and others)
+        // HKEY_LOCAL_MACHINE\HARDWARE\DESCRIPTION\System\CentralProcessor\0\~MHz
+        if (builtin.os.tag == .windows) {
+            if (getWindowsRegistryFrequency()) |freq_mhz| {
+                const freq_ghz = @as(f64, @floatFromInt(freq_mhz)) / 1000.0;
+                self.setDetailFmt("Frequency (GHz)", "{d:.2}", .{freq_ghz});
+            }
+        }
+    }
+
+    // Windows Registry API
+    const HKEY = *opaque {};
+    const HKEY_LOCAL_MACHINE: HKEY = @ptrFromInt(0x80000002);
+
+    extern "advapi32" fn RegOpenKeyExA(
+        hKey: HKEY,
+        lpSubKey: [*:0]const u8,
+        ulOptions: u32,
+        samDesired: u32,
+        phkResult: *HKEY,
+    ) callconv(.winapi) i32;
+
+    extern "advapi32" fn RegQueryValueExA(
+        hKey: HKEY,
+        lpValueName: [*:0]const u8,
+        lpReserved: ?*u32,
+        lpType: ?*u32,
+        lpData: ?*u8,
+        lpcbData: ?*u32,
+    ) callconv(.winapi) i32;
+
+    extern "advapi32" fn RegCloseKey(hKey: HKEY) callconv(.winapi) i32;
+
+    fn getWindowsRegistryFrequency() ?u32 {
+        const KEY_READ = 0x20019;
+        var hKey: HKEY = undefined;
+
+        // Open the CPU registry key
+        if (RegOpenKeyExA(
+            HKEY_LOCAL_MACHINE,
+            "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+            0,
+            KEY_READ,
+            &hKey,
+        ) != 0) {
+            return null;
+        }
+        defer _ = RegCloseKey(hKey);
+
+        // Query the ~MHz value
+        var freq_mhz: u32 = 0;
+        var data_size: u32 = @sizeOf(u32);
+
+        if (RegQueryValueExA(
+            hKey,
+            "~MHz",
+            null,
+            null,
+            @ptrCast(&freq_mhz),
+            &data_size,
+        ) != 0) {
+            return null;
+        }
+
+        return freq_mhz;
+    }
+
+    // ==================== WMI for Memory Slot Info ====================
+    // COM GUIDs
+    const CLSID_WbemLocator = GUID{
+        .Data1 = 0x4590f811,
+        .Data2 = 0x1d3a,
+        .Data3 = 0x11d0,
+        .Data4 = .{ 0x89, 0x1f, 0x00, 0xaa, 0x00, 0x4b, 0x2e, 0x24 },
+    };
+
+    const IID_IWbemLocator = GUID{
+        .Data1 = 0xdc12a687,
+        .Data2 = 0x737f,
+        .Data3 = 0x11cf,
+        .Data4 = .{ 0x88, 0x4d, 0x00, 0xaa, 0x00, 0x4b, 0x2e, 0x24 },
+    };
+
+    // BSTR type (wide string with length prefix)
+    const BSTR = [*:0]u16;
+
+    // COM interfaces
+    const IUnknown = extern struct {
+        vtable: *const VTable,
+
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IUnknown, *const GUID, *?*anyopaque) callconv(.winapi) i32,
+            AddRef: *const fn (*IUnknown) callconv(.winapi) u32,
+            Release: *const fn (*IUnknown) callconv(.winapi) u32,
+        };
+    };
+
+    const IWbemLocator = extern struct {
+        vtable: *const VTable,
+
+        const VTable = extern struct {
+            // IUnknown
+            QueryInterface: *const anyopaque,
+            AddRef: *const anyopaque,
+            Release: *const fn (*IWbemLocator) callconv(.winapi) u32,
+            // IWbemLocator
+            ConnectServer: *const fn (
+                *IWbemLocator,
+                ?BSTR, // strNetworkResource
+                ?BSTR, // strUser
+                ?BSTR, // strPassword
+                ?BSTR, // strLocale
+                i32, // lSecurityFlags
+                ?BSTR, // strAuthority
+                ?*anyopaque, // pCtx
+                *?*IWbemServices, // ppNamespace
+            ) callconv(.winapi) i32,
+        };
+
+        fn Release(self: *IWbemLocator) void {
+            _ = self.vtable.Release(self);
+        }
+
+        fn ConnectServer(self: *IWbemLocator, resource: BSTR, services: *?*IWbemServices) i32 {
+            return self.vtable.ConnectServer(self, resource, null, null, null, 0, null, null, services);
+        }
+    };
+
+    const IWbemServices = extern struct {
+        vtable: *const VTable,
+
+        const VTable = extern struct {
+            // IUnknown (3)
+            QueryInterface: *const anyopaque,
+            AddRef: *const anyopaque,
+            Release: *const fn (*IWbemServices) callconv(.winapi) u32,
+            // IWbemServices - many methods, we only need ExecQuery at index 20
+            _padding: [17]*const anyopaque,
+            ExecQuery: *const fn (
+                *IWbemServices,
+                BSTR, // strQueryLanguage
+                BSTR, // strQuery
+                i32, // lFlags
+                ?*anyopaque, // pCtx
+                *?*IEnumWbemClassObject, // ppEnum
+            ) callconv(.winapi) i32,
+        };
+
+        fn Release(self: *IWbemServices) void {
+            _ = self.vtable.Release(self);
+        }
+
+        fn ExecQuery(self: *IWbemServices, lang: BSTR, query: BSTR, enumerator: *?*IEnumWbemClassObject) i32 {
+            const WBEM_FLAG_FORWARD_ONLY = 0x20;
+            const WBEM_FLAG_RETURN_IMMEDIATELY = 0x10;
+            return self.vtable.ExecQuery(self, lang, query, WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, null, enumerator);
+        }
+    };
+
+    const IEnumWbemClassObject = extern struct {
+        vtable: *const VTable,
+
+        const VTable = extern struct {
+            // IUnknown (3)
+            QueryInterface: *const anyopaque,
+            AddRef: *const anyopaque,
+            Release: *const fn (*IEnumWbemClassObject) callconv(.winapi) u32,
+            // IEnumWbemClassObject
+            Reset: *const anyopaque,
+            Next: *const fn (
+                *IEnumWbemClassObject,
+                i32, // lTimeout
+                u32, // uCount
+                *?*IWbemClassObject, // apObjects
+                *u32, // puReturned
+            ) callconv(.winapi) i32,
+        };
+
+        fn Release(self: *IEnumWbemClassObject) void {
+            _ = self.vtable.Release(self);
+        }
+
+        fn Next(self: *IEnumWbemClassObject, obj: *?*IWbemClassObject, returned: *u32) i32 {
+            const WBEM_INFINITE: i32 = -1;
+            return self.vtable.Next(self, WBEM_INFINITE, 1, obj, returned);
+        }
+    };
+
+    const IWbemClassObject = extern struct {
+        vtable: *const VTable,
+
+        const VTable = extern struct {
+            // IUnknown (3)
+            QueryInterface: *const anyopaque,
+            AddRef: *const anyopaque,
+            Release: *const fn (*IWbemClassObject) callconv(.winapi) u32,
+            // IWbemClassObject - Get is at index 4
+            GetQualifierSet: *const anyopaque,
+            Get: *const fn (
+                *IWbemClassObject,
+                BSTR, // wszName
+                i32, // lFlags
+                *VARIANT, // pVal
+                ?*i32, // pType
+                ?*i32, // plFlavor
+            ) callconv(.winapi) i32,
+        };
+
+        fn Release(self: *IWbemClassObject) void {
+            _ = self.vtable.Release(self);
+        }
+
+        fn Get(self: *IWbemClassObject, name: BSTR, val: *VARIANT) i32 {
+            return self.vtable.Get(self, name, 0, val, null, null);
+        }
+    };
+
+    // VARIANT structure (simplified)
+    const VARIANT = extern struct {
+        vt: u16,
+        wReserved1: u16,
+        wReserved2: u16,
+        wReserved3: u16,
+        data: extern union {
+            llVal: i64,
+            ullVal: u64,
+            intVal: i32,
+            uintVal: u32,
+            bstrVal: BSTR,
+        },
+    };
+
+    const VT_NULL = 1;
+    const VT_I4 = 3;
+    const VT_BSTR = 8;
+    const VT_UI4 = 19;
+    const VT_I8 = 20;
+    const VT_UI8 = 21;
+
+    // COM functions
+    extern "ole32" fn CoInitializeEx(pvReserved: ?*anyopaque, dwCoInit: u32) callconv(.winapi) i32;
+    extern "ole32" fn CoUninitialize() callconv(.winapi) void;
+    extern "ole32" fn CoCreateInstance(
+        rclsid: *const GUID,
+        pUnkOuter: ?*anyopaque,
+        dwClsContext: u32,
+        riid: *const GUID,
+        ppv: *?*anyopaque,
+    ) callconv(.winapi) i32;
+    extern "ole32" fn CoSetProxyBlanket(
+        pProxy: *anyopaque,
+        dwAuthnSvc: u32,
+        dwAuthzSvc: u32,
+        pServerPrincName: ?*anyopaque,
+        dwAuthnLevel: u32,
+        dwImpLevel: u32,
+        pAuthInfo: ?*anyopaque,
+        dwCapabilities: u32,
+    ) callconv(.winapi) i32;
+    extern "oleaut32" fn SysFreeString(bstr: BSTR) callconv(.winapi) void;
+    extern "oleaut32" fn VariantClear(pvarg: *VARIANT) callconv(.winapi) i32;
+
+    fn collectMemorySlotInfo(self: *Self) void {
+        const COINIT_MULTITHREADED = 0;
+        const CLSCTX_INPROC_SERVER = 1;
+
+        // Initialize COM
+        const hr_init = CoInitializeEx(null, COINIT_MULTITHREADED);
+        if (hr_init < 0 and hr_init != -2147417850) { // S_OK or RPC_E_CHANGED_MODE
+            return;
+        }
+        defer CoUninitialize();
+
+        // Create WbemLocator
+        var locator: ?*IWbemLocator = null;
+        if (CoCreateInstance(&CLSID_WbemLocator, null, CLSCTX_INPROC_SERVER, &IID_IWbemLocator, @ptrCast(&locator)) < 0) {
+            return;
+        }
+        defer if (locator) |l| l.Release();
+
+        // Connect to WMI
+        var services: ?*IWbemServices = null;
+        const root_cimv2 = std.unicode.utf8ToUtf16LeStringLiteral("ROOT\\CIMV2");
+        if (locator.?.ConnectServer(@constCast(@ptrCast(root_cimv2.ptr)), &services) < 0) {
+            return;
+        }
+        defer if (services) |s| s.Release();
+
+        // Set security on the proxy - required for WMI access
+        const RPC_C_AUTHN_WINNT = 10;
+        const RPC_C_AUTHZ_NONE = 0;
+        const RPC_C_AUTHN_LEVEL_CALL = 3;
+        const RPC_C_IMP_LEVEL_IMPERSONATE = 3;
+        const EOAC_NONE = 0;
+        _ = CoSetProxyBlanket(
+            @ptrCast(services.?),
+            RPC_C_AUTHN_WINNT,
+            RPC_C_AUTHZ_NONE,
+            null,
+            RPC_C_AUTHN_LEVEL_CALL,
+            RPC_C_IMP_LEVEL_IMPERSONATE,
+            null,
+            EOAC_NONE,
+        );
+
+        // Execute query
+        var enumerator: ?*IEnumWbemClassObject = null;
+        const wql = std.unicode.utf8ToUtf16LeStringLiteral("WQL");
+        const query = std.unicode.utf8ToUtf16LeStringLiteral("SELECT Capacity, Speed, SMBIOSMemoryType FROM Win32_PhysicalMemory");
+        if (services.?.ExecQuery(@constCast(@ptrCast(wql.ptr)), @constCast(@ptrCast(query.ptr)), &enumerator) < 0) {
+            return;
+        }
+        defer if (enumerator) |e| e.Release();
+
+        // Iterate results
+        var slot_index: u32 = 0;
+        while (slot_index < 16) : (slot_index += 1) { // Max 16 slots
+            var obj: ?*IWbemClassObject = null;
+            var returned: u32 = 0;
+
+            if (enumerator.?.Next(&obj, &returned) < 0 or returned == 0) break;
+            defer if (obj) |o| o.Release();
+
+            // Get Capacity
+            var var_capacity: VARIANT = undefined;
+            if (obj.?.Get(@constCast(@ptrCast(std.unicode.utf8ToUtf16LeStringLiteral("Capacity").ptr)), &var_capacity) >= 0) {
+                defer _ = VariantClear(&var_capacity);
+
+                var capacity_bytes: ?u64 = null;
+
+                if (var_capacity.vt == VT_UI8 or var_capacity.vt == VT_I8) {
+                    capacity_bytes = @bitCast(var_capacity.data.ullVal);
+                } else if (var_capacity.vt == VT_BSTR and @intFromPtr(var_capacity.data.bstrVal) != 0) {
+                    // Parse string value
+                    var buf: [32]u8 = undefined;
+                    var len: usize = 0;
+                    var i: usize = 0;
+                    while (var_capacity.data.bstrVal[i] != 0 and len < buf.len) : (i += 1) {
+                        buf[len] = @truncate(var_capacity.data.bstrVal[i]);
+                        len += 1;
+                    }
+                    capacity_bytes = std.fmt.parseInt(u64, buf[0..len], 10) catch null;
+                }
+
+                if (capacity_bytes) |bytes| {
+                    const capacity_mib = @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
+                    const key = std.fmt.allocPrint(self.allocator, "Memory slot #{d} capacity (MiB)", .{slot_index}) catch continue;
+                    self.allocated_values.append(self.allocator, key) catch {};
+                    self.setDetailFmt(key, "{d:.2}", .{capacity_mib});
+                }
+            }
+
+            // Get Speed
+            var var_speed: VARIANT = undefined;
+            if (obj.?.Get(@constCast(@ptrCast(std.unicode.utf8ToUtf16LeStringLiteral("Speed").ptr)), &var_speed) >= 0) {
+                defer _ = VariantClear(&var_speed);
+                if (var_speed.vt == VT_UI4 or var_speed.vt == VT_I4) {
+                    const speed_mhz: u32 = @bitCast(var_speed.data.uintVal);
+                    const speed_ghz = @as(f64, @floatFromInt(speed_mhz)) / 1000.0;
+
+                    const key = std.fmt.allocPrint(self.allocator, "Memory slot #{d} clockSpeed (GHz)", .{slot_index}) catch continue;
+                    self.allocated_values.append(self.allocator, key) catch {};
+                    self.setDetailFmt(key, "{d:.2}", .{speed_ghz});
+                }
+            }
+
+            // Get Memory Type (SMBIOSMemoryType)
+            var var_type: VARIANT = undefined;
+            if (obj.?.Get(@constCast(@ptrCast(std.unicode.utf8ToUtf16LeStringLiteral("SMBIOSMemoryType").ptr)), &var_type) >= 0) {
+                defer _ = VariantClear(&var_type);
+                if (var_type.vt == VT_UI4 or var_type.vt == VT_I4) {
+                    const mem_type: u32 = @bitCast(var_type.data.uintVal);
+                    const type_name = getMemoryTypeName(mem_type);
+
+                    const key = std.fmt.allocPrint(self.allocator, "Memory slot #{d} type", .{slot_index}) catch continue;
+                    self.allocated_values.append(self.allocator, key) catch {};
+                    self.setDetail(key, type_name);
+                }
+            }
+        }
+    }
+
+    fn getMemoryTypeName(smbios_type: u32) []const u8 {
+        // SMBIOS Memory Type codes (from DMTF SMBIOS spec)
+        return switch (smbios_type) {
+            0x01 => "Other",
+            0x02 => "Unknown",
+            0x03 => "DRAM",
+            0x04 => "EDRAM",
+            0x05 => "VRAM",
+            0x06 => "SRAM",
+            0x07 => "RAM",
+            0x08 => "ROM",
+            0x09 => "Flash",
+            0x0A => "EEPROM",
+            0x0B => "FEPROM",
+            0x0C => "EPROM",
+            0x0D => "CDRAM",
+            0x0E => "3DRAM",
+            0x0F => "SDRAM",
+            0x10 => "SGRAM",
+            0x11 => "RDRAM",
+            0x12 => "DDR",
+            0x13 => "DDR2",
+            0x14 => "DDR2 FB-DIMM",
+            0x18 => "DDR3",
+            0x19 => "FBD2",
+            0x1A => "DDR4",
+            0x1B => "LPDDR",
+            0x1C => "LPDDR2",
+            0x1D => "LPDDR3",
+            0x1E => "LPDDR4",
+            0x1F => "Logical non-volatile device",
+            0x20 => "HBM",
+            0x21 => "HBM2",
+            0x22 => "DDR5",
+            0x23 => "LPDDR5",
+            else => "Unknown",
+        };
+    }
+
+    fn parseFrequencyFromBrand(brand: []const u8) ?f64 {
+        // Look for patterns like "@ 2.00GHz", "2.39 GHz", "2.39GHz"
+        var i: usize = 0;
+        while (i < brand.len) : (i += 1) {
+            // Look for @ symbol (Intel style: "@ 2.00GHz")
+            if (brand[i] == '@') {
+                i += 1;
+                // Skip spaces
+                while (i < brand.len and brand[i] == ' ') : (i += 1) {}
+                if (parseGhzValue(brand[i..])) |freq| {
+                    return freq;
+                }
+            }
+            // Look for digit followed by . and more digits then GHz/MHz
+            if (i + 4 < brand.len and isDigit(brand[i])) {
+                if (parseGhzValue(brand[i..])) |freq| {
+                    // Verify it's followed by GHz or MHz
+                    var j = i;
+                    while (j < brand.len and (isDigit(brand[j]) or brand[j] == '.')) : (j += 1) {}
+                    if (j + 3 <= brand.len) {
+                        const suffix = brand[j .. j + 3];
+                        if (std.ascii.eqlIgnoreCase(suffix, "GHz") or std.ascii.eqlIgnoreCase(suffix, "MHz")) {
+                            return freq;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    fn parseGhzValue(s: []const u8) ?f64 {
+        var value: f64 = 0;
+        var decimal_place: f64 = 0;
+        var i: usize = 0;
+
+        // Parse integer part
+        while (i < s.len and isDigit(s[i])) : (i += 1) {
+            value = value * 10 + @as(f64, @floatFromInt(s[i] - '0'));
+        }
+
+        // Parse decimal part
+        if (i < s.len and s[i] == '.') {
+            i += 1;
+            decimal_place = 0.1;
+            while (i < s.len and isDigit(s[i])) : (i += 1) {
+                value += @as(f64, @floatFromInt(s[i] - '0')) * decimal_place;
+                decimal_place *= 0.1;
+            }
+        }
+
+        if (value == 0) return null;
+
+        // Check for MHz suffix (convert to GHz)
+        if (i + 3 <= s.len and std.ascii.eqlIgnoreCase(s[i .. i + 3], "MHz")) {
+            value /= 1000.0;
+        }
+
+        return value;
+    }
+
+    fn isDigit(c: u8) bool {
+        return c >= '0' and c <= '9';
+    }
+
+    fn getPrettyMicroarchName(name: []const u8) []const u8 {
+        // AMD microarchitectures
+        if (std.mem.eql(u8, name, "znver5")) return "Zen 5";
+        if (std.mem.eql(u8, name, "znver4")) return "Zen 4";
+        if (std.mem.eql(u8, name, "znver3")) return "Zen 3";
+        if (std.mem.eql(u8, name, "znver2")) return "Zen 2";
+        if (std.mem.eql(u8, name, "znver1")) return "Zen";
+        if (std.mem.eql(u8, name, "bdver4")) return "Excavator";
+        if (std.mem.eql(u8, name, "bdver3")) return "Steamroller";
+        if (std.mem.eql(u8, name, "bdver2")) return "Piledriver";
+        if (std.mem.eql(u8, name, "bdver1")) return "Bulldozer";
+
+        // Intel microarchitectures
+        if (std.mem.eql(u8, name, "arrowlake")) return "Arrow Lake";
+        if (std.mem.eql(u8, name, "arrowlake_s")) return "Arrow Lake-S";
+        if (std.mem.eql(u8, name, "lunarlake")) return "Lunar Lake";
+        if (std.mem.eql(u8, name, "meteorlake")) return "Meteor Lake";
+        if (std.mem.eql(u8, name, "raptorlake")) return "Raptor Lake";
+        if (std.mem.eql(u8, name, "alderlake")) return "Alder Lake";
+        if (std.mem.eql(u8, name, "rocketlake")) return "Rocket Lake";
+        if (std.mem.eql(u8, name, "tigerlake")) return "Tiger Lake";
+        if (std.mem.eql(u8, name, "icelake_client")) return "Ice Lake";
+        if (std.mem.eql(u8, name, "icelake_server")) return "Ice Lake (Server)";
+        if (std.mem.eql(u8, name, "cascadelake")) return "Cascade Lake";
+        if (std.mem.eql(u8, name, "cannonlake")) return "Cannon Lake";
+        if (std.mem.eql(u8, name, "skylake")) return "Skylake";
+        if (std.mem.eql(u8, name, "skylake_avx512")) return "Skylake-X";
+        if (std.mem.eql(u8, name, "broadwell")) return "Broadwell";
+        if (std.mem.eql(u8, name, "haswell")) return "Haswell";
+        if (std.mem.eql(u8, name, "ivybridge")) return "Ivy Bridge";
+        if (std.mem.eql(u8, name, "sandybridge")) return "Sandy Bridge";
+        if (std.mem.eql(u8, name, "westmere")) return "Westmere";
+        if (std.mem.eql(u8, name, "nehalem")) return "Nehalem";
+        if (std.mem.eql(u8, name, "core2")) return "Core 2";
+
+        // Fallback to original name
+        return name;
+    }
+
+    const CpuidResult = struct {
+        eax: u32,
+        ebx: u32,
+        ecx: u32,
+        edx: u32,
+    };
+
+    fn cpuid(leaf: u32, subleaf: u32) CpuidResult {
+        var eax: u32 = undefined;
+        var ebx: u32 = undefined;
+        var ecx: u32 = undefined;
+        var edx: u32 = undefined;
+
+        asm volatile ("cpuid"
+            : [_] "={eax}" (eax),
+              [_] "={ebx}" (ebx),
+              [_] "={ecx}" (ecx),
+              [_] "={edx}" (edx),
+            : [_] "{eax}" (leaf),
+              [_] "{ecx}" (subleaf),
+        );
+
+        return .{ .eax = eax, .ebx = ebx, .ecx = ecx, .edx = edx };
+    }
+
+    // Windows CPU topology
+    const SYSTEM_LOGICAL_PROCESSOR_INFORMATION = extern struct {
+        ProcessorMask: usize,
+        Relationship: u32,
+        Data: extern union {
+            ProcessorCore: extern struct {
+                Flags: u8,
+            },
+            NumaNode: extern struct {
+                NodeNumber: u32,
+            },
+            Cache: extern struct {
+                Level: u8,
+                Associativity: u8,
+                LineSize: u16,
+                Size: u32,
+                Type: u32,
+            },
+            Reserved: [2]u64,
+        },
+    };
+
+    extern "kernel32" fn GetLogicalProcessorInformation(
+        buffer: ?[*]SYSTEM_LOGICAL_PROCESSOR_INFORMATION,
+        returnedLength: *u32,
+    ) callconv(.winapi) c_int;
+
+    fn collectWindowsCpuTopology(self: *Self) void {
+        var buffer_size: u32 = 0;
+
+        // First call to get required buffer size
+        _ = GetLogicalProcessorInformation(null, &buffer_size);
+
+        if (buffer_size == 0) return;
+
+        const count = buffer_size / @sizeOf(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+        const buffer = self.allocator.alloc(SYSTEM_LOGICAL_PROCESSOR_INFORMATION, count) catch return;
+        defer self.allocator.free(buffer);
+
+        if (GetLogicalProcessorInformation(buffer.ptr, &buffer_size) == 0) return;
+
+        var physical_cores: u32 = 0;
+        var packages: u32 = 0;
+        const RelationProcessorCore = 0;
+        const RelationProcessorPackage = 3;
+
+        for (buffer[0..count]) |info| {
+            if (info.Relationship == RelationProcessorCore) {
+                physical_cores += 1;
+            } else if (info.Relationship == RelationProcessorPackage) {
+                packages += 1;
+            }
+        }
+
+        if (packages > 0) {
+            self.setDetailFmt("Number of physical packages", "{d}", .{packages});
+        }
+        if (physical_cores > 0) {
+            self.setDetailFmt("Number of physical CPUs", "{d}", .{physical_cores});
         }
     }
 
@@ -681,19 +1456,18 @@ pub const SystemReport = struct {
     }
 
     pub fn setDetail(self: *Self, key: []const u8, value: []const u8) void {
-        self.entries.put(key, value) catch {};
+        self.entries.append(self.allocator, .{ .key = key, .value = value }) catch {};
     }
 
     pub fn writeDetails(self: *Self, allocator: std.mem.Allocator, buffer: *std.ArrayListUnmanaged(u8)) !void {
         try buffer.appendSlice(allocator, "-- System Details --\n");
         try buffer.appendSlice(allocator, "Details:");
 
-        var iter = self.entries.iterator();
-        while (iter.next()) |entry| {
+        for (self.entries.items) |entry| {
             try buffer.appendSlice(allocator, "\n\t");
-            try buffer.appendSlice(allocator, entry.key_ptr.*);
+            try buffer.appendSlice(allocator, entry.key);
             try buffer.appendSlice(allocator, ": ");
-            try buffer.appendSlice(allocator, entry.value_ptr.*);
+            try buffer.appendSlice(allocator, entry.value);
         }
     }
 };
