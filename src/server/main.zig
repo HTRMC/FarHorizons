@@ -1,8 +1,11 @@
 const std = @import("std");
+const shared = @import("shared");
+const Logger = shared.Logger;
 const FarHorizonsServer = @import("farhorizonsserver.zig").FarHorizonsServer;
 
 pub const Main = struct {
     const Self = @This();
+    const logger = Logger.init("Main");
 
     pub fn init() Self {
         return Self{};
@@ -16,12 +19,7 @@ pub const Main = struct {
         var args = try std.process.argsWithAllocator(allocator);
         defer args.deinit();
 
-        std.debug.print("Arguments:\n", .{});
-        var i: usize = 0;
-        while (args.next()) |arg| {
-            std.debug.print("  [{d}] {s}\n", .{ i, arg });
-            i += 1;
-        }
+        logger.info("Starting FarHorizons Server", .{});
 
         // TODO: Parse arguments here
         // Minecraft uses OptionParser for --port, --world, --nogui, etc.

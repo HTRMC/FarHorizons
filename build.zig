@@ -37,12 +37,22 @@ pub fn build(b: *std.Build) void {
     //
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
+    // Shared module used by both client and server
+    const shared_module = b.createModule(.{
+        .root_source_file = b.path("src/shared/shared.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "FarHorizons",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/client/main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "shared", .module = shared_module },
+            },
         }),
     });
 
@@ -59,6 +69,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/server/main.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "shared", .module = shared_module },
+            },
         }),
     });
     b.installArtifact(server_exe);
