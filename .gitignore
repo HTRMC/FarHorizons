@@ -8,3 +8,4 @@ docgen_tmp/
 compiler/
 /.claude
 /.idea
+*.txt

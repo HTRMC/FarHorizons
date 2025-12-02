@@ -1,3 +1,19 @@
 // Shared module - exports common functionality for client and server
 pub const Logger = @import("logger.zig").Logger;
 pub const Level = @import("logger.zig").Level;
+
+// Game configuration
+pub const game_config = @import("game_config.zig");
+pub const GameConfig = game_config.GameConfig;
+pub const FolderData = game_config.FolderData;
+pub const UserData = game_config.UserData;
+pub const DisplayData = game_config.DisplayData;
+pub const GameData = game_config.GameData;
+pub const QuickPlayData = game_config.QuickPlayData;
+
+// Crash reporting
+pub const crash_report = @import("crash_report.zig");
+pub const CrashReport = crash_report.CrashReport;
+pub const CrashReportCategory = crash_report.CrashReportCategory;
+pub const SystemReport = crash_report.SystemReport;
+pub const MemoryReserve = crash_report.MemoryReserve;

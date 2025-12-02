@@ -1,14 +1,22 @@
 const std = @import("std");
+const shared = @import("shared");
+const GameConfig = shared.GameConfig;
+const Logger = shared.Logger;
 
 pub const FarHorizonsClient = struct {
     const Self = @This();
+    const logger = Logger.init("FarHorizonsClient");
 
-    pub fn init() Self {
-        return Self{};
+    config: GameConfig,
+
+    pub fn init(config: GameConfig) Self {
+        return Self{
+            .config = config,
+        };
     }
 
     pub fn run(self: *Self) !void {
-        _ = self;
-        std.debug.print("FarHorizons Client starting...\n", .{});
+        logger.info("FarHorizons Client starting...", .{});
+        logger.info("Game directory: {s}", .{self.config.location.game_directory});
     }
 };
