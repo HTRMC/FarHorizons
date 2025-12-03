@@ -79,6 +79,29 @@ pub fn build(b: *std.Build) void {
         volk_module.addIncludePath(d.path(""));
     }
 
+    // Create Platform module (window management)
+    const platform_module = b.createModule(.{
+        .root_source_file = b.path("src/client/platform/platform.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "glfw", .module = glfw_module },
+            .{ .name = "shared", .module = shared_module },
+        },
+    });
+
+    // Create Renderer module (Vulkan rendering)
+    const renderer_module = b.createModule(.{
+        .root_source_file = b.path("src/client/renderer/renderer.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "volk", .module = volk_module },
+            .{ .name = "shared", .module = shared_module },
+            .{ .name = "platform", .module = platform_module },
+        },
+    });
+
     const exe = b.addExecutable(.{
         .name = "FarHorizons",
         .root_module = b.createModule(.{
@@ -89,6 +112,8 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "shared", .module = shared_module },
                 .{ .name = "glfw", .module = glfw_module },
                 .{ .name = "volk", .module = volk_module },
+                .{ .name = "platform", .module = platform_module },
+                .{ .name = "renderer", .module = renderer_module },
             },
         }),
     });
