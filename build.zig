@@ -1,3 +1,4 @@
+
 const std = @import("std");
 
 fn libName(b: *std.Build, name: []const u8) []const u8 {
@@ -31,14 +32,12 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     };
     exe.addObjectFile(lib_dep.path(libName(b, "glfw")));
 
-    // Link system libraries
+    // Link system libraries (GLFW loads X11 dynamically on Linux)
     if (t.os.tag == .windows) {
         exe.linkSystemLibrary("gdi32");
         exe.linkSystemLibrary("user32");
         exe.linkSystemLibrary("shell32");
         exe.linkSystemLibrary("opengl32");
-    } else if (t.os.tag == .linux) {
-        exe.linkSystemLibrary("X11");
     }
 }
 
