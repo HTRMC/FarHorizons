@@ -1,4 +1,5 @@
 
+
 const std = @import("std");
 
 fn libName(b: *std.Build, name: []const u8) []const u8 {
@@ -31,6 +32,7 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
         return;
     };
     exe.addObjectFile(lib_dep.path(libName(b, "glfw")));
+    exe.addObjectFile(lib_dep.path(libName(b, "volk")));
 
     // Link system libraries (GLFW loads X11 dynamically on Linux)
     if (t.os.tag == .windows) {
@@ -66,6 +68,17 @@ pub fn build(b: *std.Build) void {
         glfw_module.addIncludePath(d.path(""));
     }
 
+    // Create Volk Zig bindings module
+    const volk_module = b.createModule(.{
+        .root_source_file = b.path("src/client/volk.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    if (headers_dep) |d| {
+        volk_module.addIncludePath(d.path(""));
+    }
+
     const exe = b.addExecutable(.{
         .name = "FarHorizons",
         .root_module = b.createModule(.{
@@ -75,6 +88,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "shared", .module = shared_module },
                 .{ .name = "glfw", .module = glfw_module },
+                .{ .name = "volk", .module = volk_module },
             },
         }),
     });
