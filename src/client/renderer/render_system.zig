@@ -9,6 +9,48 @@ const platform = @import("platform");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
+// Vertex structure matching shader input
+pub const Vertex = extern struct {
+    pos: [2]f32,
+    color: [3]f32,
+
+    pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
+        return .{
+            .binding = 0,
+            .stride = @sizeOf(Vertex),
+            .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [2]vk.VkVertexInputAttributeDescription {
+        return .{
+            .{
+                .binding = 0,
+                .location = 0,
+                .format = vk.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(Vertex, "pos"),
+            },
+            .{
+                .binding = 0,
+                .location = 1,
+                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = @offsetOf(Vertex, "color"),
+            },
+        };
+    }
+};
+
+// Quad vertices (4 corners)
+const quad_vertices = [_]Vertex{
+    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } }, // top-left (red)
+    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } }, // top-right (green)
+    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } }, // bottom-right (blue)
+    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1.0, 1.0, 1.0 } }, // bottom-left (white)
+};
+
+// Quad indices (2 triangles)
+const quad_indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
+
 pub const RenderSystem = struct {
     const Self = @This();
     const logger = Logger.init("RenderSystem");
@@ -39,6 +81,12 @@ pub const RenderSystem = struct {
     // Pipeline
     pipeline_layout: vk.VkPipelineLayout = null,
     graphics_pipeline: vk.VkPipeline = null,
+
+    // Vertex/Index buffers
+    vertex_buffer: vk.VkBuffer = null,
+    vertex_buffer_memory: vk.VkDeviceMemory = null,
+    index_buffer: vk.VkBuffer = null,
+    index_buffer_memory: vk.VkDeviceMemory = null,
 
     // Command buffers
     command_pool: vk.VkCommandPool = null,
@@ -85,6 +133,8 @@ pub const RenderSystem = struct {
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
         try self.createCommandPool();
+        try self.createVertexBuffer();
+        try self.createIndexBuffer();
         try self.createCommandBuffers();
         try self.createSyncObjects();
 
@@ -101,6 +151,7 @@ pub const RenderSystem = struct {
 
         self.destroySyncObjects();
         self.destroyCommandPool();
+        self.destroyBuffers();
         self.destroyFramebuffers();
         self.destroyPipeline();
         self.destroyRenderPass();
@@ -178,9 +229,11 @@ pub const RenderSystem = struct {
         const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkCmdBeginRenderPass = vk.vkCmdBeginRenderPass orelse return error.VulkanFunctionNotLoaded;
         const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindIndexBuffer = vk.vkCmdBindIndexBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkCmdSetViewport = vk.vkCmdSetViewport orelse return error.VulkanFunctionNotLoaded;
         const vkCmdSetScissor = vk.vkCmdSetScissor orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdDrawIndexed = vk.vkCmdDrawIndexed orelse return error.VulkanFunctionNotLoaded;
         const vkCmdEndRenderPass = vk.vkCmdEndRenderPass orelse return error.VulkanFunctionNotLoaded;
         const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
 
@@ -217,6 +270,14 @@ pub const RenderSystem = struct {
         vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
 
+        // Bind vertex buffer
+        const vertex_buffers = [_]vk.VkBuffer{self.vertex_buffer};
+        const offsets = [_]vk.VkDeviceSize{0};
+        vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers, &offsets);
+
+        // Bind index buffer
+        vkCmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT16);
+
         const viewport = vk.VkViewport{
             .x = 0.0,
             .y = 0.0,
@@ -233,7 +294,8 @@ pub const RenderSystem = struct {
         };
         vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
-        vkCmdDraw(command_buffer, 3, 1, 0, 0);
+        // Draw indexed (6 indices for quad)
+        vkCmdDrawIndexed(command_buffer, quad_indices.len, 1, 0, 0, 0);
         vkCmdEndRenderPass(command_buffer);
 
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
@@ -683,14 +745,17 @@ pub const RenderSystem = struct {
             .pDynamicStates = &dynamic_states,
         };
 
+        const binding_description = Vertex.getBindingDescription();
+        const attribute_descriptions = Vertex.getAttributeDescriptions();
+
         const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .vertexBindingDescriptionCount = 0,
-            .pVertexBindingDescriptions = null,
-            .vertexAttributeDescriptionCount = 0,
-            .pVertexAttributeDescriptions = null,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &binding_description,
+            .vertexAttributeDescriptionCount = attribute_descriptions.len,
+            .pVertexAttributeDescriptions = &attribute_descriptions,
         };
 
         const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
@@ -865,6 +930,148 @@ pub const RenderSystem = struct {
         logger.info("Command pool created", .{});
     }
 
+    fn createVertexBuffer(self: *Self) !void {
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+
+        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(quad_vertices));
+
+        const buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = buffer_size,
+            .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        if (vkCreateBuffer(self.device, &buffer_info, null, &self.vertex_buffer) != vk.VK_SUCCESS) {
+            return error.BufferCreationFailed;
+        }
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetBufferMemoryRequirements(self.device, self.vertex_buffer, &mem_requirements);
+
+        const mem_type = try self.findMemoryType(
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = mem_type,
+        };
+
+        if (vkAllocateMemory(self.device, &alloc_info, null, &self.vertex_buffer_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+
+        if (vkBindBufferMemory(self.device, self.vertex_buffer, self.vertex_buffer_memory, 0) != vk.VK_SUCCESS) {
+            return error.BufferMemoryBindFailed;
+        }
+
+        // Map memory and copy vertex data
+        var data: ?*anyopaque = null;
+        if (vkMapMemory(self.device, self.vertex_buffer_memory, 0, buffer_size, 0, &data) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+
+        const dest: [*]Vertex = @ptrCast(@alignCast(data));
+        @memcpy(dest[0..quad_vertices.len], &quad_vertices);
+
+        vkUnmapMemory(self.device, self.vertex_buffer_memory);
+
+        logger.info("Vertex buffer created", .{});
+    }
+
+    fn createIndexBuffer(self: *Self) !void {
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+
+        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(quad_indices));
+
+        const buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = buffer_size,
+            .usage = vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        if (vkCreateBuffer(self.device, &buffer_info, null, &self.index_buffer) != vk.VK_SUCCESS) {
+            return error.BufferCreationFailed;
+        }
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetBufferMemoryRequirements(self.device, self.index_buffer, &mem_requirements);
+
+        const mem_type = try self.findMemoryType(
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = mem_type,
+        };
+
+        if (vkAllocateMemory(self.device, &alloc_info, null, &self.index_buffer_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+
+        if (vkBindBufferMemory(self.device, self.index_buffer, self.index_buffer_memory, 0) != vk.VK_SUCCESS) {
+            return error.BufferMemoryBindFailed;
+        }
+
+        // Map memory and copy index data
+        var data: ?*anyopaque = null;
+        if (vkMapMemory(self.device, self.index_buffer_memory, 0, buffer_size, 0, &data) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+
+        const dest: [*]u16 = @ptrCast(@alignCast(data));
+        @memcpy(dest[0..quad_indices.len], &quad_indices);
+
+        vkUnmapMemory(self.device, self.index_buffer_memory);
+
+        logger.info("Index buffer created", .{});
+    }
+
+    fn findMemoryType(self: *Self, type_filter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
+        const vkGetPhysicalDeviceMemoryProperties = vk.vkGetPhysicalDeviceMemoryProperties orelse return error.VulkanFunctionNotLoaded;
+
+        var mem_properties: vk.VkPhysicalDeviceMemoryProperties = undefined;
+        vkGetPhysicalDeviceMemoryProperties(self.physical_device, &mem_properties);
+
+        for (0..mem_properties.memoryTypeCount) |i| {
+            const idx: u5 = @intCast(i);
+            if ((type_filter & (@as(u32, 1) << idx)) != 0 and
+                (mem_properties.memoryTypes[i].propertyFlags & properties) == properties)
+            {
+                return @intCast(i);
+            }
+        }
+
+        return error.NoSuitableMemoryType;
+    }
+
     fn createCommandBuffers(self: *Self) !void {
         const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
 
@@ -932,6 +1139,28 @@ pub const RenderSystem = struct {
         if (self.command_pool) |pool| {
             if (vk.vkDestroyCommandPool) |destroy| destroy(self.device, pool, null);
             self.command_pool = null;
+        }
+    }
+
+    fn destroyBuffers(self: *Self) void {
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
+        const vkFreeMemory = vk.vkFreeMemory orelse return;
+
+        if (self.index_buffer) |buf| {
+            vkDestroyBuffer(self.device, buf, null);
+            self.index_buffer = null;
+        }
+        if (self.index_buffer_memory) |mem| {
+            vkFreeMemory(self.device, mem, null);
+            self.index_buffer_memory = null;
+        }
+        if (self.vertex_buffer) |buf| {
+            vkDestroyBuffer(self.device, buf, null);
+            self.vertex_buffer = null;
+        }
+        if (self.vertex_buffer_memory) |mem| {
+            vkFreeMemory(self.device, mem, null);
+            self.vertex_buffer_memory = null;
         }
     }
 
