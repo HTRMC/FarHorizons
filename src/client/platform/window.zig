@@ -15,6 +15,9 @@ pub const VK_SUCCESS: VkResult = 0;
 
 extern fn glfwCreateWindowSurface(instance: VkInstance, window: ?*c.GLFWwindow, allocator: ?*anyopaque, surface: *VkSurfaceKHR) callconv(.c) VkResult;
 
+// Forward declaration for MouseHandler
+pub const MouseHandler = @import("mouse_handler.zig").MouseHandler;
+
 pub const Window = struct {
     const Self = @This();
     const logger = Logger.init("Window");
@@ -27,6 +30,7 @@ pub const Window = struct {
     framebuffer_resized: bool = false,
     fullscreen: bool,
     vsync: bool,
+    mouse_handler: ?*MouseHandler = null,
 
     pub fn init(display_data: DisplayData) Self {
         return .{
@@ -150,6 +154,14 @@ pub const Window = struct {
 
     pub fn getFramebufferHeight(self: *const Self) u32 {
         return self.framebuffer_height;
+    }
+
+    pub fn setMouseHandler(self: *Self, handler: *MouseHandler) void {
+        self.mouse_handler = handler;
+    }
+
+    pub fn getMouseHandler(self: *Self) ?*MouseHandler {
+        return self.mouse_handler;
     }
 
     pub fn wasResized(self: *Self) bool {
