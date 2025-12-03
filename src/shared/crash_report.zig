@@ -1400,7 +1400,7 @@ pub const SystemReport = struct {
             defer file.close();
 
             var buf: [4096]u8 = undefined;
-            const bytes_read = file.readAll(&buf) catch {
+            const bytes_read = file.read(&buf) catch {
                 self.setDetail("Memory", "Failed to read /proc/meminfo");
                 return;
             };
