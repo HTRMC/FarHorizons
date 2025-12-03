@@ -65,6 +65,19 @@ pub const Window = struct {
         self.framebuffer_width = @intCast(fb_width);
         self.framebuffer_height = @intCast(fb_height);
 
+        // Center window on primary monitor (only for windowed mode)
+        if (!self.fullscreen) {
+            const primary_monitor = c.glfwGetPrimaryMonitor();
+            if (primary_monitor) |mon| {
+                const vidmode = c.glfwGetVideoMode(mon);
+                if (vidmode) |mode| {
+                    const x = @divTrunc(mode.*.width - @as(c_int, @intCast(self.width)), 2);
+                    const y = @divTrunc(mode.*.height - @as(c_int, @intCast(self.height)), 2);
+                    c.glfwSetWindowPos(self.handle, x, y);
+                }
+            }
+        }
+
         logger.info("Window created: {}x{} (framebuffer: {}x{})", .{
             self.width,
             self.height,
