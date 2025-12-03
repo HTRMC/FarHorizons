@@ -101,11 +101,16 @@ pub const RenderSystem = struct {
     // Allocator for dynamic arrays
     allocator: std.mem.Allocator = undefined,
 
+    // Window reference for swapchain recreation
+    window: ?*platform.Window = null,
+
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{ .allocator = allocator };
     }
 
-    pub fn initBackend(self: *Self, window: *const platform.Window) !void {
+    pub fn initBackend(self: *Self, window: *platform.Window) !void {
+        self.window = window;
+
         if (!platform.isVulkanSupported()) {
             logger.err("Vulkan is not supported on this system", .{});
             return error.VulkanNotSupported;
@@ -124,10 +129,10 @@ pub const RenderSystem = struct {
         });
 
         try self.createInstance();
-        try self.createSurface(window);
+        try self.createSurface();
         try self.pickPhysicalDevice();
         try self.createLogicalDevice();
-        try self.createSwapchain(window);
+        try self.createSwapchain();
         try self.createImageViews();
         try self.createRenderPass();
         try self.createGraphicsPipeline();
@@ -173,10 +178,9 @@ pub const RenderSystem = struct {
 
         const fence = self.in_flight_fences[self.current_frame];
         _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
-        _ = vkResetFences(self.device, 1, &fence);
 
         var image_index: u32 = 0;
-        _ = vkAcquireNextImageKHR(
+        const acquire_result = vkAcquireNextImageKHR(
             self.device,
             self.swapchain,
             std.math.maxInt(u64),
@@ -184,6 +188,15 @@ pub const RenderSystem = struct {
             null,
             &image_index,
         );
+
+        if (acquire_result == vk.VK_ERROR_OUT_OF_DATE_KHR) {
+            try self.recreateSwapchain();
+            return;
+        } else if (acquire_result != vk.VK_SUCCESS and acquire_result != vk.VK_SUBOPTIMAL_KHR) {
+            return error.SwapchainAcquireFailed;
+        }
+
+        _ = vkResetFences(self.device, 1, &fence);
 
         try self.recordCommandBuffer(self.command_buffers[self.current_frame], image_index);
 
@@ -220,8 +233,36 @@ pub const RenderSystem = struct {
             .pResults = null,
         };
 
-        _ = vkQueuePresentKHR(self.present_queue, &present_info);
+        const present_result = vkQueuePresentKHR(self.present_queue, &present_info);
+
+        if (present_result == vk.VK_ERROR_OUT_OF_DATE_KHR or present_result == vk.VK_SUBOPTIMAL_KHR or self.window.?.wasResized()) {
+            try self.recreateSwapchain();
+        } else if (present_result != vk.VK_SUCCESS) {
+            return error.PresentFailed;
+        }
+
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    fn recreateSwapchain(self: *Self) !void {
+        const vkDeviceWaitIdle = vk.vkDeviceWaitIdle orelse return error.VulkanFunctionNotLoaded;
+
+        // Wait for window to have non-zero size (handles minimization)
+        self.window.?.waitIfMinimized();
+
+        _ = vkDeviceWaitIdle(self.device);
+
+        // Cleanup old swapchain resources
+        self.destroyFramebuffers();
+        self.destroyImageViews();
+        self.destroySwapchain();
+
+        // Recreate
+        try self.createSwapchain();
+        try self.createImageViews();
+        try self.createFramebuffers();
+
+        logger.info("Swapchain recreated: {}x{}", .{ self.swapchain_extent.width, self.swapchain_extent.height });
     }
 
     fn recordCommandBuffer(self: *Self, command_buffer: vk.VkCommandBuffer, image_index: u32) !void {
@@ -341,8 +382,8 @@ pub const RenderSystem = struct {
         logger.info("Vulkan instance created", .{});
     }
 
-    fn createSurface(self: *Self, window: *const platform.Window) !void {
-        const surface = try window.createSurface(@ptrCast(self.instance));
+    fn createSurface(self: *Self) !void {
+        const surface = try self.window.?.createSurface(@ptrCast(self.instance));
         self.surface = @ptrCast(surface);
     }
 
@@ -500,12 +541,14 @@ pub const RenderSystem = struct {
         logger.info("Logical device created", .{});
     }
 
-    fn createSwapchain(self: *Self, window: *const platform.Window) !void {
+    fn createSwapchain(self: *Self) !void {
         const vkGetPhysicalDeviceSurfaceCapabilitiesKHR = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR orelse return error.VulkanFunctionNotLoaded;
         const vkGetPhysicalDeviceSurfaceFormatsKHR = vk.vkGetPhysicalDeviceSurfaceFormatsKHR orelse return error.VulkanFunctionNotLoaded;
         const vkGetPhysicalDeviceSurfacePresentModesKHR = vk.vkGetPhysicalDeviceSurfacePresentModesKHR orelse return error.VulkanFunctionNotLoaded;
         const vkCreateSwapchainKHR = vk.vkCreateSwapchainKHR orelse return error.VulkanFunctionNotLoaded;
         const vkGetSwapchainImagesKHR = vk.vkGetSwapchainImagesKHR orelse return error.VulkanFunctionNotLoaded;
+
+        const window = self.window.?;
 
         var capabilities: vk.VkSurfaceCapabilitiesKHR = undefined;
         _ = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.physical_device, self.surface, &capabilities);

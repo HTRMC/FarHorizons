@@ -24,6 +24,7 @@ pub const Window = struct {
     height: u32,
     framebuffer_width: u32 = 0,
     framebuffer_height: u32 = 0,
+    framebuffer_resized: bool = false,
     fullscreen: bool,
     vsync: bool,
 
@@ -39,7 +40,7 @@ pub const Window = struct {
     pub fn create(self: *Self, title: [*:0]const u8) !void {
         // No OpenGL context for Vulkan
         c.glfwWindowHint(c.GLFW_CLIENT_API, c.GLFW_NO_API);
-        c.glfwWindowHint(c.GLFW_RESIZABLE, c.GLFW_FALSE);
+        c.glfwWindowHint(c.GLFW_RESIZABLE, c.GLFW_TRUE);
         // Hide window initially to avoid white flash during Vulkan init
         c.glfwWindowHint(c.GLFW_VISIBLE, c.GLFW_FALSE);
 
@@ -78,12 +79,23 @@ pub const Window = struct {
             }
         }
 
+        // Set up framebuffer resize callback
+        c.glfwSetWindowUserPointer(self.handle, self);
+        _ = c.glfwSetFramebufferSizeCallback(self.handle, framebufferSizeCallback);
+
         logger.info("Window created: {}x{} (framebuffer: {}x{})", .{
             self.width,
             self.height,
             self.framebuffer_width,
             self.framebuffer_height,
         });
+    }
+
+    fn framebufferSizeCallback(window: ?*c.GLFWwindow, width: c_int, height: c_int) callconv(.c) void {
+        const self: *Self = @ptrCast(@alignCast(c.glfwGetWindowUserPointer(window)));
+        self.framebuffer_width = @intCast(width);
+        self.framebuffer_height = @intCast(height);
+        self.framebuffer_resized = true;
     }
 
     pub fn destroy(self: *Self) void {
@@ -138,6 +150,24 @@ pub const Window = struct {
 
     pub fn getFramebufferHeight(self: *const Self) u32 {
         return self.framebuffer_height;
+    }
+
+    pub fn wasResized(self: *Self) bool {
+        const resized = self.framebuffer_resized;
+        self.framebuffer_resized = false;
+        return resized;
+    }
+
+    pub fn waitIfMinimized(self: *Self) void {
+        var width: c_int = 0;
+        var height: c_int = 0;
+        c.glfwGetFramebufferSize(self.handle, &width, &height);
+        while (width == 0 or height == 0) {
+            c.glfwGetFramebufferSize(self.handle, &width, &height);
+            c.glfwWaitEvents();
+        }
+        self.framebuffer_width = @intCast(width);
+        self.framebuffer_height = @intCast(height);
     }
 
     /// Create a Vulkan surface for this window
