@@ -40,6 +40,8 @@ pub const Window = struct {
         // No OpenGL context for Vulkan
         c.glfwWindowHint(c.GLFW_CLIENT_API, c.GLFW_NO_API);
         c.glfwWindowHint(c.GLFW_RESIZABLE, c.GLFW_FALSE);
+        // Hide window initially to avoid white flash during Vulkan init
+        c.glfwWindowHint(c.GLFW_VISIBLE, c.GLFW_FALSE);
 
         const monitor: ?*c.GLFWmonitor = if (self.fullscreen) c.glfwGetPrimaryMonitor() else null;
 
@@ -89,6 +91,12 @@ pub const Window = struct {
     pub fn setShouldClose(self: *Self, value: bool) void {
         if (self.handle) |h| {
             c.glfwSetWindowShouldClose(h, if (value) c.GLFW_TRUE else c.GLFW_FALSE);
+        }
+    }
+
+    pub fn show(self: *Self) void {
+        if (self.handle) |h| {
+            c.glfwShowWindow(h);
         }
     }
 

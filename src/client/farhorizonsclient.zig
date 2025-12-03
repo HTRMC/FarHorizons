@@ -52,6 +52,10 @@ pub const FarHorizonsClient = struct {
         try self.render_system.initBackend(&self.window);
         defer self.render_system.shutdown();
 
+        // Render first frame before showing window (avoids white flash)
+        self.render_system.drawFrame() catch {};
+        self.window.show();
+
         // Main loop
         logger.info("Entering main loop", .{});
         while (!self.window.shouldClose()) {
