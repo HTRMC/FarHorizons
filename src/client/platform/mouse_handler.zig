@@ -120,6 +120,14 @@ pub const MouseHandler = struct {
 
         self.mouse_grabbed = true;
 
+        // IMPORTANT: Set ignore_first_move BEFORE any cursor operations
+        // to prevent camera jump when callbacks fire during glfwSetCursorPos
+        self.ignore_first_move = true;
+
+        // Clear any accumulated movement from before grab
+        self.accumulated_dx = 0;
+        self.accumulated_dy = 0;
+
         // Center cursor position before grabbing
         const center_x: f64 = @as(f64, @floatFromInt(self.window.getFramebufferWidth())) / 2.0;
         const center_y: f64 = @as(f64, @floatFromInt(self.window.getFramebufferHeight())) / 2.0;
@@ -134,8 +142,6 @@ pub const MouseHandler = struct {
         if (c.glfwRawMouseMotionSupported() == c.GLFW_TRUE) {
             c.glfwSetInputMode(handle, InputConstants.RAW_MOUSE_MOTION, c.GLFW_TRUE);
         }
-
-        self.ignore_first_move = true;
 
         logger.info("Mouse grabbed", .{});
     }
@@ -186,16 +192,24 @@ pub const MouseHandler = struct {
     }
 
     /// Calculate camera rotation from accumulated movement
+    /// Uses Minecraft's exact sensitivity formula:
+    /// 1. ss = sensitivity * 0.6 + 0.2 (transforms 0-1 slider to 0.2-0.8 range)
+    /// 2. sensitivityMod = ss³ (non-linear curve for fine control at low sens)
+    /// 3. sens = sensitivityMod * 8.0 (final multiplier)
+    /// 4. rotation = delta * sens * 0.15 (convert to degrees)
     pub fn getCameraRotation(self: *Self) struct { yaw: f64, pitch: f64 } {
         const movement = self.getAccumulatedMovement();
 
-        // Apply sensitivity (similar to Minecraft's formula)
-        const sens = self.sensitivity * 0.6 + 0.2;
-        const sens_mod = sens * sens * sens * 8.0;
+        // Apply Minecraft's sensitivity formula
+        const ss = self.sensitivity * 0.6 + 0.2;
+        const sensitivity_mod = ss * ss * ss;
+        const sens = sensitivity_mod * 8.0;
 
+        // Apply to mouse delta, then multiply by 0.15 to convert to rotation degrees
+        // (Minecraft does this in Entity.turn())
         return .{
-            .yaw = -movement.dx * sens_mod, // Negate: mouse right = look right
-            .pitch = movement.dy * sens_mod,
+            .yaw = -movement.dx * sens * 0.15, // Negate: mouse right = look right
+            .pitch = movement.dy * sens * 0.15,
         };
     }
 
