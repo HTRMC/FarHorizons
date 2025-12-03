@@ -19,8 +19,9 @@ pub const FarHorizonsClient = struct {
     config: GameConfig,
     window: Window,
     render_system: RenderSystem,
+    allocator: std.mem.Allocator,
 
-    pub fn init(config: GameConfig) Self {
+    pub fn init(allocator: std.mem.Allocator, config: GameConfig) Self {
         const display_data = DisplayData{
             .width = @intCast(config.display.width),
             .height = @intCast(config.display.height),
@@ -30,7 +31,8 @@ pub const FarHorizonsClient = struct {
         return .{
             .config = config,
             .window = Window.init(display_data),
-            .render_system = RenderSystem.init(),
+            .render_system = RenderSystem.init(allocator),
+            .allocator = allocator,
         };
     }
 
@@ -42,13 +44,13 @@ pub const FarHorizonsClient = struct {
         try platform.initBackend();
         defer platform.terminateBackend();
 
-        // Initialize render system (Vulkan)
-        try self.render_system.initBackend();
-        defer self.render_system.shutdown();
-
-        // Create window
+        // Create window first (needed for surface creation)
         try self.window.create("FarHorizons");
         defer self.window.destroy();
+
+        // Initialize render system (Vulkan) with window for surface
+        try self.render_system.initBackend(&self.window);
+        defer self.render_system.shutdown();
 
         // Main loop
         logger.info("Entering main loop", .{});
@@ -60,7 +62,10 @@ pub const FarHorizonsClient = struct {
                 self.window.setShouldClose(true);
             }
 
-            // TODO: Render frame with Vulkan
+            // Render frame
+            self.render_system.drawFrame() catch |err| {
+                logger.err("Failed to draw frame: {}", .{err});
+            };
         }
 
         logger.info("Main loop ended, shutting down", .{});

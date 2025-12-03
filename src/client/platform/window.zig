@@ -7,6 +7,14 @@ const shared = @import("shared");
 const Logger = shared.Logger;
 const DisplayData = @import("display_data.zig").DisplayData;
 
+// Vulkan types for surface creation
+pub const VkInstance = ?*opaque {};
+pub const VkSurfaceKHR = ?*opaque {};
+pub const VkResult = i32;
+pub const VK_SUCCESS: VkResult = 0;
+
+extern fn glfwCreateWindowSurface(instance: VkInstance, window: ?*c.GLFWwindow, allocator: ?*anyopaque, surface: *VkSurfaceKHR) callconv(.c) VkResult;
+
 pub const Window = struct {
     const Self = @This();
     const logger = Logger.init("Window");
@@ -109,6 +117,18 @@ pub const Window = struct {
 
     pub fn getFramebufferHeight(self: *const Self) u32 {
         return self.framebuffer_height;
+    }
+
+    /// Create a Vulkan surface for this window
+    pub fn createSurface(self: *const Self, instance: VkInstance) !VkSurfaceKHR {
+        var surface: VkSurfaceKHR = null;
+        const result = glfwCreateWindowSurface(instance, self.handle, null, &surface);
+        if (result != VK_SUCCESS) {
+            logger.err("Failed to create Vulkan surface: {}", .{result});
+            return error.SurfaceCreationFailed;
+        }
+        logger.info("Vulkan surface created", .{});
+        return surface;
     }
 };
 

@@ -60,7 +60,7 @@ pub const Main = struct {
             return error.TestCrash;
         }
 
-        var client = FarHorizonsClient.init(config);
+        var client = FarHorizonsClient.init(allocator, config);
         try client.run();
     }
 
