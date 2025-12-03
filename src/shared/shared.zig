@@ -17,3 +17,12 @@ pub const CrashReport = crash_report.CrashReport;
 pub const CrashReportCategory = crash_report.CrashReportCategory;
 pub const SystemReport = crash_report.SystemReport;
 pub const MemoryReserve = crash_report.MemoryReserve;
+
+// Math utilities
+pub const math = @import("math.zig");
+pub const Vec3 = math.Vec3;
+pub const Mat4 = math.Mat4;
+
+// Camera and player
+pub const Camera = @import("camera.zig").Camera;
+pub const Player = @import("player.zig").Player;

@@ -194,7 +194,7 @@ pub const MouseHandler = struct {
         const sens_mod = sens * sens * sens * 8.0;
 
         return .{
-            .yaw = movement.dx * sens_mod,
+            .yaw = -movement.dx * sens_mod, // Negate: mouse right = look right
             .pitch = movement.dy * sens_mod,
         };
     }

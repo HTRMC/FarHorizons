@@ -7,6 +7,8 @@ const renderer = @import("renderer");
 
 const GameConfig = shared.GameConfig;
 const Logger = shared.Logger;
+const Camera = shared.Camera;
+const Mat4 = shared.Mat4;
 const Window = platform.Window;
 const DisplayData = platform.DisplayData;
 const MouseHandler = platform.MouseHandler;
@@ -21,6 +23,7 @@ pub const FarHorizonsClient = struct {
     window: Window,
     mouse_handler: MouseHandler,
     render_system: RenderSystem,
+    camera: Camera,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, config: GameConfig) Self {
@@ -30,11 +33,16 @@ pub const FarHorizonsClient = struct {
             .fullscreen = config.display.fullscreen,
         };
 
+        // Initialize camera at position behind the quad looking toward it
+        var camera = Camera.init();
+        camera.position = .{ .x = 0, .y = 0, .z = 3 }; // 3 units back from the quad at z=0
+
         return Self{
             .config = config,
             .window = Window.init(display_data),
             .mouse_handler = undefined, // Initialized in run() after struct is at final location
             .render_system = RenderSystem.init(allocator),
+            .camera = camera,
             .allocator = allocator,
         };
     }
@@ -87,9 +95,16 @@ pub const FarHorizonsClient = struct {
             // Handle mouse movement for camera (when grabbed)
             if (self.mouse_handler.isMouseGrabbed()) {
                 const rotation = self.mouse_handler.getCameraRotation();
-                // TODO: Apply rotation to camera
-                _ = rotation;
+                self.camera.rotate(@floatCast(rotation.yaw), @floatCast(rotation.pitch));
             }
+
+            // Update MVP matrices
+            const aspect = self.render_system.getAspectRatio();
+            const model = Mat4.IDENTITY; // Model matrix is identity (no transformation)
+            const view = self.camera.getViewMatrix();
+            const proj = self.camera.getProjectionMatrix(aspect);
+
+            self.render_system.updateMVP(model.data, view.data, proj.data);
 
             // Render frame
             self.render_system.drawFrame() catch |err| {

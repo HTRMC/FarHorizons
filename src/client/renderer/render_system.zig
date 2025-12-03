@@ -9,9 +9,16 @@ const platform = @import("platform");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
+// Uniform buffer object matching shader uniform
+pub const UniformBufferObject = extern struct {
+    model: [16]f32,
+    view: [16]f32,
+    proj: [16]f32,
+};
+
 // Vertex structure matching shader input
 pub const Vertex = extern struct {
-    pos: [2]f32,
+    pos: [3]f32,
     color: [3]f32,
 
     pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
@@ -27,7 +34,7 @@ pub const Vertex = extern struct {
             .{
                 .binding = 0,
                 .location = 0,
-                .format = vk.VK_FORMAT_R32G32_SFLOAT,
+                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
                 .offset = @offsetOf(Vertex, "pos"),
             },
             .{
@@ -40,12 +47,12 @@ pub const Vertex = extern struct {
     }
 };
 
-// Quad vertices (4 corners)
+// Quad vertices (4 corners) in world space - a 1x1 quad at z=0
 const quad_vertices = [_]Vertex{
-    .{ .pos = .{ -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } }, // top-left (red)
-    .{ .pos = .{ 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } }, // top-right (green)
-    .{ .pos = .{ 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } }, // bottom-right (blue)
-    .{ .pos = .{ -0.5, 0.5 }, .color = .{ 1.0, 1.0, 1.0 } }, // bottom-left (white)
+    .{ .pos = .{ -0.5, -0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 } }, // bottom-left (red)
+    .{ .pos = .{ 0.5, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 } }, // bottom-right (green)
+    .{ .pos = .{ 0.5, 0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 } }, // top-right (blue)
+    .{ .pos = .{ -0.5, 0.5, 0.0 }, .color = .{ 1.0, 1.0, 1.0 } }, // top-left (white)
 };
 
 // Quad indices (2 triangles)
@@ -87,6 +94,16 @@ pub const RenderSystem = struct {
     vertex_buffer_memory: vk.VkDeviceMemory = null,
     index_buffer: vk.VkBuffer = null,
     index_buffer_memory: vk.VkDeviceMemory = null,
+
+    // Uniform buffers (one per frame in flight)
+    uniform_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkBuffer = .{null} ** MAX_FRAMES_IN_FLIGHT,
+    uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.VkDeviceMemory = .{null} ** MAX_FRAMES_IN_FLIGHT,
+    uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = .{null} ** MAX_FRAMES_IN_FLIGHT,
+
+    // Descriptors
+    descriptor_set_layout: vk.VkDescriptorSetLayout = null,
+    descriptor_pool: vk.VkDescriptorPool = null,
+    descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
     // Command buffers
     command_pool: vk.VkCommandPool = null,
@@ -135,11 +152,15 @@ pub const RenderSystem = struct {
         try self.createSwapchain();
         try self.createImageViews();
         try self.createRenderPass();
+        try self.createDescriptorSetLayout();
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
         try self.createCommandPool();
         try self.createVertexBuffer();
         try self.createIndexBuffer();
+        try self.createUniformBuffers();
+        try self.createDescriptorPool();
+        try self.createDescriptorSets();
         try self.createCommandBuffers();
         try self.createSyncObjects();
 
@@ -156,9 +177,12 @@ pub const RenderSystem = struct {
 
         self.destroySyncObjects();
         self.destroyCommandPool();
+        self.destroyDescriptorPool();
+        self.destroyUniformBuffers();
         self.destroyBuffers();
         self.destroyFramebuffers();
         self.destroyPipeline();
+        self.destroyDescriptorSetLayout();
         self.destroyRenderPass();
         self.destroyImageViews();
         self.destroySwapchain();
@@ -244,6 +268,26 @@ pub const RenderSystem = struct {
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
+    /// Update the uniform buffer with MVP matrices for the current frame
+    pub fn updateMVP(self: *Self, model: [16]f32, view: [16]f32, proj: [16]f32) void {
+        const ubo = UniformBufferObject{
+            .model = model,
+            .view = view,
+            .proj = proj,
+        };
+
+        if (self.uniform_buffers_mapped[self.current_frame]) |mapped| {
+            const dest: *UniformBufferObject = @ptrCast(@alignCast(mapped));
+            dest.* = ubo;
+        }
+    }
+
+    /// Get the current swapchain aspect ratio
+    pub fn getAspectRatio(self: *const Self) f32 {
+        if (self.swapchain_extent.height == 0) return 1.0;
+        return @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height));
+    }
+
     fn recreateSwapchain(self: *Self) !void {
         const vkDeviceWaitIdle = vk.vkDeviceWaitIdle orelse return error.VulkanFunctionNotLoaded;
 
@@ -270,6 +314,7 @@ pub const RenderSystem = struct {
         const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkCmdBeginRenderPass = vk.vkCmdBeginRenderPass orelse return error.VulkanFunctionNotLoaded;
         const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
         const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
         const vkCmdBindIndexBuffer = vk.vkCmdBindIndexBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkCmdSetViewport = vk.vkCmdSetViewport orelse return error.VulkanFunctionNotLoaded;
@@ -310,6 +355,10 @@ pub const RenderSystem = struct {
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+
+        // Bind descriptor set for current frame
+        const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
+        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
 
         // Bind vertex buffer
         const vertex_buffers = [_]vk.VkBuffer{self.vertex_buffer};
@@ -741,6 +790,32 @@ pub const RenderSystem = struct {
         logger.info("Render pass created", .{});
     }
 
+    fn createDescriptorSetLayout(self: *Self) !void {
+        const vkCreateDescriptorSetLayout = vk.vkCreateDescriptorSetLayout orelse return error.VulkanFunctionNotLoaded;
+
+        const ubo_layout_binding = vk.VkDescriptorSetLayoutBinding{
+            .binding = 0,
+            .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+            .pImmutableSamplers = null,
+        };
+
+        const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .bindingCount = 1,
+            .pBindings = &ubo_layout_binding,
+        };
+
+        if (vkCreateDescriptorSetLayout(self.device, &layout_info, null, &self.descriptor_set_layout) != vk.VK_SUCCESS) {
+            return error.DescriptorSetLayoutCreationFailed;
+        }
+
+        logger.info("Descriptor set layout created", .{});
+    }
+
     fn createGraphicsPipeline(self: *Self) !void {
         const vkCreateShaderModule = vk.vkCreateShaderModule orelse return error.VulkanFunctionNotLoaded;
         const vkDestroyShaderModule = vk.vkDestroyShaderModule orelse return error.VulkanFunctionNotLoaded;
@@ -869,12 +944,13 @@ pub const RenderSystem = struct {
             .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
         };
 
+        const descriptor_set_layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout};
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .setLayoutCount = 0,
-            .pSetLayouts = null,
+            .setLayoutCount = 1,
+            .pSetLayouts = &descriptor_set_layouts,
             .pushConstantRangeCount = 0,
             .pPushConstantRanges = null,
         };
@@ -1097,6 +1173,132 @@ pub const RenderSystem = struct {
         logger.info("Index buffer created", .{});
     }
 
+    fn createUniformBuffers(self: *Self) !void {
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+
+        const buffer_size: vk.VkDeviceSize = @sizeOf(UniformBufferObject);
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const buffer_info = vk.VkBufferCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .size = buffer_size,
+                .usage = vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+                .queueFamilyIndexCount = 0,
+                .pQueueFamilyIndices = null,
+            };
+
+            if (vkCreateBuffer(self.device, &buffer_info, null, &self.uniform_buffers[i]) != vk.VK_SUCCESS) {
+                return error.BufferCreationFailed;
+            }
+
+            var mem_requirements: vk.VkMemoryRequirements = undefined;
+            vkGetBufferMemoryRequirements(self.device, self.uniform_buffers[i], &mem_requirements);
+
+            const mem_type = try self.findMemoryType(
+                mem_requirements.memoryTypeBits,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            );
+
+            const alloc_info = vk.VkMemoryAllocateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+                .pNext = null,
+                .allocationSize = mem_requirements.size,
+                .memoryTypeIndex = mem_type,
+            };
+
+            if (vkAllocateMemory(self.device, &alloc_info, null, &self.uniform_buffers_memory[i]) != vk.VK_SUCCESS) {
+                return error.MemoryAllocationFailed;
+            }
+
+            if (vkBindBufferMemory(self.device, self.uniform_buffers[i], self.uniform_buffers_memory[i], 0) != vk.VK_SUCCESS) {
+                return error.BufferMemoryBindFailed;
+            }
+
+            // Map memory persistently (we'll update it every frame)
+            if (vkMapMemory(self.device, self.uniform_buffers_memory[i], 0, buffer_size, 0, &self.uniform_buffers_mapped[i]) != vk.VK_SUCCESS) {
+                return error.MemoryMapFailed;
+            }
+        }
+
+        logger.info("Uniform buffers created", .{});
+    }
+
+    fn createDescriptorPool(self: *Self) !void {
+        const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
+
+        const pool_size = vk.VkDescriptorPoolSize{
+            .type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        };
+
+        const pool_info = vk.VkDescriptorPoolCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .maxSets = MAX_FRAMES_IN_FLIGHT,
+            .poolSizeCount = 1,
+            .pPoolSizes = &pool_size,
+        };
+
+        if (vkCreateDescriptorPool(self.device, &pool_info, null, &self.descriptor_pool) != vk.VK_SUCCESS) {
+            return error.DescriptorPoolCreationFailed;
+        }
+
+        logger.info("Descriptor pool created", .{});
+    }
+
+    fn createDescriptorSets(self: *Self) !void {
+        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+
+        const layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout} ** MAX_FRAMES_IN_FLIGHT;
+
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.descriptor_pool,
+            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+            .pSetLayouts = &layouts,
+        };
+
+        if (vkAllocateDescriptorSets(self.device, &alloc_info, &self.descriptor_sets) != vk.VK_SUCCESS) {
+            return error.DescriptorSetAllocationFailed;
+        }
+
+        // Configure each descriptor set to point to its uniform buffer
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const buffer_info = vk.VkDescriptorBufferInfo{
+                .buffer = self.uniform_buffers[i],
+                .offset = 0,
+                .range = @sizeOf(UniformBufferObject),
+            };
+
+            const descriptor_write = vk.VkWriteDescriptorSet{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_sets[i],
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &buffer_info,
+                .pTexelBufferView = null,
+            };
+
+            vkUpdateDescriptorSets(self.device, 1, &descriptor_write, 0, null);
+        }
+
+        logger.info("Descriptor sets created", .{});
+    }
+
     fn findMemoryType(self: *Self, type_filter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
         const vkGetPhysicalDeviceMemoryProperties = vk.vkGetPhysicalDeviceMemoryProperties orelse return error.VulkanFunctionNotLoaded;
 
@@ -1185,6 +1387,30 @@ pub const RenderSystem = struct {
         }
     }
 
+    fn destroyDescriptorPool(self: *Self) void {
+        if (self.descriptor_pool) |pool| {
+            if (vk.vkDestroyDescriptorPool) |destroy| destroy(self.device, pool, null);
+            self.descriptor_pool = null;
+        }
+    }
+
+    fn destroyUniformBuffers(self: *Self) void {
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
+        const vkFreeMemory = vk.vkFreeMemory orelse return;
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            if (self.uniform_buffers[i]) |buf| {
+                vkDestroyBuffer(self.device, buf, null);
+                self.uniform_buffers[i] = null;
+            }
+            if (self.uniform_buffers_memory[i]) |mem| {
+                vkFreeMemory(self.device, mem, null);
+                self.uniform_buffers_memory[i] = null;
+            }
+            self.uniform_buffers_mapped[i] = null;
+        }
+    }
+
     fn destroyBuffers(self: *Self) void {
         const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
         const vkFreeMemory = vk.vkFreeMemory orelse return;
@@ -1226,6 +1452,13 @@ pub const RenderSystem = struct {
         if (self.pipeline_layout) |l| {
             if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
             self.pipeline_layout = null;
+        }
+    }
+
+    fn destroyDescriptorSetLayout(self: *Self) void {
+        if (self.descriptor_set_layout) |layout| {
+            if (vk.vkDestroyDescriptorSetLayout) |destroy| destroy(self.device, layout, null);
+            self.descriptor_set_layout = null;
         }
     }
 
