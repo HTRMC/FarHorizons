@@ -47,16 +47,49 @@ pub const Vertex = extern struct {
     }
 };
 
-// Quad vertices (4 corners) in world space - a 1x1 quad at z=0
-const quad_vertices = [_]Vertex{
-    .{ .pos = .{ -0.5, -0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 } }, // bottom-left (red)
-    .{ .pos = .{ 0.5, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 } }, // bottom-right (green)
-    .{ .pos = .{ 0.5, 0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 } }, // top-right (blue)
-    .{ .pos = .{ -0.5, 0.5, 0.0 }, .color = .{ 1.0, 1.0, 1.0 } }, // top-left (white)
+// Cube vertices - matching Minecraft's FaceInfo.java winding order (CCW when viewed from outside)
+const cube_vertices = [_]Vertex{
+    // SOUTH face (+Z) - red - FaceInfo: (MIN_X,MAX_Y,MAX_Z), (MIN_X,MIN_Y,MAX_Z), (MAX_X,MIN_Y,MAX_Z), (MAX_X,MAX_Y,MAX_Z)
+    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
+    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
+    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
+    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
+    // NORTH face (-Z) - green - FaceInfo: (MAX_X,MAX_Y,MIN_Z), (MAX_X,MIN_Y,MIN_Z), (MIN_X,MIN_Y,MIN_Z), (MIN_X,MAX_Y,MIN_Z)
+    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
+    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
+    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
+    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
+    // EAST face (+X) - blue - FaceInfo: (MAX_X,MAX_Y,MAX_Z), (MAX_X,MIN_Y,MAX_Z), (MAX_X,MIN_Y,MIN_Z), (MAX_X,MAX_Y,MIN_Z)
+    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
+    // WEST face (-X) - yellow - FaceInfo: (MIN_X,MAX_Y,MIN_Z), (MIN_X,MIN_Y,MIN_Z), (MIN_X,MIN_Y,MAX_Z), (MIN_X,MAX_Y,MAX_Z)
+    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
+    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
+    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
+    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
+    // UP face (+Y) - cyan - FaceInfo: (MIN_X,MAX_Y,MIN_Z), (MIN_X,MAX_Y,MAX_Z), (MAX_X,MAX_Y,MAX_Z), (MAX_X,MAX_Y,MIN_Z)
+    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
+    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
+    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
+    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
+    // DOWN face (-Y) - magenta - FaceInfo: (MIN_X,MIN_Y,MAX_Z), (MIN_X,MIN_Y,MIN_Z), (MAX_X,MIN_Y,MIN_Z), (MAX_X,MIN_Y,MAX_Z)
+    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
+    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
 };
 
-// Quad indices (2 triangles)
-const quad_indices = [_]u16{ 0, 1, 2, 2, 3, 0 };
+// Cube indices (36 indices - 6 per face, 2 triangles each)
+const cube_indices = [_]u16{
+    0,  1,  2,  2,  3,  0, // front
+    4,  5,  6,  6,  7,  4, // back
+    8,  9,  10, 10, 11, 8, // right
+    12, 13, 14, 14, 15, 12, // left
+    16, 17, 18, 18, 19, 16, // top
+    20, 21, 22, 22, 23, 20, // bottom
+};
 
 pub const RenderSystem = struct {
     const Self = @This();
@@ -80,6 +113,12 @@ pub const RenderSystem = struct {
     swapchain_image_views: []vk.VkImageView = &.{},
     swapchain_format: vk.VkFormat = vk.VK_FORMAT_UNDEFINED,
     swapchain_extent: vk.VkExtent2D = .{ .width = 0, .height = 0 },
+
+    // Depth buffer
+    depth_image: vk.VkImage = null,
+    depth_image_memory: vk.VkDeviceMemory = null,
+    depth_image_view: vk.VkImageView = null,
+    depth_format: vk.VkFormat = vk.VK_FORMAT_UNDEFINED,
 
     // Render pass & framebuffers
     render_pass: vk.VkRenderPass = null,
@@ -151,6 +190,7 @@ pub const RenderSystem = struct {
         try self.createLogicalDevice();
         try self.createSwapchain();
         try self.createImageViews();
+        try self.createDepthResources();
         try self.createRenderPass();
         try self.createDescriptorSetLayout();
         try self.createGraphicsPipeline();
@@ -184,6 +224,7 @@ pub const RenderSystem = struct {
         self.destroyPipeline();
         self.destroyDescriptorSetLayout();
         self.destroyRenderPass();
+        self.destroyDepthResources();
         self.destroyImageViews();
         self.destroySwapchain();
         self.destroyDevice();
@@ -298,12 +339,14 @@ pub const RenderSystem = struct {
 
         // Cleanup old swapchain resources
         self.destroyFramebuffers();
+        self.destroyDepthResources();
         self.destroyImageViews();
         self.destroySwapchain();
 
         // Recreate
         try self.createSwapchain();
         try self.createImageViews();
+        try self.createDepthResources();
         try self.createFramebuffers();
 
         logger.info("Swapchain recreated: {}x{}", .{ self.swapchain_extent.width, self.swapchain_extent.height });
@@ -336,8 +379,9 @@ pub const RenderSystem = struct {
             return error.CommandBufferBeginFailed;
         }
 
-        const clear_color = vk.VkClearValue{
-            .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } },
+        const clear_values = [_]vk.VkClearValue{
+            .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
+            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
         };
 
         const render_pass_info = vk.VkRenderPassBeginInfo{
@@ -349,8 +393,8 @@ pub const RenderSystem = struct {
                 .offset = .{ .x = 0, .y = 0 },
                 .extent = self.swapchain_extent,
             },
-            .clearValueCount = 1,
-            .pClearValues = &clear_color,
+            .clearValueCount = clear_values.len,
+            .pClearValues = &clear_values,
         };
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
@@ -385,7 +429,7 @@ pub const RenderSystem = struct {
         vkCmdSetScissor(command_buffer, 0, 1, &scissor);
 
         // Draw indexed (6 indices for quad)
-        vkCmdDrawIndexed(command_buffer, quad_indices.len, 1, 0, 0, 0);
+        vkCmdDrawIndexed(command_buffer, cube_indices.len, 1, 0, 0, 0);
         vkCmdEndRenderPass(command_buffer);
 
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
@@ -728,6 +772,114 @@ pub const RenderSystem = struct {
         logger.info("Image views created", .{});
     }
 
+    fn createDepthResources(self: *Self) !void {
+        const vkCreateImage = vk.vkCreateImage orelse return error.VulkanFunctionNotLoaded;
+        const vkGetImageMemoryRequirements = vk.vkGetImageMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindImageMemory = vk.vkBindImageMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateImageView = vk.vkCreateImageView orelse return error.VulkanFunctionNotLoaded;
+
+        self.depth_format = try self.findDepthFormat();
+
+        const image_info = vk.VkImageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .imageType = vk.VK_IMAGE_TYPE_2D,
+            .format = self.depth_format,
+            .extent = .{
+                .width = self.swapchain_extent.width,
+                .height = self.swapchain_extent.height,
+                .depth = 1,
+            },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
+            .usage = vk.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+
+        if (vkCreateImage(self.device, &image_info, null, &self.depth_image) != vk.VK_SUCCESS) {
+            return error.DepthImageCreationFailed;
+        }
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetImageMemoryRequirements(self.device, self.depth_image, &mem_requirements);
+
+        const mem_type = try self.findMemoryType(
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        );
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = mem_type,
+        };
+
+        if (vkAllocateMemory(self.device, &alloc_info, null, &self.depth_image_memory) != vk.VK_SUCCESS) {
+            return error.DepthMemoryAllocationFailed;
+        }
+
+        if (vkBindImageMemory(self.device, self.depth_image, self.depth_image_memory, 0) != vk.VK_SUCCESS) {
+            return error.DepthImageMemoryBindFailed;
+        }
+
+        const view_info = vk.VkImageViewCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .image = self.depth_image,
+            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+            .format = self.depth_format,
+            .components = .{
+                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        if (vkCreateImageView(self.device, &view_info, null, &self.depth_image_view) != vk.VK_SUCCESS) {
+            return error.DepthImageViewCreationFailed;
+        }
+
+        logger.info("Depth resources created", .{});
+    }
+
+    fn findDepthFormat(self: *Self) !vk.VkFormat {
+        const vkGetPhysicalDeviceFormatProperties = vk.vkGetPhysicalDeviceFormatProperties orelse return error.VulkanFunctionNotLoaded;
+
+        const candidates = [_]vk.VkFormat{
+            vk.VK_FORMAT_D32_SFLOAT,
+            vk.VK_FORMAT_D32_SFLOAT_S8_UINT,
+            vk.VK_FORMAT_D24_UNORM_S8_UINT,
+        };
+
+        for (candidates) |format| {
+            var props: vk.VkFormatProperties = undefined;
+            vkGetPhysicalDeviceFormatProperties(self.physical_device, format, &props);
+
+            if ((props.optimalTilingFeatures & vk.VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0) {
+                return format;
+            }
+        }
+
+        return error.NoSupportedDepthFormat;
+    }
+
     fn createRenderPass(self: *Self) !void {
         const vkCreateRenderPass = vk.vkCreateRenderPass orelse return error.VulkanFunctionNotLoaded;
 
@@ -743,9 +895,28 @@ pub const RenderSystem = struct {
             .finalLayout = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
         };
 
+        const depth_attachment = vk.VkAttachmentDescription{
+            .flags = 0,
+            .format = self.depth_format,
+            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+        };
+
+        const attachments = [_]vk.VkAttachmentDescription{ color_attachment, depth_attachment };
+
         const color_attachment_ref = vk.VkAttachmentReference{
             .attachment = 0,
             .layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        const depth_attachment_ref = vk.VkAttachmentReference{
+            .attachment = 1,
+            .layout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         };
 
         const subpass = vk.VkSubpassDescription{
@@ -756,7 +927,7 @@ pub const RenderSystem = struct {
             .colorAttachmentCount = 1,
             .pColorAttachments = &color_attachment_ref,
             .pResolveAttachments = null,
-            .pDepthStencilAttachment = null,
+            .pDepthStencilAttachment = &depth_attachment_ref,
             .preserveAttachmentCount = 0,
             .pPreserveAttachments = null,
         };
@@ -764,10 +935,10 @@ pub const RenderSystem = struct {
         const dependency = vk.VkSubpassDependency{
             .srcSubpass = vk.VK_SUBPASS_EXTERNAL,
             .dstSubpass = 0,
-            .srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            .dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
             .srcAccessMask = 0,
-            .dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
             .dependencyFlags = 0,
         };
 
@@ -775,8 +946,8 @@ pub const RenderSystem = struct {
             .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .attachmentCount = 1,
-            .pAttachments = &color_attachment,
+            .attachmentCount = attachments.len,
+            .pAttachments = &attachments,
             .subpassCount = 1,
             .pSubpasses = &subpass,
             .dependencyCount = 1,
@@ -902,7 +1073,7 @@ pub const RenderSystem = struct {
             .rasterizerDiscardEnable = vk.VK_FALSE,
             .polygonMode = vk.VK_POLYGON_MODE_FILL,
             .cullMode = vk.VK_CULL_MODE_BACK_BIT,
-            .frontFace = vk.VK_FRONT_FACE_CLOCKWISE,
+            .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .depthBiasEnable = vk.VK_FALSE,
             .depthBiasConstantFactor = 0.0,
             .depthBiasClamp = 0.0,
@@ -920,6 +1091,21 @@ pub const RenderSystem = struct {
             .pSampleMask = null,
             .alphaToCoverageEnable = vk.VK_FALSE,
             .alphaToOneEnable = vk.VK_FALSE,
+        };
+
+        const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_TRUE,
+            .depthWriteEnable = vk.VK_TRUE,
+            .depthCompareOp = vk.VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
         };
 
         const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
@@ -971,7 +1157,7 @@ pub const RenderSystem = struct {
             .pViewportState = &viewport_state,
             .pRasterizationState = &rasterizer,
             .pMultisampleState = &multisampling,
-            .pDepthStencilState = null,
+            .pDepthStencilState = &depth_stencil,
             .pColorBlendState = &color_blending,
             .pDynamicState = &dynamic_state,
             .layout = self.pipeline_layout,
@@ -1010,14 +1196,14 @@ pub const RenderSystem = struct {
         self.framebuffers = try self.allocator.alloc(vk.VkFramebuffer, self.swapchain_image_views.len);
 
         for (self.swapchain_image_views, 0..) |image_view, i| {
-            const attachments = [_]vk.VkImageView{image_view};
+            const attachments = [_]vk.VkImageView{ image_view, self.depth_image_view };
 
             const framebuffer_info = vk.VkFramebufferCreateInfo{
                 .sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
                 .renderPass = self.render_pass,
-                .attachmentCount = 1,
+                .attachmentCount = attachments.len,
                 .pAttachments = &attachments,
                 .width = self.swapchain_extent.width,
                 .height = self.swapchain_extent.height,
@@ -1057,7 +1243,7 @@ pub const RenderSystem = struct {
         const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
         const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
 
-        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(quad_vertices));
+        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(cube_vertices));
 
         const buffer_info = vk.VkBufferCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -1104,7 +1290,7 @@ pub const RenderSystem = struct {
         }
 
         const dest: [*]Vertex = @ptrCast(@alignCast(data));
-        @memcpy(dest[0..quad_vertices.len], &quad_vertices);
+        @memcpy(dest[0..cube_vertices.len], &cube_vertices);
 
         vkUnmapMemory(self.device, self.vertex_buffer_memory);
 
@@ -1119,7 +1305,7 @@ pub const RenderSystem = struct {
         const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
         const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
 
-        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(quad_indices));
+        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(cube_indices));
 
         const buffer_info = vk.VkBufferCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
@@ -1166,7 +1352,7 @@ pub const RenderSystem = struct {
         }
 
         const dest: [*]u16 = @ptrCast(@alignCast(data));
-        @memcpy(dest[0..quad_indices.len], &quad_indices);
+        @memcpy(dest[0..cube_indices.len], &cube_indices);
 
         vkUnmapMemory(self.device, self.index_buffer_memory);
 
@@ -1466,6 +1652,25 @@ pub const RenderSystem = struct {
         if (self.render_pass) |rp| {
             if (vk.vkDestroyRenderPass) |destroy| destroy(self.device, rp, null);
             self.render_pass = null;
+        }
+    }
+
+    fn destroyDepthResources(self: *Self) void {
+        const vkDestroyImageView = vk.vkDestroyImageView orelse return;
+        const vkDestroyImage = vk.vkDestroyImage orelse return;
+        const vkFreeMemory = vk.vkFreeMemory orelse return;
+
+        if (self.depth_image_view) |view| {
+            vkDestroyImageView(self.device, view, null);
+            self.depth_image_view = null;
+        }
+        if (self.depth_image) |image| {
+            vkDestroyImage(self.device, image, null);
+            self.depth_image = null;
+        }
+        if (self.depth_image_memory) |mem| {
+            vkFreeMemory(self.device, mem, null);
+            self.depth_image_memory = null;
         }
     }
 
