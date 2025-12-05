@@ -48,38 +48,29 @@ pub const Camera = struct {
         self.setRotation(self.yaw + delta_yaw, self.pitch + delta_pitch);
     }
 
-    /// Update direction vectors from yaw/pitch
     fn updateVectors(self: *Self) void {
         const yaw_rad = math.degreesToRadians(self.yaw);
         const pitch_rad = math.degreesToRadians(self.pitch);
 
-        // Calculate forward vector
         self.forward = Vec3{
             .x = -@sin(yaw_rad) * @cos(pitch_rad),
             .y = @sin(pitch_rad),
-            .z = -@cos(yaw_rad) * @cos(pitch_rad),
+            .z = @cos(yaw_rad) * @cos(pitch_rad),
         };
 
-        // Right vector is perpendicular to forward on XZ plane
         self.right = Vec3{
             .x = @cos(yaw_rad),
             .y = 0,
-            .z = -@sin(yaw_rad),
+            .z = @sin(yaw_rad),
         };
 
-        // Up vector is perpendicular to both
         self.up = self.right.cross(self.forward).normalize();
     }
 
     /// Move relative to camera orientation
     pub fn moveRelative(self: *Self, forward_amount: f32, right_amount: f32, up_amount: f32) void {
         // For movement, use horizontal forward (ignore pitch)
-        const raw_forward = Vec3{
-            .x = -@sin(math.degreesToRadians(self.yaw)),
-            .y = 0,
-            .z = -@cos(math.degreesToRadians(self.yaw)),
-        };
-        const horizontal_forward = raw_forward.normalize();
+        const horizontal_forward = self.getHorizontalForward();
 
         var movement = Vec3.ZERO;
         movement = movement.add(horizontal_forward.scale(forward_amount));
@@ -95,14 +86,15 @@ pub const Camera = struct {
         return Mat4.lookAt(self.position, target, Vec3.UP);
     }
 
-    /// Get projection matrix
     pub fn getProjectionMatrix(self: *const Self, aspect_ratio: f32) Mat4 {
-        return Mat4.perspective(
+        var proj = Mat4.perspective(
             math.degreesToRadians(self.fov),
             aspect_ratio,
             self.near,
             self.far,
         );
+        proj.data[5] = -proj.data[5]; // Vulkan Y-flip
+        return proj;
     }
 
     /// Get combined view-projection matrix
@@ -112,13 +104,12 @@ pub const Camera = struct {
         return Mat4.multiply(proj, view);
     }
 
-    /// Get forward vector on XZ plane (for movement)
     pub fn getHorizontalForward(self: *const Self) Vec3 {
-        const raw = Vec3{
-            .x = -@sin(math.degreesToRadians(self.yaw)),
+        const yaw_rad = math.degreesToRadians(self.yaw);
+        return Vec3{
+            .x = -@sin(yaw_rad),
             .y = 0,
-            .z = -@cos(math.degreesToRadians(self.yaw)),
-        };
-        return raw.normalize();
+            .z = @cos(yaw_rad),
+        }.normalize();
     }
 };

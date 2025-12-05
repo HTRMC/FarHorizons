@@ -23,6 +23,11 @@ pub const math = @import("math.zig");
 pub const Vec3 = math.Vec3;
 pub const Mat4 = math.Mat4;
 
-// Camera and player
+// Camera
 pub const Camera = @import("camera.zig").Camera;
+
+// Entity hierarchy (like Minecraft's)
+pub const Entity = @import("entity.zig").Entity;
+pub const LivingEntity = @import("living_entity.zig").LivingEntity;
 pub const Player = @import("player.zig").Player;
+pub const Abilities = @import("abilities.zig").Abilities;

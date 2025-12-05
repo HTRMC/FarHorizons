@@ -34,6 +34,9 @@ pub const MouseHandler = struct {
     // Sensitivity settings
     sensitivity: f64 = 0.5,
 
+    // Scroll wheel accumulator for speed adjustment
+    accumulated_scroll: f64 = 0,
+
     pub fn init(window: *Window) Self {
         return .{
             .window = window,
@@ -94,8 +97,10 @@ pub const MouseHandler = struct {
         }
     }
 
-    fn scrollCallback(_: ?*c.GLFWwindow, _: f64, _: f64) callconv(.c) void {
-        // TODO: Handle scroll events (hotbar selection, zoom, etc.)
+    fn scrollCallback(window: ?*c.GLFWwindow, _: f64, yoffset: f64) callconv(.c) void {
+        const self = getHandler(window) orelse return;
+        // Accumulate scroll for speed adjustment (like Minecraft's MouseHandler.onScroll)
+        self.accumulated_scroll += yoffset;
     }
 
     fn getHandler(glfw_window: ?*c.GLFWwindow) ?*Self {
@@ -205,11 +210,9 @@ pub const MouseHandler = struct {
         const sensitivity_mod = ss * ss * ss;
         const sens = sensitivity_mod * 8.0;
 
-        // Apply to mouse delta, then multiply by 0.15 to convert to rotation degrees
-        // (Minecraft does this in Entity.turn())
         return .{
-            .yaw = -movement.dx * sens * 0.15, // Negate: mouse right = look right
-            .pitch = movement.dy * sens * 0.15,
+            .yaw = movement.dx * sens * 0.15,
+            .pitch = -movement.dy * sens * 0.15,
         };
     }
 
@@ -239,5 +242,13 @@ pub const MouseHandler = struct {
 
     pub fn setSensitivity(self: *Self, sensitivity: f64) void {
         self.sensitivity = std.math.clamp(sensitivity, 0.0, 1.0);
+    }
+
+    /// Get accumulated scroll and reset accumulator
+    /// Like Minecraft's scroll handling in MouseHandler.onScroll
+    pub fn getAccumulatedScroll(self: *Self) f64 {
+        const scroll = self.accumulated_scroll;
+        self.accumulated_scroll = 0;
+        return scroll;
     }
 };

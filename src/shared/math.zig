@@ -10,8 +10,8 @@ pub const Vec3 = struct {
     pub const ZERO = Vec3{ .x = 0, .y = 0, .z = 0 };
     pub const UP = Vec3{ .x = 0, .y = 1, .z = 0 };
     pub const DOWN = Vec3{ .x = 0, .y = -1, .z = 0 };
-    pub const FORWARD = Vec3{ .x = 0, .y = 0, .z = -1 };
-    pub const BACKWARD = Vec3{ .x = 0, .y = 0, .z = 1 };
+    pub const FORWARD = Vec3{ .x = 0, .y = 0, .z = 1 };
+    pub const BACKWARD = Vec3{ .x = 0, .y = 0, .z = -1 };
     pub const LEFT = Vec3{ .x = -1, .y = 0, .z = 0 };
     pub const RIGHT = Vec3{ .x = 1, .y = 0, .z = 0 };
 
