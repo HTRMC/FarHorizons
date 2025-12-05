@@ -33,6 +33,7 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     };
     exe.addObjectFile(lib_dep.path(libName(b, "glfw")));
     exe.addObjectFile(lib_dep.path(libName(b, "volk")));
+    exe.addObjectFile(lib_dep.path(libName(b, "stb_image")));
 
     // Link system libraries (GLFW loads X11 dynamically on Linux)
     if (t.os.tag == .windows) {
@@ -79,6 +80,17 @@ pub fn build(b: *std.Build) void {
         volk_module.addIncludePath(d.path(""));
     }
 
+    // Create stb_image Zig bindings module
+    const stb_image_module = b.createModule(.{
+        .root_source_file = b.path("src/client/stb_image.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    if (headers_dep) |d| {
+        stb_image_module.addIncludePath(d.path(""));
+    }
+
     // Create Platform module (window management)
     const platform_module = b.createModule(.{
         .root_source_file = b.path("src/client/platform/platform.zig"),
@@ -99,6 +111,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "volk", .module = volk_module },
             .{ .name = "shared", .module = shared_module },
             .{ .name = "platform", .module = platform_module },
+            .{ .name = "stb_image", .module = stb_image_module },
         },
     });
 
@@ -114,6 +127,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "volk", .module = volk_module },
                 .{ .name = "platform", .module = platform_module },
                 .{ .name = "renderer", .module = renderer_module },
+                .{ .name = "stb_image", .module = stb_image_module },
             },
         }),
     });
