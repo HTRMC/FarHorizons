@@ -17,6 +17,7 @@ const MouseHandler = platform.MouseHandler;
 const KeyboardInput = platform.KeyboardInput;
 const InputConstants = platform.InputConstants;
 const RenderSystem = renderer.RenderSystem;
+const ModelLoader = renderer.block.ModelLoader;
 const LocalPlayer = client_player.LocalPlayer;
 
 pub const FarHorizonsClient = struct {
@@ -83,6 +84,9 @@ pub const FarHorizonsClient = struct {
         // Initialize render system (Vulkan) with window for surface
         try self.render_system.initBackend(&self.window);
         defer self.render_system.shutdown();
+
+        // Test model loading
+        try self.testModelLoading();
 
         // Render first frame before showing window (avoids white flash)
         self.render_system.drawFrame() catch {};
@@ -173,5 +177,63 @@ pub const FarHorizonsClient = struct {
         }
 
         logger.info("Main loop ended, shutting down", .{});
+    }
+
+    fn testModelLoading(self: *Self) !void {
+        logger.info("Testing model loading...", .{});
+
+        var model_loader = ModelLoader.init(self.allocator, self.config.location.asset_directory);
+        defer model_loader.deinit();
+
+        // Load oak_slab which has parent chain: oak_slab -> slab -> block
+        var model = model_loader.loadModel("farhorizons:block/oak_slab") catch |err| {
+            logger.err("Failed to load oak_slab model: {}", .{err});
+            return err;
+        };
+        defer model.deinit();
+
+        // Resolve texture references
+        model_loader.resolveTextures(&model) catch |err| {
+            logger.err("Failed to resolve textures: {}", .{err});
+            return err;
+        };
+
+        // Log the loaded model info
+        logger.info("Model loaded successfully!", .{});
+
+        if (model.elements) |elements| {
+            logger.info("  Elements: {d}", .{elements.len});
+            for (elements, 0..) |elem, i| {
+                logger.info("  Element {d}: from=[{d:.1},{d:.1},{d:.1}] to=[{d:.1},{d:.1},{d:.1}]", .{
+                    i,
+                    elem.from[0],
+                    elem.from[1],
+                    elem.from[2],
+                    elem.to[0],
+                    elem.to[1],
+                    elem.to[2],
+                });
+
+                // Iterate over all directions to find faces
+                const Direction = renderer.block.Direction;
+                inline for (std.meta.fields(Direction)) |field| {
+                    const dir: Direction = @enumFromInt(field.value);
+                    if (elem.faces.get(dir)) |face| {
+                        logger.info("    Face {s}: texture={s}", .{
+                            @tagName(dir),
+                            face.texture,
+                        });
+                    }
+                }
+            }
+        } else {
+            logger.info("  No elements in model", .{});
+        }
+
+        logger.info("  Textures:", .{});
+        var tex_it = model.textures.iterator();
+        while (tex_it.next()) |entry| {
+            logger.info("    {s} = {s}", .{ entry.key_ptr.*, entry.value_ptr.* });
+        }
     }
 };
