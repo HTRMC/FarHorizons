@@ -2,4 +2,5 @@
 
 pub const RenderSystem = @import("render_system.zig").RenderSystem;
 pub const Vertex = @import("render_system.zig").Vertex;
+pub const TextureManager = @import("texture_manager.zig").TextureManager;
 pub const block = @import("block/model.zig");

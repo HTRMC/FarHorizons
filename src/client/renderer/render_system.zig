@@ -6,7 +6,6 @@ const vk = volk.c;
 const shared = @import("shared");
 const Logger = shared.Logger;
 const platform = @import("platform");
-const stb_image = @import("stb_image");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -22,6 +21,7 @@ pub const Vertex = extern struct {
     pos: [3]f32,
     color: [3]f32,
     uv: [2]f32,
+    tex_index: u32, // Texture array layer index
 
     pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
         return .{
@@ -31,7 +31,7 @@ pub const Vertex = extern struct {
         };
     }
 
-    pub fn getAttributeDescriptions() [3]vk.VkVertexInputAttributeDescription {
+    pub fn getAttributeDescriptions() [4]vk.VkVertexInputAttributeDescription {
         return .{
             .{
                 .binding = 0,
@@ -51,54 +51,17 @@ pub const Vertex = extern struct {
                 .format = vk.VK_FORMAT_R32G32_SFLOAT,
                 .offset = @offsetOf(Vertex, "uv"),
             },
+            .{
+                .binding = 0,
+                .location = 3,
+                .format = vk.VK_FORMAT_R32_UINT,
+                .offset = @offsetOf(Vertex, "tex_index"),
+            },
         };
     }
 };
 
-// Cube vertices - matching Minecraft's FaceInfo.java winding order (CCW when viewed from outside)
-// UV coords: (0,0)=top-left, (0,1)=bottom-left, (1,1)=bottom-right, (1,0)=top-right
-const cube_vertices = [_]Vertex{
-    // SOUTH face (+Z) - red
-    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
-    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
-    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
-    // NORTH face (-Z) - green
-    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
-    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
-    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
-    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
-    // EAST face (+X) - blue
-    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .uv = .{ 0.0, 0.0 } },
-    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .uv = .{ 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .uv = .{ 1.0, 1.0 } },
-    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .uv = .{ 1.0, 0.0 } },
-    // WEST face (-X) - yellow
-    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
-    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
-    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
-    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
-    // UP face (+Y) - cyan
-    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 1.0 }, .uv = .{ 0.0, 0.0 } },
-    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 }, .uv = .{ 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 }, .uv = .{ 1.0, 1.0 } },
-    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 1.0 }, .uv = .{ 1.0, 0.0 } },
-    // DOWN face (-Y) - magenta
-    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 }, .uv = .{ 0.0, 0.0 } },
-    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 }, .uv = .{ 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 }, .uv = .{ 1.0, 1.0 } },
-    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 }, .uv = .{ 1.0, 0.0 } },
-};
-
-// Cube indices (36 indices - 6 per face, 2 triangles each)
-const cube_indices = [_]u16{
-    0,  1,  2,  2,  3,  0, // front
-    4,  5,  6,  6,  7,  4, // back
-    8,  9,  10, 10, 11, 8, // right
-    12, 13, 14, 14, 15, 12, // left
-    16, 17, 18, 18, 19, 16, // top
-    20, 21, 22, 22, 23, 20, // bottom
-};
+// Note: Geometry is now generated dynamically from block models via uploadMesh()
 
 pub const RenderSystem = struct {
     const Self = @This();
@@ -149,9 +112,7 @@ pub const RenderSystem = struct {
     uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.VkDeviceMemory = .{null} ** MAX_FRAMES_IN_FLIGHT,
     uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
-    // Texture resources
-    texture_image: vk.VkImage = null,
-    texture_image_memory: vk.VkDeviceMemory = null,
+    // Texture resources (set externally by TextureManager)
     texture_image_view: vk.VkImageView = null,
     texture_sampler: vk.VkSampler = null,
 
@@ -212,14 +173,10 @@ pub const RenderSystem = struct {
         try self.createGraphicsPipeline();
         try self.createFramebuffers();
         try self.createCommandPool();
-        try self.createVertexBuffer();
-        try self.createIndexBuffer();
+        // Note: Vertex/Index buffers are created by uploadMesh() with actual geometry
         try self.createUniformBuffers();
-        try self.createTextureImage();
-        try self.createTextureImageView();
-        try self.createTextureSampler();
-        try self.createDescriptorPool();
-        try self.createDescriptorSets();
+        // Note: Texture resources and descriptor sets are created after TextureManager is initialized
+        // See initializeTextures() which must be called after setting texture resources
         try self.createCommandBuffers();
         try self.createSyncObjects();
 
@@ -237,9 +194,7 @@ pub const RenderSystem = struct {
         self.destroySyncObjects();
         self.destroyCommandPool();
         self.destroyDescriptorPool();
-        self.destroyTextureSampler();
-        self.destroyTextureImageView();
-        self.destroyTextureImage();
+        // Note: texture_image_view and texture_sampler are owned by TextureManager
         self.destroyUniformBuffers();
         self.destroyBuffers();
         self.destroyFramebuffers();
@@ -254,6 +209,38 @@ pub const RenderSystem = struct {
         self.destroyInstance();
 
         logger.info("Render system shut down", .{});
+    }
+
+    /// Set texture resources from TextureManager and create descriptor sets
+    pub fn setTextureResources(self: *Self, image_view: vk.VkImageView, sampler: vk.VkSampler) !void {
+        self.texture_image_view = image_view;
+        self.texture_sampler = sampler;
+
+        // Now we can create descriptor pool and sets
+        try self.createDescriptorPool();
+        try self.createDescriptorSets();
+
+        logger.info("Texture resources set and descriptors created", .{});
+    }
+
+    /// Get Vulkan device (for TextureManager)
+    pub fn getDevice(self: *const Self) vk.VkDevice {
+        return self.device;
+    }
+
+    /// Get Vulkan physical device (for TextureManager)
+    pub fn getPhysicalDevice(self: *const Self) vk.VkPhysicalDevice {
+        return self.physical_device;
+    }
+
+    /// Get command pool (for TextureManager)
+    pub fn getCommandPool(self: *const Self) vk.VkCommandPool {
+        return self.command_pool;
+    }
+
+    /// Get graphics queue (for TextureManager)
+    pub fn getGraphicsQueue(self: *const Self) vk.VkQueue {
+        return self.graphics_queue;
     }
 
     pub fn drawFrame(self: *Self) !void {
@@ -1409,130 +1396,7 @@ pub const RenderSystem = struct {
         logger.info("Command pool created", .{});
     }
 
-    fn createVertexBuffer(self: *Self) !void {
-        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
-
-        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(cube_vertices));
-
-        const buffer_info = vk.VkBufferCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .size = buffer_size,
-            .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-        };
-
-        if (vkCreateBuffer(self.device, &buffer_info, null, &self.vertex_buffer) != vk.VK_SUCCESS) {
-            return error.BufferCreationFailed;
-        }
-
-        var mem_requirements: vk.VkMemoryRequirements = undefined;
-        vkGetBufferMemoryRequirements(self.device, self.vertex_buffer, &mem_requirements);
-
-        const mem_type = try self.findMemoryType(
-            mem_requirements.memoryTypeBits,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        );
-
-        const alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = mem_requirements.size,
-            .memoryTypeIndex = mem_type,
-        };
-
-        if (vkAllocateMemory(self.device, &alloc_info, null, &self.vertex_buffer_memory) != vk.VK_SUCCESS) {
-            return error.MemoryAllocationFailed;
-        }
-
-        if (vkBindBufferMemory(self.device, self.vertex_buffer, self.vertex_buffer_memory, 0) != vk.VK_SUCCESS) {
-            return error.BufferMemoryBindFailed;
-        }
-
-        // Map memory and copy vertex data
-        var data: ?*anyopaque = null;
-        if (vkMapMemory(self.device, self.vertex_buffer_memory, 0, buffer_size, 0, &data) != vk.VK_SUCCESS) {
-            return error.MemoryMapFailed;
-        }
-
-        const dest: [*]Vertex = @ptrCast(@alignCast(data));
-        @memcpy(dest[0..cube_vertices.len], &cube_vertices);
-
-        vkUnmapMemory(self.device, self.vertex_buffer_memory);
-
-        logger.info("Vertex buffer created", .{});
-    }
-
-    fn createIndexBuffer(self: *Self) !void {
-        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
-
-        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(cube_indices));
-
-        const buffer_info = vk.VkBufferCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .size = buffer_size,
-            .usage = vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-        };
-
-        if (vkCreateBuffer(self.device, &buffer_info, null, &self.index_buffer) != vk.VK_SUCCESS) {
-            return error.BufferCreationFailed;
-        }
-
-        var mem_requirements: vk.VkMemoryRequirements = undefined;
-        vkGetBufferMemoryRequirements(self.device, self.index_buffer, &mem_requirements);
-
-        const mem_type = try self.findMemoryType(
-            mem_requirements.memoryTypeBits,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        );
-
-        const alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = mem_requirements.size,
-            .memoryTypeIndex = mem_type,
-        };
-
-        if (vkAllocateMemory(self.device, &alloc_info, null, &self.index_buffer_memory) != vk.VK_SUCCESS) {
-            return error.MemoryAllocationFailed;
-        }
-
-        if (vkBindBufferMemory(self.device, self.index_buffer, self.index_buffer_memory, 0) != vk.VK_SUCCESS) {
-            return error.BufferMemoryBindFailed;
-        }
-
-        // Map memory and copy index data
-        var data: ?*anyopaque = null;
-        if (vkMapMemory(self.device, self.index_buffer_memory, 0, buffer_size, 0, &data) != vk.VK_SUCCESS) {
-            return error.MemoryMapFailed;
-        }
-
-        const dest: [*]u16 = @ptrCast(@alignCast(data));
-        @memcpy(dest[0..cube_indices.len], &cube_indices);
-
-        vkUnmapMemory(self.device, self.index_buffer_memory);
-
-        self.index_count = cube_indices.len;
-        logger.info("Index buffer created with {d} indices", .{self.index_count});
-    }
+    // Note: Vertex/Index buffers are created dynamically by uploadMesh()
 
     fn createUniformBuffers(self: *Self) !void {
         const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
@@ -1591,438 +1455,7 @@ pub const RenderSystem = struct {
         logger.info("Uniform buffers created", .{});
     }
 
-    fn createTextureImage(self: *Self) !void {
-        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkCreateImage = vk.vkCreateImage orelse return error.VulkanFunctionNotLoaded;
-        const vkGetImageMemoryRequirements = vk.vkGetImageMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkBindImageMemory = vk.vkBindImageMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
-
-        // Load the texture using stb_image
-        // Don't flip - Minecraft UVs expect (0,0) at top-left which matches Vulkan
-        stb_image.setFlipVerticallyOnLoad(false);
-        const image = stb_image.load("assets/farhorizons/textures/block/stone.png", 4) catch {
-            logger.err("Failed to load texture image", .{});
-            return error.TextureLoadFailed;
-        };
-        defer image.free();
-
-        const image_size: vk.VkDeviceSize = @as(vk.VkDeviceSize, image.width) * image.height * 4;
-
-        logger.info("Loaded texture: {}x{}, {} bytes", .{ image.width, image.height, image_size });
-
-        // Create staging buffer
-        var staging_buffer: vk.VkBuffer = null;
-        var staging_buffer_memory: vk.VkDeviceMemory = null;
-
-        const staging_buffer_info = vk.VkBufferCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .size = image_size,
-            .usage = vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-        };
-
-        if (vkCreateBuffer(self.device, &staging_buffer_info, null, &staging_buffer) != vk.VK_SUCCESS) {
-            return error.BufferCreationFailed;
-        }
-
-        var mem_requirements: vk.VkMemoryRequirements = undefined;
-        vkGetBufferMemoryRequirements(self.device, staging_buffer, &mem_requirements);
-
-        const staging_alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = mem_requirements.size,
-            .memoryTypeIndex = try self.findMemoryType(
-                mem_requirements.memoryTypeBits,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            ),
-        };
-
-        if (vkAllocateMemory(self.device, &staging_alloc_info, null, &staging_buffer_memory) != vk.VK_SUCCESS) {
-            return error.MemoryAllocationFailed;
-        }
-
-        if (vkBindBufferMemory(self.device, staging_buffer, staging_buffer_memory, 0) != vk.VK_SUCCESS) {
-            return error.BufferMemoryBindFailed;
-        }
-
-        // Copy pixel data to staging buffer
-        var data: ?*anyopaque = null;
-        if (vkMapMemory(self.device, staging_buffer_memory, 0, image_size, 0, &data) != vk.VK_SUCCESS) {
-            return error.MemoryMapFailed;
-        }
-        const dest: [*]u8 = @ptrCast(data);
-        @memcpy(dest[0..@intCast(image_size)], image.data[0..@intCast(image_size)]);
-        vkUnmapMemory(self.device, staging_buffer_memory);
-
-        // Create the texture image
-        const image_create_info = vk.VkImageCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .imageType = vk.VK_IMAGE_TYPE_2D,
-            .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
-            .extent = .{
-                .width = image.width,
-                .height = image.height,
-                .depth = 1,
-            },
-            .mipLevels = 1,
-            .arrayLayers = 1,
-            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
-            .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
-            .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
-        };
-
-        if (vkCreateImage(self.device, &image_create_info, null, &self.texture_image) != vk.VK_SUCCESS) {
-            return error.ImageCreationFailed;
-        }
-
-        var image_mem_requirements: vk.VkMemoryRequirements = undefined;
-        vkGetImageMemoryRequirements(self.device, self.texture_image, &image_mem_requirements);
-
-        const image_alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = image_mem_requirements.size,
-            .memoryTypeIndex = try self.findMemoryType(
-                image_mem_requirements.memoryTypeBits,
-                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            ),
-        };
-
-        if (vkAllocateMemory(self.device, &image_alloc_info, null, &self.texture_image_memory) != vk.VK_SUCCESS) {
-            return error.MemoryAllocationFailed;
-        }
-
-        if (vkBindImageMemory(self.device, self.texture_image, self.texture_image_memory, 0) != vk.VK_SUCCESS) {
-            return error.ImageMemoryBindFailed;
-        }
-
-        // Transition image layout and copy buffer to image
-        try self.transitionImageLayout(
-            self.texture_image,
-            vk.VK_FORMAT_R8G8B8A8_SRGB,
-            vk.VK_IMAGE_LAYOUT_UNDEFINED,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        );
-
-        try self.copyBufferToImage(staging_buffer, self.texture_image, image.width, image.height);
-
-        try self.transitionImageLayout(
-            self.texture_image,
-            vk.VK_FORMAT_R8G8B8A8_SRGB,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        );
-
-        // Cleanup staging buffer
-        vkDestroyBuffer(self.device, staging_buffer, null);
-        vkFreeMemory(self.device, staging_buffer_memory, null);
-
-        logger.info("Texture image created", .{});
-    }
-
-    fn transitionImageLayout(self: *Self, image: vk.VkImage, format: vk.VkFormat, old_layout: vk.VkImageLayout, new_layout: vk.VkImageLayout) !void {
-        _ = format;
-        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
-
-        // Allocate temporary command buffer
-        const alloc_info = vk.VkCommandBufferAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = null,
-            .commandPool = self.command_pool,
-            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-
-        var command_buffer: vk.VkCommandBuffer = null;
-        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferAllocationFailed;
-        }
-
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = null,
-        };
-
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            return error.CommandBufferBeginFailed;
-        }
-
-        var src_stage: vk.VkPipelineStageFlags = undefined;
-        var dst_stage: vk.VkPipelineStageFlags = undefined;
-        var src_access: vk.VkAccessFlags = 0;
-        var dst_access: vk.VkAccessFlags = 0;
-
-        if (old_layout == vk.VK_IMAGE_LAYOUT_UNDEFINED and new_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-            src_access = 0;
-            dst_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            src_stage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            dst_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-        } else if (old_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and new_layout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            src_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            dst_access = vk.VK_ACCESS_SHADER_READ_BIT;
-            src_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-            dst_stage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        } else {
-            return error.UnsupportedLayoutTransition;
-        }
-
-        const barrier = vk.VkImageMemoryBarrier{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = null,
-            .srcAccessMask = src_access,
-            .dstAccessMask = dst_access,
-            .oldLayout = old_layout,
-            .newLayout = new_layout,
-            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresourceRange = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-        };
-
-        vkCmdPipelineBarrier(
-            command_buffer,
-            src_stage,
-            dst_stage,
-            0,
-            0,
-            null,
-            0,
-            null,
-            1,
-            &barrier,
-        );
-
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferEndFailed;
-        }
-
-        const submit_info = vk.VkSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = null,
-        };
-
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
-            return error.QueueSubmitFailed;
-        }
-
-        _ = vkQueueWaitIdle(self.graphics_queue);
-        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
-    }
-
-    fn copyBufferToImage(self: *Self, buffer: vk.VkBuffer, image: vk.VkImage, width: u32, height: u32) !void {
-        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdCopyBufferToImage = vk.vkCmdCopyBufferToImage orelse return error.VulkanFunctionNotLoaded;
-
-        // Allocate temporary command buffer
-        const alloc_info = vk.VkCommandBufferAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = null,
-            .commandPool = self.command_pool,
-            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-
-        var command_buffer: vk.VkCommandBuffer = null;
-        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferAllocationFailed;
-        }
-
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = null,
-        };
-
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            return error.CommandBufferBeginFailed;
-        }
-
-        const region = vk.VkBufferImageCopy{
-            .bufferOffset = 0,
-            .bufferRowLength = 0,
-            .bufferImageHeight = 0,
-            .imageSubresource = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-            .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
-            .imageExtent = .{ .width = width, .height = height, .depth = 1 },
-        };
-
-        vkCmdCopyBufferToImage(
-            command_buffer,
-            buffer,
-            image,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &region,
-        );
-
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferEndFailed;
-        }
-
-        const submit_info = vk.VkSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = null,
-        };
-
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
-            return error.QueueSubmitFailed;
-        }
-
-        _ = vkQueueWaitIdle(self.graphics_queue);
-        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
-    }
-
-    fn createTextureImageView(self: *Self) !void {
-        const vkCreateImageView = vk.vkCreateImageView orelse return error.VulkanFunctionNotLoaded;
-
-        const view_info = vk.VkImageViewCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .image = self.texture_image,
-            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
-            .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
-            .components = .{
-                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-            },
-            .subresourceRange = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-        };
-
-        if (vkCreateImageView(self.device, &view_info, null, &self.texture_image_view) != vk.VK_SUCCESS) {
-            return error.ImageViewCreationFailed;
-        }
-
-        logger.info("Texture image view created", .{});
-    }
-
-    fn createTextureSampler(self: *Self) !void {
-        const vkCreateSampler = vk.vkCreateSampler orelse return error.VulkanFunctionNotLoaded;
-
-        const sampler_info = vk.VkSamplerCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .magFilter = vk.VK_FILTER_NEAREST, // Minecraft-style pixelated textures
-            .minFilter = vk.VK_FILTER_NEAREST,
-            .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
-            .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .mipLodBias = 0.0,
-            .anisotropyEnable = vk.VK_FALSE,
-            .maxAnisotropy = 1.0,
-            .compareEnable = vk.VK_FALSE,
-            .compareOp = vk.VK_COMPARE_OP_ALWAYS,
-            .minLod = 0.0,
-            .maxLod = 0.0,
-            .borderColor = vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
-            .unnormalizedCoordinates = vk.VK_FALSE,
-        };
-
-        if (vkCreateSampler(self.device, &sampler_info, null, &self.texture_sampler) != vk.VK_SUCCESS) {
-            return error.SamplerCreationFailed;
-        }
-
-        logger.info("Texture sampler created", .{});
-    }
-
-    fn destroyTextureImage(self: *Self) void {
-        const vkDestroyImage = vk.vkDestroyImage orelse return;
-        const vkFreeMemory = vk.vkFreeMemory orelse return;
-
-        if (self.texture_image) |img| {
-            vkDestroyImage(self.device, img, null);
-            self.texture_image = null;
-        }
-        if (self.texture_image_memory) |mem| {
-            vkFreeMemory(self.device, mem, null);
-            self.texture_image_memory = null;
-        }
-    }
-
-    fn destroyTextureImageView(self: *Self) void {
-        const vkDestroyImageView = vk.vkDestroyImageView orelse return;
-
-        if (self.texture_image_view) |view| {
-            vkDestroyImageView(self.device, view, null);
-            self.texture_image_view = null;
-        }
-    }
-
-    fn destroyTextureSampler(self: *Self) void {
-        const vkDestroySampler = vk.vkDestroySampler orelse return;
-
-        if (self.texture_sampler) |sampler| {
-            vkDestroySampler(self.device, sampler, null);
-            self.texture_sampler = null;
-        }
-    }
+    // Note: Texture creation/destruction is now handled by TextureManager
 
     fn createDescriptorPool(self: *Self) !void {
         const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;

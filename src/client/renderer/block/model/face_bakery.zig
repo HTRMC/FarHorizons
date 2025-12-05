@@ -18,6 +18,7 @@ pub const FaceBakery = struct {
         element_rotation: ?BlockElementRotation,
         shade: bool,
         light_emission: u8,
+        texture_index: u32,
     ) BakedQuad {
         // Get face info for vertex ordering
         const face_info = FaceInfo.fromFacing(facing);
@@ -67,6 +68,7 @@ pub const FaceBakery = struct {
             .packed_uv1 = packed_uvs[1],
             .packed_uv2 = packed_uvs[2],
             .packed_uv3 = packed_uvs[3],
+            .texture_index = texture_index,
             .tint_index = face.tint_index,
             .direction = facing,
             .shade = shade,

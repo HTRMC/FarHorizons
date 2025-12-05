@@ -31,3 +31,9 @@ pub const Entity = @import("entity.zig").Entity;
 pub const LivingEntity = @import("living_entity.zig").LivingEntity;
 pub const Player = @import("player.zig").Player;
 pub const Abilities = @import("abilities.zig").Abilities;
+
+// World data
+pub const chunk = @import("chunk.zig");
+pub const Chunk = chunk.Chunk;
+pub const BlockType = chunk.BlockType;
+pub const CHUNK_SIZE = chunk.CHUNK_SIZE;

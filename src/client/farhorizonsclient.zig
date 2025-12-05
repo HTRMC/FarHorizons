@@ -11,6 +11,9 @@ const Logger = shared.Logger;
 const Camera = shared.Camera;
 const Mat4 = shared.Mat4;
 const Vec3 = shared.Vec3;
+const Chunk = shared.Chunk;
+const BlockType = shared.BlockType;
+const CHUNK_SIZE = shared.CHUNK_SIZE;
 const Window = platform.Window;
 const DisplayData = platform.DisplayData;
 const MouseHandler = platform.MouseHandler;
@@ -18,6 +21,7 @@ const KeyboardInput = platform.KeyboardInput;
 const InputConstants = platform.InputConstants;
 const RenderSystem = renderer.RenderSystem;
 const Vertex = renderer.Vertex;
+const TextureManager = renderer.TextureManager;
 const ModelLoader = renderer.block.ModelLoader;
 const FaceBakery = renderer.block.FaceBakery;
 const BakedQuad = renderer.block.BakedQuad;
@@ -37,6 +41,7 @@ pub const FarHorizonsClient = struct {
     mouse_handler: MouseHandler,
     keyboard_input: KeyboardInput,
     render_system: RenderSystem,
+    texture_manager: ?TextureManager,
     camera: Camera,
     local_player: LocalPlayer,
     allocator: std.mem.Allocator,
@@ -50,7 +55,7 @@ pub const FarHorizonsClient = struct {
 
         // Initialize camera for rendering
         var camera = Camera.init();
-        camera.position = .{ .x = 0, .y = 0, .z = 3 };
+        camera.position = .{ .x = 8, .y = 10, .z = 20 }; // Above and behind chunk center
 
         return Self{
             .config = config,
@@ -58,6 +63,7 @@ pub const FarHorizonsClient = struct {
             .mouse_handler = undefined, // Initialized in run() after struct is at final location
             .keyboard_input = undefined, // Initialized in run() after struct is at final location
             .render_system = RenderSystem.init(allocator),
+            .texture_manager = null, // Initialized in run() after render_system
             .camera = camera,
             .local_player = undefined, // Initialized in run() after keyboard_input is ready
             .allocator = allocator,
@@ -83,11 +89,29 @@ pub const FarHorizonsClient = struct {
 
         // Initialize local player with keyboard input
         self.local_player = LocalPlayer.init(&self.keyboard_input);
-        self.local_player.setPosition(Vec3{ .x = 0, .y = 0, .z = 3 });
+        self.local_player.setPosition(Vec3{ .x = 8, .y = 10, .z = 20 }); // Above and behind chunk center
 
         // Initialize render system (Vulkan) with window for surface
         try self.render_system.initBackend(&self.window);
         defer self.render_system.shutdown();
+
+        // Initialize texture manager and load block textures
+        self.texture_manager = TextureManager.init(
+            self.allocator,
+            self.config.location.asset_directory,
+            self.render_system.getDevice(),
+            self.render_system.getPhysicalDevice(),
+            self.render_system.getCommandPool(),
+            self.render_system.getGraphicsQueue(),
+        );
+        try self.texture_manager.?.loadBlockTextures();
+        defer self.texture_manager.?.deinit();
+
+        // Set texture resources to render system and create descriptors
+        try self.render_system.setTextureResources(
+            self.texture_manager.?.getImageView(),
+            self.texture_manager.?.getSampler(),
+        );
 
         // Test model loading
         try self.testModelLoading();
@@ -184,12 +208,12 @@ pub const FarHorizonsClient = struct {
     }
 
     fn testModelLoading(self: *Self) !void {
-        logger.info("Loading and baking models...", .{});
+        logger.info("Loading and baking chunk...", .{});
 
         var model_loader = ModelLoader.init(self.allocator, self.config.location.asset_directory);
         defer model_loader.deinit();
 
-        // Load stone block
+        // Load block models
         var stone_model = model_loader.loadModel("farhorizons:block/stone") catch |err| {
             logger.err("Failed to load stone model: {}", .{err});
             return err;
@@ -197,7 +221,6 @@ pub const FarHorizonsClient = struct {
         defer stone_model.deinit();
         try model_loader.resolveTextures(&stone_model);
 
-        // Load oak slab
         var slab_model = model_loader.loadModel("farhorizons:block/oak_slab") catch |err| {
             logger.err("Failed to load oak_slab model: {}", .{err});
             return err;
@@ -205,13 +228,17 @@ pub const FarHorizonsClient = struct {
         defer slab_model.deinit();
         try model_loader.resolveTextures(&slab_model);
 
-        // Count total faces from both models
-        var total_faces: usize = 0;
+        // Generate a test chunk
+        const chunk = Chunk.generateTestChunk();
+
+        // Count faces per model for estimation
+        var stone_faces: usize = 0;
+        var slab_faces: usize = 0;
         if (stone_model.elements) |elements| {
             for (elements) |*elem| {
                 inline for (std.meta.fields(Direction)) |field| {
                     const dir: Direction = @enumFromInt(field.value);
-                    if (elem.faces.get(dir) != null) total_faces += 1;
+                    if (elem.faces.get(dir) != null) stone_faces += 1;
                 }
             }
         }
@@ -219,62 +246,123 @@ pub const FarHorizonsClient = struct {
             for (elements) |*elem| {
                 inline for (std.meta.fields(Direction)) |field| {
                     const dir: Direction = @enumFromInt(field.value);
-                    if (elem.faces.get(dir) != null) total_faces += 1;
+                    if (elem.faces.get(dir) != null) slab_faces += 1;
                 }
             }
         }
 
-        logger.info("Baking {d} total faces", .{total_faces});
+        // Count blocks in chunk to estimate buffer size
+        var block_count: usize = 0;
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                for (0..CHUNK_SIZE) |x| {
+                    const block = chunk.getBlock(@intCast(x), @intCast(y), @intCast(z));
+                    if (block != .air) block_count += 1;
+                }
+            }
+        }
 
-        // Allocate arrays for vertices and indices
-        const vertices = try self.allocator.alloc(Vertex, total_faces * 4);
+        // Worst case: every block has all faces visible
+        const max_faces = block_count * 6;
+        logger.info("Chunk has {d} blocks, allocating for up to {d} faces", .{ block_count, max_faces });
+
+        // Allocate arrays for vertices and indices (use u32 for indices since we may exceed 65k vertices)
+        const vertices = try self.allocator.alloc(Vertex, max_faces * 4);
         defer self.allocator.free(vertices);
-        const indices = try self.allocator.alloc(u16, total_faces * 6);
+        const indices = try self.allocator.alloc(u16, max_faces * 6);
         defer self.allocator.free(indices);
 
         var vertex_idx: usize = 0;
         var index_idx: usize = 0;
 
-        // Bake stone block at position (-0.5, 0, 0) - left side
-        try bakeModelAt(&stone_model, -0.5, 0, 0, vertices, indices, &vertex_idx, &index_idx);
+        // Iterate through chunk and bake visible faces
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                for (0..CHUNK_SIZE) |x| {
+                    const block = chunk.getBlock(@intCast(x), @intCast(y), @intCast(z));
+                    if (block == .air) continue;
 
-        // Bake oak slab at position (0.5, 0, 0) - right side
-        try bakeModelAt(&slab_model, 0.5, 0, 0, vertices, indices, &vertex_idx, &index_idx);
+                    // Get the model for this block type
+                    const model: *const renderer.block.BlockModel = switch (block) {
+                        .stone => &stone_model,
+                        .oak_slab => &slab_model,
+                        .air => unreachable,
+                    };
+
+                    // Bake with face culling
+                    try bakeBlockAt(
+                        model,
+                        &chunk,
+                        @intCast(x),
+                        @intCast(y),
+                        @intCast(z),
+                        block,
+                        vertices,
+                        indices,
+                        &vertex_idx,
+                        &index_idx,
+                        &self.texture_manager.?,
+                    );
+                }
+            }
+        }
 
         logger.info("Generated {d} vertices and {d} indices", .{ vertex_idx, index_idx });
 
         // Upload mesh to render system
         try self.render_system.uploadMesh(vertices[0..vertex_idx], indices[0..index_idx]);
 
-        logger.info("Models baked and uploaded successfully!", .{});
+        logger.info("Chunk baked and uploaded successfully!", .{});
     }
 
-    fn bakeModelAt(
+    /// Bake a block at chunk position with face culling
+    fn bakeBlockAt(
         model: *const renderer.block.BlockModel,
-        offset_x: f32,
-        offset_y: f32,
-        offset_z: f32,
+        chunk: *const Chunk,
+        x: i32,
+        y: i32,
+        z: i32,
+        block: BlockType,
         vertices: []Vertex,
         indices: []u16,
         vertex_idx: *usize,
         index_idx: *usize,
+        texture_manager: *const TextureManager,
     ) !void {
+        _ = block;
         const elements = model.elements orelse return error.NoElements;
 
-        // Colors for each face direction (for debugging without textures)
-        const face_colors = [_][3]f32{
-            .{ 1.0, 0.0, 1.0 }, // down - magenta
-            .{ 0.0, 1.0, 1.0 }, // up - cyan
-            .{ 0.0, 1.0, 0.0 }, // north - green
-            .{ 1.0, 0.0, 0.0 }, // south - red
-            .{ 1.0, 1.0, 0.0 }, // west - yellow
-            .{ 0.0, 0.0, 1.0 }, // east - blue
+        // Direction offsets for neighbor checking
+        const dir_offsets = [_][3]i32{
+            .{ 0, -1, 0 }, // down
+            .{ 0, 1, 0 }, // up
+            .{ 0, 0, -1 }, // north
+            .{ 0, 0, 1 }, // south
+            .{ -1, 0, 0 }, // west
+            .{ 1, 0, 0 }, // east
         };
 
+        // White color (texture provides color)
+        const color = [3]f32{ 1.0, 1.0, 1.0 };
+
+        const directions = [_]Direction{ .down, .up, .north, .south, .west, .east };
+
         for (elements) |*elem| {
-            inline for (std.meta.fields(Direction)) |field| {
-                const dir: Direction = @enumFromInt(field.value);
+            for (directions, 0..) |dir, dir_idx| {
                 if (elem.faces.get(dir)) |face| {
+                    // Check if we should render this face (neighbor is air/transparent)
+                    const offset = dir_offsets[dir_idx];
+                    const nx = x + offset[0];
+                    const ny = y + offset[1];
+                    const nz = z + offset[2];
+
+                    if (!chunk.shouldRenderFace(nx, ny, nz)) {
+                        continue; // Skip this face - neighbor is opaque
+                    }
+
+                    // Get texture index from texture name
+                    const texture_index = texture_manager.getTextureIndex(face.texture) orelse 0;
+
                     // Bake the face into a quad
                     const quad = FaceBakery.bakeQuad(
                         elem.from,
@@ -284,10 +372,13 @@ pub const FarHorizonsClient = struct {
                         elem.rotation,
                         elem.shade,
                         elem.light_emission,
+                        texture_index,
                     );
 
-                    // Get color for this direction
-                    const color = face_colors[field.value];
+                    // World position offset (chunk coords to world coords)
+                    const offset_x: f32 = @floatFromInt(x);
+                    const offset_y: f32 = @floatFromInt(y);
+                    const offset_z: f32 = @floatFromInt(z);
 
                     // Add vertices with position offset and UVs
                     const base_vertex: u16 = @intCast(vertex_idx.*);
@@ -306,6 +397,7 @@ pub const FarHorizonsClient = struct {
                             },
                             .color = color,
                             .uv = .{ u / 16.0, v / 16.0 },
+                            .tex_index = quad.texture_index,
                         };
                         vertex_idx.* += 1;
                     }

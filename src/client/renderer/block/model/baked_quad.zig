@@ -18,6 +18,9 @@ pub const BakedQuad = struct {
     packed_uv2: u64,
     packed_uv3: u64,
 
+    /// Texture array layer index
+    texture_index: u32,
+
     /// Tint index (-1 for no tint)
     tint_index: i32,
 
