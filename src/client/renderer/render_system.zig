@@ -20,6 +20,7 @@ pub const UniformBufferObject = extern struct {
 pub const Vertex = extern struct {
     pos: [3]f32,
     color: [3]f32,
+    uv: [2]f32,
 
     pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
         return .{
@@ -29,7 +30,7 @@ pub const Vertex = extern struct {
         };
     }
 
-    pub fn getAttributeDescriptions() [2]vk.VkVertexInputAttributeDescription {
+    pub fn getAttributeDescriptions() [3]vk.VkVertexInputAttributeDescription {
         return .{
             .{
                 .binding = 0,
@@ -43,42 +44,49 @@ pub const Vertex = extern struct {
                 .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
                 .offset = @offsetOf(Vertex, "color"),
             },
+            .{
+                .binding = 0,
+                .location = 2,
+                .format = vk.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(Vertex, "uv"),
+            },
         };
     }
 };
 
 // Cube vertices - matching Minecraft's FaceInfo.java winding order (CCW when viewed from outside)
+// UV coords: (0,0)=top-left, (0,1)=bottom-left, (1,1)=bottom-right, (1,0)=top-right
 const cube_vertices = [_]Vertex{
-    // SOUTH face (+Z) - red - FaceInfo: (MIN_X,MAX_Y,MAX_Z), (MIN_X,MIN_Y,MAX_Z), (MAX_X,MIN_Y,MAX_Z), (MAX_X,MAX_Y,MAX_Z)
-    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    // NORTH face (-Z) - green - FaceInfo: (MAX_X,MAX_Y,MIN_Z), (MAX_X,MIN_Y,MIN_Z), (MIN_X,MIN_Y,MIN_Z), (MIN_X,MAX_Y,MIN_Z)
-    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    // EAST face (+X) - blue - FaceInfo: (MAX_X,MAX_Y,MAX_Z), (MAX_X,MIN_Y,MAX_Z), (MAX_X,MIN_Y,MIN_Z), (MAX_X,MAX_Y,MIN_Z)
-    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    // WEST face (-X) - yellow - FaceInfo: (MIN_X,MAX_Y,MIN_Z), (MIN_X,MIN_Y,MIN_Z), (MIN_X,MIN_Y,MAX_Z), (MIN_X,MAX_Y,MAX_Z)
-    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    // UP face (+Y) - cyan - FaceInfo: (MIN_X,MAX_Y,MIN_Z), (MIN_X,MAX_Y,MAX_Z), (MAX_X,MAX_Y,MAX_Z), (MAX_X,MAX_Y,MIN_Z)
-    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    // DOWN face (-Y) - magenta - FaceInfo: (MIN_X,MIN_Y,MAX_Z), (MIN_X,MIN_Y,MIN_Z), (MAX_X,MIN_Y,MIN_Z), (MAX_X,MIN_Y,MAX_Z)
-    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
+    // SOUTH face (+Z) - red
+    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+    // NORTH face (-Z) - green
+    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+    // EAST face (+X) - blue
+    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .uv = .{ 0.0, 0.0 } },
+    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .uv = .{ 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .uv = .{ 1.0, 1.0 } },
+    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 }, .uv = .{ 1.0, 0.0 } },
+    // WEST face (-X) - yellow
+    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 }, .uv = .{ 0.0, 0.0 } },
+    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 }, .uv = .{ 0.0, 1.0 } },
+    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 1.0 } },
+    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 }, .uv = .{ 1.0, 0.0 } },
+    // UP face (+Y) - cyan
+    .{ .pos = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 1.0 }, .uv = .{ 0.0, 0.0 } },
+    .{ .pos = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 }, .uv = .{ 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 }, .uv = .{ 1.0, 1.0 } },
+    .{ .pos = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 1.0 }, .uv = .{ 1.0, 0.0 } },
+    // DOWN face (-Y) - magenta
+    .{ .pos = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 }, .uv = .{ 0.0, 0.0 } },
+    .{ .pos = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 }, .uv = .{ 0.0, 1.0 } },
+    .{ .pos = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 }, .uv = .{ 1.0, 1.0 } },
+    .{ .pos = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 }, .uv = .{ 1.0, 0.0 } },
 };
 
 // Cube indices (36 indices - 6 per face, 2 triangles each)

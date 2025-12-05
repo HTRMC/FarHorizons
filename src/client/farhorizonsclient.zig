@@ -289,10 +289,15 @@ pub const FarHorizonsClient = struct {
                     // Get color for this direction
                     const color = face_colors[field.value];
 
-                    // Add vertices with position offset
+                    // Add vertices with position offset and UVs
                     const base_vertex: u16 = @intCast(vertex_idx.*);
                     for (0..4) |i| {
                         const pos = quad.position(@intCast(i));
+                        const packed_uv = quad.packedUV(@intCast(i));
+                        // Unpack UV from u64 (u in high 32 bits, v in low 32 bits)
+                        const u: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
+                        const v: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
+                        // Normalize UVs from 0-16 Minecraft coords to 0-1
                         vertices[vertex_idx.*] = .{
                             .pos = .{
                                 pos[0] - 0.5 + offset_x,
@@ -300,6 +305,7 @@ pub const FarHorizonsClient = struct {
                                 pos[2] - 0.5 + offset_z,
                             },
                             .color = color,
+                            .uv = .{ u / 16.0, v / 16.0 },
                         };
                         vertex_idx.* += 1;
                     }
