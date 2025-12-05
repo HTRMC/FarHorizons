@@ -6,6 +6,7 @@ const vk = volk.c;
 const shared = @import("shared");
 const Logger = shared.Logger;
 const platform = @import("platform");
+const stb_image = @import("stb_image");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -148,6 +149,12 @@ pub const RenderSystem = struct {
     uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.VkDeviceMemory = .{null} ** MAX_FRAMES_IN_FLIGHT,
     uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
+    // Texture resources
+    texture_image: vk.VkImage = null,
+    texture_image_memory: vk.VkDeviceMemory = null,
+    texture_image_view: vk.VkImageView = null,
+    texture_sampler: vk.VkSampler = null,
+
     // Descriptors
     descriptor_set_layout: vk.VkDescriptorSetLayout = null,
     descriptor_pool: vk.VkDescriptorPool = null,
@@ -208,6 +215,9 @@ pub const RenderSystem = struct {
         try self.createVertexBuffer();
         try self.createIndexBuffer();
         try self.createUniformBuffers();
+        try self.createTextureImage();
+        try self.createTextureImageView();
+        try self.createTextureSampler();
         try self.createDescriptorPool();
         try self.createDescriptorSets();
         try self.createCommandBuffers();
@@ -227,6 +237,9 @@ pub const RenderSystem = struct {
         self.destroySyncObjects();
         self.destroyCommandPool();
         self.destroyDescriptorPool();
+        self.destroyTextureSampler();
+        self.destroyTextureImageView();
+        self.destroyTextureImage();
         self.destroyUniformBuffers();
         self.destroyBuffers();
         self.destroyFramebuffers();
@@ -1114,20 +1127,31 @@ pub const RenderSystem = struct {
     fn createDescriptorSetLayout(self: *Self) !void {
         const vkCreateDescriptorSetLayout = vk.vkCreateDescriptorSetLayout orelse return error.VulkanFunctionNotLoaded;
 
-        const ubo_layout_binding = vk.VkDescriptorSetLayoutBinding{
-            .binding = 0,
-            .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = 1,
-            .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
-            .pImmutableSamplers = null,
+        const bindings = [_]vk.VkDescriptorSetLayoutBinding{
+            // Binding 0: Uniform buffer (MVP matrices)
+            .{
+                .binding = 0,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = null,
+            },
+            // Binding 1: Combined image sampler (texture)
+            .{
+                .binding = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = null,
+            },
         };
 
         const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .bindingCount = 1,
-            .pBindings = &ubo_layout_binding,
+            .bindingCount = bindings.len,
+            .pBindings = &bindings,
         };
 
         if (vkCreateDescriptorSetLayout(self.device, &layout_info, null, &self.descriptor_set_layout) != vk.VK_SUCCESS) {
@@ -1567,12 +1591,450 @@ pub const RenderSystem = struct {
         logger.info("Uniform buffers created", .{});
     }
 
+    fn createTextureImage(self: *Self) !void {
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateImage = vk.vkCreateImage orelse return error.VulkanFunctionNotLoaded;
+        const vkGetImageMemoryRequirements = vk.vkGetImageMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkBindImageMemory = vk.vkBindImageMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
+
+        // Load the texture using stb_image
+        stb_image.setFlipVerticallyOnLoad(true); // Vulkan has Y=0 at top
+        const image = stb_image.load("assets/farhorizons/textures/block/stone.png", 4) catch {
+            logger.err("Failed to load texture image", .{});
+            return error.TextureLoadFailed;
+        };
+        defer image.free();
+
+        const image_size: vk.VkDeviceSize = @as(vk.VkDeviceSize, image.width) * image.height * 4;
+
+        logger.info("Loaded texture: {}x{}, {} bytes", .{ image.width, image.height, image_size });
+
+        // Create staging buffer
+        var staging_buffer: vk.VkBuffer = null;
+        var staging_buffer_memory: vk.VkDeviceMemory = null;
+
+        const staging_buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = image_size,
+            .usage = vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        if (vkCreateBuffer(self.device, &staging_buffer_info, null, &staging_buffer) != vk.VK_SUCCESS) {
+            return error.BufferCreationFailed;
+        }
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetBufferMemoryRequirements(self.device, staging_buffer, &mem_requirements);
+
+        const staging_alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = try self.findMemoryType(
+                mem_requirements.memoryTypeBits,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            ),
+        };
+
+        if (vkAllocateMemory(self.device, &staging_alloc_info, null, &staging_buffer_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+
+        if (vkBindBufferMemory(self.device, staging_buffer, staging_buffer_memory, 0) != vk.VK_SUCCESS) {
+            return error.BufferMemoryBindFailed;
+        }
+
+        // Copy pixel data to staging buffer
+        var data: ?*anyopaque = null;
+        if (vkMapMemory(self.device, staging_buffer_memory, 0, image_size, 0, &data) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+        const dest: [*]u8 = @ptrCast(data);
+        @memcpy(dest[0..@intCast(image_size)], image.data[0..@intCast(image_size)]);
+        vkUnmapMemory(self.device, staging_buffer_memory);
+
+        // Create the texture image
+        const image_create_info = vk.VkImageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .imageType = vk.VK_IMAGE_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
+            .extent = .{
+                .width = image.width,
+                .height = image.height,
+                .depth = 1,
+            },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
+            .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+
+        if (vkCreateImage(self.device, &image_create_info, null, &self.texture_image) != vk.VK_SUCCESS) {
+            return error.ImageCreationFailed;
+        }
+
+        var image_mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetImageMemoryRequirements(self.device, self.texture_image, &image_mem_requirements);
+
+        const image_alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = image_mem_requirements.size,
+            .memoryTypeIndex = try self.findMemoryType(
+                image_mem_requirements.memoryTypeBits,
+                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            ),
+        };
+
+        if (vkAllocateMemory(self.device, &image_alloc_info, null, &self.texture_image_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+
+        if (vkBindImageMemory(self.device, self.texture_image, self.texture_image_memory, 0) != vk.VK_SUCCESS) {
+            return error.ImageMemoryBindFailed;
+        }
+
+        // Transition image layout and copy buffer to image
+        try self.transitionImageLayout(
+            self.texture_image,
+            vk.VK_FORMAT_R8G8B8A8_SRGB,
+            vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        );
+
+        try self.copyBufferToImage(staging_buffer, self.texture_image, image.width, image.height);
+
+        try self.transitionImageLayout(
+            self.texture_image,
+            vk.VK_FORMAT_R8G8B8A8_SRGB,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        // Cleanup staging buffer
+        vkDestroyBuffer(self.device, staging_buffer, null);
+        vkFreeMemory(self.device, staging_buffer_memory, null);
+
+        logger.info("Texture image created", .{});
+    }
+
+    fn transitionImageLayout(self: *Self, image: vk.VkImage, format: vk.VkFormat, old_layout: vk.VkImageLayout, new_layout: vk.VkImageLayout) !void {
+        _ = format;
+        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
+
+        // Allocate temporary command buffer
+        const alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = self.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var command_buffer: vk.VkCommandBuffer = null;
+        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferAllocationFailed;
+        }
+
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        };
+
+        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
+            return error.CommandBufferBeginFailed;
+        }
+
+        var src_stage: vk.VkPipelineStageFlags = undefined;
+        var dst_stage: vk.VkPipelineStageFlags = undefined;
+        var src_access: vk.VkAccessFlags = 0;
+        var dst_access: vk.VkAccessFlags = 0;
+
+        if (old_layout == vk.VK_IMAGE_LAYOUT_UNDEFINED and new_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+            src_access = 0;
+            dst_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+            src_stage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            dst_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
+        } else if (old_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and new_layout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            src_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+            dst_access = vk.VK_ACCESS_SHADER_READ_BIT;
+            src_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
+            dst_stage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        } else {
+            return error.UnsupportedLayoutTransition;
+        }
+
+        const barrier = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = src_access,
+            .dstAccessMask = dst_access,
+            .oldLayout = old_layout,
+            .newLayout = new_layout,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        vkCmdPipelineBarrier(
+            command_buffer,
+            src_stage,
+            dst_stage,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &barrier,
+        );
+
+        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferEndFailed;
+        }
+
+        const submit_info = vk.VkSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &command_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        };
+
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+            return error.QueueSubmitFailed;
+        }
+
+        _ = vkQueueWaitIdle(self.graphics_queue);
+        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
+    }
+
+    fn copyBufferToImage(self: *Self, buffer: vk.VkBuffer, image: vk.VkImage, width: u32, height: u32) !void {
+        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdCopyBufferToImage = vk.vkCmdCopyBufferToImage orelse return error.VulkanFunctionNotLoaded;
+
+        // Allocate temporary command buffer
+        const alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = self.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var command_buffer: vk.VkCommandBuffer = null;
+        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferAllocationFailed;
+        }
+
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        };
+
+        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
+            return error.CommandBufferBeginFailed;
+        }
+
+        const region = vk.VkBufferImageCopy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
+            .imageExtent = .{ .width = width, .height = height, .depth = 1 },
+        };
+
+        vkCmdCopyBufferToImage(
+            command_buffer,
+            buffer,
+            image,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1,
+            &region,
+        );
+
+        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferEndFailed;
+        }
+
+        const submit_info = vk.VkSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &command_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        };
+
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+            return error.QueueSubmitFailed;
+        }
+
+        _ = vkQueueWaitIdle(self.graphics_queue);
+        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
+    }
+
+    fn createTextureImageView(self: *Self) !void {
+        const vkCreateImageView = vk.vkCreateImageView orelse return error.VulkanFunctionNotLoaded;
+
+        const view_info = vk.VkImageViewCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .image = self.texture_image,
+            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
+            .components = .{
+                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        if (vkCreateImageView(self.device, &view_info, null, &self.texture_image_view) != vk.VK_SUCCESS) {
+            return error.ImageViewCreationFailed;
+        }
+
+        logger.info("Texture image view created", .{});
+    }
+
+    fn createTextureSampler(self: *Self) !void {
+        const vkCreateSampler = vk.vkCreateSampler orelse return error.VulkanFunctionNotLoaded;
+
+        const sampler_info = vk.VkSamplerCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .magFilter = vk.VK_FILTER_NEAREST, // Minecraft-style pixelated textures
+            .minFilter = vk.VK_FILTER_NEAREST,
+            .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .mipLodBias = 0.0,
+            .anisotropyEnable = vk.VK_FALSE,
+            .maxAnisotropy = 1.0,
+            .compareEnable = vk.VK_FALSE,
+            .compareOp = vk.VK_COMPARE_OP_ALWAYS,
+            .minLod = 0.0,
+            .maxLod = 0.0,
+            .borderColor = vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            .unnormalizedCoordinates = vk.VK_FALSE,
+        };
+
+        if (vkCreateSampler(self.device, &sampler_info, null, &self.texture_sampler) != vk.VK_SUCCESS) {
+            return error.SamplerCreationFailed;
+        }
+
+        logger.info("Texture sampler created", .{});
+    }
+
+    fn destroyTextureImage(self: *Self) void {
+        const vkDestroyImage = vk.vkDestroyImage orelse return;
+        const vkFreeMemory = vk.vkFreeMemory orelse return;
+
+        if (self.texture_image) |img| {
+            vkDestroyImage(self.device, img, null);
+            self.texture_image = null;
+        }
+        if (self.texture_image_memory) |mem| {
+            vkFreeMemory(self.device, mem, null);
+            self.texture_image_memory = null;
+        }
+    }
+
+    fn destroyTextureImageView(self: *Self) void {
+        const vkDestroyImageView = vk.vkDestroyImageView orelse return;
+
+        if (self.texture_image_view) |view| {
+            vkDestroyImageView(self.device, view, null);
+            self.texture_image_view = null;
+        }
+    }
+
+    fn destroyTextureSampler(self: *Self) void {
+        const vkDestroySampler = vk.vkDestroySampler orelse return;
+
+        if (self.texture_sampler) |sampler| {
+            vkDestroySampler(self.device, sampler, null);
+            self.texture_sampler = null;
+        }
+    }
+
     fn createDescriptorPool(self: *Self) !void {
         const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
 
-        const pool_size = vk.VkDescriptorPoolSize{
-            .type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        const pool_sizes = [_]vk.VkDescriptorPoolSize{
+            .{
+                .type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+            },
+            .{
+                .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+            },
         };
 
         const pool_info = vk.VkDescriptorPoolCreateInfo{
@@ -1580,8 +2042,8 @@ pub const RenderSystem = struct {
             .pNext = null,
             .flags = 0,
             .maxSets = MAX_FRAMES_IN_FLIGHT,
-            .poolSizeCount = 1,
-            .pPoolSizes = &pool_size,
+            .poolSizeCount = pool_sizes.len,
+            .pPoolSizes = &pool_sizes,
         };
 
         if (vkCreateDescriptorPool(self.device, &pool_info, null, &self.descriptor_pool) != vk.VK_SUCCESS) {
@@ -1609,7 +2071,7 @@ pub const RenderSystem = struct {
             return error.DescriptorSetAllocationFailed;
         }
 
-        // Configure each descriptor set to point to its uniform buffer
+        // Configure each descriptor set to point to its uniform buffer and texture
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             const buffer_info = vk.VkDescriptorBufferInfo{
                 .buffer = self.uniform_buffers[i],
@@ -1617,20 +2079,40 @@ pub const RenderSystem = struct {
                 .range = @sizeOf(UniformBufferObject),
             };
 
-            const descriptor_write = vk.VkWriteDescriptorSet{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = self.descriptor_sets[i],
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .pImageInfo = null,
-                .pBufferInfo = &buffer_info,
-                .pTexelBufferView = null,
+            const image_info = vk.VkDescriptorImageInfo{
+                .sampler = self.texture_sampler,
+                .imageView = self.texture_image_view,
+                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             };
 
-            vkUpdateDescriptorSets(self.device, 1, &descriptor_write, 0, null);
+            const descriptor_writes = [_]vk.VkWriteDescriptorSet{
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = self.descriptor_sets[i],
+                    .dstBinding = 0,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pImageInfo = null,
+                    .pBufferInfo = &buffer_info,
+                    .pTexelBufferView = null,
+                },
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = self.descriptor_sets[i],
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &image_info,
+                    .pBufferInfo = null,
+                    .pTexelBufferView = null,
+                },
+            };
+
+            vkUpdateDescriptorSets(self.device, descriptor_writes.len, &descriptor_writes, 0, null);
         }
 
         logger.info("Descriptor sets created", .{});

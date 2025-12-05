@@ -8,9 +8,8 @@ pub const Image = struct {
     height: u32,
     channels: u32,
 
-    pub fn free(self: *Image) void {
+    pub fn free(self: Image) void {
         c.stbi_image_free(self.data);
-        self.* = undefined;
     }
 };
 
