@@ -197,3 +197,13 @@ pub fn wrapDegrees(degrees: f32) f32 {
     if (result > 180.0) result -= 360.0;
     return result;
 }
+
+/// Linear interpolation
+pub fn lerp(a: f32, b: f32, t: f32) f32 {
+    return a + t * (b - a);
+}
+
+/// Rotation interpolation with 360° wrapping
+pub fn rotLerp(from: f32, to: f32, t: f32) f32 {
+    return from + t * wrapDegrees(to - from);
+}

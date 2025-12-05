@@ -1,5 +1,4 @@
 // Entity - like Minecraft's Entity.java
-// Base entity with position, velocity, rotation, and movement methods
 
 const std = @import("std");
 const math = @import("math.zig");
@@ -8,21 +7,23 @@ const Vec3 = math.Vec3;
 pub const Entity = struct {
     const Self = @This();
 
-    // Position in world space
     position: Vec3 = Vec3.ZERO,
-
-    // Velocity (delta movement)
     delta_movement: Vec3 = Vec3.ZERO,
 
-    // Rotation in degrees
-    y_rot: f32 = 0, // yaw
-    x_rot: f32 = 0, // pitch
+    y_rot: f32 = 0,
+    x_rot: f32 = 0,
+
+    // Previous tick position/rotation for interpolation
+    xo: f32 = 0,
+    yo: f32 = 0,
+    zo: f32 = 0,
+    y_rot_o: f32 = 0,
+    x_rot_o: f32 = 0,
 
     pub fn init() Self {
         return .{};
     }
 
-    // Getters/setters for delta movement (like Minecraft's getDeltaMovement/setDeltaMovement)
     pub fn getDeltaMovement(self: *const Self) Vec3 {
         return self.delta_movement;
     }
@@ -47,23 +48,47 @@ pub const Entity = struct {
         self.x_rot = std.math.clamp(pitch, -90.0, 90.0);
     }
 
-    /// Add to velocity based on input and speed, rotated by yaw
-    /// Like Minecraft's Entity.moveRelative(float speed, Vec3 input)
+    /// Save current position/rotation as old values (called at start of each tick)
+    pub fn setOldPosAndRot(self: *Self) void {
+        self.xo = self.position.x;
+        self.yo = self.position.y;
+        self.zo = self.position.z;
+        self.y_rot_o = self.y_rot;
+        self.x_rot_o = self.x_rot;
+    }
+
+    /// Get interpolated position for rendering
+    pub fn getPosition(self: *const Self, partial_tick: f32) Vec3 {
+        return Vec3{
+            .x = math.lerp(self.xo, self.position.x, partial_tick),
+            .y = math.lerp(self.yo, self.position.y, partial_tick),
+            .z = math.lerp(self.zo, self.position.z, partial_tick),
+        };
+    }
+
+    /// Get interpolated yaw for rendering
+    pub fn getViewYRot(self: *const Self, partial_tick: f32) f32 {
+        if (partial_tick == 1.0) return self.y_rot;
+        return math.rotLerp(self.y_rot_o, self.y_rot, partial_tick);
+    }
+
+    /// Get interpolated pitch for rendering
+    pub fn getViewXRot(self: *const Self, partial_tick: f32) f32 {
+        if (partial_tick == 1.0) return self.x_rot;
+        return math.lerp(self.x_rot_o, self.x_rot, partial_tick);
+    }
+
     pub fn moveRelative(self: *Self, speed: f32, input: Vec3) void {
         const delta = getInputVector(input, speed, self.y_rot);
         self.delta_movement = self.delta_movement.add(delta);
     }
 
-    /// Convert input vector to world-space movement vector
-    /// Like Minecraft's Entity.getInputVector(Vec3 input, float speed, float yRot)
-    /// input.x = strafe (left/right), input.z = forward/backward, input.y = vertical
     pub fn getInputVector(input: Vec3, speed: f32, y_rot: f32) Vec3 {
         const length_sq = input.lengthSquared();
         if (length_sq < 1.0e-7) {
             return Vec3.ZERO;
         }
 
-        // Normalize if length > 1, then scale by speed
         const movement = if (length_sq > 1.0)
             input.normalize().scale(speed)
         else
@@ -80,14 +105,10 @@ pub const Entity = struct {
         };
     }
 
-    /// Apply delta movement to position
-    /// Like Minecraft's Entity.move(MoverType, Vec3)
     pub fn move(self: *Self) void {
         self.position = self.position.add(self.delta_movement);
     }
 
-    /// Turn the entity (add to rotation)
-    /// Like Minecraft's Entity.turn(double yaw, double pitch)
     pub fn turn(self: *Self, yaw: f64, pitch: f64) void {
         self.setYRot(self.y_rot + @as(f32, @floatCast(yaw)) * 0.15);
         self.setXRot(self.x_rot + @as(f32, @floatCast(pitch)) * 0.15);

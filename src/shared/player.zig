@@ -72,12 +72,24 @@ pub const Player = struct {
         return &self.abilities;
     }
 
-    pub fn getPosition(self: *const Self) Vec3 {
-        return self.living_entity.entity.position;
-    }
-
     pub fn setPosition(self: *Self, pos: Vec3) void {
         self.living_entity.entity.position = pos;
+    }
+
+    pub fn setOldPosAndRot(self: *Self) void {
+        self.living_entity.setOldPosAndRot();
+    }
+
+    pub fn getPosition(self: *const Self, partial_tick: f32) Vec3 {
+        return self.living_entity.getPosition(partial_tick);
+    }
+
+    pub fn getViewYRot(self: *const Self, partial_tick: f32) f32 {
+        return self.living_entity.getViewYRot(partial_tick);
+    }
+
+    pub fn getViewXRot(self: *const Self, partial_tick: f32) f32 {
+        return self.living_entity.getViewXRot(partial_tick);
     }
 
     /// Get effective flying speed with sprint modifier

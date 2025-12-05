@@ -69,6 +69,22 @@ pub const LivingEntity = struct {
         self.sprinting = sprinting;
     }
 
+    pub fn setOldPosAndRot(self: *Self) void {
+        self.entity.setOldPosAndRot();
+    }
+
+    pub fn getPosition(self: *const Self, partial_tick: f32) Vec3 {
+        return self.entity.getPosition(partial_tick);
+    }
+
+    pub fn getViewYRot(self: *const Self, partial_tick: f32) f32 {
+        return self.entity.getViewYRot(partial_tick);
+    }
+
+    pub fn getViewXRot(self: *const Self, partial_tick: f32) f32 {
+        return self.entity.getViewXRot(partial_tick);
+    }
+
     /// Flying travel with friction
     /// Like Minecraft's LivingEntity.travelFlying(Vec3 input, float airSpeed)
     pub fn travelFlying(self: *Self, input: Vec3, air_speed: f32) void {

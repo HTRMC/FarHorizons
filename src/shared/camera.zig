@@ -106,10 +106,10 @@ pub const Camera = struct {
 
     pub fn getHorizontalForward(self: *const Self) Vec3 {
         const yaw_rad = math.degreesToRadians(self.yaw);
-        return Vec3{
+        return (Vec3{
             .x = -@sin(yaw_rad),
             .y = 0,
             .z = @cos(yaw_rad),
-        }.normalize();
+        }).normalize();
     }
 };

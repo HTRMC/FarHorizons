@@ -62,16 +62,28 @@ pub const LocalPlayer = struct {
         return self.player.getAbilities();
     }
 
-    pub fn getPosition(self: *const Self) Vec3 {
-        return self.player.getPosition();
-    }
-
     pub fn setPosition(self: *Self, pos: Vec3) void {
         self.player.setPosition(pos);
     }
 
     pub fn turn(self: *Self, yaw: f64, pitch: f64) void {
         self.player.turn(yaw, pitch);
+    }
+
+    pub fn setOldPosAndRot(self: *Self) void {
+        self.player.setOldPosAndRot();
+    }
+
+    pub fn getPosition(self: *const Self, partial_tick: f32) Vec3 {
+        return self.player.getPosition(partial_tick);
+    }
+
+    pub fn getViewYRot(self: *const Self, partial_tick: f32) f32 {
+        return self.player.getViewYRot(partial_tick);
+    }
+
+    pub fn getViewXRot(self: *const Self, partial_tick: f32) f32 {
+        return self.player.getViewXRot(partial_tick);
     }
 
     /// Main tick method - called each frame

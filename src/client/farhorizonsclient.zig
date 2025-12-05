@@ -136,20 +136,26 @@ pub const FarHorizonsClient = struct {
             }
 
             // Run game ticks at fixed rate (20 ticks/second like Minecraft)
-            // This ensures movement feels the same regardless of frame rate
             while (tick_accumulator >= MS_PER_TICK) {
                 tick_accumulator -= MS_PER_TICK;
 
-                // Update keyboard input (poll WASD/Space/Shift/Ctrl)
+                // Save old position before tick (for interpolation)
+                self.local_player.setOldPosAndRot();
+
+                // Update keyboard input
                 self.keyboard_input.tick();
 
-                // Update player movement (aiStep) - runs at 20 ticks/second
+                // Update player movement
                 self.local_player.aiStep();
             }
 
-            // Sync camera with player for rendering
-            const player_pos = self.local_player.getPosition();
-            self.camera.position = player_pos;
+            // Calculate partial tick for interpolation (0.0 to 1.0)
+            const partial_tick: f32 = @floatCast(tick_accumulator / MS_PER_TICK);
+
+            // Sync camera with interpolated player position for smooth rendering
+            // Position is interpolated between ticks for smooth movement
+            // Rotation is NOT interpolated - mouse look must be instant
+            self.camera.position = self.local_player.getPosition(partial_tick);
             self.camera.setRotation(self.local_player.getYRot(), self.local_player.getXRot());
 
             // Update MVP matrices
