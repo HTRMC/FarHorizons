@@ -87,21 +87,23 @@ pub const FaceBakery = struct {
     }
 
     /// Get U coordinate for vertex, accounting for rotation
+    /// Vertex mapping: 0=top-left, 1=bottom-left, 2=bottom-right, 3=top-right
     fn getU(uvs: [4]f32, rotation: i32, vertex: u32) f32 {
         const rotated_vertex = rotateVertexIndex(vertex, rotation);
         return switch (rotated_vertex) {
-            0, 3 => uvs[0], // u1
-            1, 2 => uvs[2], // u2
+            0, 1 => uvs[0], // u1 (left vertices)
+            2, 3 => uvs[2], // u2 (right vertices)
             else => unreachable,
         };
     }
 
     /// Get V coordinate for vertex, accounting for rotation
+    /// Vertex mapping: 0=top-left, 1=bottom-left, 2=bottom-right, 3=top-right
     fn getV(uvs: [4]f32, rotation: i32, vertex: u32) f32 {
         const rotated_vertex = rotateVertexIndex(vertex, rotation);
         return switch (rotated_vertex) {
-            0, 1 => uvs[1], // v1
-            2, 3 => uvs[3], // v2
+            0, 3 => uvs[1], // v1 (top vertices)
+            1, 2 => uvs[3], // v2 (bottom vertices)
             else => unreachable,
         };
     }

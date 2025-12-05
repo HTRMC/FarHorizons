@@ -1605,7 +1605,8 @@ pub const RenderSystem = struct {
         const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
 
         // Load the texture using stb_image
-        stb_image.setFlipVerticallyOnLoad(true); // Vulkan has Y=0 at top
+        // Don't flip - Minecraft UVs expect (0,0) at top-left which matches Vulkan
+        stb_image.setFlipVerticallyOnLoad(false);
         const image = stb_image.load("assets/farhorizons/textures/block/stone.png", 4) catch {
             logger.err("Failed to load texture image", .{});
             return error.TextureLoadFailed;
