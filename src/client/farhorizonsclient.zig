@@ -17,7 +17,11 @@ const MouseHandler = platform.MouseHandler;
 const KeyboardInput = platform.KeyboardInput;
 const InputConstants = platform.InputConstants;
 const RenderSystem = renderer.RenderSystem;
+const Vertex = renderer.Vertex;
 const ModelLoader = renderer.block.ModelLoader;
+const FaceBakery = renderer.block.FaceBakery;
+const BakedQuad = renderer.block.BakedQuad;
+const Direction = renderer.block.Direction;
 const LocalPlayer = client_player.LocalPlayer;
 
 pub const FarHorizonsClient = struct {
@@ -180,7 +184,7 @@ pub const FarHorizonsClient = struct {
     }
 
     fn testModelLoading(self: *Self) !void {
-        logger.info("Testing model loading...", .{});
+        logger.info("Loading and baking model...", .{});
 
         var model_loader = ModelLoader.init(self.allocator, self.config.location.asset_directory);
         defer model_loader.deinit();
@@ -198,42 +202,95 @@ pub const FarHorizonsClient = struct {
             return err;
         };
 
-        // Log the loaded model info
-        logger.info("Model loaded successfully!", .{});
+        // Bake the model into quads
+        const elements = model.elements orelse {
+            logger.err("Model has no elements", .{});
+            return error.NoElements;
+        };
 
-        if (model.elements) |elements| {
-            logger.info("  Elements: {d}", .{elements.len});
-            for (elements, 0..) |elem, i| {
-                logger.info("  Element {d}: from=[{d:.1},{d:.1},{d:.1}] to=[{d:.1},{d:.1},{d:.1}]", .{
-                    i,
-                    elem.from[0],
-                    elem.from[1],
-                    elem.from[2],
-                    elem.to[0],
-                    elem.to[1],
-                    elem.to[2],
-                });
-
-                // Iterate over all directions to find faces
-                const Direction = renderer.block.Direction;
-                inline for (std.meta.fields(Direction)) |field| {
-                    const dir: Direction = @enumFromInt(field.value);
-                    if (elem.faces.get(dir)) |face| {
-                        logger.info("    Face {s}: texture={s}", .{
-                            @tagName(dir),
-                            face.texture,
-                        });
-                    }
+        // Count total faces to allocate arrays
+        var total_faces: usize = 0;
+        for (elements) |*elem| {
+            inline for (std.meta.fields(Direction)) |field| {
+                const dir: Direction = @enumFromInt(field.value);
+                if (elem.faces.get(dir) != null) {
+                    total_faces += 1;
                 }
             }
-        } else {
-            logger.info("  No elements in model", .{});
         }
 
-        logger.info("  Textures:", .{});
-        var tex_it = model.textures.iterator();
-        while (tex_it.next()) |entry| {
-            logger.info("    {s} = {s}", .{ entry.key_ptr.*, entry.value_ptr.* });
+        logger.info("Baking {d} faces from {d} elements", .{ total_faces, elements.len });
+
+        // Allocate arrays for vertices and indices
+        // Each quad has 4 vertices and 6 indices (2 triangles)
+        const vertices = try self.allocator.alloc(Vertex, total_faces * 4);
+        defer self.allocator.free(vertices);
+        const indices = try self.allocator.alloc(u16, total_faces * 6);
+        defer self.allocator.free(indices);
+
+        // Colors for each face direction (for debugging without textures)
+        const FACE_COLORS = struct {
+            fn get(dir: Direction) [3]f32 {
+                return switch (dir) {
+                    .down => .{ 1.0, 0.0, 1.0 }, // magenta
+                    .up => .{ 0.0, 1.0, 1.0 }, // cyan
+                    .north => .{ 0.0, 1.0, 0.0 }, // green
+                    .south => .{ 1.0, 0.0, 0.0 }, // red
+                    .west => .{ 1.0, 1.0, 0.0 }, // yellow
+                    .east => .{ 0.0, 0.0, 1.0 }, // blue
+                };
+            }
+        };
+
+        var vertex_idx: usize = 0;
+        var index_idx: usize = 0;
+
+        for (elements) |*elem| {
+            inline for (std.meta.fields(Direction)) |field| {
+                const dir: Direction = @enumFromInt(field.value);
+                if (elem.faces.get(dir)) |face| {
+                    // Bake the face into a quad
+                    const quad = FaceBakery.bakeQuad(
+                        elem.from,
+                        elem.to,
+                        face,
+                        dir,
+                        elem.rotation,
+                        elem.shade,
+                        elem.light_emission,
+                    );
+
+                    // Get color for this direction
+                    const color = FACE_COLORS.get(dir);
+
+                    // Add vertices (offset to center the model)
+                    const base_vertex: u16 = @intCast(vertex_idx);
+                    for (0..4) |i| {
+                        const pos = quad.position(@intCast(i));
+                        vertices[vertex_idx] = .{
+                            .pos = .{ pos[0] - 0.5, pos[1] - 0.5, pos[2] - 0.5 },
+                            .color = color,
+                        };
+                        vertex_idx += 1;
+                    }
+
+                    // Add indices for two triangles (CCW winding)
+                    indices[index_idx] = base_vertex;
+                    indices[index_idx + 1] = base_vertex + 1;
+                    indices[index_idx + 2] = base_vertex + 2;
+                    indices[index_idx + 3] = base_vertex + 2;
+                    indices[index_idx + 4] = base_vertex + 3;
+                    indices[index_idx + 5] = base_vertex;
+                    index_idx += 6;
+                }
+            }
         }
+
+        logger.info("Generated {d} vertices and {d} indices", .{ vertex_idx, index_idx });
+
+        // Upload mesh to render system
+        try self.render_system.uploadMesh(vertices[0..vertex_idx], indices[0..index_idx]);
+
+        logger.info("Model baked and uploaded successfully!", .{});
     }
 };
