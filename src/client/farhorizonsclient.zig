@@ -184,66 +184,92 @@ pub const FarHorizonsClient = struct {
     }
 
     fn testModelLoading(self: *Self) !void {
-        logger.info("Loading and baking model...", .{});
+        logger.info("Loading and baking models...", .{});
 
         var model_loader = ModelLoader.init(self.allocator, self.config.location.asset_directory);
         defer model_loader.deinit();
 
-        // Load oak_slab which has parent chain: oak_slab -> slab -> block
-        var model = model_loader.loadModel("farhorizons:block/oak_slab") catch |err| {
+        // Load stone block
+        var stone_model = model_loader.loadModel("farhorizons:block/stone") catch |err| {
+            logger.err("Failed to load stone model: {}", .{err});
+            return err;
+        };
+        defer stone_model.deinit();
+        try model_loader.resolveTextures(&stone_model);
+
+        // Load oak slab
+        var slab_model = model_loader.loadModel("farhorizons:block/oak_slab") catch |err| {
             logger.err("Failed to load oak_slab model: {}", .{err});
             return err;
         };
-        defer model.deinit();
+        defer slab_model.deinit();
+        try model_loader.resolveTextures(&slab_model);
 
-        // Resolve texture references
-        model_loader.resolveTextures(&model) catch |err| {
-            logger.err("Failed to resolve textures: {}", .{err});
-            return err;
-        };
-
-        // Bake the model into quads
-        const elements = model.elements orelse {
-            logger.err("Model has no elements", .{});
-            return error.NoElements;
-        };
-
-        // Count total faces to allocate arrays
+        // Count total faces from both models
         var total_faces: usize = 0;
-        for (elements) |*elem| {
-            inline for (std.meta.fields(Direction)) |field| {
-                const dir: Direction = @enumFromInt(field.value);
-                if (elem.faces.get(dir) != null) {
-                    total_faces += 1;
+        if (stone_model.elements) |elements| {
+            for (elements) |*elem| {
+                inline for (std.meta.fields(Direction)) |field| {
+                    const dir: Direction = @enumFromInt(field.value);
+                    if (elem.faces.get(dir) != null) total_faces += 1;
+                }
+            }
+        }
+        if (slab_model.elements) |elements| {
+            for (elements) |*elem| {
+                inline for (std.meta.fields(Direction)) |field| {
+                    const dir: Direction = @enumFromInt(field.value);
+                    if (elem.faces.get(dir) != null) total_faces += 1;
                 }
             }
         }
 
-        logger.info("Baking {d} faces from {d} elements", .{ total_faces, elements.len });
+        logger.info("Baking {d} total faces", .{total_faces});
 
         // Allocate arrays for vertices and indices
-        // Each quad has 4 vertices and 6 indices (2 triangles)
         const vertices = try self.allocator.alloc(Vertex, total_faces * 4);
         defer self.allocator.free(vertices);
         const indices = try self.allocator.alloc(u16, total_faces * 6);
         defer self.allocator.free(indices);
 
-        // Colors for each face direction (for debugging without textures)
-        const FACE_COLORS = struct {
-            fn get(dir: Direction) [3]f32 {
-                return switch (dir) {
-                    .down => .{ 1.0, 0.0, 1.0 }, // magenta
-                    .up => .{ 0.0, 1.0, 1.0 }, // cyan
-                    .north => .{ 0.0, 1.0, 0.0 }, // green
-                    .south => .{ 1.0, 0.0, 0.0 }, // red
-                    .west => .{ 1.0, 1.0, 0.0 }, // yellow
-                    .east => .{ 0.0, 0.0, 1.0 }, // blue
-                };
-            }
-        };
-
         var vertex_idx: usize = 0;
         var index_idx: usize = 0;
+
+        // Bake stone block at position (-0.5, 0, 0) - left side
+        try bakeModelAt(&stone_model, -0.5, 0, 0, vertices, indices, &vertex_idx, &index_idx);
+
+        // Bake oak slab at position (0.5, 0, 0) - right side
+        try bakeModelAt(&slab_model, 0.5, 0, 0, vertices, indices, &vertex_idx, &index_idx);
+
+        logger.info("Generated {d} vertices and {d} indices", .{ vertex_idx, index_idx });
+
+        // Upload mesh to render system
+        try self.render_system.uploadMesh(vertices[0..vertex_idx], indices[0..index_idx]);
+
+        logger.info("Models baked and uploaded successfully!", .{});
+    }
+
+    fn bakeModelAt(
+        model: *const renderer.block.BlockModel,
+        offset_x: f32,
+        offset_y: f32,
+        offset_z: f32,
+        vertices: []Vertex,
+        indices: []u16,
+        vertex_idx: *usize,
+        index_idx: *usize,
+    ) !void {
+        const elements = model.elements orelse return error.NoElements;
+
+        // Colors for each face direction (for debugging without textures)
+        const face_colors = [_][3]f32{
+            .{ 1.0, 0.0, 1.0 }, // down - magenta
+            .{ 0.0, 1.0, 1.0 }, // up - cyan
+            .{ 0.0, 1.0, 0.0 }, // north - green
+            .{ 1.0, 0.0, 0.0 }, // south - red
+            .{ 1.0, 1.0, 0.0 }, // west - yellow
+            .{ 0.0, 0.0, 1.0 }, // east - blue
+        };
 
         for (elements) |*elem| {
             inline for (std.meta.fields(Direction)) |field| {
@@ -261,36 +287,33 @@ pub const FarHorizonsClient = struct {
                     );
 
                     // Get color for this direction
-                    const color = FACE_COLORS.get(dir);
+                    const color = face_colors[field.value];
 
-                    // Add vertices (offset to center the model)
-                    const base_vertex: u16 = @intCast(vertex_idx);
+                    // Add vertices with position offset
+                    const base_vertex: u16 = @intCast(vertex_idx.*);
                     for (0..4) |i| {
                         const pos = quad.position(@intCast(i));
-                        vertices[vertex_idx] = .{
-                            .pos = .{ pos[0] - 0.5, pos[1] - 0.5, pos[2] - 0.5 },
+                        vertices[vertex_idx.*] = .{
+                            .pos = .{
+                                pos[0] - 0.5 + offset_x,
+                                pos[1] - 0.5 + offset_y,
+                                pos[2] - 0.5 + offset_z,
+                            },
                             .color = color,
                         };
-                        vertex_idx += 1;
+                        vertex_idx.* += 1;
                     }
 
                     // Add indices for two triangles (CCW winding)
-                    indices[index_idx] = base_vertex;
-                    indices[index_idx + 1] = base_vertex + 1;
-                    indices[index_idx + 2] = base_vertex + 2;
-                    indices[index_idx + 3] = base_vertex + 2;
-                    indices[index_idx + 4] = base_vertex + 3;
-                    indices[index_idx + 5] = base_vertex;
-                    index_idx += 6;
+                    indices[index_idx.*] = base_vertex;
+                    indices[index_idx.* + 1] = base_vertex + 1;
+                    indices[index_idx.* + 2] = base_vertex + 2;
+                    indices[index_idx.* + 3] = base_vertex + 2;
+                    indices[index_idx.* + 4] = base_vertex + 3;
+                    indices[index_idx.* + 5] = base_vertex;
+                    index_idx.* += 6;
                 }
             }
         }
-
-        logger.info("Generated {d} vertices and {d} indices", .{ vertex_idx, index_idx });
-
-        // Upload mesh to render system
-        try self.render_system.uploadMesh(vertices[0..vertex_idx], indices[0..index_idx]);
-
-        logger.info("Model baked and uploaded successfully!", .{});
     }
 };
