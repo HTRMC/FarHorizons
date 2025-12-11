@@ -273,7 +273,13 @@ pub const FarHorizonsClient = struct {
                         continue;
                     };
 
-                    // Bake with face culling
+                    // Get variant for rotation info
+                    const variant = block_model_shaper.getVariant(entry) catch |err| {
+                        logger.warn("Failed to get variant for block {}: {}", .{ entry.id, err });
+                        continue;
+                    };
+
+                    // Bake with face culling and model rotation
                     try bakeBlockAt(
                         model,
                         &chunk,
@@ -286,6 +292,9 @@ pub const FarHorizonsClient = struct {
                         &vertex_idx,
                         &index_idx,
                         &self.texture_manager.?,
+                        variant.x,
+                        variant.y,
+                        variant.uvlock,
                     );
                 }
             }
@@ -312,6 +321,9 @@ pub const FarHorizonsClient = struct {
         vertex_idx: *usize,
         index_idx: *usize,
         texture_manager: *const TextureManager,
+        model_rotation_x: i16,
+        model_rotation_y: i16,
+        uvlock: bool,
     ) !void {
         const elements = model.elements orelse return error.NoElements;
 
@@ -319,14 +331,19 @@ pub const FarHorizonsClient = struct {
         const color = [3]f32{ 1.0, 1.0, 1.0 };
 
         const directions = [_]Direction{ .down, .up, .north, .south, .west, .east };
-        const voxel_directions = [_]VoxelDirection{ .down, .up, .north, .south, .west, .east };
 
         for (elements) |*elem| {
-            for (directions, 0..) |dir, dir_idx| {
+            for (directions) |dir| {
                 if (elem.faces.get(dir)) |face| {
-                    // Use VoxelShape-based culling for accurate face visibility
-                    const voxel_dir = voxel_directions[dir_idx];
-                    if (!chunk.shouldRenderFaceVoxelEntry(x, y, z, voxel_dir, entry, null)) {
+                    // Transform face direction by model rotation for correct culling
+                    // When a model is rotated, its faces point in different directions
+                    const rotated_render_dir = FaceBakery.rotateFaceDirection(dir, model_rotation_x, model_rotation_y);
+
+                    // Convert to VoxelDirection for culling (same enum values)
+                    const rotated_voxel_dir: VoxelDirection = @enumFromInt(@intFromEnum(rotated_render_dir));
+
+                    // Use VoxelShape-based culling with the ROTATED direction
+                    if (!chunk.shouldRenderFaceVoxelEntry(x, y, z, rotated_voxel_dir, entry, null)) {
                         continue; // Skip this face - occluded by neighbor's shape
                     }
 
@@ -334,7 +351,7 @@ pub const FarHorizonsClient = struct {
                     const texture_index = texture_manager.getTextureIndex(face.texture) orelse 0;
 
                     // Bake the face into a quad
-                    const quad = FaceBakery.bakeQuad(
+                    var quad = FaceBakery.bakeQuad(
                         elem.from,
                         elem.to,
                         face,
@@ -344,6 +361,9 @@ pub const FarHorizonsClient = struct {
                         elem.light_emission,
                         texture_index,
                     );
+
+                    // Apply model-level rotation from blockstate variant
+                    FaceBakery.rotateQuad(&quad, model_rotation_x, model_rotation_y, uvlock);
 
                     // World position offset (chunk coords to world coords)
                     const offset_x: f32 = @floatFromInt(x);

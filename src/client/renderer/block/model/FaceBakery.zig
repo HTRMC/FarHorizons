@@ -184,4 +184,156 @@ pub const FaceBakery = struct {
         vertex[1] += origin[1] / 16.0;
         vertex[2] += origin[2] / 16.0;
     }
+
+    // =====================
+    // Model-Level Rotation (from blockstate variant x/y)
+    // =====================
+
+    /// Apply model-level rotation (x/y from variant) to a baked quad
+    /// x: rotation around X-axis (pitch) in degrees (0, 90, 180, 270)
+    /// y: rotation around Y-axis (yaw) in degrees (0, 90, 180, 270)
+    /// uvlock: if true, counter-rotate UVs to maintain world-aligned textures
+    pub fn rotateQuad(quad: *BakedQuad, x: i16, y: i16, uvlock: bool) void {
+        // Skip if no rotation
+        if (x == 0 and y == 0) return;
+
+        // Rotate all 4 vertex positions around block center (0.5, 0.5, 0.5)
+        // Apply Y rotation first, then X (Minecraft order)
+        rotatePosition(&quad.position0, x, y);
+        rotatePosition(&quad.position1, x, y);
+        rotatePosition(&quad.position2, x, y);
+        rotatePosition(&quad.position3, x, y);
+
+        // Rotate the face direction for correct culling
+        quad.direction = rotateFaceDirection(quad.direction, x, y);
+
+        // If uvlock is true, counter-rotate UVs to keep them world-aligned
+        if (uvlock) {
+            rotateUVs(quad, x, y);
+        }
+    }
+
+    /// Rotate a position around block center (0.5, 0.5, 0.5)
+    fn rotatePosition(pos: *[3]f32, x_deg: i16, y_deg: i16) void {
+        // Center around (0.5, 0.5, 0.5)
+        var rx = pos[0] - 0.5;
+        var ry = pos[1] - 0.5;
+        var rz = pos[2] - 0.5;
+
+        // Apply Y rotation first (around Y axis)
+        if (y_deg != 0) {
+            const cos_y = cosFromDegrees(y_deg);
+            const sin_y = sinFromDegrees(y_deg);
+            const new_x = rx * cos_y + rz * sin_y;
+            const new_z = -rx * sin_y + rz * cos_y;
+            rx = new_x;
+            rz = new_z;
+        }
+
+        // Apply X rotation (around X axis)
+        if (x_deg != 0) {
+            const cos_x = cosFromDegrees(x_deg);
+            const sin_x = sinFromDegrees(x_deg);
+            const new_y = ry * cos_x - rz * sin_x;
+            const new_z = ry * sin_x + rz * cos_x;
+            ry = new_y;
+            rz = new_z;
+        }
+
+        // Translate back
+        pos[0] = rx + 0.5;
+        pos[1] = ry + 0.5;
+        pos[2] = rz + 0.5;
+    }
+
+    /// Rotate face direction by model rotation (public for culling)
+    pub fn rotateFaceDirection(dir: Direction, x_deg: i16, y_deg: i16) Direction {
+        var result = dir;
+
+        // Apply Y rotation (around Y axis) - affects horizontal faces
+        // Y90: north→east→south→west→north
+        const y_steps: u32 = @intCast(@divFloor(@mod(y_deg, 360), 90));
+        for (0..y_steps) |_| {
+            result = switch (result) {
+                .north => .east,
+                .east => .south,
+                .south => .west,
+                .west => .north,
+                .up, .down => result, // unchanged by Y rotation
+            };
+        }
+
+        // Apply X rotation (around X axis) - affects vertical faces
+        // X90: up→north→down→south→up (west/east unchanged)
+        const x_steps: u32 = @intCast(@divFloor(@mod(x_deg, 360), 90));
+        for (0..x_steps) |_| {
+            result = switch (result) {
+                .up => .north,
+                .north => .down,
+                .down => .south,
+                .south => .up,
+                .west, .east => result, // unchanged by X rotation
+            };
+        }
+
+        return result;
+    }
+
+    /// Counter-rotate UVs for uvlock (maintain world-aligned textures)
+    fn rotateUVs(quad: *BakedQuad, x_deg: i16, y_deg: i16) void {
+        const steps = calculateUVRotationSteps(quad.direction, x_deg, y_deg);
+        if (steps == 0) return;
+
+        // Rotate UV assignments between vertices
+        const uvs = [4]u64{ quad.packed_uv0, quad.packed_uv1, quad.packed_uv2, quad.packed_uv3 };
+        quad.packed_uv0 = uvs[(0 + steps) % 4];
+        quad.packed_uv1 = uvs[(1 + steps) % 4];
+        quad.packed_uv2 = uvs[(2 + steps) % 4];
+        quad.packed_uv3 = uvs[(3 + steps) % 4];
+    }
+
+    /// Calculate UV rotation steps based on face and model rotation
+    fn calculateUVRotationSteps(face: Direction, x_deg: i16, y_deg: i16) u32 {
+        // For horizontal faces (up/down), Y rotation directly affects UV rotation
+        // For vertical faces, the effect depends on both X and Y rotation
+        const y_steps: u32 = @intCast(@divFloor(@mod(y_deg, 360), 90));
+        const x_steps: u32 = @intCast(@divFloor(@mod(x_deg, 360), 90));
+
+        return switch (face) {
+            .up => y_steps,
+            .down => (4 - y_steps) % 4, // Counter-rotate for down face
+            .north, .south, .east, .west => blk: {
+                // Vertical faces: X rotation can affect UV orientation
+                if (x_steps == 2) {
+                    // 180° X rotation flips vertical faces
+                    break :blk 2;
+                }
+                break :blk 0;
+            },
+        };
+    }
+
+    /// Cosine for 90° multiples (fast path)
+    fn cosFromDegrees(deg: i16) f32 {
+        const normalized = @mod(deg, 360);
+        return switch (normalized) {
+            0 => 1.0,
+            90 => 0.0,
+            180 => -1.0,
+            270 => 0.0,
+            else => @cos(@as(f32, @floatFromInt(deg)) * std.math.pi / 180.0),
+        };
+    }
+
+    /// Sine for 90° multiples (fast path)
+    fn sinFromDegrees(deg: i16) f32 {
+        const normalized = @mod(deg, 360);
+        return switch (normalized) {
+            0 => 0.0,
+            90 => 1.0,
+            180 => 0.0,
+            270 => -1.0,
+            else => @sin(@as(f32, @floatFromInt(deg)) * std.math.pi / 180.0),
+        };
+    }
 };
