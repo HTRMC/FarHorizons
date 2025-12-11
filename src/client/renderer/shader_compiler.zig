@@ -1,15 +1,22 @@
 const std = @import("std");
 const shaderc = @import("shaderc");
 const ShaderPreprocessor = @import("GlslPreprocessor.zig").ShaderPreprocessor;
+const ShaderCache = @import("shader_cache.zig").ShaderCache;
 
 const log = std.log.scoped(.shader_compiler);
 
 /// Shader compiler that handles preprocessing (#fh_import) and GLSL->SPIR-V compilation
+/// Includes disk-based caching to avoid recompiling unchanged shaders.
 pub const ShaderCompiler = struct {
     allocator: std.mem.Allocator,
     preprocessor: ShaderPreprocessor,
     compiler: shaderc.Compiler,
     default_options: ?shaderc.CompileOptions,
+    cache: ShaderCache,
+
+    // Stats for profiling
+    cache_hits: u32 = 0,
+    cache_misses: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) !ShaderCompiler {
         var preprocessor = ShaderPreprocessor.init(allocator);
@@ -17,6 +24,9 @@ pub const ShaderCompiler = struct {
 
         var compiler = try shaderc.Compiler.init();
         errdefer compiler.deinit();
+
+        var cache = try ShaderCache.init(allocator, null);
+        errdefer cache.deinit();
 
         // Set up default compilation options
         var options = try shaderc.CompileOptions.init();
@@ -29,6 +39,7 @@ pub const ShaderCompiler = struct {
             .preprocessor = preprocessor,
             .compiler = compiler,
             .default_options = options,
+            .cache = cache,
         };
     }
 
@@ -38,6 +49,7 @@ pub const ShaderCompiler = struct {
         }
         self.preprocessor.deinit();
         self.compiler.deinit();
+        self.cache.deinit();
     }
 
     /// Register a namespace for import resolution
@@ -47,7 +59,8 @@ pub const ShaderCompiler = struct {
     }
 
     /// Compile GLSL source code to SPIR-V
-    /// Handles #fh_import preprocessing automatically
+    /// Handles #fh_import preprocessing automatically.
+    /// Uses disk cache to avoid recompiling unchanged shaders.
     pub fn compile(
         self: *ShaderCompiler,
         source: []const u8,
@@ -57,6 +70,26 @@ pub const ShaderCompiler = struct {
         // Preprocess to resolve #fh_import directives
         const processed_source = try self.preprocessor.process(source);
         defer self.allocator.free(processed_source);
+
+        // Hash the preprocessed source + shader kind for cache lookup
+        // Include kind in hash so vertex/fragment shaders with same source are cached separately
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(processed_source);
+        hasher.update(&[_]u8{@intFromEnum(kind)});
+        const source_hash = hasher.final();
+
+        // Check cache first
+        if (self.cache.load(source_hash)) |cached_spv| {
+            self.cache_hits += 1;
+            log.info("Cache hit for '{s}' ({d} bytes SPIR-V)", .{ filename, cached_spv.len });
+            return CompiledShader{
+                .allocator = self.allocator,
+                .spv_data = cached_spv,
+                .kind = kind,
+            };
+        }
+
+        self.cache_misses += 1;
 
         // Convert filename to null-terminated string
         const filename_z = try self.allocator.dupeZ(u8, filename);
@@ -83,9 +116,14 @@ pub const ShaderCompiler = struct {
             }
         }
 
-        log.info("Compiled shader '{s}' ({} bytes SPIR-V)", .{ filename, owned_spv.len });
+        log.info("Compiled shader '{s}' ({d} bytes SPIR-V)", .{ filename, owned_spv.len });
 
         result.release();
+
+        // Store in cache for next time
+        self.cache.store(source_hash, owned_spv) catch |err| {
+            log.warn("Failed to cache shader '{s}': {}", .{ filename, err });
+        };
 
         return CompiledShader{
             .allocator = self.allocator,
@@ -132,6 +170,28 @@ pub const ShaderCompiler = struct {
             opts.addMacroDefinition(name, value);
         }
     }
+
+    /// Get cache hit/miss statistics
+    pub fn getCacheStats(self: *const ShaderCompiler) CacheStats {
+        return .{
+            .hits = self.cache_hits,
+            .misses = self.cache_misses,
+            .disk_stats = self.cache.getStats(),
+        };
+    }
+
+    /// Clear the shader cache (forces recompilation)
+    pub fn clearCache(self: *ShaderCompiler) void {
+        self.cache.clearAll();
+        self.cache_hits = 0;
+        self.cache_misses = 0;
+    }
+
+    pub const CacheStats = struct {
+        hits: u32,
+        misses: u32,
+        disk_stats: ShaderCache.CacheStats,
+    };
 };
 
 /// Shader types/stages

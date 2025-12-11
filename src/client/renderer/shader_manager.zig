@@ -34,6 +34,8 @@ pub const ShaderManager = struct {
         var default_frag: ?[]u8 = null;
 
         if (enable_runtime_compilation) {
+            var total_timer = std.time.Timer.start() catch unreachable;
+
             compiler = try ShaderCompiler.init(allocator);
 
             // Register default namespace for built-in includes
@@ -41,16 +43,28 @@ pub const ShaderManager = struct {
 
             // Compile default shaders at startup from assets directory
             log.info("Compiling default vertex shader...", .{});
+            var vert_timer = std.time.Timer.start() catch unreachable;
             var vert_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle.vert");
+            const vert_time_us = vert_timer.read() / std.time.ns_per_us;
             default_vert = try allocator.dupe(u8, vert_compiled.spv_data);
             vert_compiled.deinit();
+            log.info("Vertex shader compiled in {d}us ({d} bytes SPIR-V)", .{ vert_time_us, default_vert.?.len });
 
             log.info("Compiling default fragment shader...", .{});
+            var frag_timer = std.time.Timer.start() catch unreachable;
             var frag_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle.frag");
+            const frag_time_us = frag_timer.read() / std.time.ns_per_us;
             default_frag = try allocator.dupe(u8, frag_compiled.spv_data);
             frag_compiled.deinit();
+            log.info("Fragment shader compiled in {d}us ({d} bytes SPIR-V)", .{ frag_time_us, default_frag.?.len });
 
-            log.info("Default shaders compiled successfully", .{});
+            const total_time_ms = @as(f64, @floatFromInt(total_timer.read())) / @as(f64, std.time.ns_per_ms);
+            const cache_stats = compiler.?.getCacheStats();
+            log.info("Shader loading complete in {d:.2}ms (cache: {d} hits, {d} misses)", .{
+                total_time_ms,
+                cache_stats.hits,
+                cache_stats.misses,
+            });
         }
 
         return .{
