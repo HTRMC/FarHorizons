@@ -1,5 +1,5 @@
 const std = @import("std");
-const shared = @import("shared");
+const shared = @import("Shared");
 const Logger = shared.Logger;
 const GameConfig = shared.GameConfig;
 const FolderData = shared.FolderData;

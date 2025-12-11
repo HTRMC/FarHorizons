@@ -7,7 +7,7 @@
 /// - Boolean operations (join, or, and)
 /// - Occlusion testing utilities
 const std = @import("std");
-const voxel_shape = @import("voxel_shape.zig");
+const voxel_shape = @import("VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const CubeVoxelShape = voxel_shape.CubeVoxelShape;
 const BitSetDiscreteVoxelShape = voxel_shape.BitSetDiscreteVoxelShape;

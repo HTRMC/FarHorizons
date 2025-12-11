@@ -4,9 +4,9 @@
 /// Blocks define the behavior and properties of a block type.
 /// Each block can return different VoxelShapes based on block state.
 const std = @import("std");
-const voxel_shape = @import("../voxel_shape.zig");
+const voxel_shape = @import("../VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
-const shapes = @import("../shapes.zig");
+const shapes = @import("../Shapes.zig");
 const Shapes = shapes.Shapes;
 
 /// Block state properties that affect shape

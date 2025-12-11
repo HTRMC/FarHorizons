@@ -5,9 +5,9 @@
 /// allowing representation of shapes that don't align to power-of-2 grids.
 /// Less efficient than CubeVoxelShape but more flexible.
 const std = @import("std");
-const BitSetDiscreteVoxelShape = @import("bitset_discrete_voxel_shape.zig").BitSetDiscreteVoxelShape;
-const BitSetDiscreteVoxelShape2D = @import("bitset_discrete_voxel_shape.zig").BitSetDiscreteVoxelShape2D;
-const dvs = @import("discrete_voxel_shape.zig");
+const BitSetDiscreteVoxelShape = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape;
+const BitSetDiscreteVoxelShape2D = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape2D;
+const dvs = @import("DiscreteVoxelShape.zig");
 const Direction = dvs.Direction;
 const Axis = dvs.Axis;
 

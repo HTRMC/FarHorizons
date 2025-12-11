@@ -4,7 +4,7 @@ const std = @import("std");
 const volk = @import("volk");
 const vk = volk.c;
 const stb_image = @import("stb_image");
-const shared = @import("shared");
+const shared = @import("Shared");
 const Logger = shared.Logger;
 
 pub const TextureManager = struct {

@@ -1,7 +1,7 @@
 // Entity - like Minecraft's Entity.java
 
 const std = @import("std");
-const math = @import("math.zig");
+const math = @import("Math.zig");
 const Vec3 = math.Vec3;
 
 pub const Entity = struct {

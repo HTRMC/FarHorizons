@@ -1,12 +1,11 @@
 // Window management using GLFW
 
 const std = @import("std");
-const glfw = @import("glfw");
+const glfw = @import("GLFW");
 const c = glfw.c;
-const shared = @import("shared");
+const shared = @import("Shared");
 const Logger = shared.Logger;
-const DisplayData = @import("display_data.zig").DisplayData;
-
+const DisplayData = @import("DisplayData.zig").DisplayData;
 // Vulkan types for surface creation
 pub const VkInstance = ?*opaque {};
 pub const VkSurfaceKHR = ?*opaque {};
@@ -16,7 +15,7 @@ pub const VK_SUCCESS: VkResult = 0;
 extern fn glfwCreateWindowSurface(instance: VkInstance, window: ?*c.GLFWwindow, allocator: ?*anyopaque, surface: *VkSurfaceKHR) callconv(.c) VkResult;
 
 // Forward declaration for MouseHandler
-pub const MouseHandler = @import("mouse_handler.zig").MouseHandler;
+pub const MouseHandler = @import("MouseHandler.zig").MouseHandler;
 
 pub const Window = struct {
     const Self = @This();

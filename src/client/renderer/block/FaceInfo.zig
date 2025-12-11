@@ -1,4 +1,4 @@
-const Direction = @import("model/block_element.zig").Direction;
+const Direction = @import("model/BlockElement.zig").Direction;
 
 /// Extent enum for selecting min/max coordinates
 /// Matches net/minecraft/client/renderer/FaceInfo.Extent

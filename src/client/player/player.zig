@@ -1,3 +1,3 @@
 // Client player module
 
-pub const LocalPlayer = @import("local_player.zig").LocalPlayer;
+pub const LocalPlayer = @import("LocalPlayer.zig").LocalPlayer;

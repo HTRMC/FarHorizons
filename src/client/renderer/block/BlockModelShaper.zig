@@ -2,19 +2,19 @@
 /// Connects block entries to their resolved models via blockstate definitions
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const shared = @import("shared");
+const shared = @import("Shared");
 const Logger = shared.Logger;
 const BlockEntry = shared.BlockEntry;
 const BlockState = shared.BlockState;
 const blocks = shared.block;
 
-const ModelLoader = @import("model/model_loader.zig").ModelLoader;
-const BlockModel = @import("model/block_model.zig").BlockModel;
-const BlockstateLoader = @import("blockstate_loader.zig").BlockstateLoader;
-const BlockstateDefinition = @import("blockstate.zig").BlockstateDefinition;
-const ModelVariant = @import("blockstate.zig").ModelVariant;
-const StateMapper = @import("state_mapper.zig").StateMapper;
-const TextureManager = @import("../texture_manager.zig").TextureManager;
+const ModelLoader = @import("model/ModelLoader.zig").ModelLoader;
+const BlockModel = @import("model/BlockModel.zig").BlockModel;
+const BlockstateLoader = @import("BlockstateLoader.zig").BlockstateLoader;
+const BlockstateDefinition = @import("Blockstate.zig").BlockstateDefinition;
+const ModelVariant = @import("Blockstate.zig").ModelVariant;
+const StateMapper = @import("StateMapper.zig").StateMapper;
+const TextureManager = @import("../TextureManager.zig").TextureManager;
 
 pub const BlockModelShaper = struct {
     const Self = @This();

@@ -1,6 +1,6 @@
 // Input constants for GLFW - mirrors Minecraft's InputConstants
 
-const glfw = @import("glfw");
+const glfw = @import("GLFW");
 const c = glfw.c;
 
 // Cursor modes for glfwSetInputMode

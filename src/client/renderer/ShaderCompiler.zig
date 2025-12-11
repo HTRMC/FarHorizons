@@ -1,7 +1,7 @@
 const std = @import("std");
 const shaderc = @import("shaderc");
 const ShaderPreprocessor = @import("GlslPreprocessor.zig").ShaderPreprocessor;
-const ShaderCache = @import("shader_cache.zig").ShaderCache;
+const ShaderCache = @import("ShaderCache.zig").ShaderCache;
 
 const log = std.log.scoped(.shader_compiler);
 

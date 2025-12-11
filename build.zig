@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
 
     // Shared module used by both client and server
     const shared_module = b.createModule(.{
-        .root_source_file = b.path("src/shared/shared.zig"),
+        .root_source_file = b.path("src/shared/Shared.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -64,7 +64,7 @@ pub fn build(b: *std.Build) void {
 
     // Create GLFW Zig bindings module
     const glfw_module = b.createModule(.{
-        .root_source_file = b.path("src/client/glfw.zig"),
+        .root_source_file = b.path("src/client/GLFW.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -108,24 +108,24 @@ pub fn build(b: *std.Build) void {
 
     // Create Platform module (window management)
     const platform_module = b.createModule(.{
-        .root_source_file = b.path("src/client/platform/platform.zig"),
+        .root_source_file = b.path("src/client/platform/Platform.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "glfw", .module = glfw_module },
-            .{ .name = "shared", .module = shared_module },
+            .{ .name = "GLFW", .module = glfw_module },
+            .{ .name = "Shared", .module = shared_module },
         },
     });
 
     // Create Renderer module (Vulkan rendering)
     const renderer_module = b.createModule(.{
-        .root_source_file = b.path("src/client/renderer/renderer.zig"),
+        .root_source_file = b.path("src/client/renderer/Renderer.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "volk", .module = volk_module },
-            .{ .name = "shared", .module = shared_module },
-            .{ .name = "platform", .module = platform_module },
+            .{ .name = "Shared", .module = shared_module },
+            .{ .name = "Platform", .module = platform_module },
             .{ .name = "stb_image", .module = stb_image_module },
             .{ .name = "shaderc", .module = shaderc_module },
         },
@@ -138,11 +138,11 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "shared", .module = shared_module },
-                .{ .name = "glfw", .module = glfw_module },
+                .{ .name = "Shared", .module = shared_module },
+                .{ .name = "GLFW", .module = glfw_module },
                 .{ .name = "volk", .module = volk_module },
-                .{ .name = "platform", .module = platform_module },
-                .{ .name = "renderer", .module = renderer_module },
+                .{ .name = "Platform", .module = platform_module },
+                .{ .name = "Renderer", .module = renderer_module },
                 .{ .name = "stb_image", .module = stb_image_module },
             },
         }),
@@ -155,11 +155,11 @@ pub fn build(b: *std.Build) void {
     const server_exe = b.addExecutable(.{
         .name = "FarHorizons-Server",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/server/main.zig"),
+            .root_source_file = b.path("src/server/Main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "shared", .module = shared_module },
+                .{ .name = "Shared", .module = shared_module },
             },
         }),
     });
@@ -184,7 +184,7 @@ pub fn build(b: *std.Build) void {
     // Tests
     const exe_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/client/main.zig"),
+            .root_source_file = b.path("src/client/Main.zig"),
             .target = target,
             .optimize = optimize,
         }),

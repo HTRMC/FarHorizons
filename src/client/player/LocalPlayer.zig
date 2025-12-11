@@ -2,12 +2,12 @@
 // Client-side player with input handling and aiStep
 
 const std = @import("std");
-const shared = @import("shared");
+const shared = @import("Shared");
 const math = shared.math;
 const Vec3 = math.Vec3;
 const Player = shared.Player;
 const Abilities = shared.Abilities;
-const platform = @import("platform");
+const platform = @import("Platform");
 const KeyboardInput = platform.KeyboardInput;
 
 pub const LocalPlayer = struct {

@@ -1,5 +1,5 @@
 const std = @import("std");
-const Direction = @import("block_element.zig").Direction;
+const Direction = @import("BlockElement.zig").Direction;
 
 /// A baked quad ready for rendering
 /// Matches net/minecraft/client/renderer/block/model/BakedQuad.java

@@ -1,7 +1,7 @@
 const std = @import("std");
-const ShaderCompiler = @import("shader_compiler.zig").ShaderCompiler;
-const ShaderKind = @import("shader_compiler.zig").ShaderKind;
-const CompiledShader = @import("shader_compiler.zig").CompiledShader;
+const ShaderCompiler = @import("ShaderCompiler.zig").ShaderCompiler;
+const ShaderKind = @import("ShaderCompiler.zig").ShaderKind;
+const CompiledShader = @import("ShaderCompiler.zig").CompiledShader;
 
 const log = std.log.scoped(.shader_manager);
 

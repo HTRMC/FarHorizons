@@ -1,10 +1,10 @@
 const std = @import("std");
-const BlockElement = @import("block_element.zig").BlockElement;
-const BlockElementFace = @import("block_element.zig").BlockElementFace;
-const BlockElementRotation = @import("block_element.zig").BlockElementRotation;
-const Direction = @import("block_element.zig").Direction;
-const BakedQuad = @import("baked_quad.zig").BakedQuad;
-const FaceInfo = @import("../face_info.zig").FaceInfo;
+const BlockElement = @import("BlockElement.zig").BlockElement;
+const BlockElementFace = @import("BlockElement.zig").BlockElementFace;
+const BlockElementRotation = @import("BlockElement.zig").BlockElementRotation;
+const Direction = @import("BlockElement.zig").Direction;
+const BakedQuad = @import("BakedQuad.zig").BakedQuad;
+const FaceInfo = @import("../FaceInfo.zig").FaceInfo;
 
 /// Bakes block model faces into BakedQuads
 /// Matches net/minecraft/client/renderer/block/model/FaceBakery.java

@@ -1,8 +1,8 @@
 const std = @import("std");
-const shared = @import("shared");
+const shared = @import("Shared");
 const Allocator = std.mem.Allocator;
-const BlockModel = @import("block_model.zig").BlockModel;
-const BlockElement = @import("block_element.zig").BlockElement;
+const BlockModel = @import("BlockModel.zig").BlockModel;
+const BlockElement = @import("BlockElement.zig").BlockElement;
 const Logger = shared.Logger;
 
 /// Loads and resolves Minecraft block models with parent inheritance
@@ -174,7 +174,7 @@ pub const ModelLoader = struct {
     }
 
     fn copyElement(allocator: Allocator, src: *const BlockElement) !BlockElement {
-        const Direction = @import("block_element.zig").Direction;
+        const Direction = @import("BlockElement.zig").Direction;
 
         var elem = BlockElement.init(allocator);
         elem.from = src.from;
@@ -199,7 +199,7 @@ pub const ModelLoader = struct {
     /// Resolve all texture references in a model (replace #name with actual paths)
     pub fn resolveTextures(self: *Self, model: *BlockModel) !void {
         _ = self;
-        const Direction = @import("block_element.zig").Direction;
+        const Direction = @import("BlockElement.zig").Direction;
 
         if (model.elements) |elements| {
             for (elements) |*elem| {

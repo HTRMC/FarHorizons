@@ -6,13 +6,13 @@
 /// - Top: occupies y=0.5 to y=1.0
 /// - Double: full block (y=0 to y=1.0)
 const std = @import("std");
-const block_mod = @import("block.zig");
+const block_mod = @import("Block.zig");
 const Block = block_mod.Block;
 const BlockState = block_mod.BlockState;
 const BlockVTable = block_mod.BlockVTable;
-const voxel_shape = @import("../voxel_shape.zig");
+const voxel_shape = @import("../VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
-const shapes = @import("../shapes.zig");
+const shapes = @import("../Shapes.zig");
 const Shapes = shapes.Shapes;
 
 /// Slab block vtable

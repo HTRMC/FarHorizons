@@ -1,14 +1,14 @@
 /// Chunk data structure - 16x16x16 blocks
 /// Matches Minecraft's chunk section concept
-const voxel_shape = @import("voxel_shape.zig");
+const voxel_shape = @import("VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const Direction = voxel_shape.Direction;
-const shapes_mod = @import("shapes.zig");
+const shapes_mod = @import("Shapes.zig");
 const Shapes = shapes_mod.Shapes;
-const ChunkAccess = @import("chunk_access.zig").ChunkAccess;
-const occlusion = @import("occlusion_cache.zig");
-const blocks = @import("block/blocks.zig");
-const block_mod = @import("block/block.zig");
+const ChunkAccess = @import("ChunkAccess.zig").ChunkAccess;
+const occlusion = @import("OcclusionCache.zig");
+const blocks = @import("block/Blocks.zig");
+const block_mod = @import("block/Block.zig");
 const BlockState = block_mod.BlockState;
 
 pub const CHUNK_SIZE = 16;

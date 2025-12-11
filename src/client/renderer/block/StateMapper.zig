@@ -2,7 +2,7 @@
 /// Maps the packed BlockState properties to Minecraft-style variant keys
 /// like "type=bottom", "axis=y", etc.
 const std = @import("std");
-const shared = @import("shared");
+const shared = @import("Shared");
 const BlockState = shared.BlockState;
 
 pub const StateMapper = struct {

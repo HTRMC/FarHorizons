@@ -2,10 +2,10 @@
 // Polls keyboard state and calculates normalized movement vector
 
 const std = @import("std");
-const shared = @import("shared");
+const shared = @import("Shared");
 const Vec2 = struct { x: f32, z: f32 };
-const Window = @import("window.zig").Window;
-const InputConstants = @import("input_constants.zig");
+const Window = @import("Window.zig").Window;
+const InputConstants = @import("InputConstants.zig");
 
 /// Input state - like Minecraft's Input record
 pub const Input = struct {

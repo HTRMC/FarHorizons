@@ -5,8 +5,8 @@
 /// It's used for face occlusion testing - comparing the face shape of
 /// one block against the opposite face of its neighbor.
 const std = @import("std");
-const BitSetDiscreteVoxelShape2D = @import("bitset_discrete_voxel_shape.zig").BitSetDiscreteVoxelShape2D;
-const dvs = @import("discrete_voxel_shape.zig");
+const BitSetDiscreteVoxelShape2D = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape2D;
+const dvs = @import("DiscreteVoxelShape.zig");
 const Direction = dvs.Direction;
 const Axis = dvs.Axis;
 

@@ -13,25 +13,24 @@
 const std = @import("std");
 
 // Re-export core types
-pub const DiscreteVoxelShape = @import("discrete_voxel_shape.zig").DiscreteVoxelShape;
-pub const Axis = @import("discrete_voxel_shape.zig").Axis;
-pub const Direction = @import("discrete_voxel_shape.zig").Direction;
-pub const AxisDirection = @import("discrete_voxel_shape.zig").AxisDirection;
+pub const DiscreteVoxelShape = @import("DiscreteVoxelShape.zig").DiscreteVoxelShape;
+pub const Axis = @import("DiscreteVoxelShape.zig").Axis;
+pub const Direction = @import("DiscreteVoxelShape.zig").Direction;
+pub const AxisDirection = @import("DiscreteVoxelShape.zig").AxisDirection;
 
-pub const BitSetDiscreteVoxelShape = @import("bitset_discrete_voxel_shape.zig").BitSetDiscreteVoxelShape;
-pub const BitSetDiscreteVoxelShape2D = @import("bitset_discrete_voxel_shape.zig").BitSetDiscreteVoxelShape2D;
+pub const BitSetDiscreteVoxelShape = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape;
+pub const BitSetDiscreteVoxelShape2D = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape2D;
 
-pub const CubeVoxelShape = @import("cube_voxel_shape.zig").CubeVoxelShape;
-pub const findRequiredResolution = @import("cube_voxel_shape.zig").findRequiredResolution;
-pub const findBits = @import("cube_voxel_shape.zig").findBits;
+pub const CubeVoxelShape = @import("CubeVoxelShape.zig").CubeVoxelShape;
+pub const findRequiredResolution = @import("CubeVoxelShape.zig").findRequiredResolution;
+pub const findBits = @import("CubeVoxelShape.zig").findBits;
 
-pub const ArrayVoxelShape = @import("array_voxel_shape.zig").ArrayVoxelShape;
+pub const ArrayVoxelShape = @import("ArrayVoxelShape.zig").ArrayVoxelShape;
 
-pub const SliceShape = @import("slice_shape.zig").SliceShape;
-
-pub const IndexMerger = @import("index_merger.zig").IndexMerger;
-pub const DiscreteCubeMerger = @import("index_merger.zig").DiscreteCubeMerger;
-pub const IdenticalMerger = @import("index_merger.zig").IdenticalMerger;
+pub const SliceShape = @import("SliceShape.zig").SliceShape;
+pub const IndexMerger = @import("IndexMerger.zig").IndexMerger;
+pub const DiscreteCubeMerger = @import("IndexMerger.zig").DiscreteCubeMerger;
+pub const IdenticalMerger = @import("IndexMerger.zig").IdenticalMerger;
 
 /// VoxelShape variant union - the main shape type
 /// Use this when you need runtime polymorphism between shape types

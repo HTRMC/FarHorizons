@@ -1,12 +1,12 @@
 /// Cross-chunk block access
 /// Provides a way to query blocks across chunk boundaries during mesh generation
 const std = @import("std");
-const chunk_mod = @import("chunk.zig");
+const chunk_mod = @import("Chunk.zig");
 const Chunk = chunk_mod.Chunk;
 const BlockType = chunk_mod.BlockType;
 const BlockEntry = chunk_mod.BlockEntry;
 const CHUNK_SIZE = chunk_mod.CHUNK_SIZE;
-const voxel_shape = @import("voxel_shape.zig");
+const voxel_shape = @import("VoxelShape.zig");
 const Direction = voxel_shape.Direction;
 
 /// Interface for accessing blocks across chunk boundaries

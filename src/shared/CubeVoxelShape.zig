@@ -5,9 +5,9 @@
 /// align to a power-of-2 grid (1, 2, 4, 8, or 16 divisions per axis).
 /// Most block shapes fall into this category.
 const std = @import("std");
-const BitSetDiscreteVoxelShape = @import("bitset_discrete_voxel_shape.zig").BitSetDiscreteVoxelShape;
-const BitSetDiscreteVoxelShape2D = @import("bitset_discrete_voxel_shape.zig").BitSetDiscreteVoxelShape2D;
-const dvs = @import("discrete_voxel_shape.zig");
+const BitSetDiscreteVoxelShape = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape;
+const BitSetDiscreteVoxelShape2D = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape2D;
+const dvs = @import("DiscreteVoxelShape.zig");
 const Direction = dvs.Direction;
 const Axis = dvs.Axis;
 

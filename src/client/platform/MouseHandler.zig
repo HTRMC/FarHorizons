@@ -1,12 +1,12 @@
 // Mouse handler - mirrors Minecraft's MouseHandler
 
 const std = @import("std");
-const glfw = @import("glfw");
+const glfw = @import("GLFW");
 const c = glfw.c;
-const shared = @import("shared");
+const shared = @import("Shared");
 const Logger = shared.Logger;
-const Window = @import("window.zig").Window;
-const InputConstants = @import("input_constants.zig");
+const Window = @import("Window.zig").Window;
+const InputConstants = @import("InputConstants.zig");
 
 pub const MouseHandler = struct {
     const Self = @This();

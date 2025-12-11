@@ -3,10 +3,10 @@
 const std = @import("std");
 const volk = @import("volk");
 const vk = volk.c;
-const shared = @import("shared");
+const shared = @import("Shared");
 const Logger = shared.Logger;
-const platform = @import("platform");
-const ShaderManager = @import("shader_manager.zig").ShaderManager;
+const platform = @import("Platform");
+const ShaderManager = @import("ShaderManager.zig").ShaderManager;
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 

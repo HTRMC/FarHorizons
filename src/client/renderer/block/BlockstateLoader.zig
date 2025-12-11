@@ -2,10 +2,10 @@
 /// Matches Minecraft's blockstate loading from assets/namespace/blockstates/*.json
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const shared = @import("shared");
+const shared = @import("Shared");
 const Logger = shared.Logger;
-const BlockstateDefinition = @import("blockstate.zig").BlockstateDefinition;
-const ModelVariant = @import("blockstate.zig").ModelVariant;
+const BlockstateDefinition = @import("Blockstate.zig").BlockstateDefinition;
+const ModelVariant = @import("Blockstate.zig").ModelVariant;
 
 pub const BlockstateLoader = struct {
     const Self = @This();

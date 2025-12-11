@@ -4,7 +4,7 @@
 /// Uses a linear bitset to store which voxels are filled.
 /// Index calculation: index = x * ySize * zSize + y * zSize + z
 const std = @import("std");
-const DiscreteVoxelShape = @import("discrete_voxel_shape.zig").DiscreteVoxelShape;
+const DiscreteVoxelShape = @import("DiscreteVoxelShape.zig").DiscreteVoxelShape;
 
 /// Maximum supported size per axis (16 for block shapes)
 pub const MAX_SIZE: u8 = 16;
@@ -254,7 +254,7 @@ pub const BitSetDiscreteVoxelShape = struct {
 
     /// Create a 2D slice of the shape along an axis at a given position
     /// Returns a new 2D BitSetDiscreteVoxelShape
-    pub fn getSlice(self: *const Self, axis: @import("discrete_voxel_shape.zig").Axis, pos: u8) BitSetDiscreteVoxelShape2D {
+    pub fn getSlice(self: *const Self, axis: @import("DiscreteVoxelShape.zig").Axis, pos: u8) BitSetDiscreteVoxelShape2D {
         return switch (axis) {
             .x => blk: {
                 // YZ slice at X=pos

@@ -1,5 +1,5 @@
 const std = @import("std");
-const shared = @import("shared");
+const shared = @import("Shared");
 const Logger = shared.Logger;
 const FarHorizonsServer = @import("farhorizonsserver.zig").FarHorizonsServer;
 

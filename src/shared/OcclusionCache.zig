@@ -5,10 +5,10 @@
 /// expensive shape comparisons. Uses a simple hash-indexed array
 /// with LRU-like eviction.
 const std = @import("std");
-const voxel_shape = @import("voxel_shape.zig");
+const voxel_shape = @import("VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const Direction = voxel_shape.Direction;
-const shapes = @import("shapes.zig");
+const shapes = @import("Shapes.zig");
 
 /// Cache size (number of entries)
 /// Minecraft uses 256 entries per thread

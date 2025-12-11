@@ -2,9 +2,9 @@
 // Extends Entity with travel methods and friction
 
 const std = @import("std");
-const math = @import("math.zig");
+const math = @import("Math.zig");
 const Vec3 = math.Vec3;
-const Entity = @import("entity.zig").Entity;
+const Entity = @import("Entity.zig").Entity;
 
 pub const LivingEntity = struct {
     const Self = @This();

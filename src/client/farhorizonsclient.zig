@@ -1,10 +1,10 @@
 // FarHorizons Client - main client orchestration
 
 const std = @import("std");
-const shared = @import("shared");
-const platform = @import("platform");
-const renderer = @import("renderer");
-const client_player = @import("player/player.zig");
+const shared = @import("Shared");
+const platform = @import("Platform");
+const renderer = @import("Renderer");
+const client_player = @import("player/Player.zig");
 
 const GameConfig = shared.GameConfig;
 const Logger = shared.Logger;

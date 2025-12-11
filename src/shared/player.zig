@@ -2,10 +2,10 @@
 // Extends LivingEntity with abilities and flying speed calculation
 
 const std = @import("std");
-const math = @import("math.zig");
+const math = @import("Math.zig");
 const Vec3 = math.Vec3;
-const LivingEntity = @import("living_entity.zig").LivingEntity;
-const Abilities = @import("abilities.zig").Abilities;
+const LivingEntity = @import("LivingEntity.zig").LivingEntity;
+const Abilities = @import("Abilities.zig").Abilities;
 
 pub const Player = struct {
     const Self = @This();

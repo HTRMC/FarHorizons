@@ -1,18 +1,18 @@
 // Model types
-pub const BlockModel = @import("model/block_model.zig").BlockModel;
-pub const BlockElement = @import("model/block_element.zig").BlockElement;
-pub const BlockElementFace = @import("model/block_element.zig").BlockElementFace;
-pub const BlockElementRotation = @import("model/block_element.zig").BlockElementRotation;
-pub const Direction = @import("model/block_element.zig").Direction;
-pub const ModelLoader = @import("model/model_loader.zig").ModelLoader;
-pub const BakedQuad = @import("model/baked_quad.zig").BakedQuad;
-pub const FaceBakery = @import("model/face_bakery.zig").FaceBakery;
-pub const FaceInfo = @import("face_info.zig").FaceInfo;
+pub const BlockModel = @import("model/BlockModel.zig").BlockModel;
+pub const BlockElement = @import("model/BlockElement.zig").BlockElement;
+pub const BlockElementFace = @import("model/BlockElement.zig").BlockElementFace;
+pub const BlockElementRotation = @import("model/BlockElement.zig").BlockElementRotation;
+pub const Direction = @import("model/BlockElement.zig").Direction;
+pub const ModelLoader = @import("model/ModelLoader.zig").ModelLoader;
+pub const BakedQuad = @import("model/BakedQuad.zig").BakedQuad;
+pub const FaceBakery = @import("model/FaceBakery.zig").FaceBakery;
+pub const FaceInfo = @import("FaceInfo.zig").FaceInfo;
 
 // Blockstate types
-pub const blockstate = @import("blockstate.zig");
+pub const blockstate = @import("Blockstate.zig");
 pub const BlockstateDefinition = blockstate.BlockstateDefinition;
 pub const ModelVariant = blockstate.ModelVariant;
-pub const BlockstateLoader = @import("blockstate_loader.zig").BlockstateLoader;
-pub const StateMapper = @import("state_mapper.zig").StateMapper;
-pub const BlockModelShaper = @import("block_model_shaper.zig").BlockModelShaper;
+pub const BlockstateLoader = @import("BlockstateLoader.zig").BlockstateLoader;
+pub const StateMapper = @import("StateMapper.zig").StateMapper;
+pub const BlockModelShaper = @import("BlockModelShaper.zig").BlockModelShaper;
