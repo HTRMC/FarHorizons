@@ -6,6 +6,7 @@ const vk = volk.c;
 const shared = @import("shared");
 const Logger = shared.Logger;
 const platform = @import("platform");
+const ShaderManager = @import("shader_manager.zig").ShaderManager;
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -137,12 +138,24 @@ pub const RenderSystem = struct {
     // Window reference for swapchain recreation
     window: ?*platform.Window = null,
 
+    // Shader management (supports runtime shader packs)
+    shader_manager: ?ShaderManager = null,
+
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{ .allocator = allocator };
     }
 
     pub fn initBackend(self: *Self, window: *platform.Window) !void {
         self.window = window;
+
+        // Initialize shader manager (enable runtime compilation for shader pack support)
+        // Set to false if you want to disable runtime shader compilation
+        const enable_runtime_shaders = true;
+        self.shader_manager = ShaderManager.init(self.allocator, enable_runtime_shaders) catch |err| blk: {
+            logger.warn("Failed to initialize shader manager with runtime compilation: {}", .{err});
+            // Fall back to embedded shaders only
+            break :blk ShaderManager.init(self.allocator, false) catch null;
+        };
 
         if (!platform.isVulkanSupported()) {
             logger.err("Vulkan is not supported on this system", .{});
@@ -191,6 +204,12 @@ pub const RenderSystem = struct {
             }
         }
 
+        // Shutdown shader manager
+        if (self.shader_manager) |*sm| {
+            sm.deinit();
+            self.shader_manager = null;
+        }
+
         self.destroySyncObjects();
         self.destroyCommandPool();
         self.destroyDescriptorPool();
@@ -209,6 +228,59 @@ pub const RenderSystem = struct {
         self.destroyInstance();
 
         logger.info("Render system shut down", .{});
+    }
+
+    /// Load a shader pack from a directory path
+    /// This will compile the shaders and recreate the graphics pipeline
+    pub fn loadShaderPack(self: *Self, pack_path: []const u8) !void {
+        if (self.shader_manager) |*sm| {
+            try sm.loadShaderPack(pack_path);
+            try self.recreateGraphicsPipeline();
+            logger.info("Loaded shader pack: {s}", .{pack_path});
+        } else {
+            logger.err("Shader manager not initialized", .{});
+            return error.ShaderManagerNotInitialized;
+        }
+    }
+
+    /// Unload current shader pack and return to default shaders
+    pub fn unloadShaderPack(self: *Self) !void {
+        if (self.shader_manager) |*sm| {
+            sm.unloadShaderPack();
+            try self.recreateGraphicsPipeline();
+            logger.info("Unloaded shader pack, using default shaders", .{});
+        }
+    }
+
+    /// Recreate the graphics pipeline (used after shader changes)
+    fn recreateGraphicsPipeline(self: *Self) !void {
+        const vkDeviceWaitIdle = vk.vkDeviceWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyPipeline = vk.vkDestroyPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyPipelineLayout = vk.vkDestroyPipelineLayout orelse return error.VulkanFunctionNotLoaded;
+
+        // Wait for GPU to finish
+        _ = vkDeviceWaitIdle(self.device);
+
+        // Destroy old pipeline
+        if (self.graphics_pipeline) |pipeline| {
+            vkDestroyPipeline(self.device, pipeline, null);
+            self.graphics_pipeline = null;
+        }
+        if (self.pipeline_layout) |layout| {
+            vkDestroyPipelineLayout(self.device, layout, null);
+            self.pipeline_layout = null;
+        }
+
+        // Create new pipeline with new shaders
+        try self.createGraphicsPipeline();
+    }
+
+    /// Check if runtime shader compilation is available
+    pub fn isRuntimeShaderCompilationEnabled(self: *const Self) bool {
+        if (self.shader_manager) |sm| {
+            return sm.isRuntimeCompilationEnabled();
+        }
+        return false;
     }
 
     /// Set texture resources from TextureManager and create descriptor sets
@@ -1154,15 +1226,21 @@ pub const RenderSystem = struct {
         const vkCreatePipelineLayout = vk.vkCreatePipelineLayout orelse return error.VulkanFunctionNotLoaded;
         const vkCreateGraphicsPipelines = vk.vkCreateGraphicsPipelines orelse return error.VulkanFunctionNotLoaded;
 
-        // Embedded SPIR-V shaders (compiled from GLSL)
-        // Use @alignCast to ensure proper alignment for SPIR-V (requires 4-byte alignment)
-        const vert_shader_code align(4) = @embedFile("shaders/triangle.vert.spv").*;
-        const frag_shader_code align(4) = @embedFile("shaders/triangle.frag.spv").*;
+        // Get SPIR-V shaders from ShaderManager (runtime-compiled with #moj_import support)
+        const vert_shader_code = if (self.shader_manager) |*sm|
+            sm.getDefaultVertexShader() orelse return error.ShaderNotAvailable
+        else
+            return error.ShaderManagerNotInitialized;
 
-        const vert_module = try self.createShaderModule(vkCreateShaderModule, &vert_shader_code);
+        const frag_shader_code = if (self.shader_manager) |*sm|
+            sm.getDefaultFragmentShader() orelse return error.ShaderNotAvailable
+        else
+            return error.ShaderManagerNotInitialized;
+
+        const vert_module = try self.createShaderModule(vkCreateShaderModule, vert_shader_code);
         defer vkDestroyShaderModule(self.device, vert_module, null);
 
-        const frag_module = try self.createShaderModule(vkCreateShaderModule, &frag_shader_code);
+        const frag_module = try self.createShaderModule(vkCreateShaderModule, frag_shader_code);
         defer vkDestroyShaderModule(self.device, frag_module, null);
 
         const shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{

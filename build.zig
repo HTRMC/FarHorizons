@@ -3,7 +3,7 @@
 const std = @import("std");
 
 fn libName(b: *std.Build, name: []const u8) []const u8 {
-    // We always build with mingw-style naming (libXXX.a)
+    // All libraries use mingw-style naming (lib*.a)
     return b.fmt("lib{s}.a", .{name});
 }
 
@@ -34,6 +34,10 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.addObjectFile(lib_dep.path(libName(b, "glfw")));
     exe.addObjectFile(lib_dep.path(libName(b, "volk")));
     exe.addObjectFile(lib_dep.path(libName(b, "stb_image")));
+    exe.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
+
+    // shaderc requires C++ standard library
+    exe.linkLibCpp();
 
     // Link system libraries (GLFW loads X11 dynamically on Linux)
     if (t.os.tag == .windows) {
@@ -91,6 +95,17 @@ pub fn build(b: *std.Build) void {
         stb_image_module.addIncludePath(d.path(""));
     }
 
+    // Create shaderc Zig bindings module
+    const shaderc_module = b.createModule(.{
+        .root_source_file = b.path("src/client/shaderc.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    if (headers_dep) |d| {
+        shaderc_module.addIncludePath(d.path(""));
+    }
+
     // Create Platform module (window management)
     const platform_module = b.createModule(.{
         .root_source_file = b.path("src/client/platform/platform.zig"),
@@ -112,6 +127,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "shared", .module = shared_module },
             .{ .name = "platform", .module = platform_module },
             .{ .name = "stb_image", .module = stb_image_module },
+            .{ .name = "shaderc", .module = shaderc_module },
         },
     });
 

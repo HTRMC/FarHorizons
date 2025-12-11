@@ -1,0 +1,253 @@
+const std = @import("std");
+const ShaderCompiler = @import("shader_compiler.zig").ShaderCompiler;
+const ShaderKind = @import("shader_compiler.zig").ShaderKind;
+const CompiledShader = @import("shader_compiler.zig").CompiledShader;
+
+const log = std.log.scoped(.shader_manager);
+
+/// Manages both embedded (build-time) and runtime-compiled shaders
+pub const ShaderManager = struct {
+    allocator: std.mem.Allocator,
+    compiler: ?ShaderCompiler,
+    /// Cache of runtime-compiled shaders
+    shader_cache: std.StringHashMap(CachedShader),
+    /// Active shader pack path (null = use defaults)
+    active_pack: ?[]const u8,
+    /// Cached default shaders (compiled at startup)
+    default_vert_spv: ?[]u8,
+    default_frag_spv: ?[]u8,
+
+    // Embedded default shader sources
+    const default_vert_src = @embedFile("shaders/triangle.vert");
+    const default_frag_src = @embedFile("shaders/triangle.frag");
+
+    const CachedShader = struct {
+        data: []const u8,
+        kind: ShaderKind,
+    };
+
+    /// Initialize shader manager
+    /// Set enable_runtime_compilation to true to allow loading player shader packs
+    pub fn init(allocator: std.mem.Allocator, enable_runtime_compilation: bool) !ShaderManager {
+        var compiler: ?ShaderCompiler = null;
+        var default_vert: ?[]u8 = null;
+        var default_frag: ?[]u8 = null;
+
+        if (enable_runtime_compilation) {
+            compiler = try ShaderCompiler.init(allocator);
+
+            // Register default namespace for built-in includes
+            try compiler.?.registerNamespace("farhorizons", "src/client/renderer/shaders/include/");
+
+            // Compile default shaders at startup
+            log.info("Compiling default vertex shader...", .{});
+            var vert_compiled = try compiler.?.compile(default_vert_src, .vertex, "triangle.vert");
+            default_vert = try allocator.dupe(u8, vert_compiled.spv_data);
+            vert_compiled.deinit();
+
+            log.info("Compiling default fragment shader...", .{});
+            var frag_compiled = try compiler.?.compile(default_frag_src, .fragment, "triangle.frag");
+            default_frag = try allocator.dupe(u8, frag_compiled.spv_data);
+            frag_compiled.deinit();
+
+            log.info("Default shaders compiled successfully", .{});
+        }
+
+        return .{
+            .allocator = allocator,
+            .compiler = compiler,
+            .shader_cache = std.StringHashMap(CachedShader).init(allocator),
+            .active_pack = null,
+            .default_vert_spv = default_vert,
+            .default_frag_spv = default_frag,
+        };
+    }
+
+    pub fn deinit(self: *ShaderManager) void {
+        // Free cached shaders
+        var iter = self.shader_cache.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.data);
+        }
+        self.shader_cache.deinit();
+
+        if (self.active_pack) |pack| {
+            self.allocator.free(pack);
+        }
+
+        // Free compiled default shaders
+        if (self.default_vert_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.default_frag_spv) |spv| {
+            self.allocator.free(spv);
+        }
+
+        if (self.compiler) |*c| {
+            c.deinit();
+        }
+    }
+
+    /// Get the default vertex shader (compiled at runtime)
+    pub fn getDefaultVertexShader(self: *ShaderManager) ?[]const u8 {
+        return self.default_vert_spv;
+    }
+
+    /// Get the default fragment shader (compiled at runtime)
+    pub fn getDefaultFragmentShader(self: *ShaderManager) ?[]const u8 {
+        return self.default_frag_spv;
+    }
+
+    /// Get default vertex shader as u32 words for Vulkan
+    pub fn getDefaultVertexShaderWords(self: *ShaderManager) ?[]const u32 {
+        if (self.default_vert_spv) |spv| {
+            const ptr: [*]const u32 = @ptrCast(@alignCast(spv.ptr));
+            return ptr[0 .. spv.len / 4];
+        }
+        return null;
+    }
+
+    /// Get default fragment shader as u32 words for Vulkan
+    pub fn getDefaultFragmentShaderWords(self: *ShaderManager) ?[]const u32 {
+        if (self.default_frag_spv) |spv| {
+            const ptr: [*]const u32 = @ptrCast(@alignCast(spv.ptr));
+            return ptr[0 .. spv.len / 4];
+        }
+        return null;
+    }
+
+    /// Load a shader pack from a directory
+    /// Shader pack structure:
+    ///   pack_path/
+    ///     shaders/
+    ///       include/     (optional custom includes)
+    ///       terrain.vert
+    ///       terrain.frag
+    ///       ...
+    ///     pack.json     (optional metadata)
+    pub fn loadShaderPack(self: *ShaderManager, pack_path: []const u8) !void {
+        if (self.compiler == null) {
+            log.err("Runtime shader compilation is disabled", .{});
+            return error.RuntimeCompilationDisabled;
+        }
+
+        log.info("Loading shader pack from: {s}", .{pack_path});
+
+        // Clear existing cache
+        self.clearCache();
+
+        // Store active pack path
+        if (self.active_pack) |old| {
+            self.allocator.free(old);
+        }
+        self.active_pack = try self.allocator.dupe(u8, pack_path);
+
+        // Register the pack's include directory
+        const include_path = try std.fs.path.join(self.allocator, &.{ pack_path, "shaders", "include" });
+        defer self.allocator.free(include_path);
+
+        // Check if include directory exists before registering
+        if (std.fs.cwd().openDir(include_path, .{})) |dir| {
+            dir.close();
+            try self.compiler.?.registerNamespace("pack", include_path);
+            log.info("Registered pack include path: {s}", .{include_path});
+        } else |_| {
+            log.info("No custom include directory in shader pack", .{});
+        }
+    }
+
+    /// Get a shader by name, compiling if necessary
+    /// Returns SPIR-V bytes
+    pub fn getShader(self: *ShaderManager, name: []const u8, kind: ShaderKind) ![]const u8 {
+        // Check cache first
+        if (self.shader_cache.get(name)) |cached| {
+            return cached.data;
+        }
+
+        // If no active pack, return default
+        if (self.active_pack == null) {
+            return switch (kind) {
+                .vertex => self.getDefaultVertexShader(),
+                .fragment => self.getDefaultFragmentShader(),
+                else => error.NoShaderAvailable,
+            };
+        }
+
+        // Compile from pack
+        if (self.compiler) |*compiler| {
+            const ext = switch (kind) {
+                .vertex => ".vert",
+                .fragment => ".frag",
+                .compute => ".comp",
+                .geometry => ".geom",
+                .tess_control => ".tesc",
+                .tess_evaluation => ".tese",
+            };
+
+            const shader_path = try std.fs.path.join(self.allocator, &.{
+                self.active_pack.?,
+                "shaders",
+                try std.mem.concat(self.allocator, u8, &.{ name, ext }),
+            });
+            defer self.allocator.free(shader_path);
+
+            var compiled = try compiler.compileFile(shader_path);
+            defer compiled.deinit();
+
+            // Cache the result
+            const key = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(key);
+            const data = try self.allocator.dupe(u8, compiled.spv_data);
+
+            try self.shader_cache.put(key, .{ .data = data, .kind = kind });
+
+            return data;
+        }
+
+        return error.RuntimeCompilationDisabled;
+    }
+
+    /// Compile a shader from source string (for hot-reloading or testing)
+    pub fn compileSource(
+        self: *ShaderManager,
+        source: []const u8,
+        kind: ShaderKind,
+        name: []const u8,
+    ) !CompiledShader {
+        if (self.compiler) |*compiler| {
+            return compiler.compile(source, kind, name);
+        }
+        return error.RuntimeCompilationDisabled;
+    }
+
+    /// Clear the shader cache (call before reloading a pack)
+    pub fn clearCache(self: *ShaderManager) void {
+        var iter = self.shader_cache.iterator();
+        while (iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.data);
+        }
+        self.shader_cache.clearRetainingCapacity();
+    }
+
+    /// Unload the current shader pack and return to defaults
+    pub fn unloadShaderPack(self: *ShaderManager) void {
+        self.clearCache();
+        if (self.active_pack) |pack| {
+            self.allocator.free(pack);
+            self.active_pack = null;
+        }
+        log.info("Shader pack unloaded, using default shaders", .{});
+    }
+
+    /// Check if runtime compilation is enabled
+    pub fn isRuntimeCompilationEnabled(self: *ShaderManager) bool {
+        return self.compiler != null;
+    }
+
+    /// Check if a shader pack is currently loaded
+    pub fn hasActiveShaderPack(self: *ShaderManager) bool {
+        return self.active_pack != null;
+    }
+};

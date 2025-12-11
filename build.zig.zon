@@ -6,26 +6,26 @@
     .dependencies = .{
         // Headers (shared across all platforms)
         .farhorizons_deps_headers = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.6/farhorizons_deps_headers.tar.gz",
-            .hash = "N-V-__8AADbGOAERPpcB6YP573iL-pQAMwToauv-CN11SI2l",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.7/farhorizons_deps_headers.tar.gz",
+            .hash = "N-V-__8AAOC9OQEVrYLzIChjRo22_IVQsa5QcELWoK-RqT_L",
             .lazy = true,
         },
         // Windows x86_64
         .@"farhorizons_deps_x86_64-windows-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.6/farhorizons_deps_x86_64-windows-gnu.tar.gz",
-            .hash = "N-V-__8AANzmJQA21Gm5yWzMLplM78pHt6gI1EXnwP0Rnmjg",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.7/farhorizons_deps_x86_64-windows-gnu.tar.gz",
+            .hash = "N-V-__8AAOxFZQF6_wa5neg4pf73J3kurVgDeu87fFL7X1zo",
             .lazy = true,
         },
         // Linux x86_64
         .@"farhorizons_deps_x86_64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.6/farhorizons_deps_x86_64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AACIRMgDEXEy48v0wi0clCmRY4ncAqECZOssfj7Q5",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.7/farhorizons_deps_x86_64-linux-gnu.tar.gz",
+            .hash = "N-V-__8AABKmgQGJqPbtm2UnUvg8JA5bVrZw2WIKmB6gPrGJ",
             .lazy = true,
         },
         // Linux aarch64
         .@"farhorizons_deps_aarch64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.6/farhorizons_deps_aarch64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AABrWNQDplQ44xr26DnIbbUh5AfNowaTYQbudbbs8",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.7/farhorizons_deps_aarch64-linux-gnu.tar.gz",
+            .hash = "N-V-__8AAAprhQEcqZbrU0pDsU9n_9nn8OvRy94Pgl6gG6Zm",
             .lazy = true,
         },
     },
