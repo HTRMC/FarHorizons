@@ -115,6 +115,11 @@ pub fn getBlock(id: u16) *const Block {
     return &AIR; // Unknown blocks become air
 }
 
+/// Get block name by ID
+pub fn getBlockName(id: u16) []const u8 {
+    return getBlock(id).name;
+}
+
 /// Get block by BlockId enum
 pub fn getBlockById(id: BlockId) *const Block {
     return getBlock(@intFromEnum(id));

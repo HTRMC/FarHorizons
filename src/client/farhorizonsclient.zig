@@ -27,6 +27,8 @@ const ModelLoader = renderer.block.ModelLoader;
 const FaceBakery = renderer.block.FaceBakery;
 const BakedQuad = renderer.block.BakedQuad;
 const Direction = renderer.block.Direction;
+const BlockstateLoader = renderer.block.BlockstateLoader;
+const BlockModelShaper = renderer.block.BlockModelShaper;
 const LocalPlayer = client_player.LocalPlayer;
 
 // VoxelShape culling
@@ -216,46 +218,23 @@ pub const FarHorizonsClient = struct {
     fn testModelLoading(self: *Self) !void {
         logger.info("Loading and baking chunk...", .{});
 
+        // Initialize model loading system
         var model_loader = ModelLoader.init(self.allocator, self.config.location.asset_directory);
         defer model_loader.deinit();
 
-        // Load block models
-        var stone_model = model_loader.loadModel("farhorizons:block/stone") catch |err| {
-            logger.err("Failed to load stone model: {}", .{err});
-            return err;
-        };
-        defer stone_model.deinit();
-        try model_loader.resolveTextures(&stone_model);
+        var blockstate_loader = BlockstateLoader.init(self.allocator, self.config.location.asset_directory);
+        defer blockstate_loader.deinit();
 
-        var slab_model = model_loader.loadModel("farhorizons:block/oak_slab") catch |err| {
-            logger.err("Failed to load oak_slab model: {}", .{err});
-            return err;
-        };
-        defer slab_model.deinit();
-        try model_loader.resolveTextures(&slab_model);
+        var block_model_shaper = BlockModelShaper.init(
+            self.allocator,
+            &model_loader,
+            &blockstate_loader,
+            &self.texture_manager.?,
+        );
+        defer block_model_shaper.deinit();
 
         // Generate a test chunk
         const chunk = Chunk.generateTestChunk();
-
-        // Count faces per model for estimation
-        var stone_faces: usize = 0;
-        var slab_faces: usize = 0;
-        if (stone_model.elements) |elements| {
-            for (elements) |*elem| {
-                inline for (std.meta.fields(Direction)) |field| {
-                    const dir: Direction = @enumFromInt(field.value);
-                    if (elem.faces.get(dir) != null) stone_faces += 1;
-                }
-            }
-        }
-        if (slab_model.elements) |elements| {
-            for (elements) |*elem| {
-                inline for (std.meta.fields(Direction)) |field| {
-                    const dir: Direction = @enumFromInt(field.value);
-                    if (elem.faces.get(dir) != null) slab_faces += 1;
-                }
-            }
-        }
 
         // Count blocks in chunk to estimate buffer size
         var block_count: usize = 0;
@@ -272,7 +251,7 @@ pub const FarHorizonsClient = struct {
         const max_faces = block_count * 6;
         logger.info("Chunk has {d} blocks, allocating for up to {d} faces", .{ block_count, max_faces });
 
-        // Allocate arrays for vertices and indices (use u32 for indices since we may exceed 65k vertices)
+        // Allocate arrays for vertices and indices
         const vertices = try self.allocator.alloc(Vertex, max_faces * 4);
         defer self.allocator.free(vertices);
         const indices = try self.allocator.alloc(u16, max_faces * 6);
@@ -288,11 +267,10 @@ pub const FarHorizonsClient = struct {
                     const entry = chunk.getBlockEntry(@intCast(x), @intCast(y), @intCast(z));
                     if (entry.isAir()) continue;
 
-                    // Get the model for this block type
-                    const model: *const renderer.block.BlockModel = switch (entry.id) {
-                        1 => &stone_model, // stone
-                        2 => &slab_model, // oak_slab
-                        else => continue,
+                    // Get the model for this block via blockstate system
+                    const model = block_model_shaper.getModel(entry) catch |err| {
+                        logger.warn("Failed to get model for block {}: {}", .{ entry.id, err });
+                        continue;
                     };
 
                     // Bake with face culling

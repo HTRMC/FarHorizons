@@ -1,0 +1,7 @@
+{
+    "variants": {
+        "type=bottom": { "model": "farhorizons:block/oak_slab" },
+        "type=top": { "model": "farhorizons:block/oak_slab_top" },
+        "type=double": { "model": "farhorizons:block/oak_planks" }
+    }
+}

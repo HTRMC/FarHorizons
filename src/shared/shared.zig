@@ -59,3 +59,8 @@ pub const OcclusionCache = occlusion_cache.OcclusionCache;
 
 pub const chunk_access = @import("chunk_access.zig");
 pub const ChunkAccess = chunk_access.ChunkAccess;
+
+// Block system
+pub const block = @import("block/blocks.zig");
+pub const block_mod = @import("block/block.zig");
+pub const BlockState = block_mod.BlockState;
