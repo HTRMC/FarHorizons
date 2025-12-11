@@ -13,6 +13,7 @@ const Mat4 = shared.Mat4;
 const Vec3 = shared.Vec3;
 const Chunk = shared.Chunk;
 const BlockType = shared.BlockType;
+const BlockEntry = shared.BlockEntry;
 const CHUNK_SIZE = shared.CHUNK_SIZE;
 const Window = platform.Window;
 const DisplayData = platform.DisplayData;
@@ -27,6 +28,9 @@ const FaceBakery = renderer.block.FaceBakery;
 const BakedQuad = renderer.block.BakedQuad;
 const Direction = renderer.block.Direction;
 const LocalPlayer = client_player.LocalPlayer;
+
+// VoxelShape culling
+const VoxelDirection = shared.Direction;
 
 pub const FarHorizonsClient = struct {
     const Self = @This();
@@ -258,8 +262,8 @@ pub const FarHorizonsClient = struct {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
                 for (0..CHUNK_SIZE) |x| {
-                    const block = chunk.getBlock(@intCast(x), @intCast(y), @intCast(z));
-                    if (block != .air) block_count += 1;
+                    const entry = chunk.getBlockEntry(@intCast(x), @intCast(y), @intCast(z));
+                    if (!entry.isAir()) block_count += 1;
                 }
             }
         }
@@ -281,14 +285,14 @@ pub const FarHorizonsClient = struct {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
                 for (0..CHUNK_SIZE) |x| {
-                    const block = chunk.getBlock(@intCast(x), @intCast(y), @intCast(z));
-                    if (block == .air) continue;
+                    const entry = chunk.getBlockEntry(@intCast(x), @intCast(y), @intCast(z));
+                    if (entry.isAir()) continue;
 
                     // Get the model for this block type
-                    const model: *const renderer.block.BlockModel = switch (block) {
-                        .stone => &stone_model,
-                        .oak_slab => &slab_model,
-                        .air => unreachable,
+                    const model: *const renderer.block.BlockModel = switch (entry.id) {
+                        1 => &stone_model, // stone
+                        2 => &slab_model, // oak_slab
+                        else => continue,
                     };
 
                     // Bake with face culling
@@ -298,7 +302,7 @@ pub const FarHorizonsClient = struct {
                         @intCast(x),
                         @intCast(y),
                         @intCast(z),
-                        block,
+                        entry,
                         vertices,
                         indices,
                         &vertex_idx,
@@ -317,49 +321,35 @@ pub const FarHorizonsClient = struct {
         logger.info("Chunk baked and uploaded successfully!", .{});
     }
 
-    /// Bake a block at chunk position with face culling
+    /// Bake a block at chunk position with VoxelShape-based face culling
     fn bakeBlockAt(
         model: *const renderer.block.BlockModel,
         chunk: *const Chunk,
         x: i32,
         y: i32,
         z: i32,
-        block: BlockType,
+        entry: BlockEntry,
         vertices: []Vertex,
         indices: []u16,
         vertex_idx: *usize,
         index_idx: *usize,
         texture_manager: *const TextureManager,
     ) !void {
-        _ = block;
         const elements = model.elements orelse return error.NoElements;
-
-        // Direction offsets for neighbor checking
-        const dir_offsets = [_][3]i32{
-            .{ 0, -1, 0 }, // down
-            .{ 0, 1, 0 }, // up
-            .{ 0, 0, -1 }, // north
-            .{ 0, 0, 1 }, // south
-            .{ -1, 0, 0 }, // west
-            .{ 1, 0, 0 }, // east
-        };
 
         // White color (texture provides color)
         const color = [3]f32{ 1.0, 1.0, 1.0 };
 
         const directions = [_]Direction{ .down, .up, .north, .south, .west, .east };
+        const voxel_directions = [_]VoxelDirection{ .down, .up, .north, .south, .west, .east };
 
         for (elements) |*elem| {
             for (directions, 0..) |dir, dir_idx| {
                 if (elem.faces.get(dir)) |face| {
-                    // Check if we should render this face (neighbor is air/transparent)
-                    const offset = dir_offsets[dir_idx];
-                    const nx = x + offset[0];
-                    const ny = y + offset[1];
-                    const nz = z + offset[2];
-
-                    if (!chunk.shouldRenderFace(nx, ny, nz)) {
-                        continue; // Skip this face - neighbor is opaque
+                    // Use VoxelShape-based culling for accurate face visibility
+                    const voxel_dir = voxel_directions[dir_idx];
+                    if (!chunk.shouldRenderFaceVoxelEntry(x, y, z, voxel_dir, entry, null)) {
+                        continue; // Skip this face - occluded by neighbor's shape
                     }
 
                     // Get texture index from texture name

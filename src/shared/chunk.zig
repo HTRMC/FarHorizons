@@ -1,87 +1,240 @@
 /// Chunk data structure - 16x16x16 blocks
 /// Matches Minecraft's chunk section concept
+const voxel_shape = @import("voxel_shape.zig");
+const VoxelShape = voxel_shape.VoxelShape;
+const Direction = voxel_shape.Direction;
+const shapes_mod = @import("shapes.zig");
+const Shapes = shapes_mod.Shapes;
+const ChunkAccess = @import("chunk_access.zig").ChunkAccess;
+const occlusion = @import("occlusion_cache.zig");
+const blocks = @import("block/blocks.zig");
+const block_mod = @import("block/block.zig");
+const BlockState = block_mod.BlockState;
 
 pub const CHUNK_SIZE = 16;
 pub const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 
-/// Block types
+/// Block entry storing both ID and state
+/// Packed into 16 bits for efficient storage
+pub const BlockEntry = packed struct {
+    /// Block ID (0-255)
+    id: u8,
+    /// Block state (packed properties)
+    state: BlockState,
+
+    pub const AIR = BlockEntry{ .id = 0, .state = .{} };
+
+    /// Create a simple block entry with default state
+    pub fn simple(id: u8) BlockEntry {
+        return .{ .id = id, .state = .{} };
+    }
+
+    /// Create a slab block entry
+    pub fn slab(id: u8, slab_type: BlockState.SlabType) BlockEntry {
+        return .{ .id = id, .state = BlockState.slab(slab_type) };
+    }
+
+    /// Get the block definition
+    pub fn getBlock(self: BlockEntry) *const blocks.block_mod.Block {
+        return blocks.getBlock(self.id);
+    }
+
+    /// Get the VoxelShape for this block entry
+    pub fn getShape(self: BlockEntry) *const VoxelShape {
+        return blocks.getShape(self.id, self.state);
+    }
+
+    /// Check if block is opaque
+    pub fn isOpaque(self: BlockEntry) bool {
+        return blocks.isOpaque(self.id, self.state);
+    }
+
+    /// Check if block is solid
+    pub fn isSolid(self: BlockEntry) bool {
+        return blocks.isSolid(self.id, self.state);
+    }
+
+    /// Check if this is air
+    pub fn isAir(self: BlockEntry) bool {
+        return self.id == 0;
+    }
+};
+
+/// Legacy BlockType enum for backwards compatibility
+/// Maps to BlockEntry internally
 pub const BlockType = enum(u8) {
     air = 0,
     stone = 1,
     oak_slab = 2,
 
     pub fn isOpaque(self: BlockType) bool {
-        return switch (self) {
-            .air => false,
-            .stone => true,
-            .oak_slab => false, // Slab is not full block
-        };
+        return self.toEntry().isOpaque();
     }
 
     pub fn isSolid(self: BlockType) bool {
-        return self != .air;
+        return self.toEntry().isSolid();
+    }
+
+    pub fn getShape(self: BlockType) *const VoxelShape {
+        return self.toEntry().getShape();
+    }
+
+    /// Convert to BlockEntry with default state
+    pub fn toEntry(self: BlockType) BlockEntry {
+        return BlockEntry.simple(@intFromEnum(self));
     }
 };
 
 /// A 16x16x16 chunk section
 pub const Chunk = struct {
-    blocks: [CHUNK_VOLUME]BlockType,
+    /// Block storage - stores BlockEntry (id + state)
+    block_entries: [CHUNK_VOLUME]BlockEntry,
 
     pub fn init() Chunk {
         return .{
-            .blocks = .{.air} ** CHUNK_VOLUME,
+            .block_entries = .{BlockEntry.AIR} ** CHUNK_VOLUME,
         };
     }
 
-    /// Get block at local coordinates (0-15)
-    pub fn getBlock(self: *const Chunk, x: u32, y: u32, z: u32) BlockType {
+    /// Get block entry at local coordinates (0-15)
+    pub fn getBlockEntry(self: *const Chunk, x: u32, y: u32, z: u32) BlockEntry {
         if (x >= CHUNK_SIZE or y >= CHUNK_SIZE or z >= CHUNK_SIZE) {
-            return .air;
+            return BlockEntry.AIR;
         }
-        return self.blocks[getIndex(x, y, z)];
+        return self.block_entries[getIndex(x, y, z)];
     }
 
-    /// Set block at local coordinates (0-15)
-    pub fn setBlock(self: *Chunk, x: u32, y: u32, z: u32, block: BlockType) void {
+    /// Set block entry at local coordinates (0-15)
+    pub fn setBlockEntry(self: *Chunk, x: u32, y: u32, z: u32, entry: BlockEntry) void {
         if (x >= CHUNK_SIZE or y >= CHUNK_SIZE or z >= CHUNK_SIZE) {
             return;
         }
-        self.blocks[getIndex(x, y, z)] = block;
+        self.block_entries[getIndex(x, y, z)] = entry;
+    }
+
+    /// Legacy: Get block type at local coordinates (ignores state)
+    pub fn getBlock(self: *const Chunk, x: u32, y: u32, z: u32) BlockType {
+        const entry = self.getBlockEntry(x, y, z);
+        return @enumFromInt(entry.id);
+    }
+
+    /// Legacy: Set block at local coordinates (default state)
+    pub fn setBlock(self: *Chunk, x: u32, y: u32, z: u32, block: BlockType) void {
+        self.setBlockEntry(x, y, z, block.toEntry());
     }
 
     /// Check if face should be rendered (neighbor is air or transparent)
+    /// DEPRECATED: Use shouldRenderFaceVoxel for shape-aware culling
     pub fn shouldRenderFace(self: *const Chunk, x: i32, y: i32, z: i32) bool {
         // Out of bounds = air = render face
         if (x < 0 or y < 0 or z < 0 or x >= CHUNK_SIZE or y >= CHUNK_SIZE or z >= CHUNK_SIZE) {
             return true;
         }
-        const neighbor = self.getBlock(@intCast(x), @intCast(y), @intCast(z));
+        const neighbor = self.getBlockEntry(@intCast(x), @intCast(y), @intCast(z));
         // Render if neighbor is not opaque
         return !neighbor.isOpaque();
     }
 
-    /// Generate a test chunk with some blocks
+    /// Shape-aware face culling using VoxelShapes
+    /// Returns true if face SHOULD be rendered, false if it should be culled
+    ///
+    /// Parameters:
+    /// - x, y, z: Block position within chunk
+    /// - direction: Which face we're checking
+    /// - block: The block entry at this position
+    /// - chunk_access: Optional cross-chunk access for boundary lookups
+    pub fn shouldRenderFaceVoxelEntry(
+        self: *const Chunk,
+        x: i32,
+        y: i32,
+        z: i32,
+        direction: Direction,
+        block: BlockEntry,
+        chunk_access: ?*const ChunkAccess,
+    ) bool {
+        // Get neighbor position
+        const off = direction.offset();
+        const nx = x + off[0];
+        const ny = y + off[1];
+        const nz = z + off[2];
+
+        // Get neighbor block entry
+        const neighbor: BlockEntry = blk: {
+            if (chunk_access) |access| {
+                break :blk access.getBlockEntry(nx, ny, nz);
+            }
+            // No cross-chunk access - check bounds
+            if (nx < 0 or ny < 0 or nz < 0 or
+                nx >= CHUNK_SIZE or ny >= CHUNK_SIZE or nz >= CHUNK_SIZE)
+            {
+                break :blk BlockEntry.AIR;
+            }
+            break :blk self.getBlockEntry(@intCast(nx), @intCast(ny), @intCast(nz));
+        };
+
+        // Get shapes and check occlusion
+        const block_shape = block.getShape();
+        const neighbor_shape = neighbor.getShape();
+
+        return occlusion.shouldRenderFace(block_shape, neighbor_shape, direction);
+    }
+
+    /// Legacy: Shape-aware face culling (ignores state)
+    pub fn shouldRenderFaceVoxel(
+        self: *const Chunk,
+        x: i32,
+        y: i32,
+        z: i32,
+        direction: Direction,
+        block: BlockType,
+        chunk_access: ?*const ChunkAccess,
+    ) bool {
+        return self.shouldRenderFaceVoxelEntry(x, y, z, direction, block.toEntry(), chunk_access);
+    }
+
+    /// Generate a test chunk with blocks including slabs of different types
     pub fn generateTestChunk() Chunk {
         var chunk = Chunk.init();
 
-        // Create a simple terrain: stone base with some slabs on top
+        // Create a terrain with stone base
         for (0..CHUNK_SIZE) |x| {
             for (0..CHUNK_SIZE) |z| {
                 // Stone layer at y=0
-                chunk.setBlock(@intCast(x), 0, @intCast(z), .stone);
+                chunk.setBlockEntry(@intCast(x), 0, @intCast(z), BlockEntry.simple(1)); // stone
+            }
+        }
 
-                // Random-ish pattern for second layer
-                const hash = (x * 7 + z * 13) % 5;
-                if (hash < 2) {
-                    chunk.setBlock(@intCast(x), 1, @intCast(z), .stone);
-                } else if (hash == 2) {
-                    chunk.setBlock(@intCast(x), 1, @intCast(z), .oak_slab);
-                }
-                // else air
+        // Create a row of adjacent bottom slabs at y=1 (for testing side face culling)
+        // These should have their shared side faces culled
+        for (0..8) |x| {
+            chunk.setBlockEntry(@intCast(x), 1, 4, BlockEntry.slab(2, .bottom));
+        }
 
-                // Some scattered blocks at y=2
-                if ((x + z) % 7 == 0) {
-                    chunk.setBlock(@intCast(x), 2, @intCast(z), .stone);
+        // Create a 2x2 grid of adjacent bottom slabs
+        for (0..4) |x| {
+            for (0..4) |z| {
+                chunk.setBlockEntry(@intCast(x + 10), 1, @intCast(z + 10), BlockEntry.slab(2, .bottom));
+            }
+        }
+
+        // Place stone blocks above some bottom slabs (to test UP face rendering)
+        chunk.setBlockEntry(0, 2, 4, BlockEntry.simple(1)); // stone above first slab
+        chunk.setBlockEntry(2, 2, 4, BlockEntry.simple(1)); // stone above third slab
+
+        // Create top slabs at y=1
+        for (0..4) |x| {
+            chunk.setBlockEntry(@intCast(x), 1, 8, BlockEntry.slab(2, .top));
+        }
+
+        // Place stone blocks below top slabs (to test DOWN face rendering)
+        chunk.setBlockEntry(0, 0, 8, BlockEntry.simple(1)); // already stone from layer 0
+
+        // Mixed pattern for variety
+        for (0..CHUNK_SIZE) |x| {
+            for (0..CHUNK_SIZE) |z| {
+                const hash = (x * 7 + z * 13) % 11;
+                if (hash == 0 and x >= 4 and z >= 0 and z < 4) {
+                    chunk.setBlockEntry(@intCast(x), 1, @intCast(z), BlockEntry.simple(1)); // stone
                 }
             }
         }

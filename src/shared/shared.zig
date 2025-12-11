@@ -36,4 +36,26 @@ pub const Abilities = @import("abilities.zig").Abilities;
 pub const chunk = @import("chunk.zig");
 pub const Chunk = chunk.Chunk;
 pub const BlockType = chunk.BlockType;
+pub const BlockEntry = chunk.BlockEntry;
 pub const CHUNK_SIZE = chunk.CHUNK_SIZE;
+
+// VoxelShape system for face culling
+pub const voxel_shape = @import("voxel_shape.zig");
+pub const VoxelShape = voxel_shape.VoxelShape;
+pub const Direction = voxel_shape.Direction;
+pub const Axis = voxel_shape.Axis;
+pub const CubeVoxelShape = voxel_shape.CubeVoxelShape;
+pub const ArrayVoxelShape = voxel_shape.ArrayVoxelShape;
+pub const BitSetDiscreteVoxelShape = voxel_shape.BitSetDiscreteVoxelShape;
+pub const BitSetDiscreteVoxelShape2D = voxel_shape.BitSetDiscreteVoxelShape2D;
+pub const SliceShape = voxel_shape.SliceShape;
+
+pub const shapes = @import("shapes.zig");
+pub const Shapes = shapes.Shapes;
+pub const BooleanOp = shapes.BooleanOp;
+
+pub const occlusion_cache = @import("occlusion_cache.zig");
+pub const OcclusionCache = occlusion_cache.OcclusionCache;
+
+pub const chunk_access = @import("chunk_access.zig");
+pub const ChunkAccess = chunk_access.ChunkAccess;

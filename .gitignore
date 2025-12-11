@@ -10,3 +10,4 @@ compiler/
 /.idea
 *.txt
 nul
+/cache
