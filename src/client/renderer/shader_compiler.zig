@@ -4,7 +4,7 @@ const ShaderPreprocessor = @import("GlslPreprocessor.zig").ShaderPreprocessor;
 
 const log = std.log.scoped(.shader_compiler);
 
-/// Shader compiler that handles preprocessing (#moj_import) and GLSL->SPIR-V compilation
+/// Shader compiler that handles preprocessing (#fh_import) and GLSL->SPIR-V compilation
 pub const ShaderCompiler = struct {
     allocator: std.mem.Allocator,
     preprocessor: ShaderPreprocessor,
@@ -47,14 +47,14 @@ pub const ShaderCompiler = struct {
     }
 
     /// Compile GLSL source code to SPIR-V
-    /// Handles #moj_import preprocessing automatically
+    /// Handles #fh_import preprocessing automatically
     pub fn compile(
         self: *ShaderCompiler,
         source: []const u8,
         kind: ShaderKind,
         filename: []const u8,
     ) !CompiledShader {
-        // Preprocess to resolve #moj_import directives
+        // Preprocess to resolve #fh_import directives
         const processed_source = try self.preprocessor.process(source);
         defer self.allocator.free(processed_source);
 

@@ -56,6 +56,7 @@ pub const FarHorizonsClient = struct {
         // Initialize camera for rendering
         var camera = Camera.init();
         camera.position = .{ .x = 8, .y = 10, .z = 20 }; // Above and behind chunk center
+        camera.setRotation(180, 0); // Face towards -Z (towards the chunk)
 
         return Self{
             .config = config,
@@ -90,6 +91,7 @@ pub const FarHorizonsClient = struct {
         // Initialize local player with keyboard input
         self.local_player = LocalPlayer.init(&self.keyboard_input);
         self.local_player.setPosition(Vec3{ .x = 8, .y = 10, .z = 20 }); // Above and behind chunk center
+        self.local_player.setYRot(180); // Face towards -Z (towards the chunk)
 
         // Initialize render system (Vulkan) with window for surface
         try self.render_system.initBackend(&self.window);

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const log = std.log.scoped(.shader_preprocessor);
 
-/// Shader preprocessor that handles #moj_import directives
+/// Shader preprocessor that handles #fh_import directives
 /// Similar to Minecraft's shader import system
 pub const ShaderPreprocessor = struct {
     allocator: std.mem.Allocator,
@@ -49,7 +49,7 @@ pub const ShaderPreprocessor = struct {
         try self.namespace_paths.put(ns_copy, path_copy);
     }
 
-    /// Process shader source and resolve all #moj_import directives
+    /// Process shader source and resolve all #fh_import directives
     /// Returns the preprocessed source with all imports inlined
     pub fn process(self: *ShaderPreprocessor, source: []const u8) ![]const u8 {
         // Clear included files for new processing session
@@ -85,7 +85,7 @@ pub const ShaderPreprocessor = struct {
             line_num += 1;
             const trimmed = std.mem.trim(u8, line, " \t\r");
 
-            if (std.mem.startsWith(u8, trimmed, "#moj_import")) {
+            if (std.mem.startsWith(u8, trimmed, "#fh_import")) {
                 // Parse the import directive
                 const import_path = try self.parseImportDirective(trimmed, line_num);
                 defer self.allocator.free(import_path);
@@ -136,19 +136,19 @@ pub const ShaderPreprocessor = struct {
         return result.toOwnedSlice(self.allocator);
     }
 
-    /// Parse #moj_import <namespace:path> directive
+    /// Parse #fh_import <namespace:path> directive
     /// Returns the resolved file path
     fn parseImportDirective(self: *ShaderPreprocessor, line: []const u8, line_num: usize) ![]const u8 {
-        // Expected format: #moj_import <namespace:path>
-        const after_import = std.mem.trimLeft(u8, line["#moj_import".len..], " \t");
+        // Expected format: #fh_import <namespace:path>
+        const after_import = std.mem.trimLeft(u8, line["#fh_import".len..], " \t");
 
         if (after_import.len == 0 or after_import[0] != '<') {
-            log.err("Line {}: Invalid #moj_import syntax, expected '<'", .{line_num});
+            log.err("Line {}: Invalid #fh_import syntax, expected '<'", .{line_num});
             return error.InvalidImportSyntax;
         }
 
         const end_bracket = std.mem.indexOf(u8, after_import, ">") orelse {
-            log.err("Line {}: Invalid #moj_import syntax, missing '>'", .{line_num});
+            log.err("Line {}: Invalid #fh_import syntax, missing '>'", .{line_num});
             return error.InvalidImportSyntax;
         };
 

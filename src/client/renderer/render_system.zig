@@ -1226,7 +1226,7 @@ pub const RenderSystem = struct {
         const vkCreatePipelineLayout = vk.vkCreatePipelineLayout orelse return error.VulkanFunctionNotLoaded;
         const vkCreateGraphicsPipelines = vk.vkCreateGraphicsPipelines orelse return error.VulkanFunctionNotLoaded;
 
-        // Get SPIR-V shaders from ShaderManager (runtime-compiled with #moj_import support)
+        // Get SPIR-V shaders from ShaderManager (runtime-compiled with #fh_import support)
         const vert_shader_code = if (self.shader_manager) |*sm|
             sm.getDefaultVertexShader() orelse return error.ShaderNotAvailable
         else

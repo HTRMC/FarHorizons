@@ -5,7 +5,7 @@ const CompiledShader = @import("shader_compiler.zig").CompiledShader;
 
 const log = std.log.scoped(.shader_manager);
 
-/// Manages both embedded (build-time) and runtime-compiled shaders
+/// Manages runtime-compiled shaders loaded from assets
 pub const ShaderManager = struct {
     allocator: std.mem.Allocator,
     compiler: ?ShaderCompiler,
@@ -17,9 +17,9 @@ pub const ShaderManager = struct {
     default_vert_spv: ?[]u8,
     default_frag_spv: ?[]u8,
 
-    // Embedded default shader sources
-    const default_vert_src = @embedFile("shaders/triangle.vert");
-    const default_frag_src = @embedFile("shaders/triangle.frag");
+    /// Base path for default shaders
+    const default_shader_path = "assets/farhorizons/shaders/";
+    const default_include_path = "assets/farhorizons/shaders/include/";
 
     const CachedShader = struct {
         data: []const u8,
@@ -37,16 +37,16 @@ pub const ShaderManager = struct {
             compiler = try ShaderCompiler.init(allocator);
 
             // Register default namespace for built-in includes
-            try compiler.?.registerNamespace("farhorizons", "src/client/renderer/shaders/include/");
+            try compiler.?.registerNamespace("farhorizons", default_include_path);
 
-            // Compile default shaders at startup
+            // Compile default shaders at startup from assets directory
             log.info("Compiling default vertex shader...", .{});
-            var vert_compiled = try compiler.?.compile(default_vert_src, .vertex, "triangle.vert");
+            var vert_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle.vert");
             default_vert = try allocator.dupe(u8, vert_compiled.spv_data);
             vert_compiled.deinit();
 
             log.info("Compiling default fragment shader...", .{});
-            var frag_compiled = try compiler.?.compile(default_frag_src, .fragment, "triangle.frag");
+            var frag_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle.frag");
             default_frag = try allocator.dupe(u8, frag_compiled.spv_data);
             frag_compiled.deinit();
 
