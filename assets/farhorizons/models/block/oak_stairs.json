@@ -1,0 +1,8 @@
+{
+    "parent": "farhorizons:block/stairs",
+    "textures": {
+        "bottom": "farhorizons:block/oak_planks",
+        "side": "farhorizons:block/oak_planks",
+        "top": "farhorizons:block/oak_planks"
+    }
+}

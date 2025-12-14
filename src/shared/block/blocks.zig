@@ -9,6 +9,7 @@ const Block = block_mod.Block;
 const BlockState = block_mod.BlockState;
 const BlockVTable = block_mod.BlockVTable;
 const slab_block = @import("SlabBlock.zig");
+const stair_block = @import("StairBlock.zig");
 const voxel_shape = @import("../VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const shapes = @import("../Shapes.zig");
@@ -28,6 +29,7 @@ pub const BlockId = enum(u16) {
     oak_planks = 6,
     spruce_slab = 7,
     birch_slab = 8,
+    oak_stairs = 9,
     // Add more as needed
     _,
 };
@@ -90,6 +92,12 @@ pub const BIRCH_SLAB = Block{
     .vtable = &slab_block.SLAB_BLOCK_VTABLE,
 };
 
+pub const OAK_STAIRS = Block{
+    .id = @intFromEnum(BlockId.oak_stairs),
+    .name = "oak_stairs",
+    .vtable = &stair_block.STAIR_BLOCK_VTABLE,
+};
+
 // ======================
 // Block Registry
 // ======================
@@ -105,6 +113,7 @@ const BLOCK_REGISTRY = [_]*const Block{
     &OAK_PLANKS, // 6
     &SPRUCE_SLAB, // 7
     &BIRCH_SLAB, // 8
+    &OAK_STAIRS, // 9
 };
 
 /// Get block by ID
@@ -165,4 +174,75 @@ test "Slab shapes by state" {
     try std.testing.expect(!bottom.isFullBlock());
     try std.testing.expect(!top.isFullBlock());
     try std.testing.expect(double.isFullBlock());
+}
+
+test "Stair state encoding roundtrip" {
+    // Test that state encoding/decoding works for all combinations
+    const facings = [_]BlockState.StairFacing{ .north, .south, .east, .west };
+    const halves = [_]BlockState.StairHalf{ .bottom, .top };
+    const shape_types = [_]BlockState.StairShape{ .straight, .inner_left, .inner_right, .outer_left, .outer_right };
+
+    for (facings) |facing| {
+        for (halves) |half| {
+            for (shape_types) |shape| {
+                const state = BlockState.stair(facing, half, shape);
+                try std.testing.expectEqual(facing, state.getStairFacing());
+                try std.testing.expectEqual(half, state.getStairHalf());
+                try std.testing.expectEqual(shape, state.getStairShape());
+            }
+        }
+    }
+}
+
+test "Stair shapes are valid" {
+    const stair_id = @intFromEnum(BlockId.oak_stairs);
+
+    // Test all facing/half combinations for straight stairs
+    const facings = [_]BlockState.StairFacing{ .north, .south, .east, .west };
+    const halves = [_]BlockState.StairHalf{ .bottom, .top };
+
+    for (facings) |facing| {
+        for (halves) |half| {
+            const state = BlockState.stair(facing, half, .straight);
+            const shape = getShape(stair_id, state);
+
+            // Shape should be a cube (not empty, not full block)
+            try std.testing.expect(shape.* == .cube);
+            try std.testing.expect(!shape.isEmpty());
+            try std.testing.expect(!shape.isFullBlock());
+        }
+    }
+}
+
+test "Top stair DOWN face is partial" {
+    const stair_id = @intFromEnum(BlockId.oak_stairs);
+
+    // For ALL top-half stairs, the DOWN face should be partial (not full)
+    const facings = [_]BlockState.StairFacing{ .north, .south, .east, .west };
+
+    for (facings) |facing| {
+        const state = BlockState.stair(facing, .top, .straight);
+        const shape = getShape(stair_id, state);
+        const down_face = shape.getFaceShapeConst(.down);
+
+        // DOWN face should NOT be full (only half is filled)
+        try std.testing.expect(!down_face.isFull());
+    }
+}
+
+test "Stone below top stair should render" {
+    const stone_shape = &Shapes.BLOCK;
+    const stair_id = @intFromEnum(BlockId.oak_stairs);
+
+    // For any top-half stair, stone below should render its UP face
+    const facings = [_]BlockState.StairFacing{ .north, .south, .east, .west };
+
+    for (facings) |facing| {
+        const state = BlockState.stair(facing, .top, .straight);
+        const stair_shape = getShape(stair_id, state);
+
+        // Stone's UP face should render (not be occluded by stair's DOWN)
+        const should_render = stone_shape.shouldRenderFace(.up, stair_shape);
+        try std.testing.expect(should_render);
+    }
 }

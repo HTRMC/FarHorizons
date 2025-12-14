@@ -11,6 +11,9 @@ const dvs = @import("DiscreteVoxelShape.zig");
 const Direction = dvs.Direction;
 const Axis = dvs.Axis;
 
+/// Import CoordList from VoxelShape for rotation support
+pub const CoordList = @import("CubeVoxelShape.zig").CoordList;
+
 /// Maximum number of coordinates per axis
 pub const MAX_COORDS: usize = 17; // 16 divisions + 1
 
@@ -117,6 +120,37 @@ pub const ArrayVoxelShape = struct {
         return self;
     }
 
+    /// Create from an existing BitSetDiscreteVoxelShape and coordinate lists (for rotation)
+    pub fn initWithCoords(
+        discrete: BitSetDiscreteVoxelShape,
+        x_list: CoordList,
+        y_list: CoordList,
+        z_list: CoordList,
+    ) Self {
+        var x_coords = CoordArray.init();
+        var y_coords = CoordArray.init();
+        var z_coords = CoordArray.init();
+
+        for (0..x_list.len) |i| {
+            x_coords.appendAssumeCapacity(x_list.data[i]);
+        }
+        for (0..y_list.len) |i| {
+            y_coords.appendAssumeCapacity(y_list.data[i]);
+        }
+        for (0..z_list.len) |i| {
+            z_coords.appendAssumeCapacity(z_list.data[i]);
+        }
+
+        return .{
+            .shape = discrete,
+            .x_coords = x_coords,
+            .y_coords = y_coords,
+            .z_coords = z_coords,
+            .face_cache = [_]?BitSetDiscreteVoxelShape2D{null} ** 6,
+            .allocator = std.heap.page_allocator, // Default allocator for rotation results
+        };
+    }
+
     pub fn deinit(self: *Self) void {
         _ = self;
         // BoundedArrays don't need deallocation
@@ -131,6 +165,17 @@ pub const ArrayVoxelShape = struct {
         };
     }
 
+    /// Get coordinate list along axis (for rotation)
+    pub fn getCoordList(self: *const Self, axis: Axis) CoordList {
+        var list = CoordList.init();
+        const coords = self.getCoords(axis);
+        for (0..@min(coords.len, 17)) |i| {
+            list.data[i] = coords[i];
+        }
+        list.len = @intCast(@min(coords.len, 17));
+        return list;
+    }
+
     /// Get coordinate value at index
     pub fn getCoord(self: *const Self, axis: Axis, index: u8) f64 {
         const coords = self.getCoords(axis);
@@ -139,22 +184,25 @@ pub const ArrayVoxelShape = struct {
     }
 
     /// Find index for a coordinate value
+    /// Returns the voxel index containing the coordinate.
+    /// Boundary values belong to the voxel starting at that boundary.
     pub fn findIndex(self: *const Self, axis: Axis, coord: f64) u8 {
         const coords = self.getCoords(axis);
 
-        // Binary search for the coordinate
+        // Binary search for first index where coords[i] > coord
         var low: usize = 0;
         var high: usize = coords.len;
 
         while (low < high) {
             const mid = low + (high - low) / 2;
-            if (coords[mid] < coord) {
+            if (coords[mid] <= coord) {
                 low = mid + 1;
             } else {
                 high = mid;
             }
         }
 
+        // low is now first index > coord, so voxel index is low - 1
         if (low > 0) low -= 1;
         return @intCast(@min(low, coords.len - 2));
     }

@@ -6,6 +6,7 @@
 /// - Factory methods for creating shapes
 /// - Boolean operations (join, or, and)
 /// - Occlusion testing utilities
+/// - Rotation support for generating directional variants
 const std = @import("std");
 const voxel_shape = @import("VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
@@ -14,6 +15,9 @@ const BitSetDiscreteVoxelShape = voxel_shape.BitSetDiscreteVoxelShape;
 const BitSetDiscreteVoxelShape2D = voxel_shape.BitSetDiscreteVoxelShape2D;
 const Direction = voxel_shape.Direction;
 const Axis = voxel_shape.Axis;
+const OctahedralGroup = voxel_shape.OctahedralGroup;
+const rotate = voxel_shape.rotate;
+const rotateHorizontal = voxel_shape.rotateHorizontal;
 
 /// Boolean operations for shape joining
 pub const BooleanOp = enum {
@@ -120,6 +124,159 @@ pub const Shapes = struct {
 
     /// Lily pad (full XZ, thin on Y)
     pub const LILY_PAD = voxel_shape.fromBlockBounds(.{ 0, 0, 0 }, .{ 16, 1.5, 16 });
+
+    // === Stair shapes ===
+    // Exact Minecraft implementation from StairBlock.java
+    //
+    // Base shapes:
+    // - SHAPE_OUTER = column(16, 0, 8) OR box(0, 8, 0, 8, 16, 8)
+    //   = bottom_slab OR NW_corner_step
+    // - SHAPE_STRAIGHT = SHAPE_OUTER OR rotate(SHAPE_OUTER, 90)
+    //   = bottom_slab + NW + NE corners = north-facing straight stair
+    // - SHAPE_INNER = SHAPE_STRAIGHT OR rotate(SHAPE_STRAIGHT, 90)
+    //   = bottom_slab + N + E edges = NE inner corner stair
+
+    /// Block.column(16.0, 0.0, 8.0) = bottom slab
+    fn column(size_xz: f32, min_y: f32, max_y: f32) VoxelShape {
+        const half = size_xz / 2.0;
+        return voxel_shape.fromBlockBounds(
+            .{ 8.0 - half, min_y, 8.0 - half },
+            .{ 8.0 + half, max_y, 8.0 + half },
+        );
+    }
+
+    /// SHAPE_OUTER: bottom slab + NW corner step
+    /// Minecraft: Shapes.or(Block.column(16.0, 0.0, 8.0), Block.box(0.0, 8.0, 0.0, 8.0, 16.0, 8.0))
+    const SHAPE_OUTER: VoxelShape = blk: {
+        const bottom_slab = column(16.0, 0.0, 8.0);
+        const nw_corner = voxel_shape.fromBlockBounds(.{ 0, 8, 0 }, .{ 8, 16, 8 });
+        break :blk @"or"(&bottom_slab, &nw_corner);
+    };
+
+    /// SHAPE_STRAIGHT: SHAPE_OUTER + rotate(SHAPE_OUTER, 90)
+    /// = bottom slab + NW corner + NE corner = north-facing straight stair
+    const SHAPE_STRAIGHT: VoxelShape = blk: {
+        const rotated = rotate(SHAPE_OUTER, OctahedralGroup.BLOCK_ROT_Y_90);
+        break :blk @"or"(&SHAPE_OUTER, &rotated);
+    };
+
+    /// SHAPE_INNER: SHAPE_STRAIGHT + rotate(SHAPE_STRAIGHT, 90)
+    /// = north edge + east edge = NE inner corner
+    const SHAPE_INNER: VoxelShape = blk: {
+        const rotated = rotate(SHAPE_STRAIGHT, OctahedralGroup.BLOCK_ROT_Y_90);
+        break :blk @"or"(&SHAPE_STRAIGHT, &rotated);
+    };
+
+    // === Direction-indexed shape maps ===
+    // Indexed by Direction enum: [down, up, north, south, west, east]
+    // Only horizontal directions are used: north=2, south=3, west=4, east=5
+
+    /// rotateHorizontal creates Map<Direction, VoxelShape>
+    /// Returns shapes indexed by direction
+    fn rotateHorizontalMap(base: VoxelShape, initial: OctahedralGroup) [6]VoxelShape {
+        var result: [6]VoxelShape = undefined;
+        // North
+        result[@intFromEnum(Direction.north)] = rotate(base, initial);
+        // East (90 CW)
+        result[@intFromEnum(Direction.east)] = rotate(base, OctahedralGroup.BLOCK_ROT_Y_90.compose(initial));
+        // South (180)
+        result[@intFromEnum(Direction.south)] = rotate(base, OctahedralGroup.BLOCK_ROT_Y_180.compose(initial));
+        // West (270)
+        result[@intFromEnum(Direction.west)] = rotate(base, OctahedralGroup.BLOCK_ROT_Y_270.compose(initial));
+        // Fill unused directions with empty
+        result[@intFromEnum(Direction.down)] = EMPTY;
+        result[@intFromEnum(Direction.up)] = EMPTY;
+        return result;
+    }
+
+    /// Bottom half shape maps (indexed by Direction)
+    pub const SHAPE_BOTTOM_OUTER = rotateHorizontalMap(SHAPE_OUTER, OctahedralGroup.IDENTITY);
+    pub const SHAPE_BOTTOM_STRAIGHT = rotateHorizontalMap(SHAPE_STRAIGHT, OctahedralGroup.IDENTITY);
+    pub const SHAPE_BOTTOM_INNER = rotateHorizontalMap(SHAPE_INNER, OctahedralGroup.IDENTITY);
+
+    /// Top half shape maps (INVERT_Y as initial rotation)
+    pub const SHAPE_TOP_OUTER = rotateHorizontalMap(SHAPE_OUTER, OctahedralGroup.INVERT_Y);
+    pub const SHAPE_TOP_STRAIGHT = rotateHorizontalMap(SHAPE_STRAIGHT, OctahedralGroup.INVERT_Y);
+    pub const SHAPE_TOP_INNER = rotateHorizontalMap(SHAPE_INNER, OctahedralGroup.INVERT_Y);
+
+    /// Get stair shape by state (exact Minecraft getShape implementation)
+    /// shape_type: straight, inner_left, inner_right, outer_left, outer_right
+    /// half: bottom, top
+    /// facing: north, south, east, west (as Direction enum)
+    pub fn getStairShape(shape_type: StairShape, half: StairHalf, facing: Direction) *const VoxelShape {
+        // Select the map based on shape type and half
+        const map: *const [6]VoxelShape = switch (shape_type) {
+            .straight => if (half == .bottom) &SHAPE_BOTTOM_STRAIGHT else &SHAPE_TOP_STRAIGHT,
+            .outer_left, .outer_right => if (half == .bottom) &SHAPE_BOTTOM_OUTER else &SHAPE_TOP_OUTER,
+            .inner_left, .inner_right => if (half == .bottom) &SHAPE_BOTTOM_INNER else &SHAPE_TOP_INNER,
+        };
+
+        // Determine lookup direction based on shape type
+        // Minecraft: STRAIGHT, OUTER_LEFT, INNER_RIGHT -> facing
+        //           INNER_LEFT -> facing.getCounterClockWise()
+        //           OUTER_RIGHT -> facing.getClockWise()
+        const lookup_dir: Direction = switch (shape_type) {
+            .straight, .outer_left, .inner_right => facing,
+            .inner_left => facing.counterClockwise(),
+            .outer_right => facing.clockwise(),
+        };
+
+        return &map[@intFromEnum(lookup_dir)];
+    }
+
+    /// Stair shape variants
+    pub const StairShape = enum {
+        straight,
+        inner_left,
+        inner_right,
+        outer_left,
+        outer_right,
+    };
+
+    /// Stair half (top or bottom)
+    pub const StairHalf = enum {
+        bottom,
+        top,
+    };
+
+    // === Direct access constants for backwards compatibility ===
+    // These index into the direction maps
+
+    // Bottom-half straight stairs
+    pub const STAIR_BOTTOM_NORTH = SHAPE_BOTTOM_STRAIGHT[@intFromEnum(Direction.north)];
+    pub const STAIR_BOTTOM_EAST = SHAPE_BOTTOM_STRAIGHT[@intFromEnum(Direction.east)];
+    pub const STAIR_BOTTOM_SOUTH = SHAPE_BOTTOM_STRAIGHT[@intFromEnum(Direction.south)];
+    pub const STAIR_BOTTOM_WEST = SHAPE_BOTTOM_STRAIGHT[@intFromEnum(Direction.west)];
+
+    // Top-half straight stairs
+    pub const STAIR_TOP_NORTH = SHAPE_TOP_STRAIGHT[@intFromEnum(Direction.north)];
+    pub const STAIR_TOP_EAST = SHAPE_TOP_STRAIGHT[@intFromEnum(Direction.east)];
+    pub const STAIR_TOP_SOUTH = SHAPE_TOP_STRAIGHT[@intFromEnum(Direction.south)];
+    pub const STAIR_TOP_WEST = SHAPE_TOP_STRAIGHT[@intFromEnum(Direction.west)];
+
+    // Bottom-half inner corners (indexed by the corner direction they form)
+    pub const STAIR_BOTTOM_INNER_NE = SHAPE_BOTTOM_INNER[@intFromEnum(Direction.north)];
+    pub const STAIR_BOTTOM_INNER_SE = SHAPE_BOTTOM_INNER[@intFromEnum(Direction.east)];
+    pub const STAIR_BOTTOM_INNER_SW = SHAPE_BOTTOM_INNER[@intFromEnum(Direction.south)];
+    pub const STAIR_BOTTOM_INNER_NW = SHAPE_BOTTOM_INNER[@intFromEnum(Direction.west)];
+
+    // Top-half inner corners
+    pub const STAIR_TOP_INNER_NE = SHAPE_TOP_INNER[@intFromEnum(Direction.north)];
+    pub const STAIR_TOP_INNER_SE = SHAPE_TOP_INNER[@intFromEnum(Direction.east)];
+    pub const STAIR_TOP_INNER_SW = SHAPE_TOP_INNER[@intFromEnum(Direction.south)];
+    pub const STAIR_TOP_INNER_NW = SHAPE_TOP_INNER[@intFromEnum(Direction.west)];
+
+    // Bottom-half outer corners
+    pub const STAIR_BOTTOM_OUTER_NW = SHAPE_BOTTOM_OUTER[@intFromEnum(Direction.north)];
+    pub const STAIR_BOTTOM_OUTER_NE = SHAPE_BOTTOM_OUTER[@intFromEnum(Direction.east)];
+    pub const STAIR_BOTTOM_OUTER_SE = SHAPE_BOTTOM_OUTER[@intFromEnum(Direction.south)];
+    pub const STAIR_BOTTOM_OUTER_SW = SHAPE_BOTTOM_OUTER[@intFromEnum(Direction.west)];
+
+    // Top-half outer corners
+    pub const STAIR_TOP_OUTER_NW = SHAPE_TOP_OUTER[@intFromEnum(Direction.north)];
+    pub const STAIR_TOP_OUTER_NE = SHAPE_TOP_OUTER[@intFromEnum(Direction.east)];
+    pub const STAIR_TOP_OUTER_SE = SHAPE_TOP_OUTER[@intFromEnum(Direction.south)];
+    pub const STAIR_TOP_OUTER_SW = SHAPE_TOP_OUTER[@intFromEnum(Direction.west)];
 };
 
 // ======================
@@ -376,4 +533,64 @@ test "shouldRenderFace" {
 
     // Slab next to air: render
     try std.testing.expect(shouldRenderFace(&Shapes.SLAB_BOTTOM, &Shapes.EMPTY, .north));
+}
+
+test "stair shape is cube type" {
+    // Verify stair shapes are cubes, not blocks
+    try std.testing.expect(Shapes.STAIR_BOTTOM_EAST == .cube);
+    try std.testing.expect(Shapes.STAIR_TOP_EAST == .cube);
+    try std.testing.expect(Shapes.STAIR_BOTTOM_NORTH == .cube);
+
+    // Verify they're not full blocks or empty
+    try std.testing.expect(!Shapes.STAIR_BOTTOM_EAST.isFullBlock());
+    try std.testing.expect(!Shapes.STAIR_BOTTOM_EAST.isEmpty());
+}
+
+test "stair shape voxel pattern" {
+    // STAIR_BOTTOM_EAST should be L-shaped in 2x2x2 grid:
+    // Bottom layer (y=0): all 4 voxels filled
+    // Top layer (y=1): only east half (x=1) filled
+    const shape = Shapes.STAIR_BOTTOM_EAST;
+    try std.testing.expect(shape == .cube);
+
+    const cube = &shape.cube;
+    try std.testing.expectEqual(@as(u8, 2), cube.shape.base.x_size);
+    try std.testing.expectEqual(@as(u8, 2), cube.shape.base.y_size);
+    try std.testing.expectEqual(@as(u8, 2), cube.shape.base.z_size);
+
+    // Bottom layer - all filled
+    try std.testing.expect(cube.isFull(0, 0, 0));
+    try std.testing.expect(cube.isFull(0, 0, 1));
+    try std.testing.expect(cube.isFull(1, 0, 0));
+    try std.testing.expect(cube.isFull(1, 0, 1));
+
+    // Top layer - only east half (x=1)
+    try std.testing.expect(!cube.isFull(0, 1, 0)); // west side empty
+    try std.testing.expect(!cube.isFull(0, 1, 1)); // west side empty
+    try std.testing.expect(cube.isFull(1, 1, 0)); // east side filled
+    try std.testing.expect(cube.isFull(1, 1, 1)); // east side filled
+}
+
+test "stair face occlusion with stone" {
+    // Stone block (full) below top stair
+    // Stone's UP face next to stair's DOWN face should render
+    // because stair's DOWN is only partially covered (east half)
+
+    const stone = Shapes.BLOCK;
+    const top_stair = Shapes.STAIR_TOP_EAST;
+
+    // Top stair's DOWN face (y=0) should be partial (only east half)
+    const down_face = top_stair.getFaceShapeConst(.down);
+    try std.testing.expect(!down_face.isFull()); // Should be partial
+
+    // Stone's UP face is full
+    const up_face = stone.getFaceShapeConst(.up);
+    try std.testing.expect(up_face.isFull());
+
+    // Stone's UP face should NOT be occluded by top stair's DOWN face
+    // (stone's full face is not a subset of stair's partial face)
+    try std.testing.expect(!up_face.isSubsetOf(&down_face));
+
+    // Therefore stone should render its UP face next to top stair
+    try std.testing.expect(shouldRenderFace(&stone, &top_stair, .up));
 }

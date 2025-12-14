@@ -21,5 +21,5 @@ float getFaceShading(vec3 normal) {
     if (normal.y > 0.5) return 1.0;      // Top
     if (normal.y < -0.5) return 0.5;     // Bottom
     if (abs(normal.z) > 0.5) return 0.8; // North/South
-    return 0.6;                           // East/West
+    return 0.6;                          // East/West
 }

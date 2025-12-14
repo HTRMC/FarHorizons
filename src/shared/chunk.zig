@@ -34,6 +34,16 @@ pub const BlockEntry = packed struct {
         return .{ .id = id, .state = BlockState.slab(slab_type) };
     }
 
+    /// Create a stair block entry
+    pub fn stair(
+        id: u8,
+        facing: BlockState.StairFacing,
+        half: BlockState.StairHalf,
+        shape: BlockState.StairShape,
+    ) BlockEntry {
+        return .{ .id = id, .state = BlockState.stair(facing, half, shape) };
+    }
+
     /// Get the block definition
     pub fn getBlock(self: BlockEntry) *const blocks.block_mod.Block {
         return blocks.getBlock(self.id);
@@ -179,6 +189,79 @@ pub const Chunk = struct {
         return occlusion.shouldRenderFace(block_shape, neighbor_shape, direction);
     }
 
+    /// Per-element face culling for precise model face handling
+    /// Takes the element's bounding box in block coordinates (0-16) and checks
+    /// if that specific region of the face is occluded by the neighbor
+    ///
+    /// Parameters:
+    /// - x, y, z: Block position within chunk
+    /// - direction: Which face direction we're checking (after model rotation)
+    /// - element_from, element_to: Element bounds in block coords (0-16)
+    /// - chunk_access: Optional cross-chunk access for boundary lookups
+    pub fn shouldRenderElementFace(
+        self: *const Chunk,
+        x: i32,
+        y: i32,
+        z: i32,
+        direction: Direction,
+        element_from: [3]f32,
+        element_to: [3]f32,
+        chunk_access: ?*const ChunkAccess,
+    ) bool {
+        // Get neighbor position
+        const off = direction.offset();
+        const nx = x + off[0];
+        const ny = y + off[1];
+        const nz = z + off[2];
+
+        // Get neighbor block entry
+        const neighbor: BlockEntry = blk: {
+            if (chunk_access) |access| {
+                break :blk access.getBlockEntry(nx, ny, nz);
+            }
+            // No cross-chunk access - check bounds
+            if (nx < 0 or ny < 0 or nz < 0 or
+                nx >= CHUNK_SIZE or ny >= CHUNK_SIZE or nz >= CHUNK_SIZE)
+            {
+                break :blk BlockEntry.AIR;
+            }
+            break :blk self.getBlockEntry(@intCast(nx), @intCast(ny), @intCast(nz));
+        };
+
+        // Get neighbor shape
+        const neighbor_shape = neighbor.getShape();
+
+        // Fast path: neighbor is empty (air) - always render
+        if (neighbor_shape.isEmpty()) return true;
+
+        // Fast path: neighbor is full block - never render (occluded)
+        if (neighbor_shape.isFullBlock()) return false;
+
+        // Compute face bounds from element bounds
+        // The UV coordinates depend on the face direction
+        const face_bounds = computeFaceBounds(direction, element_from, element_to);
+
+        // Check if the neighbor's opposite face covers this specific region
+        // If covered, the face is occluded and should NOT render
+        return !neighbor_shape.faceCoversRegion(direction.opposite(), face_bounds);
+    }
+
+    /// Compute 2D face bounds [u_min, v_min, u_max, v_max] from 3D element bounds
+    /// The mapping depends on which face direction we're looking at:
+    /// - DOWN/UP: u=x, v=z
+    /// - NORTH/SOUTH: u=x, v=y
+    /// - WEST/EAST: u=y, v=z (note: getSlice uses this order)
+    fn computeFaceBounds(direction: Direction, from: [3]f32, to: [3]f32) [4]f32 {
+        return switch (direction) {
+            // Y-axis faces: u=x, v=z
+            .down, .up => .{ from[0], from[2], to[0], to[2] },
+            // Z-axis faces: u=x, v=y
+            .north, .south => .{ from[0], from[1], to[0], to[1] },
+            // X-axis faces: u=y, v=z (matches getSlice y×z)
+            .west, .east => .{ from[1], from[2], to[1], to[2] },
+        };
+    }
+
     /// Legacy: Shape-aware face culling (ignores state)
     pub fn shouldRenderFaceVoxel(
         self: *const Chunk,
@@ -238,6 +321,22 @@ pub const Chunk = struct {
                 }
             }
         }
+
+        // Row of stairs facing different directions
+        chunk.setBlockEntry(0, 1, 12, BlockEntry.stair(9, .north, .bottom, .straight));
+        chunk.setBlockEntry(1, 1, 12, BlockEntry.stair(9, .east, .bottom, .straight));
+        chunk.setBlockEntry(2, 1, 12, BlockEntry.stair(9, .south, .bottom, .straight));
+        chunk.setBlockEntry(3, 1, 12, BlockEntry.stair(9, .west, .bottom, .straight));
+
+        // Corner stairs (inner and outer)
+        chunk.setBlockEntry(5, 1, 12, BlockEntry.stair(9, .north, .bottom, .inner_left));
+        chunk.setBlockEntry(6, 1, 12, BlockEntry.stair(9, .north, .bottom, .inner_right));
+        chunk.setBlockEntry(7, 1, 12, BlockEntry.stair(9, .north, .bottom, .outer_left));
+        chunk.setBlockEntry(8, 1, 12, BlockEntry.stair(9, .north, .bottom, .outer_right));
+
+        // Top half stairs
+        chunk.setBlockEntry(10, 1, 12, BlockEntry.stair(9, .east, .top, .straight));
+        chunk.setBlockEntry(11, 1, 12, BlockEntry.stair(9, .west, .top, .straight));
 
         return chunk;
     }

@@ -1,304 +1,346 @@
-/// SliceShape - 2D cross-section of a VoxelShape
+/// SliceShape - A thin 3D slice of a VoxelShape
 /// Equivalent to Minecraft's net.minecraft.world.phys.shapes.SliceShape
 ///
-/// A SliceShape is a 2D projection of a 3D VoxelShape along one axis.
-/// It's used for face occlusion testing - comparing the face shape of
-/// one block against the opposite face of its neighbor.
+/// SliceShape creates a 1-unit thick slice perpendicular to an axis.
+/// It's used for face occlusion testing - comparing the face of one block
+/// against the opposite face of its neighbor using 3D join operations.
+///
+/// Key behavior:
+/// - For the slice axis: coordinates are always [0, 1] (1 unit thick)
+/// - For other axes: coordinates come from the delegate shape
 const std = @import("std");
-const BitSetDiscreteVoxelShape2D = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape2D;
+const SubShape = @import("SubShape.zig").SubShape;
 const dvs = @import("DiscreteVoxelShape.zig");
+const DiscreteVoxelShape = dvs.DiscreteVoxelShape;
 const Direction = dvs.Direction;
 const Axis = dvs.Axis;
 
-/// Maximum size for coordinate arrays
+/// Maximum coordinate array size (17 for 16 divisions + 1)
 const MAX_COORDS: usize = 17;
 
-/// Bounded array for coordinate storage (replaces std.BoundedArray)
-const CoordArray = struct {
+/// Coordinate array with normalized values [0.0 to 1.0]
+pub const CoordList = struct {
     data: [MAX_COORDS]f64,
     len: usize,
 
-    pub fn init() CoordArray {
+    pub fn init() CoordList {
         return .{
             .data = [_]f64{0.0} ** MAX_COORDS,
             .len = 0,
         };
     }
 
-    pub fn appendAssumeCapacity(self: *CoordArray, val: f64) void {
-        self.data[self.len] = val;
-        self.len += 1;
+    /// Create coords for a uniform grid (0/n, 1/n, 2/n, ..., n/n)
+    pub fn uniform(grid_size: u8) CoordList {
+        var list = CoordList.init();
+        const n: f64 = @floatFromInt(grid_size);
+        for (0..grid_size + 1) |i| {
+            list.data[i] = @as(f64, @floatFromInt(i)) / n;
+        }
+        list.len = grid_size + 1;
+        return list;
     }
 
-    pub fn constSlice(self: *const CoordArray) []const f64 {
-        return self.data[0..self.len];
+    /// Create slice coords [0, 1]
+    pub fn slice() CoordList {
+        var list = CoordList.init();
+        list.data[0] = 0.0;
+        list.data[1] = 1.0;
+        list.len = 2;
+        return list;
+    }
+
+    pub fn get(self: *const CoordList, index: usize) f64 {
+        if (index >= self.len) return 1.0;
+        return self.data[index];
+    }
+
+    pub fn size(self: *const CoordList) usize {
+        return if (self.len > 0) self.len - 1 else 0;
     }
 };
 
-/// A 2D slice of a 3D VoxelShape
+/// A thin 3D slice of a VoxelShape for face occlusion testing
 pub const SliceShape = struct {
     const Self = @This();
 
-    /// The 2D shape data
-    shape: BitSetDiscreteVoxelShape2D,
+    /// The SubShape providing the discrete voxel data
+    sub_shape: SubShape,
 
-    /// Coordinate lists for the two axes of this slice
-    /// For example, if this is a YZ slice, u_coords is Y and v_coords is Z
-    u_coords: CoordArray,
-    v_coords: CoordArray,
+    /// The axis this slice is perpendicular to
+    slice_axis: Axis,
 
-    /// Create a slice shape from a 2D bitset with uniform coordinates
-    pub fn fromBitSet(shape: BitSetDiscreteVoxelShape2D) Self {
-        var self = Self{
-            .shape = shape,
-            .u_coords = CoordArray.init(),
-            .v_coords = CoordArray.init(),
-        };
+    /// Coordinate lists for each axis
+    /// For slice_axis: always [0, 1]
+    /// For other axes: uniform coords based on delegate size
+    x_coords: CoordList,
+    y_coords: CoordList,
+    z_coords: CoordList,
 
-        // Generate uniform coordinates
-        for (0..shape.u_size + 1) |i| {
-            const coord = @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(shape.u_size));
-            self.u_coords.appendAssumeCapacity(coord);
-        }
-        for (0..shape.v_size + 1) |i| {
-            const coord = @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(shape.v_size));
-            self.v_coords.appendAssumeCapacity(coord);
-        }
-
-        return self;
-    }
-
-    /// Create a slice shape with explicit coordinates
-    pub fn withCoords(
-        shape_param: BitSetDiscreteVoxelShape2D,
-        u_coords_param: []const f64,
-        v_coords_param: []const f64,
+    /// Create a SliceShape from a DiscreteVoxelShape
+    /// Takes a slice at 'point' along 'axis'
+    pub fn init(
+        parent: *const DiscreteVoxelShape,
+        axis: Axis,
+        point: u8,
     ) Self {
-        var self = Self{
-            .shape = shape_param,
-            .u_coords = CoordArray.init(),
-            .v_coords = CoordArray.init(),
+        const sub = SubShape.makeSlice(parent, axis, point);
+
+        // Create coordinate lists
+        // Slice axis gets [0, 1], others get uniform coords from parent
+        const x_coords = if (axis == .x) CoordList.slice() else CoordList.uniform(parent.x_size);
+        const y_coords = if (axis == .y) CoordList.slice() else CoordList.uniform(parent.y_size);
+        const z_coords = if (axis == .z) CoordList.slice() else CoordList.uniform(parent.z_size);
+
+        return .{
+            .sub_shape = sub,
+            .slice_axis = axis,
+            .x_coords = x_coords,
+            .y_coords = y_coords,
+            .z_coords = z_coords,
         };
-
-        for (u_coords_param) |c| {
-            self.u_coords.appendAssumeCapacity(c);
-        }
-        for (v_coords_param) |c| {
-            self.v_coords.appendAssumeCapacity(c);
-        }
-
-        return self;
     }
 
-    /// Create an empty slice
-    pub fn empty(u_size: u8, v_size: u8) Self {
-        return fromBitSet(BitSetDiscreteVoxelShape2D.init(u_size, v_size));
-    }
+    // === Shape queries ===
 
-    /// Create a full slice
-    pub fn full(u_size: u8, v_size: u8) Self {
-        return fromBitSet(BitSetDiscreteVoxelShape2D.initFull(u_size, v_size));
-    }
-
-    /// Check if position is filled
-    pub fn isFull(self: *const Self, u: u8, v: u8) bool {
-        return self.shape.get(u, v);
-    }
-
-    /// Check if slice is empty
     pub fn isEmpty(self: *const Self) bool {
-        return self.shape.isEmpty();
+        return self.sub_shape.base.isEmpty();
     }
 
-    /// Check if slice fills entire area
-    pub fn isFullCoverage(self: *const Self) bool {
-        return self.shape.isFull();
+    pub fn isFullBlock(self: *const Self) bool {
+        return self.sub_shape.base.isFullBlock();
     }
 
-    /// Check if another slice completely covers this one
-    /// Returns true if every filled cell in self is also filled in other
-    pub fn isCoveredBy(self: *const Self, other: *const Self) bool {
-        // Fast path: if other is full, it covers everything
-        if (other.isFullCoverage()) {
-            return true;
-        }
-
-        // Fast path: if self is empty, it's covered by anything
-        if (self.isEmpty()) {
-            return true;
-        }
-
-        // If sizes match, we can do direct bitset comparison
-        if (self.shape.u_size == other.shape.u_size and
-            self.shape.v_size == other.shape.v_size)
-        {
-            // Check if coordinates match (for uniform shapes they will)
-            var coords_match = true;
-            if (self.u_coords.len == other.u_coords.len and
-                self.v_coords.len == other.v_coords.len)
-            {
-                for (self.u_coords.constSlice(), other.u_coords.constSlice()) |a, b| {
-                    if (a != b) {
-                        coords_match = false;
-                        break;
-                    }
-                }
-                if (coords_match) {
-                    for (self.v_coords.constSlice(), other.v_coords.constSlice()) |a, b| {
-                        if (a != b) {
-                            coords_match = false;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                coords_match = false;
-            }
-
-            if (coords_match) {
-                return self.shape.isSubsetOf(&other.shape);
-            }
-        }
-
-        // Different resolutions - need to check coverage cell by cell
-        // This is the expensive path
-        return self.checkCoverageWithMerge(other);
+    /// Check if voxel at position is filled
+    pub fn isFull(self: *const Self, x: u8, y: u8, z: u8) bool {
+        return self.sub_shape.base.isFull(x, y, z);
     }
 
-    /// Check coverage when shapes have different resolutions
-    fn checkCoverageWithMerge(self: *const Self, other: *const Self) bool {
-        // For each cell in self, check if it's covered by other
-        for (0..self.shape.u_size) |u| {
-            for (0..self.shape.v_size) |v| {
-                if (self.shape.get(@intCast(u), @intCast(v))) {
-                    // Get the coordinate range for this cell
-                    const u_min = self.u_coords.constSlice()[u];
-                    const u_max = self.u_coords.constSlice()[u + 1];
-                    const v_min = self.v_coords.constSlice()[v];
-                    const v_max = self.v_coords.constSlice()[v + 1];
+    // === Coordinate queries ===
 
-                    // Check if other covers this entire range
-                    if (!other.coversRange(u_min, u_max, v_min, v_max)) {
-                        return false;
-                    }
-                }
-            }
-        }
-        return true;
+    pub fn getCoords(self: *const Self, axis: Axis) *const CoordList {
+        return switch (axis) {
+            .x => &self.x_coords,
+            .y => &self.y_coords,
+            .z => &self.z_coords,
+        };
     }
 
-    /// Check if this slice covers a coordinate range
-    fn coversRange(self: *const Self, u_min: f64, u_max: f64, v_min: f64, v_max: f64) bool {
-        // Find cells that overlap with this range
-        const u_start = self.findIndex(self.u_coords.constSlice(), u_min);
-        const u_end = self.findIndex(self.u_coords.constSlice(), u_max);
-        const v_start = self.findIndex(self.v_coords.constSlice(), v_min);
-        const v_end = self.findIndex(self.v_coords.constSlice(), v_max);
-
-        // All cells in the range must be filled
-        for (u_start..u_end + 1) |u| {
-            for (v_start..v_end + 1) |v| {
-                if (!self.shape.get(@intCast(@min(u, self.shape.u_size - 1)), @intCast(@min(v, self.shape.v_size - 1)))) {
-                    return false;
-                }
-            }
-        }
-        return true;
+    pub fn getSize(self: *const Self, axis: Axis) u8 {
+        return @intCast(self.getCoords(axis).size());
     }
 
-    fn findIndex(self: *const Self, coords: []const f64, value: f64) usize {
-        _ = self;
-        // Binary search for the coordinate
+    pub fn getCoord(self: *const Self, axis: Axis, index: u8) f64 {
+        return self.getCoords(axis).get(index);
+    }
+
+    /// Get min coordinate along axis
+    pub fn min(self: *const Self, axis: Axis) f64 {
+        const first = self.sub_shape.firstFull(axis);
+        return self.getCoord(axis, first);
+    }
+
+    /// Get max coordinate along axis
+    pub fn max(self: *const Self, axis: Axis) f64 {
+        const last = self.sub_shape.lastFull(axis);
+        return self.getCoord(axis, last);
+    }
+
+    /// Find index for a coordinate value
+    /// Returns the voxel index containing the coordinate.
+    /// Boundary values belong to the voxel starting at that boundary.
+    pub fn findIndex(self: *const Self, axis: Axis, coord: f64) u8 {
+        const coords = self.getCoords(axis);
+        // Binary search for first index where coords[i] > coord
         var low: usize = 0;
         var high: usize = coords.len;
-
         while (low < high) {
             const mid = low + (high - low) / 2;
-            if (coords[mid] < value) {
+            if (coords.data[mid] <= coord) {
                 low = mid + 1;
             } else {
                 high = mid;
             }
         }
-
+        // low is now first index > coord, so voxel index is low - 1
         if (low > 0) low -= 1;
-        return @min(low, coords.len - 2);
+        return @intCast(@min(low, coords.size() -| 1));
     }
 
-    /// Get coordinate at index
-    pub fn getUCoord(self: *const Self, index: u8) f64 {
-        if (index >= self.u_coords.len) return 1.0;
-        return self.u_coords.constSlice()[index];
-    }
+    // === Bounds ===
 
-    pub fn getVCoord(self: *const Self, index: u8) f64 {
-        if (index >= self.v_coords.len) return 1.0;
-        return self.v_coords.constSlice()[index];
-    }
-
-    /// Get bounds [u_min, v_min, u_max, v_max]
-    pub fn getBounds(self: *const Self) [4]f64 {
-        var u_min: f64 = 1.0;
-        var v_min: f64 = 1.0;
-        var u_max: f64 = 0.0;
-        var v_max: f64 = 0.0;
-
-        for (0..self.shape.u_size) |u| {
-            for (0..self.shape.v_size) |v| {
-                if (self.shape.get(@intCast(u), @intCast(v))) {
-                    u_min = @min(u_min, self.u_coords.constSlice()[u]);
-                    v_min = @min(v_min, self.v_coords.constSlice()[v]);
-                    u_max = @max(u_max, self.u_coords.constSlice()[u + 1]);
-                    v_max = @max(v_max, self.v_coords.constSlice()[v + 1]);
-                }
-            }
-        }
-
-        return .{ u_min, v_min, u_max, v_max };
+    pub fn getBounds(self: *const Self) [6]f64 {
+        return .{
+            self.min(.x),
+            self.min(.y),
+            self.min(.z),
+            self.max(.x),
+            self.max(.y),
+            self.max(.z),
+        };
     }
 };
 
-/// Create a face shape for occlusion testing from direction
-pub fn getFaceShapeForDirection(
-    comptime ShapeType: type,
-    shape: *const ShapeType,
-    direction: Direction,
-) SliceShape {
-    const face_2d = shape.getFaceShapeConst(direction);
-    return SliceShape.fromBitSet(face_2d);
+/// Check if joining two SliceShapes with an operation produces non-empty result
+/// This is the core operation for face occlusion testing
+pub fn sliceJoinIsNotEmpty(
+    first: *const SliceShape,
+    second: *const SliceShape,
+    comptime op: enum { only_first, only_second, @"or", @"and" },
+) bool {
+    // For slices, we need to iterate over the merged coordinate space
+    // and check if the boolean operation produces any filled voxels
+
+    // Get merged coordinates for each axis
+    const x_merge = mergeCoords(&first.x_coords, &second.x_coords);
+    const y_merge = mergeCoords(&first.y_coords, &second.y_coords);
+    const z_merge = mergeCoords(&first.z_coords, &second.z_coords);
+
+    // Iterate over merged space
+    for (0..x_merge.size()) |xi| {
+        for (0..y_merge.size()) |yi| {
+            for (0..z_merge.size()) |zi| {
+                // Find corresponding indices in each shape
+                const x_coord = x_merge.get(xi);
+                const y_coord = y_merge.get(yi);
+                const z_coord = z_merge.get(zi);
+
+                const first_x = first.findIndex(.x, x_coord);
+                const first_y = first.findIndex(.y, y_coord);
+                const first_z = first.findIndex(.z, z_coord);
+                const first_full = first.isFull(first_x, first_y, first_z);
+
+                const second_x = second.findIndex(.x, x_coord);
+                const second_y = second.findIndex(.y, y_coord);
+                const second_z = second.findIndex(.z, z_coord);
+                const second_full = second.isFull(second_x, second_y, second_z);
+
+                const result = switch (op) {
+                    .only_first => first_full and !second_full,
+                    .only_second => !first_full and second_full,
+                    .@"or" => first_full or second_full,
+                    .@"and" => first_full and second_full,
+                };
+
+                if (result) return true;
+            }
+        }
+    }
+
+    return false;
 }
 
-// Tests
-test "SliceShape empty and full" {
-    const empty_slice = SliceShape.empty(4, 4);
-    try std.testing.expect(empty_slice.isEmpty());
-    try std.testing.expect(!empty_slice.isFullCoverage());
+/// Merge two coordinate lists (union of all coordinates)
+fn mergeCoords(a: *const CoordList, b: *const CoordList) CoordList {
+    var result = CoordList.init();
 
-    const full_slice = SliceShape.full(4, 4);
-    try std.testing.expect(!full_slice.isEmpty());
-    try std.testing.expect(full_slice.isFullCoverage());
+    var ai: usize = 0;
+    var bi: usize = 0;
+
+    while (ai < a.len or bi < b.len) {
+        const av = if (ai < a.len) a.data[ai] else 2.0;
+        const bv = if (bi < b.len) b.data[bi] else 2.0;
+
+        const eps = 1.0e-7;
+        if (@abs(av - bv) < eps) {
+            // Equal - add once
+            result.data[result.len] = av;
+            result.len += 1;
+            ai += 1;
+            bi += 1;
+        } else if (av < bv) {
+            result.data[result.len] = av;
+            result.len += 1;
+            ai += 1;
+        } else {
+            result.data[result.len] = bv;
+            result.len += 1;
+            bi += 1;
+        }
+
+        if (result.len >= MAX_COORDS) break;
+    }
+
+    return result;
 }
 
-test "SliceShape coverage" {
-    const full_slice = SliceShape.full(4, 4);
-    var partial = SliceShape.empty(4, 4);
+// === Tests ===
 
-    // Set some cells
-    partial.shape.set(0, 0, true);
-    partial.shape.set(1, 1, true);
+test "SliceShape creation" {
+    const BitSetDiscreteVoxelShape = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape;
 
-    // Partial should be covered by full
-    try std.testing.expect(partial.isCoveredBy(&full_slice));
-    // Full should NOT be covered by partial
-    try std.testing.expect(!full_slice.isCoveredBy(&partial));
+    // Create a 4x4x4 full shape
+    var parent = BitSetDiscreteVoxelShape.initFull(4, 4, 4);
+
+    // Create a Y slice at y=2
+    const slice = SliceShape.init(&parent.base, .y, 2);
+
+    // Slice axis should have size 1
+    try std.testing.expectEqual(@as(u8, 1), slice.getSize(.y));
+
+    // Other axes should have original size
+    try std.testing.expectEqual(@as(u8, 4), slice.getSize(.x));
+    try std.testing.expectEqual(@as(u8, 4), slice.getSize(.z));
+
+    // Should not be empty (parent is full)
+    try std.testing.expect(!slice.isEmpty());
 }
 
-test "SliceShape self-coverage" {
-    var slice = SliceShape.empty(4, 4);
-    slice.shape.set(0, 0, true);
-    slice.shape.set(1, 1, true);
-    slice.shape.set(2, 2, true);
+test "SliceShape coords" {
+    const BitSetDiscreteVoxelShape = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape;
 
-    // Shape should cover itself
-    try std.testing.expect(slice.isCoveredBy(&slice));
+    var parent = BitSetDiscreteVoxelShape.initFull(2, 2, 2);
+    const slice = SliceShape.init(&parent.base, .x, 0);
+
+    // X coords should be [0, 1] (slice)
+    try std.testing.expectEqual(@as(f64, 0.0), slice.getCoord(.x, 0));
+    try std.testing.expectEqual(@as(f64, 1.0), slice.getCoord(.x, 1));
+
+    // Y coords should be [0, 0.5, 1] (uniform for size 2)
+    try std.testing.expectEqual(@as(f64, 0.0), slice.getCoord(.y, 0));
+    try std.testing.expectEqual(@as(f64, 0.5), slice.getCoord(.y, 1));
+    try std.testing.expectEqual(@as(f64, 1.0), slice.getCoord(.y, 2));
+}
+
+test "SliceShape join - full covers partial" {
+    const BitSetDiscreteVoxelShape = @import("BitsetDiscreteVoxelShape.zig").BitSetDiscreteVoxelShape;
+
+    // Full shape
+    var full_parent = BitSetDiscreteVoxelShape.initFull(2, 2, 2);
+    const full_slice = SliceShape.init(&full_parent.base, .y, 0);
+
+    // Partial shape (bottom half on X)
+    var partial_parent = BitSetDiscreteVoxelShape.withFilledBounds(2, 2, 2, 0, 0, 0, 1, 2, 2);
+    const partial_slice = SliceShape.init(&partial_parent.base, .y, 0);
+
+    // full ONLY_FIRST partial = parts of full not in partial = east half = not empty
+    try std.testing.expect(sliceJoinIsNotEmpty(&full_slice, &partial_slice, .only_first));
+
+    // partial ONLY_FIRST full = parts of partial not in full = nothing = empty
+    try std.testing.expect(!sliceJoinIsNotEmpty(&partial_slice, &full_slice, .only_first));
+}
+
+test "mergeCoords" {
+    var a = CoordList.init();
+    a.data[0] = 0.0;
+    a.data[1] = 0.5;
+    a.data[2] = 1.0;
+    a.len = 3;
+
+    var b = CoordList.init();
+    b.data[0] = 0.0;
+    b.data[1] = 0.25;
+    b.data[2] = 0.5;
+    b.data[3] = 0.75;
+    b.data[4] = 1.0;
+    b.len = 5;
+
+    const merged = mergeCoords(&a, &b);
+    // Should be [0, 0.25, 0.5, 0.75, 1.0]
+    try std.testing.expectEqual(@as(usize, 5), merged.len);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), merged.data[0], 1e-7);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.25), merged.data[1], 1e-7);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.5), merged.data[2], 1e-7);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.75), merged.data[3], 1e-7);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), merged.data[4], 1e-7);
 }

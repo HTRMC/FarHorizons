@@ -10,6 +10,31 @@ const BitSetDiscreteVoxelShape2D = @import("BitsetDiscreteVoxelShape.zig").BitSe
 const dvs = @import("DiscreteVoxelShape.zig");
 const Direction = dvs.Direction;
 const Axis = dvs.Axis;
+const OctahedralGroup = @import("OctahedralGroup.zig").OctahedralGroup;
+
+/// Coordinate list for VoxelShape rotation
+pub const CoordList = struct {
+    data: [17]f64,
+    len: u8,
+
+    pub fn init() CoordList {
+        return .{
+            .data = [_]f64{0.0} ** 17,
+            .len = 0,
+        };
+    }
+
+    /// Create a uniform coordinate list for a given resolution (e.g., resolution=2 -> [0, 0.5, 1])
+    pub fn uniform(resolution: u8) CoordList {
+        var list = init();
+        const n: f64 = @floatFromInt(resolution);
+        for (0..resolution + 1) |i| {
+            list.data[i] = @as(f64, @floatFromInt(i)) / n;
+        }
+        list.len = resolution + 1;
+        return list;
+    }
+};
 
 /// A VoxelShape backed by a discrete voxel grid with power-of-2 divisions
 pub const CubeVoxelShape = struct {
@@ -72,6 +97,14 @@ pub const CubeVoxelShape = struct {
         return shape;
     }
 
+    /// Create from an existing BitSetDiscreteVoxelShape (e.g., after rotation)
+    pub fn fromDiscrete(discrete: BitSetDiscreteVoxelShape) Self {
+        return .{
+            .shape = discrete,
+            .face_cache = [_]?BitSetDiscreteVoxelShape2D{null} ** 6,
+        };
+    }
+
     /// Check if a voxel is filled
     pub fn isFull(self: *const Self, x: u8, y: u8, z: u8) bool {
         return self.shape.base.isFull(x, y, z);
@@ -114,6 +147,11 @@ pub const CubeVoxelShape = struct {
         const size = self.getSize(axis);
         const idx = @as(u8, @intFromFloat(coord * @as(f64, @floatFromInt(size))));
         return @min(idx, size - 1);
+    }
+
+    /// Get coordinate list along axis (for rotation)
+    pub fn getCoordList(self: *const Self, axis: Axis) CoordList {
+        return CoordList.uniform(self.getSize(axis));
     }
 
     /// Get the face shape for occlusion testing
@@ -307,16 +345,17 @@ test "CubeVoxelShape basic operations" {
 }
 
 test "CubeVoxelShape face projection" {
-    // Half slab (bottom half)
+    // Half slab (bottom half) - filled y=0 only in a 2-division grid
     const slab = CubeVoxelShape.withFilledBounds(2, 2, 2, 0, 0, 0, 2, 1, 2);
 
-    // Down face should be full (slab covers entire bottom)
+    // Down face should be full (slab covers entire bottom at y=0)
     const down_face = slab.getFaceShapeConst(.down);
     try std.testing.expect(down_face.isFull());
 
-    // Up face should be full (top surface of slab)
+    // Up face is at y=1 (top block boundary) - slab doesn't reach there!
+    // The slab ends at y=0.5, so up face at y=1 is EMPTY
     const up_face = slab.getFaceShapeConst(.up);
-    try std.testing.expect(up_face.isFull());
+    try std.testing.expect(up_face.isEmpty());
 
     // North face should be half-filled (only bottom half)
     const north_face = slab.getFaceShapeConst(.north);

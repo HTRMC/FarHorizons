@@ -5,6 +5,7 @@
 /// Index calculation: index = x * ySize * zSize + y * zSize + z
 const std = @import("std");
 const DiscreteVoxelShape = @import("DiscreteVoxelShape.zig").DiscreteVoxelShape;
+const OctahedralGroup = @import("OctahedralGroup.zig").OctahedralGroup;
 
 /// Maximum supported size per axis (16 for block shapes)
 pub const MAX_SIZE: u8 = 16;
@@ -252,6 +253,57 @@ pub const BitSetDiscreteVoxelShape = struct {
         return count;
     }
 
+    /// Rotate the shape using an OctahedralGroup transformation
+    /// Returns a new rotated shape
+    /// Equivalent to Minecraft's DiscreteVoxelShape.rotate()
+    pub fn rotate(self: *const Self, rotation: OctahedralGroup) Self {
+        if (rotation.isIdentity()) {
+            return self.*;
+        }
+
+        // Rotate the size vector to get new dimensions
+        const size_vec = rotation.rotateVec(
+            @as(i32, self.base.x_size),
+            @as(i32, self.base.y_size),
+            @as(i32, self.base.z_size),
+        );
+
+        // Handle negative sizes (absolute value) and calculate shift
+        const new_x_size: u8 = @intCast(if (size_vec.x < 0) -size_vec.x else size_vec.x);
+        const new_y_size: u8 = @intCast(if (size_vec.y < 0) -size_vec.y else size_vec.y);
+        const new_z_size: u8 = @intCast(if (size_vec.z < 0) -size_vec.z else size_vec.z);
+
+        // Calculate shift for negative coordinates (fixupCoordinate equivalent)
+        const shift_x: i32 = if (size_vec.x < 0) -size_vec.x - 1 else 0;
+        const shift_y: i32 = if (size_vec.y < 0) -size_vec.y - 1 else 0;
+        const shift_z: i32 = if (size_vec.z < 0) -size_vec.z - 1 else 0;
+
+        var result = init(new_x_size, new_y_size, new_z_size);
+
+        // Iterate over all voxels and rotate their positions
+        for (0..self.base.x_size) |x| {
+            for (0..self.base.y_size) |y| {
+                for (0..self.base.z_size) |z| {
+                    if (self.getDirect(@intCast(x), @intCast(y), @intCast(z))) {
+                        const rotated = rotation.rotateVec(
+                            @as(i32, @intCast(x)),
+                            @as(i32, @intCast(y)),
+                            @as(i32, @intCast(z)),
+                        );
+                        const new_x: u8 = @intCast(shift_x + rotated.x);
+                        const new_y: u8 = @intCast(shift_y + rotated.y);
+                        const new_z: u8 = @intCast(shift_z + rotated.z);
+                        result.setDirect(new_x, new_y, new_z, true);
+                    }
+                }
+            }
+        }
+
+        // Update bounds
+        result.base.recalculateBounds();
+        return result;
+    }
+
     /// Create a 2D slice of the shape along an axis at a given position
     /// Returns a new 2D BitSetDiscreteVoxelShape
     pub fn getSlice(self: *const Self, axis: @import("DiscreteVoxelShape.zig").Axis, pos: u8) BitSetDiscreteVoxelShape2D {
@@ -434,7 +486,7 @@ pub const BitSetDiscreteVoxelShape2D = struct {
     }
 
     /// Check if this shape covers the given normalized coordinate region
-    fn coversRegion(self: *const Self, u_min: f64, u_max: f64, v_min: f64, v_max: f64) bool {
+    pub fn coversRegion(self: *const Self, u_min: f64, u_max: f64, v_min: f64, v_max: f64) bool {
         // Convert to cell indices in this shape's resolution
         const u_start: usize = @intFromFloat(@floor(u_min * @as(f64, @floatFromInt(self.u_size))));
         const u_end: usize = @intFromFloat(@ceil(u_max * @as(f64, @floatFromInt(self.u_size))));
@@ -506,4 +558,62 @@ test "BitSetDiscreteVoxelShape slice" {
     // Get slice at Y=3 (should be empty)
     const slice_y3 = shape.getSlice(.y, 3);
     try std.testing.expect(slice_y3.isEmpty());
+}
+
+test "BitSetDiscreteVoxelShape rotate Y 90" {
+    // Create a shape with a single voxel at (0, 0, 0) in a 2x2x2 space
+    var shape = BitSetDiscreteVoxelShape.init(2, 2, 2);
+    shape.setDirect(0, 0, 0, true);
+
+    // Rotate 90 degrees around Y axis
+    // In block coords: (0,0,0) -> looking down, 90 CW rotation
+    // X becomes -Z, Z becomes X (with coordinate system adjustments)
+    const rotated = shape.rotate(OctahedralGroup.BLOCK_ROT_Y_90);
+
+    // The rotated shape should still be 2x2x2
+    try std.testing.expectEqual(@as(u8, 2), rotated.base.x_size);
+    try std.testing.expectEqual(@as(u8, 2), rotated.base.y_size);
+    try std.testing.expectEqual(@as(u8, 2), rotated.base.z_size);
+
+    // Should have exactly one voxel
+    try std.testing.expectEqual(@as(usize, 1), rotated.popCount());
+}
+
+test "BitSetDiscreteVoxelShape rotate Y 180" {
+    // Create a shape with voxels at one corner
+    var shape = BitSetDiscreteVoxelShape.init(2, 2, 2);
+    shape.setDirect(0, 0, 0, true);
+
+    // Rotate 180 degrees around Y axis
+    const rotated = shape.rotate(OctahedralGroup.BLOCK_ROT_Y_180);
+
+    // Should have exactly one voxel at opposite corner
+    try std.testing.expectEqual(@as(usize, 1), rotated.popCount());
+    try std.testing.expect(rotated.getDirect(1, 0, 1));
+}
+
+test "BitSetDiscreteVoxelShape rotate identity" {
+    const shape = BitSetDiscreteVoxelShape.withFilledBounds(4, 4, 4, 0, 0, 0, 2, 2, 2);
+
+    // Identity rotation should return identical shape
+    const rotated = shape.rotate(OctahedralGroup.IDENTITY);
+
+    try std.testing.expectEqual(shape.base.x_size, rotated.base.x_size);
+    try std.testing.expectEqual(shape.base.y_size, rotated.base.y_size);
+    try std.testing.expectEqual(shape.base.z_size, rotated.base.z_size);
+    try std.testing.expectEqual(shape.popCount(), rotated.popCount());
+}
+
+test "BitSetDiscreteVoxelShape rotate INVERT_Y" {
+    // Create bottom slab (filled Y=0,1 of 4)
+    const shape = BitSetDiscreteVoxelShape.withFilledBounds(4, 4, 4, 0, 0, 0, 4, 2, 4);
+
+    // Invert Y should create top slab
+    const rotated = shape.rotate(OctahedralGroup.INVERT_Y);
+
+    // Check that bottom is now empty and top is filled
+    try std.testing.expect(!rotated.getDirect(0, 0, 0));
+    try std.testing.expect(!rotated.getDirect(0, 1, 0));
+    try std.testing.expect(rotated.getDirect(0, 2, 0));
+    try std.testing.expect(rotated.getDirect(0, 3, 0));
 }

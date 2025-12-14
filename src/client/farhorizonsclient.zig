@@ -315,7 +315,7 @@ pub const FarHorizonsClient = struct {
         x: i32,
         y: i32,
         z: i32,
-        entry: BlockEntry,
+        _: BlockEntry, // Previously used for whole-block culling, now unused with per-element culling
         vertices: []Vertex,
         indices: []u16,
         vertex_idx: *usize,
@@ -335,17 +335,37 @@ pub const FarHorizonsClient = struct {
         for (elements) |*elem| {
             for (directions) |dir| {
                 if (elem.faces.get(dir)) |face| {
-                    // Transform face direction by model rotation for correct culling
-                    // When a model is rotated, its faces point in different directions
-                    const rotated_render_dir = FaceBakery.rotateFaceDirection(dir, model_rotation_x, model_rotation_y);
+                    // Only cull faces that have cullface specified
+                    // Internal faces (no cullface) should always render
+                    if (face.cullface) |cullface_dir| {
+                        // Transform cullface direction by model rotation
+                        const rotated_cullface = FaceBakery.rotateFaceDirection(cullface_dir, model_rotation_x, model_rotation_y);
 
-                    // Convert to VoxelDirection for culling (same enum values)
-                    const rotated_voxel_dir: VoxelDirection = @enumFromInt(@intFromEnum(rotated_render_dir));
+                        // Convert to VoxelDirection for culling (same enum values)
+                        const rotated_voxel_dir: VoxelDirection = @enumFromInt(@intFromEnum(rotated_cullface));
 
-                    // Use VoxelShape-based culling with the ROTATED direction
-                    if (!chunk.shouldRenderFaceVoxelEntry(x, y, z, rotated_voxel_dir, entry, null)) {
-                        continue; // Skip this face - occluded by neighbor's shape
+                        // Rotate element bounds by model rotation for accurate per-element culling
+                        const rotated_bounds = FaceBakery.rotateElementBounds(
+                            elem.from,
+                            elem.to,
+                            model_rotation_x,
+                            model_rotation_y,
+                        );
+
+                        // Use per-element face culling for precise handling
+                        if (!chunk.shouldRenderElementFace(
+                            x,
+                            y,
+                            z,
+                            rotated_voxel_dir,
+                            rotated_bounds.from,
+                            rotated_bounds.to,
+                            null,
+                        )) {
+                            continue; // Skip this face - occluded by neighbor's shape
+                        }
                     }
+                    // No cullface = internal face, always render
 
                     // Get texture index from texture name
                     const texture_index = texture_manager.getTextureIndex(face.texture) orelse 0;
@@ -376,9 +396,9 @@ pub const FarHorizonsClient = struct {
                         const pos = quad.position(@intCast(i));
                         const packed_uv = quad.packedUV(@intCast(i));
                         // Unpack UV from u64 (u in high 32 bits, v in low 32 bits)
+                        // UVs are already normalized to 0-1 range by FaceBakery
                         const u: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
                         const v: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
-                        // Normalize UVs from 0-16 Minecraft coords to 0-1
                         vertices[vertex_idx.*] = .{
                             .pos = .{
                                 pos[0] - 0.5 + offset_x,
@@ -386,7 +406,7 @@ pub const FarHorizonsClient = struct {
                                 pos[2] - 0.5 + offset_z,
                             },
                             .color = color,
-                            .uv = .{ u / 16.0, v / 16.0 },
+                            .uv = .{ u, v },
                             .tex_index = quad.texture_index,
                         };
                         vertex_idx.* += 1;
