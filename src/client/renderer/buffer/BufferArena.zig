@@ -107,10 +107,16 @@ pub const BufferArena = struct {
             return error.BufferBindFailed;
         }
 
-        // Use the larger of specified alignment or memory requirements
-        const effective_alignment = @max(alignment, mem_requirements.alignment);
+        // Use LCM of specified alignment and memory requirements alignment
+        // This ensures allocations are aligned for both Vulkan AND vertex/index access
+        const effective_alignment = lcm(alignment, mem_requirements.alignment);
 
-        logger.info("Created BufferArena: {} bytes, alignment {}", .{ size, effective_alignment });
+        logger.info("Created BufferArena: {} bytes, alignment {} (requested={}, mem_req={})", .{
+            size,
+            effective_alignment,
+            alignment,
+            mem_requirements.alignment,
+        });
 
         return Self{
             .buffer = buffer,
@@ -196,3 +202,20 @@ pub const BufferArena = struct {
         return null;
     }
 };
+
+/// Greatest common divisor
+fn gcd(a: u64, b: u64) u64 {
+    var x = a;
+    var y = b;
+    while (y != 0) {
+        const t = y;
+        y = x % y;
+        x = t;
+    }
+    return x;
+}
+
+/// Least common multiple
+fn lcm(a: u64, b: u64) u64 {
+    return (a / gcd(a, b)) * b;
+}

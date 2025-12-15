@@ -271,8 +271,18 @@ pub const ChunkManager = struct {
         self.updateLoadQueue();
     }
 
+    /// Begin a new frame - call this before tick() with the current frame fence
+    /// This ensures staging buffer synchronization
+    pub fn beginFrame(self: *Self, frame_fence: vk.VkFence) void {
+        if (self.buffer_manager) |buf_mgr| {
+            buf_mgr.beginFrame(frame_fence) catch |err| {
+                logger.warn("Failed to begin frame for buffer manager: {}", .{err});
+            };
+        }
+    }
+
     /// Process completed meshes and update chunks
-    /// Call this once per frame from the main thread
+    /// Call this once per frame from the main thread (after beginFrame)
     pub fn tick(self: *Self) void {
         const buf_mgr = self.buffer_manager orelse return;
 
@@ -288,6 +298,24 @@ pub const ChunkManager = struct {
             if (self.loaded_chunks.get(mesh.pos)) |render_chunk_ptr| {
                 // Skip empty meshes
                 if (mesh.vertices.len == 0 or mesh.indices.len == 0) {
+                    mesh.deinit();
+                    _ = self.pending_loads.remove(mesh.pos);
+                    continue;
+                }
+
+                // Validate indices are within vertex bounds
+                var max_index: u32 = 0;
+                for (mesh.indices) |idx| {
+                    if (idx > max_index) max_index = idx;
+                }
+                if (max_index >= mesh.vertices.len) {
+                    logger.err("Chunk ({},{},{}) has invalid index {} >= vertex count {}", .{
+                        mesh.pos.x,
+                        mesh.pos.z,
+                        mesh.pos.section_y,
+                        max_index,
+                        mesh.vertices.len,
+                    });
                     mesh.deinit();
                     _ = self.pending_loads.remove(mesh.pos);
                     continue;
@@ -369,9 +397,25 @@ pub const ChunkManager = struct {
             const m = chunk.mesh orelse continue;
             if (!m.hasValidAllocation()) continue;
 
+            const vertex_offset = m.getVertexOffset();
+            const index_offset = m.getIndexOffset();
+
+            // Sanity checks - offsets should be aligned
+            const vertex_size: u64 = 36; // sizeof(Vertex)
+            const index_size: u64 = 4; // sizeof(u32)
+
+            if (vertex_offset % vertex_size != 0) {
+                logger.warn("Chunk ({},{},{}) has unaligned vertex offset: {}", .{ chunk.pos.x, chunk.pos.z, chunk.pos.section_y, vertex_offset });
+                continue;
+            }
+            if (index_offset % index_size != 0) {
+                logger.warn("Chunk ({},{},{}) has unaligned index offset: {}", .{ chunk.pos.x, chunk.pos.z, chunk.pos.section_y, index_offset });
+                continue;
+            }
+
             self.draw_commands.append(self.allocator, ChunkDrawCommand{
-                .vertex_offset = m.getVertexOffset(),
-                .index_offset = m.getIndexOffset(),
+                .vertex_offset = vertex_offset,
+                .index_offset = index_offset,
                 .index_count = m.index_count,
             }) catch continue;
         }

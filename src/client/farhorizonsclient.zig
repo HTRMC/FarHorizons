@@ -230,6 +230,8 @@ pub const FarHorizonsClient = struct {
 
             // Process completed chunk meshes (main thread only)
             if (self.chunk_manager) |*cm| {
+                // Begin frame for staging buffer synchronization
+                cm.beginFrame(self.render_system.getCurrentFrameFence());
                 cm.tick();
             }
 
