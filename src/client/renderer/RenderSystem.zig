@@ -437,18 +437,32 @@ pub const RenderSystem = struct {
         vertex_base: i32 = 0,
     };
 
+    /// Staging copy info for buffer uploads
+    pub const StagingCopy = struct {
+        src_buffer: vk.VkBuffer,
+        src_offset: u64,
+        dst_buffer: vk.VkBuffer,
+        dst_offset: u64,
+        size: u64,
+    };
+
     /// Draw frame with multiple chunks from arena buffers
+    /// staging_copies: optional slice of pending staging copies to commit before rendering
     pub fn drawFrameMultiChunk(
         self: *Self,
         vertex_buffer: vk.VkBuffer,
         index_buffer: vk.VkBuffer,
         draw_commands: []const ChunkDrawCommand,
+        staging_buffer: ?vk.VkBuffer,
+        staging_copies: []const StagingCopy,
     ) !void {
         const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
         const vkResetFences = vk.vkResetFences orelse return error.VulkanFunctionNotLoaded;
         const vkAcquireNextImageKHR = vk.vkAcquireNextImageKHR orelse return error.VulkanFunctionNotLoaded;
         const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
         const vkQueuePresentKHR = vk.vkQueuePresentKHR orelse return error.VulkanFunctionNotLoaded;
+
+        _ = staging_buffer;
 
         const fence = self.in_flight_fences[self.current_frame];
         _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
@@ -478,6 +492,7 @@ pub const RenderSystem = struct {
             vertex_buffer,
             index_buffer,
             draw_commands,
+            staging_copies,
         );
 
         const wait_semaphores = [_]vk.VkSemaphore{self.image_available_semaphores[self.current_frame]};
@@ -532,6 +547,7 @@ pub const RenderSystem = struct {
         vertex_buffer: vk.VkBuffer,
         index_buffer: vk.VkBuffer,
         draw_commands: []const ChunkDrawCommand,
+        staging_copies: []const StagingCopy,
     ) !void {
         const vkResetCommandBuffer = vk.vkResetCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
@@ -545,6 +561,8 @@ pub const RenderSystem = struct {
         const vkCmdDrawIndexed = vk.vkCmdDrawIndexed orelse return error.VulkanFunctionNotLoaded;
         const vkCmdEndRenderPass = vk.vkCmdEndRenderPass orelse return error.VulkanFunctionNotLoaded;
         const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
 
         _ = vkResetCommandBuffer(command_buffer, 0);
 
@@ -557,6 +575,38 @@ pub const RenderSystem = struct {
 
         if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
             return error.CommandBufferBeginFailed;
+        }
+
+        // Record staging buffer copies before render pass
+        if (staging_copies.len > 0) {
+            for (staging_copies) |copy| {
+                const region = vk.VkBufferCopy{
+                    .srcOffset = copy.src_offset,
+                    .dstOffset = copy.dst_offset,
+                    .size = copy.size,
+                };
+                vkCmdCopyBuffer(command_buffer, copy.src_buffer, copy.dst_buffer, 1, &region);
+            }
+
+            // Memory barrier: transfer writes must complete before vertex/index reads
+            const barrier = vk.VkMemoryBarrier{
+                .sType = vk.VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+                .pNext = null,
+                .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+                .dstAccessMask = vk.VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | vk.VK_ACCESS_INDEX_READ_BIT,
+            };
+            vkCmdPipelineBarrier(
+                command_buffer,
+                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+                vk.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+                0,
+                1,
+                &barrier,
+                0,
+                null,
+                0,
+                null,
+            );
         }
 
         const clear_values = [_]vk.VkClearValue{

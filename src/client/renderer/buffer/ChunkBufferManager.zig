@@ -9,7 +9,9 @@ const ChunkPos = shared.ChunkPos;
 
 const BufferArena = @import("BufferArena.zig").BufferArena;
 const BufferSlice = @import("BufferArena.zig").BufferSlice;
-const StagingRing = @import("StagingRing.zig").StagingRing;
+const staging_ring_module = @import("StagingRing.zig");
+const StagingRing = staging_ring_module.StagingRing;
+const PendingCopy = staging_ring_module.PendingCopy;
 
 /// Allocation handle for a chunk's GPU buffers
 pub const ChunkBufferAllocation = struct {
@@ -227,6 +229,21 @@ pub const ChunkBufferManager = struct {
     /// Get the index buffer for binding
     pub fn getIndexBuffer(self: *const Self) vk.VkBuffer {
         return self.index_arena.getBuffer();
+    }
+
+    /// Get the staging buffer for copy commands
+    pub fn getStagingBuffer(self: *const Self) vk.VkBuffer {
+        return self.staging.getBuffer();
+    }
+
+    /// Get pending staging copies
+    pub fn getPendingCopies(self: *const Self) []const PendingCopy {
+        return self.staging.getPendingCopies();
+    }
+
+    /// Clear pending copies after they've been committed
+    pub fn clearPendingCopies(self: *Self) void {
+        self.staging.clearPendingCopies();
     }
 
     /// Get usage statistics

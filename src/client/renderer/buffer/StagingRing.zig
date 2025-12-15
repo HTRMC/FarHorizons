@@ -279,6 +279,21 @@ pub const StagingRing = struct {
         return self.pending_copies.items.len > 0;
     }
 
+    /// Get the staging buffer handle
+    pub fn getBuffer(self: *const Self) vk.VkBuffer {
+        return self.buffer;
+    }
+
+    /// Get pending copies (for building StagingCopy array)
+    pub fn getPendingCopies(self: *const Self) []const PendingCopy {
+        return self.pending_copies.items;
+    }
+
+    /// Clear pending copies after they've been committed
+    pub fn clearPendingCopies(self: *Self) void {
+        self.pending_copies.clearRetainingCapacity();
+    }
+
     fn findMemoryType(
         physical_device: vk.VkPhysicalDevice,
         type_filter: u32,

@@ -257,15 +257,32 @@ pub const FarHorizonsClient = struct {
                     const vertex_buffer = cm.getVertexBuffer();
                     const index_buffer = cm.getIndexBuffer();
                     const draw_commands = cm.getDrawCommands();
+                    const staging_copies = cm.getStagingCopies();
 
                     if (vertex_buffer != null and index_buffer != null and draw_commands.len > 0) {
                         self.render_system.drawFrameMultiChunk(
                             vertex_buffer.?,
                             index_buffer.?,
                             draw_commands,
+                            null, // staging buffer (not needed, included in copies)
+                            staging_copies,
                         ) catch |err| {
                             logger.err("Failed to draw multi-chunk frame: {}", .{err});
                         };
+                        // Clear staging copies after they've been submitted
+                        cm.clearStagingCopies();
+                    } else if (staging_copies.len > 0) {
+                        // Have staging data but no ready chunks yet - still need to upload
+                        self.render_system.drawFrameMultiChunk(
+                            vertex_buffer orelse return,
+                            index_buffer orelse return,
+                            &.{},
+                            null,
+                            staging_copies,
+                        ) catch |err| {
+                            logger.err("Failed to draw frame with staging: {}", .{err});
+                        };
+                        cm.clearStagingCopies();
                     } else {
                         // No chunks ready yet, draw empty frame
                         self.render_system.drawFrame() catch |err| {

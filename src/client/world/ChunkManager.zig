@@ -22,6 +22,7 @@ const BlockstateLoader = renderer.block.BlockstateLoader;
 const ChunkBufferManager = renderer.buffer.ChunkBufferManager;
 const ChunkBufferConfig = renderer.buffer.ChunkBufferConfig;
 const ChunkDrawCommand = RenderSystem.ChunkDrawCommand;
+const StagingCopy = RenderSystem.StagingCopy;
 
 const render_chunk = @import("RenderChunk.zig");
 const RenderChunk = render_chunk.RenderChunk;
@@ -108,6 +109,9 @@ pub const ChunkManager = struct {
 
     /// Reusable draw commands list
     draw_commands: std.ArrayListUnmanaged(ChunkDrawCommand) = .{},
+
+    /// Reusable staging copies list
+    staging_copies: std.ArrayListUnmanaged(StagingCopy) = .{},
 
     /// Initialize the chunk manager
     pub fn init(
@@ -243,8 +247,9 @@ pub const ChunkManager = struct {
         }
         self.completed_queue.deinit();
 
-        // Free draw commands
+        // Free draw commands and staging copies
         self.draw_commands.deinit(self.allocator);
+        self.staging_copies.deinit(self.allocator);
 
         // Free buffer manager
         if (self.buffer_manager) |buf_mgr| {
@@ -384,6 +389,38 @@ pub const ChunkManager = struct {
     pub fn getIndexBuffer(self: *const Self) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
         return buf_mgr.getIndexBuffer();
+    }
+
+    /// Get pending staging copies for GPU upload
+    /// Call this after tick() and before drawFrameMultiChunk()
+    pub fn getStagingCopies(self: *Self) []const StagingCopy {
+        const buf_mgr = self.buffer_manager orelse return &.{};
+
+        // Build staging copies from pending copies
+        self.staging_copies.clearRetainingCapacity();
+
+        const staging_buffer = buf_mgr.getStagingBuffer();
+        const pending = buf_mgr.getPendingCopies();
+
+        for (pending) |copy| {
+            self.staging_copies.append(self.allocator, StagingCopy{
+                .src_buffer = staging_buffer,
+                .src_offset = copy.src_offset,
+                .dst_buffer = copy.dst_buffer,
+                .dst_offset = copy.dst_offset,
+                .size = copy.size,
+            }) catch continue;
+        }
+
+        return self.staging_copies.items;
+    }
+
+    /// Clear pending staging copies after they've been committed
+    pub fn clearStagingCopies(self: *Self) void {
+        if (self.buffer_manager) |buf_mgr| {
+            buf_mgr.clearPendingCopies();
+        }
+        self.staging_copies.clearRetainingCapacity();
     }
 
     /// Get all chunks ready for rendering
