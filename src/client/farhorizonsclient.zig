@@ -4,6 +4,7 @@ const std = @import("std");
 const shared = @import("Shared");
 const platform = @import("Platform");
 const renderer = @import("Renderer");
+const world = @import("World");
 const client_player = @import("player/Player.zig");
 
 const GameConfig = shared.GameConfig;
@@ -30,6 +31,8 @@ const Direction = renderer.block.Direction;
 const BlockstateLoader = renderer.block.BlockstateLoader;
 const BlockModelShaper = renderer.block.BlockModelShaper;
 const LocalPlayer = client_player.LocalPlayer;
+const ChunkManager = world.ChunkManager;
+const ChunkConfig = world.chunk_manager.ChunkConfig;
 
 // VoxelShape culling
 const VoxelDirection = shared.Direction;
@@ -48,9 +51,12 @@ pub const FarHorizonsClient = struct {
     keyboard_input: KeyboardInput,
     render_system: RenderSystem,
     texture_manager: ?TextureManager,
+    chunk_manager: ?ChunkManager,
     camera: Camera,
     local_player: LocalPlayer,
     allocator: std.mem.Allocator,
+    /// Use async chunk loading (set to false for legacy single-chunk mode)
+    use_async_chunks: bool,
 
     pub fn init(allocator: std.mem.Allocator, config: GameConfig) Self {
         const display_data = DisplayData{
@@ -71,9 +77,11 @@ pub const FarHorizonsClient = struct {
             .keyboard_input = undefined, // Initialized in run() after struct is at final location
             .render_system = RenderSystem.init(allocator),
             .texture_manager = null, // Initialized in run() after render_system
+            .chunk_manager = null, // Initialized in run() after texture_manager
             .camera = camera,
             .local_player = undefined, // Initialized in run() after keyboard_input is ready
             .allocator = allocator,
+            .use_async_chunks = true, // Enable async chunk loading by default
         };
     }
 
@@ -121,8 +129,34 @@ pub const FarHorizonsClient = struct {
             self.texture_manager.?.getSampler(),
         );
 
-        // Test model loading
-        try self.testModelLoading();
+        // Initialize chunk manager for async loading
+        if (self.use_async_chunks) {
+            self.chunk_manager = try ChunkManager.init(
+                self.allocator,
+                &self.render_system,
+                &self.texture_manager.?,
+                self.config.location.asset_directory,
+                ChunkConfig{
+                    .view_distance = 2, // Start small for testing
+                    .vertical_view_distance = 2,
+                    .unload_distance = 4,
+                    .worker_count = 2,
+                    .max_uploads_per_tick = 2,
+                },
+            );
+            try self.chunk_manager.?.start();
+            // Trigger initial chunk loading based on player position
+            self.chunk_manager.?.updatePlayerPosition(self.local_player.getPosition(0));
+            logger.info("Async chunk loading enabled", .{});
+        } else {
+            // Legacy single-chunk mode
+            try self.testModelLoading();
+        }
+        defer {
+            if (self.chunk_manager) |*cm| {
+                cm.deinit();
+            }
+        }
 
         // Render first frame before showing window (avoids white flash)
         self.render_system.drawFrame() catch {};
@@ -187,6 +221,16 @@ pub const FarHorizonsClient = struct {
 
                 // Update player movement
                 self.local_player.aiStep();
+
+                // Update chunk loading based on player position
+                if (self.chunk_manager) |*cm| {
+                    cm.updatePlayerPosition(self.local_player.getPosition(0));
+                }
+            }
+
+            // Process completed chunk meshes (main thread only)
+            if (self.chunk_manager) |*cm| {
+                cm.tick();
             }
 
             // Calculate partial tick for interpolation (0.0 to 1.0)
@@ -207,9 +251,38 @@ pub const FarHorizonsClient = struct {
             self.render_system.updateMVP(model.data, view.data, proj.data);
 
             // Render frame
-            self.render_system.drawFrame() catch |err| {
-                logger.err("Failed to draw frame: {}", .{err});
-            };
+            if (self.use_async_chunks) {
+                // Multi-chunk rendering with arena buffers
+                if (self.chunk_manager) |*cm| {
+                    const vertex_buffer = cm.getVertexBuffer();
+                    const index_buffer = cm.getIndexBuffer();
+                    const draw_commands = cm.getDrawCommands();
+
+                    if (vertex_buffer != null and index_buffer != null and draw_commands.len > 0) {
+                        self.render_system.drawFrameMultiChunk(
+                            vertex_buffer.?,
+                            index_buffer.?,
+                            draw_commands,
+                        ) catch |err| {
+                            logger.err("Failed to draw multi-chunk frame: {}", .{err});
+                        };
+                    } else {
+                        // No chunks ready yet, draw empty frame
+                        self.render_system.drawFrame() catch |err| {
+                            logger.err("Failed to draw frame: {}", .{err});
+                        };
+                    }
+                } else {
+                    self.render_system.drawFrame() catch |err| {
+                        logger.err("Failed to draw frame: {}", .{err});
+                    };
+                }
+            } else {
+                // Legacy single-chunk rendering
+                self.render_system.drawFrame() catch |err| {
+                    logger.err("Failed to draw frame: {}", .{err});
+                };
+            }
         }
 
         logger.info("Main loop ended, shutting down", .{});

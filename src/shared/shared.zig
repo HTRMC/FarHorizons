@@ -60,6 +60,11 @@ pub const OcclusionCache = occlusion_cache.OcclusionCache;
 pub const chunk_access = @import("ChunkAccess.zig");
 pub const ChunkAccess = chunk_access.ChunkAccess;
 
+// Chunk positioning
+pub const chunk_pos = @import("ChunkPos.zig");
+pub const ChunkPos = chunk_pos.ChunkPos;
+pub const ChunkPosContext = chunk_pos.ChunkPosContext;
+
 // Block system
 pub const block = @import("block/Blocks.zig");
 pub const block_mod = @import("block/Block.zig");

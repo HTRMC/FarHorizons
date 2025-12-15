@@ -131,6 +131,18 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Create World module (chunk management)
+    const world_module = b.createModule(.{
+        .root_source_file = b.path("src/client/world/world.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "Shared", .module = shared_module },
+            .{ .name = "Renderer", .module = renderer_module },
+            .{ .name = "volk", .module = volk_module },
+        },
+    });
+
     const exe = b.addExecutable(.{
         .name = "FarHorizons",
         .root_module = b.createModule(.{
@@ -143,6 +155,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "volk", .module = volk_module },
                 .{ .name = "Platform", .module = platform_module },
                 .{ .name = "Renderer", .module = renderer_module },
+                .{ .name = "World", .module = world_module },
                 .{ .name = "stb_image", .module = stb_image_module },
             },
         }),

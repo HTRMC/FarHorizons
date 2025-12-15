@@ -410,6 +410,230 @@ pub const RenderSystem = struct {
         return @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height));
     }
 
+    /// Get the current frame fence for staging synchronization
+    pub fn getCurrentFrameFence(self: *const Self) vk.VkFence {
+        return self.in_flight_fences[self.current_frame];
+    }
+
+    /// Get the current frame index
+    pub fn getCurrentFrame(self: *const Self) u32 {
+        return self.current_frame;
+    }
+
+    /// Get the current command buffer for recording additional commands
+    pub fn getCurrentCommandBuffer(self: *const Self) vk.VkCommandBuffer {
+        return self.command_buffers[self.current_frame];
+    }
+
+    /// Draw command for multi-chunk rendering
+    pub const ChunkDrawCommand = struct {
+        /// Offset into the vertex buffer (in bytes)
+        vertex_offset: u64,
+        /// Offset into the index buffer (in bytes)
+        index_offset: u64,
+        /// Number of indices to draw
+        index_count: u32,
+        /// Base vertex offset (added to each index)
+        vertex_base: i32 = 0,
+    };
+
+    /// Draw frame with multiple chunks from arena buffers
+    pub fn drawFrameMultiChunk(
+        self: *Self,
+        vertex_buffer: vk.VkBuffer,
+        index_buffer: vk.VkBuffer,
+        draw_commands: []const ChunkDrawCommand,
+    ) !void {
+        const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
+        const vkResetFences = vk.vkResetFences orelse return error.VulkanFunctionNotLoaded;
+        const vkAcquireNextImageKHR = vk.vkAcquireNextImageKHR orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
+        const vkQueuePresentKHR = vk.vkQueuePresentKHR orelse return error.VulkanFunctionNotLoaded;
+
+        const fence = self.in_flight_fences[self.current_frame];
+        _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
+
+        var image_index: u32 = 0;
+        const acquire_result = vkAcquireNextImageKHR(
+            self.device,
+            self.swapchain,
+            std.math.maxInt(u64),
+            self.image_available_semaphores[self.current_frame],
+            null,
+            &image_index,
+        );
+
+        if (acquire_result == vk.VK_ERROR_OUT_OF_DATE_KHR) {
+            try self.recreateSwapchain();
+            return;
+        } else if (acquire_result != vk.VK_SUCCESS and acquire_result != vk.VK_SUBOPTIMAL_KHR) {
+            return error.SwapchainAcquireFailed;
+        }
+
+        _ = vkResetFences(self.device, 1, &fence);
+
+        try self.recordMultiChunkCommandBuffer(
+            self.command_buffers[self.current_frame],
+            image_index,
+            vertex_buffer,
+            index_buffer,
+            draw_commands,
+        );
+
+        const wait_semaphores = [_]vk.VkSemaphore{self.image_available_semaphores[self.current_frame]};
+        const wait_stages = [_]vk.VkPipelineStageFlags{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        const signal_semaphores = [_]vk.VkSemaphore{self.render_finished_semaphores[self.current_frame]};
+        const cmd_buffers = [_]vk.VkCommandBuffer{self.command_buffers[self.current_frame]};
+
+        const submit_info = vk.VkSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &wait_semaphores,
+            .pWaitDstStageMask = &wait_stages,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd_buffers,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &signal_semaphores,
+        };
+
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, fence) != vk.VK_SUCCESS) {
+            return error.QueueSubmitFailed;
+        }
+
+        const swapchains = [_]vk.VkSwapchainKHR{self.swapchain};
+        const present_info = vk.VkPresentInfoKHR{
+            .sType = vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = null,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &signal_semaphores,
+            .swapchainCount = 1,
+            .pSwapchains = &swapchains,
+            .pImageIndices = &image_index,
+            .pResults = null,
+        };
+
+        const present_result = vkQueuePresentKHR(self.present_queue, &present_info);
+
+        if (present_result == vk.VK_ERROR_OUT_OF_DATE_KHR or present_result == vk.VK_SUBOPTIMAL_KHR) {
+            try self.recreateSwapchain();
+        } else if (present_result != vk.VK_SUCCESS) {
+            return error.PresentFailed;
+        }
+
+        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    /// Record command buffer for multi-chunk rendering
+    fn recordMultiChunkCommandBuffer(
+        self: *Self,
+        command_buffer: vk.VkCommandBuffer,
+        image_index: u32,
+        vertex_buffer: vk.VkBuffer,
+        index_buffer: vk.VkBuffer,
+        draw_commands: []const ChunkDrawCommand,
+    ) !void {
+        const vkResetCommandBuffer = vk.vkResetCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBeginRenderPass = vk.vkCmdBeginRenderPass orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindIndexBuffer = vk.vkCmdBindIndexBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdSetViewport = vk.vkCmdSetViewport orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdSetScissor = vk.vkCmdSetScissor orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdDrawIndexed = vk.vkCmdDrawIndexed orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdEndRenderPass = vk.vkCmdEndRenderPass orelse return error.VulkanFunctionNotLoaded;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+
+        _ = vkResetCommandBuffer(command_buffer, 0);
+
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = 0,
+            .pInheritanceInfo = null,
+        };
+
+        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
+            return error.CommandBufferBeginFailed;
+        }
+
+        const clear_values = [_]vk.VkClearValue{
+            .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
+            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+        };
+
+        const render_pass_info = vk.VkRenderPassBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .pNext = null,
+            .renderPass = self.render_pass,
+            .framebuffer = self.framebuffers[image_index],
+            .renderArea = .{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = self.swapchain_extent,
+            },
+            .clearValueCount = clear_values.len,
+            .pClearValues = &clear_values,
+        };
+
+        vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+
+        // Bind descriptor set for current frame
+        const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
+        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
+
+        const viewport = vk.VkViewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapchain_extent.width),
+            .height = @floatFromInt(self.swapchain_extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        };
+        vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+        const scissor = vk.VkRect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        };
+        vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+        // Bind vertex buffer once (with offset 0, we'll use vertex_base per-draw)
+        const vertex_buffers = [_]vk.VkBuffer{vertex_buffer};
+        const offsets = [_]vk.VkDeviceSize{0};
+        vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers, &offsets);
+
+        // Bind index buffer (u32 indices for larger meshes)
+        vkCmdBindIndexBuffer(command_buffer, index_buffer, 0, vk.VK_INDEX_TYPE_UINT32);
+
+        // Draw each chunk
+        for (draw_commands) |cmd| {
+            if (cmd.index_count == 0) continue;
+
+            // Calculate first index from byte offset
+            const first_index: u32 = @intCast(cmd.index_offset / 4); // u32 indices = 4 bytes each
+            // Calculate vertex offset from byte offset
+            const vertex_offset: i32 = @intCast(cmd.vertex_offset / @sizeOf(Vertex));
+
+            vkCmdDrawIndexed(
+                command_buffer,
+                cmd.index_count, // indexCount
+                1, // instanceCount
+                first_index, // firstIndex
+                vertex_offset, // vertexOffset
+                0, // firstInstance
+            );
+        }
+
+        vkCmdEndRenderPass(command_buffer);
+
+        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferEndFailed;
+        }
+    }
+
     /// Upload new mesh data (vertices and indices)
     pub fn uploadMesh(self: *Self, vertices: []const Vertex, indices: []const u16) !void {
         const vkDeviceWaitIdle = vk.vkDeviceWaitIdle orelse return error.VulkanFunctionNotLoaded;

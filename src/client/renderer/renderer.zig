@@ -5,6 +5,9 @@ pub const Vertex = @import("RenderSystem.zig").Vertex;
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
 pub const block = @import("block/Model.zig");
 
+// Buffer management
+pub const buffer = @import("buffer/buffer.zig");
+
 // Shader system
 pub const ShaderPreprocessor = @import("GlslPreprocessor.zig").ShaderPreprocessor;
 pub const ShaderCompiler = @import("ShaderCompiler.zig").ShaderCompiler;
