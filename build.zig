@@ -41,7 +41,6 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     // Windows: use libc++ (LLVM) which works with the prebuilt libs
     if (t.os.tag == .linux) {
         exe.linkSystemLibrary("stdc++");
-        exe.linkSystemLibrary("stdc++fs"); // filesystem support (GCC < 9)
         exe.linkSystemLibrary("m"); // math library
     } else {
         exe.linkLibCpp();
