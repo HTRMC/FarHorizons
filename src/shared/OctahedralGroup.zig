@@ -1,5 +1,4 @@
 /// OctahedralGroup - 3D rotation and reflection transformations
-/// Equivalent to Minecraft's com.mojang.math.OctahedralGroup
 ///
 /// The octahedral group consists of 48 transformations that map a cube to itself:
 /// - 24 proper rotations (orientation-preserving)

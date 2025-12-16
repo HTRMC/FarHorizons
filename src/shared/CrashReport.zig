@@ -27,7 +27,6 @@ fn getTimestamp() i64 {
 }
 
 /// A crash report that collects information about an error and system state.
-/// Similar to Minecraft's CrashReport class.
 pub const CrashReport = struct {
     const Self = @This();
     const logger = Logger.init("CrashReport");
@@ -241,7 +240,6 @@ pub const CrashReport = struct {
 };
 
 /// A category/section within a crash report.
-/// Similar to Minecraft's CrashReportCategory.
 pub const CrashReportCategory = struct {
     const Self = @This();
 
@@ -295,7 +293,6 @@ pub const CrashReportCategory = struct {
 };
 
 /// Collects system information for crash reports.
-/// Similar to Minecraft's SystemReport.
 pub const SystemReport = struct {
     const Self = @This();
 
@@ -1443,9 +1440,8 @@ pub const SystemReport = struct {
 };
 
 /// Pre-allocates memory that can be released during OOM to allow crash reporting.
-/// Similar to Minecraft's MemoryReserve.
 pub const MemoryReserve = struct {
-    const RESERVE_SIZE = 10 * 1024 * 1024; // 10 MiB, same as Minecraft
+    const RESERVE_SIZE = 10 * 1024 * 1024; // 10 MiB
 
     var reserve: ?[]u8 = null;
     var backing_allocator: ?std.mem.Allocator = null;

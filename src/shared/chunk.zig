@@ -1,5 +1,4 @@
 /// Chunk data structure - 16x16x16 blocks
-/// Matches Minecraft's chunk section concept
 const voxel_shape = @import("VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const Direction = voxel_shape.Direction;

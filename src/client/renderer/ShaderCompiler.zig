@@ -223,7 +223,7 @@ pub const ShaderKind = enum {
         if (std.mem.eql(u8, ext, ".geom")) return .geometry;
         if (std.mem.eql(u8, ext, ".tesc")) return .tess_control;
         if (std.mem.eql(u8, ext, ".tese")) return .tess_evaluation;
-        // Also support .vsh/.fsh (Minecraft-style)
+        // Also support .vsh/.fsh
         if (std.mem.eql(u8, ext, ".vsh")) return .vertex;
         if (std.mem.eql(u8, ext, ".fsh")) return .fragment;
         return null;

@@ -1,5 +1,4 @@
 /// VoxelShape - Abstract shape interface for block collision and occlusion
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.VoxelShape
 ///
 /// VoxelShape is the main interface for representing block shapes.
 /// It provides methods for:
@@ -356,13 +355,11 @@ pub const BLOCK_CENTER: [3]f64 = .{ 0.5, 0.5, 0.5 };
 // =====================
 
 /// Rotate a VoxelShape using an OctahedralGroup transformation
-/// Equivalent to Minecraft's Shapes.rotate()
 pub fn rotate(shape: VoxelShape, rotation: OctahedralGroup) VoxelShape {
     return rotateAroundPoint(shape, rotation, BLOCK_CENTER);
 }
 
 /// Rotate a VoxelShape using an OctahedralGroup transformation around a specific point
-/// Equivalent to Minecraft's Shapes.rotate(shape, rotation, rotationPoint)
 pub fn rotateAroundPoint(shape: VoxelShape, rotation: OctahedralGroup, rotation_point: [3]f64) VoxelShape {
     if (rotation.isIdentity()) {
         return shape;
@@ -440,7 +437,6 @@ pub fn rotateAroundPoint(shape: VoxelShape, rotation: OctahedralGroup, rotation_
 pub const CoordList = CubeVoxelShape.CoordList;
 
 /// Flip a coordinate list if needed during rotation
-/// Equivalent to Minecraft's Shapes.flipAxisIfNeeded()
 fn flipAxisIfNeeded(coords: CoordList, flip: bool, new_relative: f64, old_relative: f64) CoordList {
     if (!flip and new_relative == old_relative) {
         return coords;
@@ -552,14 +548,13 @@ test "VoxelShape shouldRenderFace" {
 }
 
 // =====================
-// Block Occlusion (Minecraft-style using SliceShape)
+// Block Occlusion (using SliceShape)
 // =====================
 
 /// Static full block shape for blockOccludes fast paths
 var static_full_shape: BitSetDiscreteVoxelShape = BitSetDiscreteVoxelShape.initFull(1, 1, 1);
 
 /// Check if a shape's face is occluded by a neighbor shape
-/// This matches Minecraft's Shapes.blockOccludes() exactly
 ///
 /// direction: The direction FROM shape TO occluder (e.g., .north means occluder is to the north)
 /// Returns true if shape's face in that direction should be culled

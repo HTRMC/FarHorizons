@@ -1,5 +1,4 @@
-// Player - like Minecraft's Player.java
-// Extends LivingEntity with abilities and flying speed calculation
+// Player - extends LivingEntity with abilities and flying speed calculation
 
 const std = @import("std");
 const math = @import("Math.zig");
@@ -93,7 +92,6 @@ pub const Player = struct {
     }
 
     /// Get effective flying speed with sprint modifier
-    /// Like Minecraft's Player.getFlyingSpeed() (Player.java:1823-1826)
     /// Returns flyingSpeed * 2.0 if sprinting, else flyingSpeed
     pub fn getFlyingSpeed(self: *const Self) f32 {
         if (self.abilities.flying) {
@@ -107,7 +105,6 @@ pub const Player = struct {
     }
 
     /// Travel method for flying players
-    /// Like Minecraft's Player.travel(Vec3 input) (Player.java:1306-1326)
     /// Applies Y-axis dampening of 0.6 when flying
     pub fn travel(self: *Self, input: Vec3) void {
         if (self.abilities.flying) {

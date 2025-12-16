@@ -1,6 +1,6 @@
 /// Blockstate definition and JSON parsing
 /// Maps block state properties to model variants
-/// Matches Minecraft's assets/namespace/blockstates/*.json format
+/// Uses assets/namespace/blockstates/*.json format
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -45,7 +45,7 @@ pub const BlockstateDefinition = struct {
     }
 
     /// Parse a BlockstateDefinition from JSON bytes
-    /// Supports Minecraft's variants format:
+    /// Supports variants format:
     /// { "variants": { "type=bottom": { "model": "...", "x": 0, "y": 0 } } }
     pub fn parseFromJson(allocator: Allocator, json_data: []const u8) !Self {
         var definition = Self.init(allocator);

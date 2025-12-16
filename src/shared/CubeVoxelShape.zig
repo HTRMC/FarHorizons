@@ -1,5 +1,4 @@
 /// CubeVoxelShape - VoxelShape with power-of-2 aligned coordinates
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.CubeVoxelShape
 ///
 /// This is the most efficient VoxelShape implementation for shapes that
 /// align to a power-of-2 grid (1, 2, 4, 8, or 16 divisions per axis).
@@ -307,7 +306,7 @@ pub fn findRequiredResolution(from: [3]f32, to: [3]f32) u8 {
     return 16; // Maximum resolution as fallback
 }
 
-/// Determine bits needed to represent a size (Minecraft's findBits)
+/// Determine bits needed to represent a size (findBits)
 /// Returns number of bits (0-4) or -1 if not a power of 2
 pub fn findBits(coord_min: f64, coord_max: f64) i8 {
     if (coord_min < 0 or coord_max > 1 or coord_min >= coord_max) {

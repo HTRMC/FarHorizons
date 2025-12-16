@@ -1,5 +1,4 @@
 /// ArrayVoxelShape - VoxelShape with arbitrary coordinate lists
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.ArrayVoxelShape
 ///
 /// This shape type stores explicit coordinate lists for each axis,
 /// allowing representation of shapes that don't align to power-of-2 grids.

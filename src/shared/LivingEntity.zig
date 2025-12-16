@@ -1,5 +1,4 @@
-// LivingEntity - like Minecraft's LivingEntity.java
-// Extends Entity with travel methods and friction
+// LivingEntity - extends Entity with travel methods and friction
 
 const std = @import("std");
 const math = @import("Math.zig");
@@ -9,7 +8,7 @@ const Entity = @import("Entity.zig").Entity;
 pub const LivingEntity = struct {
     const Self = @This();
 
-    // Friction constants from Minecraft's LivingEntity.travelFlying
+    // Friction constants for flying movement
     pub const AIR_FRICTION: f64 = 0.91;
     pub const WATER_FRICTION: f64 = 0.8;
     pub const LAVA_FRICTION: f64 = 0.5;
@@ -86,7 +85,6 @@ pub const LivingEntity = struct {
     }
 
     /// Flying travel with friction
-    /// Like Minecraft's LivingEntity.travelFlying(Vec3 input, float airSpeed)
     pub fn travelFlying(self: *Self, input: Vec3, air_speed: f32) void {
         // Apply movement relative to rotation
         self.moveRelative(air_speed, input);

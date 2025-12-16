@@ -1,4 +1,4 @@
-// Input constants for GLFW - mirrors Minecraft's InputConstants
+// Input constants for GLFW
 
 const glfw = @import("GLFW");
 const c = glfw.c;

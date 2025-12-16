@@ -1,7 +1,6 @@
 const Direction = @import("model/BlockElement.zig").Direction;
 
 /// Extent enum for selecting min/max coordinates
-/// Matches net/minecraft/client/renderer/FaceInfo.Extent
 pub const Extent = enum {
     min_x,
     min_y,
@@ -23,7 +22,6 @@ pub const Extent = enum {
 };
 
 /// Vertex info specifying which extent to use for each axis
-/// Matches net/minecraft/client/renderer/FaceInfo.VertexInfo
 pub const VertexInfo = struct {
     x_face: Extent,
     y_face: Extent,
@@ -39,7 +37,6 @@ pub const VertexInfo = struct {
 };
 
 /// Face vertex ordering information for each direction
-/// Matches net/minecraft/client/renderer/FaceInfo
 pub const FaceInfo = struct {
     infos: [4]VertexInfo,
 

@@ -1,12 +1,11 @@
-// Abilities - like Minecraft's Abilities.java
-// Stores player ability flags and speed values
+// Abilities - stores player ability flags and speed values
 
 const std = @import("std");
 
 pub const Abilities = struct {
     const Self = @This();
 
-    // Default values from Minecraft's Abilities.java
+    // Default values
     pub const DEFAULT_FLYING_SPEED: f32 = 0.05;
     pub const DEFAULT_WALKING_SPEED: f32 = 0.1;
     pub const MIN_FLYING_SPEED: f32 = 0.0;
@@ -43,7 +42,7 @@ pub const Abilities = struct {
         self.walking_speed = value;
     }
 
-    /// Adjust flying speed by scroll amount (Minecraft uses 0.005 per scroll notch)
+    /// Adjust flying speed by scroll amount (0.005 per scroll notch)
     pub fn adjustFlyingSpeed(self: *Self, scroll_delta: f32) void {
         self.setFlyingSpeed(self.flying_speed + scroll_delta * 0.005);
     }

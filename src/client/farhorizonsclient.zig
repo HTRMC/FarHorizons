@@ -41,7 +41,7 @@ pub const FarHorizonsClient = struct {
     const Self = @This();
     const logger = Logger.init("FarHorizonsClient");
 
-    // Minecraft runs at 20 ticks per second (50ms per tick)
+    // Runs at 20 ticks per second (50ms per tick)
     const TICK_RATE: f64 = 20.0;
     const MS_PER_TICK: f64 = 1000.0 / TICK_RATE; // 50ms
 
@@ -165,7 +165,7 @@ pub const FarHorizonsClient = struct {
         // Track ESC key state for edge detection
         var esc_was_pressed = false;
 
-        // Tick timing (like Minecraft's 20 ticks/second)
+        // Tick timing (20 ticks/second)
         var timer = std.time.Timer.start() catch {
             logger.err("Failed to start timer", .{});
             return;
@@ -186,7 +186,7 @@ pub const FarHorizonsClient = struct {
             const esc_pressed = self.window.isKeyPressed(InputConstants.KEY_ESCAPE);
             if (esc_pressed and !esc_was_pressed) {
                 if (self.mouse_handler.isMouseGrabbed()) {
-                    // Release mouse when ESC is pressed (like Minecraft pause menu)
+                    // Release mouse when ESC is pressed (pause menu)
                     self.mouse_handler.releaseMouse();
                 } else {
                     // Close window if mouse is already released
@@ -202,14 +202,14 @@ pub const FarHorizonsClient = struct {
                 self.local_player.setYRot(self.local_player.getYRot() + @as(f32, @floatCast(rotation.yaw)));
                 self.local_player.setXRot(self.local_player.getXRot() + @as(f32, @floatCast(rotation.pitch)));
 
-                // Handle scroll wheel for flying speed (like Minecraft spectator mode)
+                // Handle scroll wheel for flying speed (spectator mode)
                 const scroll = self.mouse_handler.getAccumulatedScroll();
                 if (scroll != 0) {
                     self.local_player.getAbilities().adjustFlyingSpeed(@floatCast(scroll));
                 }
             }
 
-            // Run game ticks at fixed rate (20 ticks/second like Minecraft)
+            // Run game ticks at fixed rate (20 ticks/second)
             while (tick_accumulator >= MS_PER_TICK) {
                 tick_accumulator -= MS_PER_TICK;
 

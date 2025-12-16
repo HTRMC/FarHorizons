@@ -26,7 +26,7 @@ pub const Mat4 = math.Mat4;
 // Camera
 pub const Camera = @import("Camera.zig").Camera;
 
-// Entity hierarchy (like Minecraft's)
+// Entity hierarchy
 pub const Entity = @import("Entity.zig").Entity;
 pub const LivingEntity = @import("LivingEntity.zig").LivingEntity;
 pub const Player = @import("Player.zig").Player;

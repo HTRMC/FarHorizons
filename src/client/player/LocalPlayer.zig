@@ -1,5 +1,4 @@
-// LocalPlayer - like Minecraft's LocalPlayer.java
-// Client-side player with input handling and aiStep
+// LocalPlayer - client-side player with input handling and aiStep
 
 const std = @import("std");
 const shared = @import("Shared");
@@ -87,7 +86,6 @@ pub const LocalPlayer = struct {
     }
 
     /// Main tick method - called each frame
-    /// Like Minecraft's LocalPlayer.aiStep() (LocalPlayer.java:700+)
     pub fn aiStep(self: *Self) void {
         // Update sprint state from input
         self.player.setSprinting(self.input.key_presses.sprint);
@@ -119,7 +117,7 @@ pub const LocalPlayer = struct {
         const move_vec = self.input.getMoveVector();
 
         // Create input Vec3 (x = strafe, y = 0, z = forward)
-        // Note: In Minecraft, x is strafe (left/right), z is forward/backward
+        // x is strafe (left/right), z is forward/backward
         const input = Vec3{
             .x = move_vec.x, // left/right
             .y = 0,

@@ -1,4 +1,4 @@
-// Camera - like Minecraft's Camera class
+// Camera class
 
 const std = @import("std");
 const math = @import("Math.zig");
@@ -11,7 +11,7 @@ pub const Camera = struct {
     // Position in world space
     position: Vec3 = Vec3.ZERO,
 
-    // Rotation in degrees (like Minecraft)
+    // Rotation in degrees
     // yaw: horizontal rotation (0 = +Z, 90 = -X, 180 = -Z, 270 = +X)
     // pitch: vertical rotation (-90 = down, 0 = forward, 90 = up)
     yaw: f32 = 0,
@@ -28,7 +28,7 @@ pub const Camera = struct {
     far: f32 = 1000.0,
 
     // Eye height for first person
-    eye_height: f32 = 1.62, // Minecraft player eye height
+    eye_height: f32 = 1.62, // Player eye height
 
     pub fn init() Self {
         var cam = Self{};

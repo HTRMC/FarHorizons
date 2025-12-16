@@ -15,7 +15,7 @@ float calculateAttenuation(float distance, float constant, float linear, float q
     return 1.0 / (constant + linear * distance + quadratic * distance * distance);
 }
 
-// Minecraft-style face shading (different brightness per face direction)
+// Face shading (different brightness per face direction)
 float getFaceShading(vec3 normal) {
     // Top faces are brightest, bottom darkest, sides in between
     if (normal.y > 0.5) return 1.0;      // Top

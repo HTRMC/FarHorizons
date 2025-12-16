@@ -3,7 +3,6 @@ const std = @import("std");
 const log = std.log.scoped(.shader_preprocessor);
 
 /// Shader preprocessor that handles #fh_import directives
-/// Similar to Minecraft's shader import system
 pub const ShaderPreprocessor = struct {
     allocator: std.mem.Allocator,
     /// Map of namespace -> base path (e.g., "farhorizons" -> "shaders/include/")

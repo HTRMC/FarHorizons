@@ -1,5 +1,4 @@
 /// Block - Base block behavior interface
-/// Equivalent to Minecraft's net.minecraft.world.level.block.Block
 ///
 /// Blocks define the behavior and properties of a block type.
 /// Each block can return different VoxelShapes based on block state.

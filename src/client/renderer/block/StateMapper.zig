@@ -1,5 +1,5 @@
 /// StateMapper - Converts BlockState to variant key strings
-/// Maps the packed BlockState properties to Minecraft-style variant keys
+/// Maps the packed BlockState properties to variant keys
 /// like "type=bottom", "axis=y", "facing=north,half=bottom,shape=straight", etc.
 const std = @import("std");
 const shared = @import("Shared");

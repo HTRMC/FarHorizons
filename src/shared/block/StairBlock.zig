@@ -1,5 +1,4 @@
 /// StairBlock - Stair block behavior
-/// Equivalent to Minecraft's net.minecraft.world.level.block.StairBlock
 const std = @import("std");
 const block_mod = @import("Block.zig");
 const BlockState = block_mod.BlockState;
@@ -17,14 +16,12 @@ pub const STAIR_BLOCK_VTABLE = BlockVTable{
 };
 
 /// Get the shape based on stair state
-/// Matches Minecraft's StairBlock.getShape() exactly
 /// Shape selection uses direction lookup with clockwise/counterclockwise rotation
 fn stairGetShape(state: BlockState) *const VoxelShape {
     const shape = state.getStairShape();
     const half = state.getStairHalf();
     const facing = state.getStairFacing();
 
-    // Minecraft's logic from StairBlock.java lines 78-89:
     // - STRAIGHT, OUTER_LEFT, INNER_RIGHT -> use facing directly
     // - INNER_LEFT -> use facing.getCounterClockWise()
     // - OUTER_RIGHT -> use facing.getClockWise()

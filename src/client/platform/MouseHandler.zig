@@ -1,4 +1,4 @@
-// Mouse handler - mirrors Minecraft's MouseHandler
+// Mouse handler
 
 const std = @import("std");
 const glfw = @import("GLFW");
@@ -86,7 +86,7 @@ pub const MouseHandler = struct {
         switch (button) {
             InputConstants.MOUSE_BUTTON_LEFT => {
                 self.is_left_pressed = pressed;
-                // Grab mouse on left click when not grabbed (like Minecraft)
+                // Grab mouse on left click when not grabbed
                 if (pressed and !self.mouse_grabbed) {
                     self.grabMouse();
                 }
@@ -99,7 +99,7 @@ pub const MouseHandler = struct {
 
     fn scrollCallback(window: ?*c.GLFWwindow, _: f64, yoffset: f64) callconv(.c) void {
         const self = getHandler(window) orelse return;
-        // Accumulate scroll for speed adjustment (like Minecraft's MouseHandler.onScroll)
+        // Accumulate scroll for speed adjustment
         self.accumulated_scroll += yoffset;
     }
 
@@ -197,7 +197,7 @@ pub const MouseHandler = struct {
     }
 
     /// Calculate camera rotation from accumulated movement
-    /// Uses Minecraft's exact sensitivity formula:
+    /// Sensitivity formula:
     /// 1. ss = sensitivity * 0.6 + 0.2 (transforms 0-1 slider to 0.2-0.8 range)
     /// 2. sensitivityMod = ss³ (non-linear curve for fine control at low sens)
     /// 3. sens = sensitivityMod * 8.0 (final multiplier)
@@ -205,7 +205,7 @@ pub const MouseHandler = struct {
     pub fn getCameraRotation(self: *Self) struct { yaw: f64, pitch: f64 } {
         const movement = self.getAccumulatedMovement();
 
-        // Apply Minecraft's sensitivity formula
+        // Apply sensitivity formula
         const ss = self.sensitivity * 0.6 + 0.2;
         const sensitivity_mod = ss * ss * ss;
         const sens = sensitivity_mod * 8.0;
@@ -245,7 +245,6 @@ pub const MouseHandler = struct {
     }
 
     /// Get accumulated scroll and reset accumulator
-    /// Like Minecraft's scroll handling in MouseHandler.onScroll
     pub fn getAccumulatedScroll(self: *Self) f64 {
         const scroll = self.accumulated_scroll;
         self.accumulated_scroll = 0;

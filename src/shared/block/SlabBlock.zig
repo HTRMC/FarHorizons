@@ -1,5 +1,4 @@
 /// SlabBlock - Slab block behavior
-/// Equivalent to Minecraft's net.minecraft.world.level.block.SlabBlock
 ///
 /// Slabs have three states:
 /// - Bottom: occupies y=0 to y=0.5

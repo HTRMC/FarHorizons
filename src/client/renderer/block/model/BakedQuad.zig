@@ -2,7 +2,6 @@ const std = @import("std");
 const Direction = @import("BlockElement.zig").Direction;
 
 /// A baked quad ready for rendering
-/// Matches net/minecraft/client/renderer/block/model/BakedQuad.java
 pub const BakedQuad = struct {
     pub const VERTEX_COUNT = 4;
 

@@ -1,5 +1,4 @@
 /// SliceShape - A thin 3D slice of a VoxelShape
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.SliceShape
 ///
 /// SliceShape creates a 1-unit thick slice perpendicular to an axis.
 /// It's used for face occlusion testing - comparing the face of one block

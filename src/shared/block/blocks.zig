@@ -1,5 +1,4 @@
 /// Blocks - Block registry and definitions
-/// Equivalent to Minecraft's net.minecraft.world.level.block.Blocks
 ///
 /// This module contains all block definitions and provides
 /// lookup by ID.

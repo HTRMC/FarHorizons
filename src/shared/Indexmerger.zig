@@ -1,5 +1,4 @@
 /// IndexMerger - Coordinate list merging for boolean shape operations
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.IndexMerger
 ///
 /// When performing boolean operations between two VoxelShapes, we need to
 /// merge their coordinate lists. For example, if shape A has X coordinates
@@ -310,7 +309,7 @@ pub fn createMerger(
         return .{ .discrete_cube = try DiscreteCubeMerger.init(allocator, first_size, second_size) };
     }
 
-    // Fall back to discrete cube anyway (would be IndirectMerger in Minecraft)
+    // Fall back to discrete cube anyway (would be IndirectMerger)
     return .{ .discrete_cube = try DiscreteCubeMerger.init(allocator, first_size, second_size) };
 }
 

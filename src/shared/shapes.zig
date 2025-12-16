@@ -1,5 +1,4 @@
 /// Shapes - Factory methods and common shape definitions
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.Shapes
 ///
 /// This module provides:
 /// - Pre-defined common shapes (EMPTY, BLOCK, slabs, etc.)
@@ -126,7 +125,6 @@ pub const Shapes = struct {
     pub const LILY_PAD = voxel_shape.fromBlockBounds(.{ 0, 0, 0 }, .{ 16, 1.5, 16 });
 
     // === Stair shapes ===
-    // Exact Minecraft implementation from StairBlock.java
     //
     // Base shapes:
     // - SHAPE_OUTER = column(16, 0, 8) OR box(0, 8, 0, 8, 16, 8)
@@ -199,7 +197,7 @@ pub const Shapes = struct {
     pub const SHAPE_TOP_STRAIGHT = rotateHorizontalMap(SHAPE_STRAIGHT, OctahedralGroup.INVERT_Y);
     pub const SHAPE_TOP_INNER = rotateHorizontalMap(SHAPE_INNER, OctahedralGroup.INVERT_Y);
 
-    /// Get stair shape by state (exact Minecraft getShape implementation)
+    /// Get stair shape by state
     /// shape_type: straight, inner_left, inner_right, outer_left, outer_right
     /// half: bottom, top
     /// facing: north, south, east, west (as Direction enum)

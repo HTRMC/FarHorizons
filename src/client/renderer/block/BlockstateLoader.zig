@@ -1,5 +1,5 @@
 /// BlockstateLoader - Loads and caches blockstate definitions from JSON files
-/// Matches Minecraft's blockstate loading from assets/namespace/blockstates/*.json
+/// Loads blockstates from assets/namespace/blockstates/*.json
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const shared = @import("Shared");

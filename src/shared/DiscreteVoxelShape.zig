@@ -1,5 +1,4 @@
 /// DiscreteVoxelShape - Base for discrete voxel representations
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.DiscreteVoxelShape
 ///
 /// A discrete voxel shape represents a 3D boolean grid where each cell
 /// is either filled or empty. The shape has dimensions (xSize, ySize, zSize)

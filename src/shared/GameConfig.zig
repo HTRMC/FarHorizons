@@ -1,7 +1,6 @@
     const std = @import("std");
 
 /// Game configuration - passed from Main to the client/server
-/// Similar to Minecraft's GameConfig class
 pub const GameConfig = struct {
     user: UserData,
     display: DisplayData,

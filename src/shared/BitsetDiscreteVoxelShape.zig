@@ -1,5 +1,4 @@
 /// BitSetDiscreteVoxelShape - Bitset-backed discrete voxel shape
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.BitSetDiscreteVoxelShape
 ///
 /// Uses a linear bitset to store which voxels are filled.
 /// Index calculation: index = x * ySize * zSize + y * zSize + z
@@ -255,7 +254,6 @@ pub const BitSetDiscreteVoxelShape = struct {
 
     /// Rotate the shape using an OctahedralGroup transformation
     /// Returns a new rotated shape
-    /// Equivalent to Minecraft's DiscreteVoxelShape.rotate()
     pub fn rotate(self: *const Self, rotation: OctahedralGroup) Self {
         if (rotation.isIdentity()) {
             return self.*;

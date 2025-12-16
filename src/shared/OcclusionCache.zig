@@ -1,5 +1,4 @@
 /// OcclusionCache - LRU cache for face occlusion results
-/// Equivalent to Minecraft's Block.OCCLUSION_CACHE
 ///
 /// Caches the results of face occlusion tests to avoid repeated
 /// expensive shape comparisons. Uses a simple hash-indexed array
@@ -11,7 +10,6 @@ const Direction = voxel_shape.Direction;
 const shapes = @import("Shapes.zig");
 
 /// Cache size (number of entries)
-/// Minecraft uses 256 entries per thread
 pub const CACHE_SIZE: usize = 256;
 
 /// Cache key combining block shape pair and direction

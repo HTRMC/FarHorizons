@@ -1,4 +1,4 @@
-// Entity - like Minecraft's Entity.java
+// Entity class
 
 const std = @import("std");
 const math = @import("Math.zig");

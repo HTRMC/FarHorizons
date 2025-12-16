@@ -2,8 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const BlockElement = @import("BlockElement.zig").BlockElement;
 
-/// Represents a Minecraft block model JSON file
-/// Matches net/minecraft/client/renderer/block/model/BlockModel.java
+/// Represents a block model JSON file
 pub const BlockModel = struct {
     const Self = @This();
 

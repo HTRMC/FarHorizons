@@ -161,7 +161,6 @@ fn getFaceTransformMatrix(model_transform: Mat3, original_face: Direction) Mat3 
 }
 
 /// Bakes block model faces into BakedQuads
-/// Matches net/minecraft/client/renderer/block/model/FaceBakery.java
 pub const FaceBakery = struct {
 
     /// Bake a face into a BakedQuad
@@ -208,7 +207,7 @@ pub const FaceBakery = struct {
 
             positions[i] = vertex;
 
-            // Get UV for this vertex (Minecraft divides by 16 to normalize)
+            // Get UV for this vertex (divided by 16 to normalize)
             const raw_u = getU(uvs, face.rotation, @intCast(i));
             const raw_v = getV(uvs, face.rotation, @intCast(i));
             // Normalize UVs from 0-16 to 0-1 range
@@ -356,7 +355,7 @@ pub const FaceBakery = struct {
         if (x == 0 and y == 0) return;
 
         // Rotate all 4 vertex positions around block center (0.5, 0.5, 0.5)
-        // Apply Y rotation first, then X (Minecraft order)
+        // Apply Y rotation first, then X
         rotatePosition(&quad.position0, x, y);
         rotatePosition(&quad.position1, x, y);
         rotatePosition(&quad.position2, x, y);
@@ -373,7 +372,7 @@ pub const FaceBakery = struct {
 
     /// Rotate a position around block center (0.5, 0.5, 0.5)
     /// Uses clockwise rotation convention (looking down +Y for Y rotation)
-    /// to match Minecraft's blockstate rotation and OctahedralGroup
+    /// to match blockstate rotation and OctahedralGroup
     fn rotatePosition(pos: *[3]f32, x_deg: i16, y_deg: i16) void {
         // Center around (0.5, 0.5, 0.5)
         var rx = pos[0] - 0.5;
@@ -391,7 +390,7 @@ pub const FaceBakery = struct {
             rz = new_z;
         }
 
-        // Apply X rotation (around X axis) - matches Minecraft convention
+        // Apply X rotation (around X axis)
         // X90: Up→North, North→Down (front face rotates down)
         if (x_deg != 0) {
             const cos_x = cosFromDegrees(x_deg);
@@ -443,7 +442,6 @@ pub const FaceBakery = struct {
     }
 
     /// Counter-rotate UVs for uvlock (maintain world-aligned textures)
-    /// Implements Minecraft's BlockMath.getFaceTransformation logic exactly
     /// Uses matrix transforms matching Java's inverseFaceTransformation
     fn rotateUVs(quad: *BakedQuad, x_deg: i16, y_deg: i16) void {
         // Get the model rotation matrix

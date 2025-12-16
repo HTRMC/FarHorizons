@@ -1,5 +1,4 @@
 /// SubShape - A view into a DiscreteVoxelShape with bounds
-/// Equivalent to Minecraft's net.minecraft.world.phys.shapes.SubShape
 ///
 /// SubShape provides a windowed view into a parent shape without copying data.
 /// It's used by SliceShape to create thin 3D slices for face occlusion.

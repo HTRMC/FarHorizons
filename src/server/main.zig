@@ -21,8 +21,7 @@ pub const Main = struct {
 
         logger.info("Starting FarHorizons Server", .{});
 
-        // TODO: Parse arguments here
-        // Minecraft uses OptionParser for --port, --world, --nogui, etc.
+        // TODO: Parse arguments here (--port, --world, --nogui, etc.)
 
         var server = FarHorizonsServer.init();
         try server.run();

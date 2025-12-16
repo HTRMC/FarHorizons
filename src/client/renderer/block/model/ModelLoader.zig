@@ -5,8 +5,7 @@ const BlockModel = @import("BlockModel.zig").BlockModel;
 const BlockElement = @import("BlockElement.zig").BlockElement;
 const Logger = shared.Logger;
 
-/// Loads and resolves Minecraft block models with parent inheritance
-/// Matches the functionality of net/minecraft/client/resources/model/ModelBakery.java
+/// Loads and resolves block models with parent inheritance
 pub const ModelLoader = struct {
     const Self = @This();
     const logger = Logger.init("ModelLoader");

@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Direction enum matching Minecraft's Direction
+/// Direction enum
 pub const Direction = enum {
     down,
     up,
@@ -24,7 +24,6 @@ pub const Direction = enum {
 };
 
 /// Face UV coordinates and texture reference
-/// Matches net/minecraft/client/renderer/block/model/BlockElementFace.java
 pub const BlockElementFace = struct {
     uv: ?[4]f32 = null, // [u1, v1, u2, v2] - optional, auto-calculated if missing
     texture: []const u8, // texture reference like "#side" or "farhorizons:block/oak_planks"
@@ -34,7 +33,6 @@ pub const BlockElementFace = struct {
 };
 
 /// Element rotation
-/// Matches net/minecraft/client/renderer/block/model/BlockElementRotation.java
 pub const BlockElementRotation = struct {
     origin: [3]f32,
     axis: u8, // 'x', 'y', or 'z'
@@ -43,7 +41,6 @@ pub const BlockElementRotation = struct {
 };
 
 /// A single element (cube) in a block model
-/// Matches net/minecraft/client/renderer/block/model/BlockElement.java
 pub const BlockElement = struct {
     const Self = @This();
 
