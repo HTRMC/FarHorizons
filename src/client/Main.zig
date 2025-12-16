@@ -8,7 +8,7 @@ const DisplayData = shared.DisplayData;
 const GameData = shared.GameData;
 const QuickPlayData = shared.QuickPlayData;
 const CrashReport = shared.CrashReport;
-const FarHorizonsClient = @import("farhorizonsclient.zig").FarHorizonsClient;
+const FarHorizonsClient = @import("FarHorizonsClient.zig").FarHorizonsClient;
 
 pub const Main = struct {
     const Self = @This();
