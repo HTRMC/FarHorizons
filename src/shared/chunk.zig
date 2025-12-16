@@ -338,6 +338,9 @@ pub const Chunk = struct {
         chunk.setBlockEntry(10, 1, 12, BlockEntry.stair(9, .east, .top, .straight));
         chunk.setBlockEntry(11, 1, 12, BlockEntry.stair(9, .west, .top, .straight));
 
+        // Crafting table
+        chunk.setBlockEntry(13, 1, 12, BlockEntry.simple(10)); // crafting_table
+
         return chunk;
     }
 

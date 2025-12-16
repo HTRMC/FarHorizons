@@ -30,6 +30,7 @@ pub const BlockId = enum(u16) {
     spruce_slab = 7,
     birch_slab = 8,
     oak_stairs = 9,
+    crafting_table = 10,
     // Add more as needed
     _,
 };
@@ -98,6 +99,12 @@ pub const OAK_STAIRS = Block{
     .vtable = &stair_block.STAIR_BLOCK_VTABLE,
 };
 
+pub const CRAFTING_TABLE = Block{
+    .id = @intFromEnum(BlockId.crafting_table),
+    .name = "crafting_table",
+    .vtable = &block_mod.FULL_BLOCK_VTABLE,
+};
+
 // ======================
 // Block Registry
 // ======================
@@ -114,6 +121,7 @@ const BLOCK_REGISTRY = [_]*const Block{
     &SPRUCE_SLAB, // 7
     &BIRCH_SLAB, // 8
     &OAK_STAIRS, // 9
+    &CRAFTING_TABLE, // 10
 };
 
 /// Get block by ID

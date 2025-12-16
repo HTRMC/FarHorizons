@@ -1,0 +1,12 @@
+{
+  "parent": "farhorizons:block/cube",
+  "textures": {
+    "particle": "farhorizons:block/crafting_table_front",
+    "north": "farhorizons:block/crafting_table_front",
+    "south": "farhorizons:block/crafting_table_front",
+    "east": "farhorizons:block/crafting_table_side",
+    "west": "farhorizons:block/crafting_table_side",
+    "up": "farhorizons:block/crafting_table_top",
+    "down": "farhorizons:block/crafting_table_bottom"
+  }
+}

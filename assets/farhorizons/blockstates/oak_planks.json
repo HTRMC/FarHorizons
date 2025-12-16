@@ -1,5 +1,5 @@
 {
-    "variants": {
-        "": { "model": "farhorizons:block/oak_planks" }
-    }
+  "variants": {
+    "": { "model": "farhorizons:block/oak_planks" }
+  }
 }
