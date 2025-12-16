@@ -7,6 +7,8 @@
 
 A voxel-based game/game-engine written in Zig with a Vulkan renderer. Inspired by [Minecraft](https://www.minecraft.net), FarHorizons features a client/server design with block-based world rendering, async chunk loading, and a modern graphics pipeline.
 
+<img width="2560" height="1369" alt="Screenshot 2025-12-16 174834" src="https://github.com/user-attachments/assets/b0b08e6e-e975-41e0-bd52-e24cb37af5f5" />
+
 ## Current Features
 
 - Vulkan rendering pipeline with dynamic shader compilation
