@@ -146,7 +146,7 @@ pub fn build(b: *std.Build) void {
     const exe = b.addExecutable(.{
         .name = "FarHorizons",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/client/main.zig"),
+            .root_source_file = b.path("src/client/Main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -168,7 +168,7 @@ pub fn build(b: *std.Build) void {
     const server_exe = b.addExecutable(.{
         .name = "FarHorizons-Server",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/server/main.zig"),
+            .root_source_file = b.path("src/server/Main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -197,7 +197,7 @@ pub fn build(b: *std.Build) void {
     // Tests
     const exe_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/client/main.zig"),
+            .root_source_file = b.path("src/client/Main.zig"),
             .target = target,
             .optimize = optimize,
         }),
