@@ -37,7 +37,13 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
 
     // shaderc requires C++ standard library
-    exe.linkLibCpp();
+    // Linux: use libstdc++ (GNU) since prebuilt shaderc was compiled with GCC
+    // Windows: use libc++ (LLVM) which works with the prebuilt libs
+    if (t.os.tag == .linux) {
+        exe.linkSystemLibrary("stdc++");
+    } else {
+        exe.linkLibCpp();
+    }
 
     // Link system libraries (GLFW loads X11 dynamically on Linux)
     if (t.os.tag == .windows) {
