@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
 
     // Shared module used by both client and server
     const shared_module = b.createModule(.{
-        .root_source_file = b.path("src/shared/Shared.zig"),
+        .root_source_file = b.path("src/shared/shared.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -168,7 +168,7 @@ pub fn build(b: *std.Build) void {
     const server_exe = b.addExecutable(.{
         .name = "FarHorizons-Server",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/server/Main.zig"),
+            .root_source_file = b.path("src/server/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
@@ -197,7 +197,7 @@ pub fn build(b: *std.Build) void {
     // Tests
     const exe_tests = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/client/Main.zig"),
+            .root_source_file = b.path("src/client/main.zig"),
             .target = target,
             .optimize = optimize,
         }),
