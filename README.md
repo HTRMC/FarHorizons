@@ -1,7 +1,7 @@
 # FarHorizons
 
 [![Zig](https://img.shields.io/badge/Zig-F7A41D?style=flat-square&logo=zig&logoColor=white)](#)
-[![Vulkan](https://custom-icon-badges.demolab.com/badge/Vulkan-AC162C?style=flat-square&logo=https%3A%2F%2Fgithub-production-user-asset-6210df.s3.amazonaws.com%2F143692436%2F527180130-c8d4b965-1359-4c63-9cb2-b7cdf75c0474.svg&logoColor=white)](#)
+[![Vulkan](https://github.com/user-attachments/assets/bccb4d19-d6a0-4f9c-82eb-d0434ae82c6e.svg)&logoColor=white)](#)
 [![Windows](https://custom-icon-badges.demolab.com/badge/Windows-0078D6?style=flat-square&logo=windows11&logoColor=white)](#)
 [![Linux](https://img.shields.io/badge/Linux-1F1F1F?style=flat-square&logo=linux&logoColor=white)](#)
 
