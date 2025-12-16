@@ -133,7 +133,7 @@ pub fn build(b: *std.Build) void {
 
     // Create World module (chunk management)
     const world_module = b.createModule(.{
-        .root_source_file = b.path("src/client/world/world.zig"),
+        .root_source_file = b.path("src/client/world/World.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
