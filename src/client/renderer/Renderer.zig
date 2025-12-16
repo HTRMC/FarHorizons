@@ -6,7 +6,7 @@ pub const TextureManager = @import("TextureManager.zig").TextureManager;
 pub const block = @import("block/Model.zig");
 
 // Buffer management
-pub const buffer = @import("buffer/buffer.zig");
+pub const buffer = @import("buffer/Buffer.zig");
 
 // Shader system
 pub const ShaderPreprocessor = @import("GlslPreprocessor.zig").ShaderPreprocessor;
