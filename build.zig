@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
 
     // Shared module used by both client and server
     const shared_module = b.createModule(.{
-        .root_source_file = b.path("src/shared/shared.zig"),
+        .root_source_file = b.path("src/shared/Shared.zig"),
         .target = target,
         .optimize = optimize,
     });
