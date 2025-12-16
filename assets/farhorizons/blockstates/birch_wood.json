@@ -1,0 +1,16 @@
+{
+  "variants": {
+    "axis=x": {
+      "model": "farhorizons:block/birch_wood",
+      "x": 90,
+      "y": 90
+    },
+    "axis=y": {
+      "model": "farhorizons:block/birch_wood"
+    },
+    "axis=z": {
+      "model": "farhorizons:block/birch_wood",
+      "x": 90
+    }
+  }
+}

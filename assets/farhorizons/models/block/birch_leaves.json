@@ -1,0 +1,6 @@
+{
+  "parent": "farhorizons:block/leaves",
+  "textures": {
+    "all": "farhorizons:block/birch_leaves"
+  }
+}

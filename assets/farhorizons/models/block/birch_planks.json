@@ -1,0 +1,6 @@
+{
+  "parent": "farhorizons:block/cube_all",
+  "textures": {
+    "all": "farhorizons:block/birch_planks"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "parent": "farhorizons:block/cube_column",
+  "textures": {
+    "end": "farhorizons:block/stripped_birch_log",
+    "side": "farhorizons:block/stripped_birch_log"
+  }
+}

@@ -207,6 +207,17 @@ fn airBlockIsSolid(_: BlockState) bool {
     return false;
 }
 
+/// Leaves block (full shape, not opaque, solid)
+pub const LEAVES_BLOCK_VTABLE = BlockVTable{
+    .getShape = fullBlockGetShape,
+    .isOpaque = leavesBlockIsOpaque,
+    .isSolid = fullBlockIsSolid,
+};
+
+fn leavesBlockIsOpaque(_: BlockState) bool {
+    return false;
+}
+
 // ======================
 // Tests
 // ======================

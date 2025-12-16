@@ -31,6 +31,12 @@ pub const BlockId = enum(u16) {
     birch_slab = 8,
     oak_stairs = 9,
     crafting_table = 10,
+    birch_leaves = 11,
+    birch_wood = 12,
+    birch_log = 13,
+    birch_planks = 14,
+    stripped_birch_log = 15,
+    stripped_birch_wood = 16,
     // Add more as needed
     _,
 };
@@ -105,6 +111,42 @@ pub const CRAFTING_TABLE = Block{
     .vtable = &block_mod.FULL_BLOCK_VTABLE,
 };
 
+pub const BIRCH_LEAVES = Block{
+    .id = @intFromEnum(BlockId.birch_leaves),
+    .name = "birch_leaves",
+    .vtable = &block_mod.LEAVES_BLOCK_VTABLE,
+};
+
+pub const BIRCH_WOOD = Block{
+    .id = @intFromEnum(BlockId.birch_wood),
+    .name = "birch_wood",
+    .vtable = &block_mod.FULL_BLOCK_VTABLE,
+};
+
+pub const BIRCH_LOG = Block{
+    .id = @intFromEnum(BlockId.birch_log),
+    .name = "birch_log",
+    .vtable = &block_mod.FULL_BLOCK_VTABLE,
+};
+
+pub const BIRCH_PLANKS = Block{
+    .id = @intFromEnum(BlockId.birch_planks),
+    .name = "birch_planks",
+    .vtable = &block_mod.FULL_BLOCK_VTABLE,
+};
+
+pub const STRIPPED_BIRCH_LOG = Block{
+    .id = @intFromEnum(BlockId.stripped_birch_log),
+    .name = "stripped_birch_log",
+    .vtable = &block_mod.FULL_BLOCK_VTABLE,
+};
+
+pub const STRIPPED_BIRCH_WOOD = Block{
+    .id = @intFromEnum(BlockId.stripped_birch_wood),
+    .name = "stripped_birch_wood",
+    .vtable = &block_mod.FULL_BLOCK_VTABLE,
+};
+
 // ======================
 // Block Registry
 // ======================
@@ -122,6 +164,12 @@ const BLOCK_REGISTRY = [_]*const Block{
     &BIRCH_SLAB, // 8
     &OAK_STAIRS, // 9
     &CRAFTING_TABLE, // 10
+    &BIRCH_LEAVES, // 11
+    &BIRCH_WOOD, // 12
+    &BIRCH_LOG, // 13
+    &BIRCH_PLANKS, // 14
+    &STRIPPED_BIRCH_LOG, // 15
+    &STRIPPED_BIRCH_WOOD, // 16
 };
 
 /// Get block by ID

@@ -341,6 +341,14 @@ pub const Chunk = struct {
         // Crafting table
         chunk.setBlockEntry(13, 1, 12, BlockEntry.simple(10)); // crafting_table
 
+        // Birch blocks
+        chunk.setBlockEntry(0, 1, 14, BlockEntry.simple(11)); // birch_leaves
+        chunk.setBlockEntry(1, 1, 14, BlockEntry.simple(12)); // birch_wood
+        chunk.setBlockEntry(2, 1, 14, BlockEntry.simple(13)); // birch_log
+        chunk.setBlockEntry(3, 1, 14, BlockEntry.simple(14)); // birch_planks
+        chunk.setBlockEntry(4, 1, 14, BlockEntry.simple(15)); // stripped_birch_log
+        chunk.setBlockEntry(5, 1, 14, BlockEntry.simple(16)); // stripped_birch_wood
+
         return chunk;
     }
 

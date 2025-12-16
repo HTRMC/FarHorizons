@@ -146,7 +146,7 @@ pub const Shapes = struct {
     }
 
     /// SHAPE_OUTER: bottom slab + NW corner step
-    /// Minecraft: Shapes.or(Block.column(16.0, 0.0, 8.0), Block.box(0.0, 8.0, 0.0, 8.0, 16.0, 8.0))
+    /// farhorizons: Shapes.or(Block.column(16.0, 0.0, 8.0), Block.box(0.0, 8.0, 0.0, 8.0, 16.0, 8.0))
     const SHAPE_OUTER: VoxelShape = blk: {
         const bottom_slab = column(16.0, 0.0, 8.0);
         const nw_corner = voxel_shape.fromBlockBounds(.{ 0, 8, 0 }, .{ 8, 16, 8 });
@@ -212,7 +212,7 @@ pub const Shapes = struct {
         };
 
         // Determine lookup direction based on shape type
-        // Minecraft: STRAIGHT, OUTER_LEFT, INNER_RIGHT -> facing
+        // farhorizons: STRAIGHT, OUTER_LEFT, INNER_RIGHT -> facing
         //           INNER_LEFT -> facing.getCounterClockWise()
         //           OUTER_RIGHT -> facing.getClockWise()
         const lookup_dir: Direction = switch (shape_type) {
