@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Logger = @import("logger.zig").Logger;
+const Logger = @import("Logger.zig").Logger;
 
 // Windows FILETIME to Unix timestamp conversion
 const EPOCH_DIFF: u64 = 116444736000000000; // 100-ns intervals between 1601 and 1970
