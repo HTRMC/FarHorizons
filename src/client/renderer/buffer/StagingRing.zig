@@ -151,20 +151,22 @@ pub const StagingRing = struct {
         const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
         const vkFreeMemory = vk.vkFreeMemory orelse return;
         const vkUnmapMemory = vk.vkUnmapMemory orelse return;
-        const vkDestroyFence = vk.vkDestroyFence orelse return;
+        const vkWaitForFences = vk.vkWaitForFences orelse return;
 
-        // Unmap memory
-        vkUnmapMemory(self.device, self.buffer_memory);
-
-        // Destroy fences
+        // Wait for any in-flight fences before destroying resources
+        // Note: We don't destroy fences here - they're owned by the renderer
         for (&self.frame_allocations) |*frame_alloc| {
             if (frame_alloc.*) |alloc| {
                 if (alloc.fence != null) {
-                    vkDestroyFence(self.device, alloc.fence, null);
+                    const fences = [_]vk.VkFence{alloc.fence};
+                    _ = vkWaitForFences(self.device, 1, &fences, vk.VK_TRUE, std.math.maxInt(u64));
                 }
                 frame_alloc.* = null;
             }
         }
+
+        // Unmap memory
+        vkUnmapMemory(self.device, self.buffer_memory);
 
         // Destroy buffer and free memory
         if (self.buffer != null) {
