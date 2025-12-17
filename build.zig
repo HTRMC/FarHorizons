@@ -37,16 +37,7 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
 
     // shaderc requires C++ standard library
-    // On Linux, the prebuilt shaderc was built with GCC/libstdc++
-    if (t.os.tag == .linux) {
-        // Add common libstdc++ paths on Linux
-        exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
-        exe.addLibraryPath(.{ .cwd_relative = "/usr/lib64" });
-        exe.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
-        exe.linkSystemLibrary("stdc++");
-    } else {
-        exe.linkLibCpp();
-    }
+    exe.linkLibCpp();
 
     // Link system libraries
     if (t.os.tag == .windows) {

@@ -6,26 +6,26 @@
     .dependencies = .{
         // Headers (shared across all platforms)
         .farhorizons_deps_headers = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.7/farhorizons_deps_headers.tar.gz",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.8/farhorizons_deps_headers.tar.gz",
             .hash = "N-V-__8AAOC9OQEVrYLzIChjRo22_IVQsa5QcELWoK-RqT_L",
             .lazy = true,
         },
         // Windows x86_64
         .@"farhorizons_deps_x86_64-windows-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.7/farhorizons_deps_x86_64-windows-gnu.tar.gz",
-            .hash = "N-V-__8AAOxFZQF6_wa5neg4pf73J3kurVgDeu87fFL7X1zo",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.8/farhorizons_deps_x86_64-windows-gnu.tar.gz",
+            .hash = "N-V-__8AAOhFZQGwW7OtcCBNaICL5CKtWpZRXP88CAVfBd1n",
             .lazy = true,
         },
         // Linux x86_64
         .@"farhorizons_deps_x86_64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.7/farhorizons_deps_x86_64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AABKmgQGJqPbtm2UnUvg8JA5bVrZw2WIKmB6gPrGJ",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.8/farhorizons_deps_x86_64-linux-gnu.tar.gz",
+            .hash = "N-V-__8AAHL_ogEj0WgOcc7VerR01OBC8ISnIJxllMLqPmWw",
             .lazy = true,
         },
         // Linux aarch64
         .@"farhorizons_deps_aarch64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.7/farhorizons_deps_aarch64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AAAprhQEcqZbrU0pDsU9n_9nn8OvRy94Pgl6gG6Zm",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.8/farhorizons_deps_aarch64-linux-gnu.tar.gz",
+            .hash = "N-V-__8AAGrEpgH2XGg6WW71zu4Xc6Xxe2yjlq4q3HQqLF8L",
             .lazy = true,
         },
     },
