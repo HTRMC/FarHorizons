@@ -36,8 +36,13 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.addObjectFile(lib_dep.path(libName(b, "stb_image")));
     exe.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
 
-    // shaderc requires C++ standard library (built with clang/libc++ for all platforms)
-    exe.linkLibCpp();
+    // shaderc requires C++ standard library
+    // On Linux with GNU ABI, use libstdc++; otherwise use libc++
+    if (t.os.tag == .linux and t.abi == .gnu) {
+        exe.linkSystemLibrary("stdc++");
+    } else {
+        exe.linkLibCpp();
+    }
 
     // Link system libraries
     if (t.os.tag == .windows) {
