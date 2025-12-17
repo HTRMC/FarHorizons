@@ -43,6 +43,11 @@ pub const BlockEntry = packed struct {
         return .{ .id = id, .state = BlockState.stair(facing, half, shape) };
     }
 
+    /// Create an axis-rotated block entry (for logs, wood, pillars)
+    pub fn withAxis(id: u8, axis: BlockState.Axis) BlockEntry {
+        return .{ .id = id, .state = .{ .axis = axis } };
+    }
+
     /// Get the block definition
     pub fn getBlock(self: BlockEntry) *const blocks.block_mod.Block {
         return blocks.getBlock(self.id);
@@ -340,13 +345,25 @@ pub const Chunk = struct {
         // Crafting table
         chunk.setBlockEntry(13, 1, 12, BlockEntry.simple(10)); // crafting_table
 
-        // Birch blocks
+        // Birch blocks (axis=y, vertical)
         chunk.setBlockEntry(0, 1, 14, BlockEntry.simple(11)); // birch_leaves
-        chunk.setBlockEntry(1, 1, 14, BlockEntry.simple(12)); // birch_wood
-        chunk.setBlockEntry(2, 1, 14, BlockEntry.simple(13)); // birch_log
+        chunk.setBlockEntry(1, 1, 14, BlockEntry.simple(12)); // birch_wood axis=y
+        chunk.setBlockEntry(2, 1, 14, BlockEntry.simple(13)); // birch_log axis=y
         chunk.setBlockEntry(3, 1, 14, BlockEntry.simple(14)); // birch_planks
-        chunk.setBlockEntry(4, 1, 14, BlockEntry.simple(15)); // stripped_birch_log
-        chunk.setBlockEntry(5, 1, 14, BlockEntry.simple(16)); // stripped_birch_wood
+        chunk.setBlockEntry(4, 1, 14, BlockEntry.simple(15)); // stripped_birch_log axis=y
+        chunk.setBlockEntry(5, 1, 14, BlockEntry.simple(16)); // stripped_birch_wood axis=y
+
+        // Horizontal logs (axis=x, east-west)
+        chunk.setBlockEntry(7, 1, 14, BlockEntry.withAxis(13, .x)); // birch_log axis=x
+        chunk.setBlockEntry(8, 1, 14, BlockEntry.withAxis(15, .x)); // stripped_birch_log axis=x
+        chunk.setBlockEntry(9, 1, 14, BlockEntry.withAxis(12, .x)); // birch_wood axis=x
+        chunk.setBlockEntry(10, 1, 14, BlockEntry.withAxis(16, .x)); // stripped_birch_wood axis=x
+
+        // Horizontal logs (axis=z, north-south)
+        chunk.setBlockEntry(12, 1, 14, BlockEntry.withAxis(13, .z)); // birch_log axis=z
+        chunk.setBlockEntry(13, 1, 14, BlockEntry.withAxis(15, .z)); // stripped_birch_log axis=z
+        chunk.setBlockEntry(14, 1, 14, BlockEntry.withAxis(12, .z)); // birch_wood axis=z
+        chunk.setBlockEntry(15, 1, 14, BlockEntry.withAxis(16, .z)); // stripped_birch_wood axis=z
 
         return chunk;
     }
