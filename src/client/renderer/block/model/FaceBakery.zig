@@ -372,25 +372,14 @@ pub const FaceBakery = struct {
 
     /// Rotate a position around block center (0.5, 0.5, 0.5)
     /// Uses clockwise rotation convention (looking down +Y for Y rotation)
-    /// to match blockstate rotation and OctahedralGroup
+    /// Minecraft blockstate rotation order: X first, then Y
     fn rotatePosition(pos: *[3]f32, x_deg: i16, y_deg: i16) void {
         // Center around (0.5, 0.5, 0.5)
         var rx = pos[0] - 0.5;
         var ry = pos[1] - 0.5;
         var rz = pos[2] - 0.5;
 
-        // Apply Y rotation first (around Y axis) - CLOCKWISE when viewed from +Y
-        // Y90: East→South, North→East (matches OctahedralGroup.BLOCK_ROT_Y_90)
-        if (y_deg != 0) {
-            const cos_y = cosFromDegrees(y_deg);
-            const sin_y = sinFromDegrees(y_deg);
-            const new_x = rx * cos_y - rz * sin_y;
-            const new_z = rx * sin_y + rz * cos_y;
-            rx = new_x;
-            rz = new_z;
-        }
-
-        // Apply X rotation (around X axis)
+        // Apply X rotation first (around X axis)
         // X90: Up→North, North→Down (front face rotates down)
         if (x_deg != 0) {
             const cos_x = cosFromDegrees(x_deg);
@@ -401,6 +390,17 @@ pub const FaceBakery = struct {
             rz = new_z;
         }
 
+        // Apply Y rotation second (around Y axis) - CLOCKWISE when viewed from +Y
+        // Y90: North→East→South→West
+        if (y_deg != 0) {
+            const cos_y = cosFromDegrees(y_deg);
+            const sin_y = sinFromDegrees(y_deg);
+            const new_x = rx * cos_y - rz * sin_y;
+            const new_z = rx * sin_y + rz * cos_y;
+            rx = new_x;
+            rz = new_z;
+        }
+
         // Translate back
         pos[0] = rx + 0.5;
         pos[1] = ry + 0.5;
@@ -408,24 +408,11 @@ pub const FaceBakery = struct {
     }
 
     /// Rotate face direction by model rotation (public for culling)
-    /// Must match the position rotation formula exactly (clockwise convention)
+    /// Must match the position rotation formula exactly (X first, then Y)
     pub fn rotateFaceDirection(dir: Direction, x_deg: i16, y_deg: i16) Direction {
         var result = dir;
 
-        // Apply Y rotation first (around Y axis) - CLOCKWISE when viewed from +Y
-        // Y90: North→East→South→West→North (matches OctahedralGroup.BLOCK_ROT_Y_90)
-        const y_steps: u32 = @intCast(@divFloor(@mod(y_deg, 360), 90));
-        for (0..y_steps) |_| {
-            result = switch (result) {
-                .north => .east,
-                .east => .south,
-                .south => .west,
-                .west => .north,
-                .up, .down => result, // unchanged by Y rotation
-            };
-        }
-
-        // Apply X rotation (around X axis)
+        // Apply X rotation first (around X axis)
         // X90: Up→North→Down→South→Up (front face rotates down)
         const x_steps: u32 = @intCast(@divFloor(@mod(x_deg, 360), 90));
         for (0..x_steps) |_| {
@@ -435,6 +422,19 @@ pub const FaceBakery = struct {
                 .down => .south,
                 .south => .up,
                 .west, .east => result, // unchanged by X rotation
+            };
+        }
+
+        // Apply Y rotation second (around Y axis) - CLOCKWISE when viewed from +Y
+        // Y90: North→East→South→West→North
+        const y_steps: u32 = @intCast(@divFloor(@mod(y_deg, 360), 90));
+        for (0..y_steps) |_| {
+            result = switch (result) {
+                .north => .east,
+                .east => .south,
+                .south => .west,
+                .west => .north,
+                .up, .down => result, // unchanged by Y rotation
             };
         }
 
