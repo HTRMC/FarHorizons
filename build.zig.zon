@@ -6,26 +6,26 @@
     .dependencies = .{
         // Headers (shared across all platforms)
         .farhorizons_deps_headers = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.10/farhorizons_deps_headers.tar.gz",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.14/farhorizons_deps_headers.tar.gz",
             .hash = "N-V-__8AAOC9OQEVrYLzIChjRo22_IVQsa5QcELWoK-RqT_L",
             .lazy = true,
         },
         // Windows x86_64
         .@"farhorizons_deps_x86_64-windows-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.10/farhorizons_deps_x86_64-windows-gnu.tar.gz",
-            .hash = "N-V-__8AAOxFZQEnkSc-OT8o0sLrqUMqb8SpOG5pnHZDzn_I",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.14/farhorizons_deps_x86_64-windows-gnu.tar.gz",
+            .hash = "N-V-__8AAMBFZQEopkhPCYkDp6Mb9CwzqTuBpoKXDYw4VL0v",
             .lazy = true,
         },
         // Linux x86_64
         .@"farhorizons_deps_x86_64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.10/farhorizons_deps_x86_64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AAHBRnwHeDSIof_s4mWeN0yzaV05_VMsCxHT0ZAGn",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.14/farhorizons_deps_x86_64-linux-gnu.tar.gz",
+            .hash = "N-V-__8AAHL_ogHfDc86wrdU2bRcvGQpnhrtajWw1rBQiOvk",
             .lazy = true,
         },
         // Linux aarch64
         .@"farhorizons_deps_aarch64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.10/farhorizons_deps_aarch64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AAFA4kwHNg9xNMhdr3fdp-2WRaQW9nU5WM4YYZry-",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.14/farhorizons_deps_aarch64-linux-gnu.tar.gz",
+            .hash = "N-V-__8AANCPkgFI4oOSuCFCxfHt1AQychA4V5fbgJVHhXql",
             .lazy = true,
         },
     },
