@@ -12,6 +12,6 @@ void main() {
     // Sample from texture array using layer index
     vec4 texColor = texture(texSampler, vec3(fragTexCoord, float(fragTexIndex)));
 
-    // Output the texture color
-    outColor = texColor;
+    // Apply vertex color (contains ambient occlusion) to texture
+    outColor = vec4(texColor.rgb * fragColor, texColor.a);
 }

@@ -19,6 +19,8 @@ const Direction = renderer.block.Direction;
 const BlockModelShaper = renderer.block.BlockModelShaper;
 const TextureManager = renderer.TextureManager;
 
+const AmbientOcclusion = @import("AmbientOcclusion.zig");
+
 const RenderChunk = @import("RenderChunk.zig");
 const CompletedMesh = RenderChunk.CompletedMesh;
 
@@ -163,9 +165,6 @@ pub const ChunkMesher = struct {
 
         const elements = model.elements orelse return;
 
-        // White color (texture provides color)
-        const color = [3]f32{ 1.0, 1.0, 1.0 };
-
         const directions = [_]Direction{ .down, .up, .north, .south, .west, .east };
 
         for (elements) |*elem| {
@@ -219,25 +218,34 @@ pub const ChunkMesher = struct {
                     // Apply model-level rotation
                     FaceBakery.rotateQuad(&quad, model_rotation_x, model_rotation_y, uvlock);
 
+                    // Calculate ambient occlusion for this face
+                    // Convert renderer Direction to VoxelDirection for AO calculation
+                    const ao_direction: VoxelDirection = @enumFromInt(@intFromEnum(quad.direction));
+                    const ao_values = if (quad.shade)
+                        AmbientOcclusion.calculateFaceAo(chunk_access, x, y, z, ao_direction)
+                    else
+                        [4]f32{ 1.0, 1.0, 1.0, 1.0 }; // No AO if shade is false
+
                     // Local position offset within chunk
                     const local_x: f32 = @floatFromInt(x);
                     const local_y: f32 = @floatFromInt(y);
                     const local_z: f32 = @floatFromInt(z);
 
-                    // Add vertices
+                    // Add vertices with AO-modified colors
                     const base_vertex: u32 = @intCast(vertex_idx.*);
                     for (0..4) |i| {
                         const pos = quad.position(@intCast(i));
                         const packed_uv = quad.packedUV(@intCast(i));
                         const u: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
                         const v: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
+                        const ao = ao_values[i];
                         vertices[vertex_idx.*] = .{
                             .pos = .{
                                 pos[0] - 0.5 + local_x + offset_x,
                                 pos[1] - 0.5 + local_y + offset_y,
                                 pos[2] - 0.5 + local_z + offset_z,
                             },
-                            .color = color,
+                            .color = .{ ao, ao, ao }, // Apply AO as grayscale multiplier
                             .uv = .{ u, v },
                             .tex_index = quad.texture_index,
                         };
