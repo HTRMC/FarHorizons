@@ -7,6 +7,7 @@ const shared = @import("Shared");
 const Logger = shared.Logger;
 const platform = @import("Platform");
 const ShaderManager = @import("ShaderManager.zig").ShaderManager;
+const stb_image = @import("stb_image");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -104,8 +105,15 @@ pub const RenderSystem = struct {
     // UI Pipeline (for crosshair, HUD elements)
     ui_pipeline_layout: vk.VkPipelineLayout = null,
     ui_pipeline: vk.VkPipeline = null,
+    ui_descriptor_set_layout: vk.VkDescriptorSetLayout = null,
+    ui_descriptor_pool: vk.VkDescriptorPool = null,
+    ui_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
     crosshair_vertex_buffer: vk.VkBuffer = null,
     crosshair_vertex_buffer_memory: vk.VkDeviceMemory = null,
+    crosshair_texture: vk.VkImage = null,
+    crosshair_texture_memory: vk.VkDeviceMemory = null,
+    crosshair_texture_view: vk.VkImageView = null,
+    crosshair_sampler: vk.VkSampler = null,
 
     // Vertex/Index buffers
     vertex_buffer: vk.VkBuffer = null,
@@ -190,10 +198,14 @@ pub const RenderSystem = struct {
         try self.createRenderPass();
         try self.createDescriptorSetLayout();
         try self.createGraphicsPipeline();
+        try self.createUIDescriptorSetLayout();
         try self.createUIPipeline();
-        try self.createCrosshairBuffer();
         try self.createFramebuffers();
         try self.createCommandPool();
+        try self.loadCrosshairTexture();
+        try self.createUIDescriptorPool();
+        try self.createUIDescriptorSets();
+        try self.createCrosshairBuffer();
         // Note: Vertex/Index buffers are created by uploadMesh() with actual geometry
         try self.createUniformBuffers();
         // Note: Texture resources and descriptor sets are created after TextureManager is initialized
@@ -691,11 +703,15 @@ pub const RenderSystem = struct {
 
             vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline);
 
+            // Bind UI descriptor set for crosshair texture
+            const ui_descriptor_sets = [_]vk.VkDescriptorSet{self.ui_descriptor_sets[self.current_frame]};
+            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline_layout, 0, 1, &ui_descriptor_sets, 0, null);
+
             const ui_vertex_buffers = [_]vk.VkBuffer{self.crosshair_vertex_buffer.?};
             const ui_offsets = [_]vk.VkDeviceSize{0};
             vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vertex_buffers, &ui_offsets);
 
-            vkCmdDraw(command_buffer, 6, 1, 0, 0); // 6 vertices for 2 triangles
+            vkCmdDraw(command_buffer, 6, 1, 0, 0); // 6 vertices for textured quad
         }
 
         vkCmdEndRenderPass(command_buffer);
@@ -954,11 +970,15 @@ pub const RenderSystem = struct {
 
             vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline);
 
+            // Bind UI descriptor set for crosshair texture
+            const ui_descriptor_sets = [_]vk.VkDescriptorSet{self.ui_descriptor_sets[self.current_frame]};
+            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline_layout, 0, 1, &ui_descriptor_sets, 0, null);
+
             const ui_vertex_buffers = [_]vk.VkBuffer{self.crosshair_vertex_buffer.?};
             const ui_offsets = [_]vk.VkDeviceSize{0};
             vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vertex_buffers, &ui_offsets);
 
-            vkCmdDraw(command_buffer, 6, 1, 0, 0); // 6 vertices for 2 triangles
+            vkCmdDraw(command_buffer, 6, 1, 0, 0); // 6 vertices for textured quad
         }
 
         vkCmdEndRenderPass(command_buffer);
@@ -1722,10 +1742,37 @@ pub const RenderSystem = struct {
         logger.info("Graphics pipeline created", .{});
     }
 
-    /// UI Vertex for crosshair/HUD (simple 2D with color)
+    fn createUIDescriptorSetLayout(self: *Self) !void {
+        const vkCreateDescriptorSetLayout = vk.vkCreateDescriptorSetLayout orelse return error.VulkanFunctionNotLoaded;
+
+        // Single combined image sampler for UI texture
+        const sampler_binding = vk.VkDescriptorSetLayoutBinding{
+            .binding = 0,
+            .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+            .pImmutableSamplers = null,
+        };
+
+        const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .bindingCount = 1,
+            .pBindings = &sampler_binding,
+        };
+
+        if (vkCreateDescriptorSetLayout(self.device, &layout_info, null, &self.ui_descriptor_set_layout) != vk.VK_SUCCESS) {
+            return error.DescriptorSetLayoutCreationFailed;
+        }
+
+        logger.info("UI descriptor set layout created", .{});
+    }
+
+    /// UI Vertex for crosshair/HUD (2D position + UV)
     pub const UIVertex = extern struct {
         pos: [2]f32,
-        color: [4]f32,
+        uv: [2]f32,
 
         pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
             return .{
@@ -1746,8 +1793,8 @@ pub const RenderSystem = struct {
                 .{
                     .binding = 0,
                     .location = 1,
-                    .format = vk.VK_FORMAT_R32G32B32A32_SFLOAT,
-                    .offset = @offsetOf(UIVertex, "color"),
+                    .format = vk.VK_FORMAT_R32G32_SFLOAT,
+                    .offset = @offsetOf(UIVertex, "uv"),
                 },
             };
         }
@@ -1904,13 +1951,14 @@ pub const RenderSystem = struct {
             .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
         };
 
-        // No descriptor sets needed for simple UI
+        // Use UI descriptor set layout for texture
+        const descriptor_set_layouts = [_]vk.VkDescriptorSetLayout{self.ui_descriptor_set_layout};
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .setLayoutCount = 0,
-            .pSetLayouts = null,
+            .setLayoutCount = 1,
+            .pSetLayouts = &descriptor_set_layouts,
             .pushConstantRangeCount = 0,
             .pPushConstantRanges = null,
         };
@@ -1948,6 +1996,461 @@ pub const RenderSystem = struct {
         logger.info("UI pipeline created", .{});
     }
 
+    fn loadCrosshairTexture(self: *Self) !void {
+        const vkCreateImage = vk.vkCreateImage orelse return error.VulkanFunctionNotLoaded;
+        const vkGetImageMemoryRequirements = vk.vkGetImageMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindImageMemory = vk.vkBindImageMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateImageView = vk.vkCreateImageView orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateSampler = vk.vkCreateSampler orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
+
+        // Load crosshair PNG using stb_image
+        const crosshair_path = "assets/farhorizons/textures/gui/crosshair.png";
+        stb_image.setFlipVerticallyOnLoad(false);
+        const image = stb_image.load(crosshair_path, 4) catch {
+            logger.err("Failed to load crosshair texture: {s}", .{crosshair_path});
+            return error.TextureLoadFailed;
+        };
+        defer image.free();
+
+        const width: u32 = @intCast(image.width);
+        const height: u32 = @intCast(image.height);
+        logger.info("Loaded crosshair texture: {}x{}", .{ width, height });
+
+        // Create staging buffer
+        const image_size: vk.VkDeviceSize = @as(u64, width) * @as(u64, height) * 4;
+        var staging_buffer: vk.VkBuffer = null;
+        var staging_memory: vk.VkDeviceMemory = null;
+
+        const staging_buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = image_size,
+            .usage = vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        if (vkCreateBuffer(self.device, &staging_buffer_info, null, &staging_buffer) != vk.VK_SUCCESS) {
+            return error.BufferCreationFailed;
+        }
+
+        var staging_mem_req: vk.VkMemoryRequirements = undefined;
+        vkGetBufferMemoryRequirements(self.device, staging_buffer, &staging_mem_req);
+
+        const staging_alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = staging_mem_req.size,
+            .memoryTypeIndex = try self.findMemoryType(staging_mem_req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+        };
+
+        if (vkAllocateMemory(self.device, &staging_alloc_info, null, &staging_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+
+        if (vkBindBufferMemory(self.device, staging_buffer, staging_memory, 0) != vk.VK_SUCCESS) {
+            return error.BufferBindFailed;
+        }
+
+        // Copy pixel data to staging buffer
+        var data: ?*anyopaque = null;
+        if (vkMapMemory(self.device, staging_memory, 0, image_size, 0, &data) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+        @memcpy(@as([*]u8, @ptrCast(data.?))[0..@intCast(image_size)], image.data[0..@intCast(image_size)]);
+        vkUnmapMemory(self.device, staging_memory);
+
+        // Create image
+        const image_info = vk.VkImageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .imageType = vk.VK_IMAGE_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
+            .extent = .{ .width = width, .height = height, .depth = 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
+            .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+
+        if (vkCreateImage(self.device, &image_info, null, &self.crosshair_texture) != vk.VK_SUCCESS) {
+            return error.ImageCreationFailed;
+        }
+
+        var img_mem_req: vk.VkMemoryRequirements = undefined;
+        vkGetImageMemoryRequirements(self.device, self.crosshair_texture, &img_mem_req);
+
+        const img_alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = img_mem_req.size,
+            .memoryTypeIndex = try self.findMemoryType(img_mem_req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+        };
+
+        if (vkAllocateMemory(self.device, &img_alloc_info, null, &self.crosshair_texture_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+
+        if (vkBindImageMemory(self.device, self.crosshair_texture, self.crosshair_texture_memory, 0) != vk.VK_SUCCESS) {
+            return error.ImageBindFailed;
+        }
+
+        // Transition image and copy from staging buffer
+        try self.transitionImageLayout(self.crosshair_texture, vk.VK_IMAGE_LAYOUT_UNDEFINED, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        try self.copyBufferToImage(staging_buffer, self.crosshair_texture, width, height);
+        try self.transitionImageLayout(self.crosshair_texture, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+        // Cleanup staging buffer
+        vkDestroyBuffer(self.device, staging_buffer, null);
+        vkFreeMemory(self.device, staging_memory, null);
+
+        // Create image view
+        const view_info = vk.VkImageViewCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .image = self.crosshair_texture,
+            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
+            .components = .{
+                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        if (vkCreateImageView(self.device, &view_info, null, &self.crosshair_texture_view) != vk.VK_SUCCESS) {
+            return error.ImageViewCreationFailed;
+        }
+
+        // Create sampler (nearest neighbor for pixel-perfect rendering)
+        const sampler_info = vk.VkSamplerCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .magFilter = vk.VK_FILTER_NEAREST,
+            .minFilter = vk.VK_FILTER_NEAREST,
+            .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .mipLodBias = 0.0,
+            .anisotropyEnable = vk.VK_FALSE,
+            .maxAnisotropy = 1.0,
+            .compareEnable = vk.VK_FALSE,
+            .compareOp = vk.VK_COMPARE_OP_ALWAYS,
+            .minLod = 0.0,
+            .maxLod = 0.0,
+            .borderColor = vk.VK_BORDER_COLOR_INT_TRANSPARENT_BLACK,
+            .unnormalizedCoordinates = vk.VK_FALSE,
+        };
+
+        if (vkCreateSampler(self.device, &sampler_info, null, &self.crosshair_sampler) != vk.VK_SUCCESS) {
+            return error.SamplerCreationFailed;
+        }
+
+        logger.info("Crosshair texture loaded ({}x{})", .{ width, height });
+    }
+
+    fn transitionImageLayout(
+        self: *Self,
+        image: vk.VkImage,
+        old_layout: vk.VkImageLayout,
+        new_layout: vk.VkImageLayout,
+    ) !void {
+        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+
+        const alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = self.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var command_buffer: vk.VkCommandBuffer = undefined;
+        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferAllocationFailed;
+        }
+
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        };
+
+        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
+            return error.CommandBufferBeginFailed;
+        }
+
+        var src_stage: vk.VkPipelineStageFlags = undefined;
+        var dst_stage: vk.VkPipelineStageFlags = undefined;
+        var src_access: vk.VkAccessFlags = 0;
+        var dst_access: vk.VkAccessFlags = 0;
+
+        if (old_layout == vk.VK_IMAGE_LAYOUT_UNDEFINED and new_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+            src_access = 0;
+            dst_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+            src_stage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            dst_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
+        } else if (old_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and new_layout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+            src_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+            dst_access = vk.VK_ACCESS_SHADER_READ_BIT;
+            src_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
+            dst_stage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        } else {
+            return error.UnsupportedLayoutTransition;
+        }
+
+        const barrier = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = src_access,
+            .dstAccessMask = dst_access,
+            .oldLayout = old_layout,
+            .newLayout = new_layout,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        vkCmdPipelineBarrier(
+            command_buffer,
+            src_stage,
+            dst_stage,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &barrier,
+        );
+
+        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferEndFailed;
+        }
+
+        const submit_info = vk.VkSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &command_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        };
+
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+            return error.QueueSubmitFailed;
+        }
+
+        _ = vkQueueWaitIdle(self.graphics_queue);
+        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
+    }
+
+    fn copyBufferToImage(
+        self: *Self,
+        buffer: vk.VkBuffer,
+        image: vk.VkImage,
+        width: u32,
+        height: u32,
+    ) !void {
+        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdCopyBufferToImage = vk.vkCmdCopyBufferToImage orelse return error.VulkanFunctionNotLoaded;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+
+        const alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = self.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var command_buffer: vk.VkCommandBuffer = undefined;
+        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferAllocationFailed;
+        }
+
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        };
+
+        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
+            return error.CommandBufferBeginFailed;
+        }
+
+        const region = vk.VkBufferImageCopy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
+            .imageExtent = .{
+                .width = width,
+                .height = height,
+                .depth = 1,
+            },
+        };
+
+        vkCmdCopyBufferToImage(
+            command_buffer,
+            buffer,
+            image,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1,
+            &region,
+        );
+
+        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferEndFailed;
+        }
+
+        const submit_info = vk.VkSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &command_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        };
+
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+            return error.QueueSubmitFailed;
+        }
+
+        _ = vkQueueWaitIdle(self.graphics_queue);
+        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
+    }
+
+    fn createUIDescriptorPool(self: *Self) !void {
+        const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
+
+        const pool_size = vk.VkDescriptorPoolSize{
+            .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+        };
+
+        const pool_info = vk.VkDescriptorPoolCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .maxSets = MAX_FRAMES_IN_FLIGHT,
+            .poolSizeCount = 1,
+            .pPoolSizes = &pool_size,
+        };
+
+        if (vkCreateDescriptorPool(self.device, &pool_info, null, &self.ui_descriptor_pool) != vk.VK_SUCCESS) {
+            return error.DescriptorPoolCreationFailed;
+        }
+
+        logger.info("UI descriptor pool created", .{});
+    }
+
+    fn createUIDescriptorSets(self: *Self) !void {
+        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+
+        var layouts: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSetLayout = undefined;
+        for (&layouts) |*l| {
+            l.* = self.ui_descriptor_set_layout;
+        }
+
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.ui_descriptor_pool,
+            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+            .pSetLayouts = &layouts,
+        };
+
+        if (vkAllocateDescriptorSets(self.device, &alloc_info, &self.ui_descriptor_sets) != vk.VK_SUCCESS) {
+            return error.DescriptorSetAllocationFailed;
+        }
+
+        // Update descriptor sets to point to crosshair texture
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const image_info = vk.VkDescriptorImageInfo{
+                .sampler = self.crosshair_sampler,
+                .imageView = self.crosshair_texture_view,
+                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+
+            const descriptor_write = vk.VkWriteDescriptorSet{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.ui_descriptor_sets[i],
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &image_info,
+                .pBufferInfo = null,
+                .pTexelBufferView = null,
+            };
+
+            vkUpdateDescriptorSets(self.device, 1, &descriptor_write, 0, null);
+        }
+
+        logger.info("UI descriptor sets created", .{});
+    }
+
     fn createCrosshairBuffer(self: *Self) !void {
         const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
@@ -1956,21 +2459,34 @@ pub const RenderSystem = struct {
         const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
         const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
 
-        // Crosshair is a small white quad at the center of the screen
-        // Using NDC coordinates: center is (0,0), range is -1 to 1
-        const size: f32 = 0.02; // Size in NDC (will be a small square)
-        const color = [4]f32{ 1.0, 1.0, 1.0, 1.0 }; // White
+        // Crosshair is rendered as a textured quad
+        // Minecraft uses GUI scale - at scale 2, each texture pixel = 2 screen pixels
+        // The 15x15 texture at GUI scale 2 = 30x30 screen pixels
+        const screen_height: f32 = @floatFromInt(self.swapchain_extent.height);
+        const screen_width: f32 = @floatFromInt(self.swapchain_extent.width);
 
-        // 6 vertices for 2 triangles (quad)
+        // Calculate appropriate GUI scale based on screen height (like Minecraft)
+        // Minecraft auto-selects: 1 for <480, 2 for <720, 3 for <1080, etc.
+        const gui_scale: f32 = if (screen_height < 480) 1.0 else if (screen_height < 720) 2.0 else if (screen_height < 1080) 2.0 else 3.0;
+
+        // Crosshair size in screen pixels
+        const crosshair_pixels: f32 = 15.0 * gui_scale;
+
+        // Convert to NDC (screen goes from -1 to 1, so total range is 2)
+        // half_size = (crosshair_pixels / screen_dimension) since NDC range is 2
+        const half_size_y: f32 = crosshair_pixels / screen_height;
+        const half_size_x: f32 = crosshair_pixels / screen_width;
+
+        // 6 vertices for 2 triangles (textured quad)
         const vertices = [_]UIVertex{
             // Triangle 1
-            .{ .pos = .{ -size, -size }, .color = color },
-            .{ .pos = .{ size, -size }, .color = color },
-            .{ .pos = .{ size, size }, .color = color },
+            .{ .pos = .{ -half_size_x, -half_size_y }, .uv = .{ 0.0, 0.0 } },
+            .{ .pos = .{ half_size_x, -half_size_y }, .uv = .{ 1.0, 0.0 } },
+            .{ .pos = .{ half_size_x, half_size_y }, .uv = .{ 1.0, 1.0 } },
             // Triangle 2
-            .{ .pos = .{ -size, -size }, .color = color },
-            .{ .pos = .{ size, size }, .color = color },
-            .{ .pos = .{ -size, size }, .color = color },
+            .{ .pos = .{ -half_size_x, -half_size_y }, .uv = .{ 0.0, 0.0 } },
+            .{ .pos = .{ half_size_x, half_size_y }, .uv = .{ 1.0, 1.0 } },
+            .{ .pos = .{ -half_size_x, half_size_y }, .uv = .{ 0.0, 1.0 } },
         };
 
         const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(vertices));
@@ -2412,6 +2928,33 @@ pub const RenderSystem = struct {
         if (self.crosshair_vertex_buffer_memory) |m| {
             if (vk.vkFreeMemory) |free| free(self.device, m, null);
             self.crosshair_vertex_buffer_memory = null;
+        }
+        // Destroy crosshair texture resources
+        if (self.crosshair_sampler) |s| {
+            if (vk.vkDestroySampler) |destroy| destroy(self.device, s, null);
+            self.crosshair_sampler = null;
+        }
+        if (self.crosshair_texture_view) |v| {
+            if (vk.vkDestroyImageView) |destroy| destroy(self.device, v, null);
+            self.crosshair_texture_view = null;
+        }
+        if (self.crosshair_texture) |img| {
+            if (vk.vkDestroyImage) |destroy| destroy(self.device, img, null);
+            self.crosshair_texture = null;
+        }
+        if (self.crosshair_texture_memory) |m| {
+            if (vk.vkFreeMemory) |free| free(self.device, m, null);
+            self.crosshair_texture_memory = null;
+        }
+        // Destroy UI descriptor pool (sets are freed automatically)
+        if (self.ui_descriptor_pool) |pool| {
+            if (vk.vkDestroyDescriptorPool) |destroy| destroy(self.device, pool, null);
+            self.ui_descriptor_pool = null;
+        }
+        // Destroy UI descriptor set layout
+        if (self.ui_descriptor_set_layout) |layout| {
+            if (vk.vkDestroyDescriptorSetLayout) |destroy| destroy(self.device, layout, null);
+            self.ui_descriptor_set_layout = null;
         }
     }
 

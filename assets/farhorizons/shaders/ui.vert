@@ -1,12 +1,12 @@
 #version 450
 
-// Simple UI vertex shader - positions in NDC (-1 to 1)
+// UI vertex shader with texture support
 layout(location = 0) in vec2 inPosition;
-layout(location = 1) in vec4 inColor;
+layout(location = 1) in vec2 inTexCoord;
 
-layout(location = 0) out vec4 fragColor;
+layout(location = 0) out vec2 fragTexCoord;
 
 void main() {
     gl_Position = vec4(inPosition, 0.0, 1.0);
-    fragColor = inColor;
+    fragTexCoord = inTexCoord;
 }
