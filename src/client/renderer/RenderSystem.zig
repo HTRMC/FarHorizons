@@ -101,6 +101,12 @@ pub const RenderSystem = struct {
     pipeline_layout: vk.VkPipelineLayout = null,
     graphics_pipeline: vk.VkPipeline = null,
 
+    // UI Pipeline (for crosshair, HUD elements)
+    ui_pipeline_layout: vk.VkPipelineLayout = null,
+    ui_pipeline: vk.VkPipeline = null,
+    crosshair_vertex_buffer: vk.VkBuffer = null,
+    crosshair_vertex_buffer_memory: vk.VkDeviceMemory = null,
+
     // Vertex/Index buffers
     vertex_buffer: vk.VkBuffer = null,
     vertex_buffer_memory: vk.VkDeviceMemory = null,
@@ -184,6 +190,8 @@ pub const RenderSystem = struct {
         try self.createRenderPass();
         try self.createDescriptorSetLayout();
         try self.createGraphicsPipeline();
+        try self.createUIPipeline();
+        try self.createCrosshairBuffer();
         try self.createFramebuffers();
         try self.createCommandPool();
         // Note: Vertex/Index buffers are created by uploadMesh() with actual geometry
@@ -677,6 +685,19 @@ pub const RenderSystem = struct {
             );
         }
 
+        // Draw crosshair (UI overlay)
+        if (self.ui_pipeline != null and self.crosshair_vertex_buffer != null) {
+            const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+
+            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline);
+
+            const ui_vertex_buffers = [_]vk.VkBuffer{self.crosshair_vertex_buffer.?};
+            const ui_offsets = [_]vk.VkDeviceSize{0};
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vertex_buffers, &ui_offsets);
+
+            vkCmdDraw(command_buffer, 6, 1, 0, 0); // 6 vertices for 2 triangles
+        }
+
         vkCmdEndRenderPass(command_buffer);
 
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
@@ -926,6 +947,20 @@ pub const RenderSystem = struct {
 
         // Draw indexed
         vkCmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
+
+        // Draw crosshair (UI overlay)
+        if (self.ui_pipeline != null and self.crosshair_vertex_buffer != null) {
+            const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+
+            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline);
+
+            const ui_vertex_buffers = [_]vk.VkBuffer{self.crosshair_vertex_buffer.?};
+            const ui_offsets = [_]vk.VkDeviceSize{0};
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vertex_buffers, &ui_offsets);
+
+            vkCmdDraw(command_buffer, 6, 1, 0, 0); // 6 vertices for 2 triangles
+        }
+
         vkCmdEndRenderPass(command_buffer);
 
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
@@ -1687,6 +1722,308 @@ pub const RenderSystem = struct {
         logger.info("Graphics pipeline created", .{});
     }
 
+    /// UI Vertex for crosshair/HUD (simple 2D with color)
+    pub const UIVertex = extern struct {
+        pos: [2]f32,
+        color: [4]f32,
+
+        pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
+            return .{
+                .binding = 0,
+                .stride = @sizeOf(UIVertex),
+                .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
+            };
+        }
+
+        pub fn getAttributeDescriptions() [2]vk.VkVertexInputAttributeDescription {
+            return .{
+                .{
+                    .binding = 0,
+                    .location = 0,
+                    .format = vk.VK_FORMAT_R32G32_SFLOAT,
+                    .offset = @offsetOf(UIVertex, "pos"),
+                },
+                .{
+                    .binding = 0,
+                    .location = 1,
+                    .format = vk.VK_FORMAT_R32G32B32A32_SFLOAT,
+                    .offset = @offsetOf(UIVertex, "color"),
+                },
+            };
+        }
+    };
+
+    fn createUIPipeline(self: *Self) !void {
+        const vkCreateShaderModule = vk.vkCreateShaderModule orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyShaderModule = vk.vkDestroyShaderModule orelse return error.VulkanFunctionNotLoaded;
+        const vkCreatePipelineLayout = vk.vkCreatePipelineLayout orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateGraphicsPipelines = vk.vkCreateGraphicsPipelines orelse return error.VulkanFunctionNotLoaded;
+
+        // Get UI shaders from ShaderManager
+        const vert_shader_code = if (self.shader_manager) |*sm|
+            sm.getUIVertexShader() orelse return error.ShaderNotAvailable
+        else
+            return error.ShaderManagerNotInitialized;
+
+        const frag_shader_code = if (self.shader_manager) |*sm|
+            sm.getUIFragmentShader() orelse return error.ShaderNotAvailable
+        else
+            return error.ShaderManagerNotInitialized;
+
+        const vert_module = try self.createShaderModule(vkCreateShaderModule, vert_shader_code);
+        defer vkDestroyShaderModule(self.device, vert_module, null);
+
+        const frag_module = try self.createShaderModule(vkCreateShaderModule, frag_shader_code);
+        defer vkDestroyShaderModule(self.device, frag_module, null);
+
+        const shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stage = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vert_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = frag_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+            },
+        };
+
+        const dynamic_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR };
+        const dynamic_state = vk.VkPipelineDynamicStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .dynamicStateCount = dynamic_states.len,
+            .pDynamicStates = &dynamic_states,
+        };
+
+        const binding_description = UIVertex.getBindingDescription();
+        const attribute_descriptions = UIVertex.getAttributeDescriptions();
+
+        const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &binding_description,
+            .vertexAttributeDescriptionCount = attribute_descriptions.len,
+            .pVertexAttributeDescriptions = &attribute_descriptions,
+        };
+
+        const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .topology = vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = vk.VK_FALSE,
+        };
+
+        const viewport_state = vk.VkPipelineViewportStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = null,
+            .scissorCount = 1,
+            .pScissors = null,
+        };
+
+        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthClampEnable = vk.VK_FALSE,
+            .rasterizerDiscardEnable = vk.VK_FALSE,
+            .polygonMode = vk.VK_POLYGON_MODE_FILL,
+            .cullMode = vk.VK_CULL_MODE_NONE, // No culling for UI
+            .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = vk.VK_FALSE,
+            .depthBiasConstantFactor = 0.0,
+            .depthBiasClamp = 0.0,
+            .depthBiasSlopeFactor = 0.0,
+            .lineWidth = 1.0,
+        };
+
+        const multisampling = vk.VkPipelineMultisampleStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = vk.VK_FALSE,
+            .minSampleShading = 1.0,
+            .pSampleMask = null,
+            .alphaToCoverageEnable = vk.VK_FALSE,
+            .alphaToOneEnable = vk.VK_FALSE,
+        };
+
+        // No depth testing for UI
+        const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_FALSE,
+            .depthWriteEnable = vk.VK_FALSE,
+            .depthCompareOp = vk.VK_COMPARE_OP_ALWAYS,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
+        };
+
+        // Alpha blending for UI
+        const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        const color_blending = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = vk.VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        // No descriptor sets needed for simple UI
+        const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 0,
+            .pSetLayouts = null,
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges = null,
+        };
+
+        if (vkCreatePipelineLayout(self.device, &pipeline_layout_info, null, &self.ui_pipeline_layout) != vk.VK_SUCCESS) {
+            return error.PipelineLayoutCreationFailed;
+        }
+
+        const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stageCount = shader_stages.len,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_stencil,
+            .pColorBlendState = &color_blending,
+            .pDynamicState = &dynamic_state,
+            .layout = self.ui_pipeline_layout,
+            .renderPass = self.render_pass,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        if (vkCreateGraphicsPipelines(self.device, null, 1, &pipeline_info, null, &self.ui_pipeline) != vk.VK_SUCCESS) {
+            return error.PipelineCreationFailed;
+        }
+
+        logger.info("UI pipeline created", .{});
+    }
+
+    fn createCrosshairBuffer(self: *Self) !void {
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+
+        // Crosshair is a small white quad at the center of the screen
+        // Using NDC coordinates: center is (0,0), range is -1 to 1
+        const size: f32 = 0.02; // Size in NDC (will be a small square)
+        const color = [4]f32{ 1.0, 1.0, 1.0, 1.0 }; // White
+
+        // 6 vertices for 2 triangles (quad)
+        const vertices = [_]UIVertex{
+            // Triangle 1
+            .{ .pos = .{ -size, -size }, .color = color },
+            .{ .pos = .{ size, -size }, .color = color },
+            .{ .pos = .{ size, size }, .color = color },
+            // Triangle 2
+            .{ .pos = .{ -size, -size }, .color = color },
+            .{ .pos = .{ size, size }, .color = color },
+            .{ .pos = .{ -size, size }, .color = color },
+        };
+
+        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(vertices));
+
+        const buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = buffer_size,
+            .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        if (vkCreateBuffer(self.device, &buffer_info, null, &self.crosshair_vertex_buffer) != vk.VK_SUCCESS) {
+            return error.BufferCreationFailed;
+        }
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetBufferMemoryRequirements(self.device, self.crosshair_vertex_buffer, &mem_requirements);
+
+        const mem_type = try self.findMemoryType(
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = mem_type,
+        };
+
+        if (vkAllocateMemory(self.device, &alloc_info, null, &self.crosshair_vertex_buffer_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+
+        if (vkBindBufferMemory(self.device, self.crosshair_vertex_buffer, self.crosshair_vertex_buffer_memory, 0) != vk.VK_SUCCESS) {
+            return error.BufferBindFailed;
+        }
+
+        // Copy vertex data
+        var data: ?*anyopaque = null;
+        if (vkMapMemory(self.device, self.crosshair_vertex_buffer_memory, 0, buffer_size, 0, &data) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+        @memcpy(@as([*]u8, @ptrCast(data.?))[0..buffer_size], std.mem.asBytes(&vertices));
+        vkUnmapMemory(self.device, self.crosshair_vertex_buffer_memory);
+
+        logger.info("Crosshair buffer created", .{});
+    }
+
     fn createShaderModule(self: *Self, vkCreateShaderModule: anytype, code: []const u8) !vk.VkShaderModule {
         const create_info = vk.VkShaderModuleCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -2057,6 +2394,24 @@ pub const RenderSystem = struct {
         if (self.pipeline_layout) |l| {
             if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
             self.pipeline_layout = null;
+        }
+        // Destroy UI pipeline
+        if (self.ui_pipeline) |p| {
+            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+            self.ui_pipeline = null;
+        }
+        if (self.ui_pipeline_layout) |l| {
+            if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
+            self.ui_pipeline_layout = null;
+        }
+        // Destroy crosshair buffer
+        if (self.crosshair_vertex_buffer) |b| {
+            if (vk.vkDestroyBuffer) |destroy| destroy(self.device, b, null);
+            self.crosshair_vertex_buffer = null;
+        }
+        if (self.crosshair_vertex_buffer_memory) |m| {
+            if (vk.vkFreeMemory) |free| free(self.device, m, null);
+            self.crosshair_vertex_buffer_memory = null;
         }
     }
 

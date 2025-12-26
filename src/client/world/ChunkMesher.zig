@@ -241,9 +241,9 @@ pub const ChunkMesher = struct {
                         const ao = ao_values[i];
                         vertices[vertex_idx.*] = .{
                             .pos = .{
-                                pos[0] - 0.5 + local_x + offset_x,
-                                pos[1] - 0.5 + local_y + offset_y,
-                                pos[2] - 0.5 + local_z + offset_z,
+                                pos[0] + local_x + offset_x,
+                                pos[1] + local_y + offset_y,
+                                pos[2] + local_z + offset_z,
                             },
                             .color = .{ ao, ao, ao }, // Apply AO as grayscale multiplier
                             .uv = .{ u, v },

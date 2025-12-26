@@ -532,9 +532,9 @@ pub const FarHorizonsClient = struct {
                         const v: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
                         vertices[vertex_idx.*] = .{
                             .pos = .{
-                                pos[0] - 0.5 + offset_x,
-                                pos[1] - 0.5 + offset_y,
-                                pos[2] - 0.5 + offset_z,
+                                pos[0] + offset_x,
+                                pos[1] + offset_y,
+                                pos[2] + offset_z,
                             },
                             .color = color,
                             .uv = .{ u, v },

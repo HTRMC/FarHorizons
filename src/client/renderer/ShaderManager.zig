@@ -16,6 +16,9 @@ pub const ShaderManager = struct {
     /// Cached default shaders (compiled at startup)
     default_vert_spv: ?[]u8,
     default_frag_spv: ?[]u8,
+    /// Cached UI shaders
+    ui_vert_spv: ?[]u8,
+    ui_frag_spv: ?[]u8,
 
     /// Base path for default shaders
     const default_shader_path = "assets/farhorizons/shaders/";
@@ -32,6 +35,8 @@ pub const ShaderManager = struct {
         var compiler: ?ShaderCompiler = null;
         var default_vert: ?[]u8 = null;
         var default_frag: ?[]u8 = null;
+        var ui_vert: ?[]u8 = null;
+        var ui_frag: ?[]u8 = null;
 
         if (enable_runtime_compilation) {
             var total_timer = std.time.Timer.start() catch unreachable;
@@ -58,6 +63,17 @@ pub const ShaderManager = struct {
             frag_compiled.deinit();
             log.info("Fragment shader compiled in {d}us ({d} bytes SPIR-V)", .{ frag_time_us, default_frag.?.len });
 
+            // Compile UI shaders
+            log.info("Compiling UI shaders...", .{});
+            var ui_vert_compiled = try compiler.?.compileFile(default_shader_path ++ "ui.vert");
+            ui_vert = try allocator.dupe(u8, ui_vert_compiled.spv_data);
+            ui_vert_compiled.deinit();
+
+            var ui_frag_compiled = try compiler.?.compileFile(default_shader_path ++ "ui.frag");
+            ui_frag = try allocator.dupe(u8, ui_frag_compiled.spv_data);
+            ui_frag_compiled.deinit();
+            log.info("UI shaders compiled", .{});
+
             const total_time_ms = @as(f64, @floatFromInt(total_timer.read())) / @as(f64, std.time.ns_per_ms);
             const cache_stats = compiler.?.getCacheStats();
             log.info("Shader loading complete in {d:.2}ms (cache: {d} hits, {d} misses)", .{
@@ -74,6 +90,8 @@ pub const ShaderManager = struct {
             .active_pack = null,
             .default_vert_spv = default_vert,
             .default_frag_spv = default_frag,
+            .ui_vert_spv = ui_vert,
+            .ui_frag_spv = ui_frag,
         };
     }
 
@@ -97,6 +115,12 @@ pub const ShaderManager = struct {
         if (self.default_frag_spv) |spv| {
             self.allocator.free(spv);
         }
+        if (self.ui_vert_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.ui_frag_spv) |spv| {
+            self.allocator.free(spv);
+        }
 
         if (self.compiler) |*c| {
             c.deinit();
@@ -111,6 +135,16 @@ pub const ShaderManager = struct {
     /// Get the default fragment shader (compiled at runtime)
     pub fn getDefaultFragmentShader(self: *ShaderManager) ?[]const u8 {
         return self.default_frag_spv;
+    }
+
+    /// Get the UI vertex shader (compiled at runtime)
+    pub fn getUIVertexShader(self: *ShaderManager) ?[]const u8 {
+        return self.ui_vert_spv;
+    }
+
+    /// Get the UI fragment shader (compiled at runtime)
+    pub fn getUIFragmentShader(self: *ShaderManager) ?[]const u8 {
+        return self.ui_frag_spv;
     }
 
     /// Get default vertex shader as u32 words for Vulkan
