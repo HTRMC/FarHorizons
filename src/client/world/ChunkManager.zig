@@ -583,6 +583,103 @@ pub const ChunkManager = struct {
         return neighbors;
     }
 
+    // ========== Block Access Methods ==========
+
+    /// Get block entry at world position
+    /// Returns null if chunk is not loaded
+    pub fn getBlockAt(self: *Self, world_x: i32, world_y: i32, world_z: i32) ?shared.BlockEntry {
+        const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
+
+        const rchunk = self.loaded_chunks.get(chunk_pos) orelse return null;
+        if (rchunk.state != .ready) return null;
+
+        // Convert to local coordinates (0-15)
+        const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
+        const local_y: u32 = @intCast(@mod(world_y, CHUNK_SIZE));
+        const local_z: u32 = @intCast(@mod(world_z, CHUNK_SIZE));
+
+        return rchunk.chunk.getBlockEntry(local_x, local_y, local_z);
+    }
+
+    /// Set block entry at world position
+    /// Returns true if successful, false if chunk is not loaded
+    pub fn setBlockAt(self: *Self, world_x: i32, world_y: i32, world_z: i32, entry: shared.BlockEntry) bool {
+        const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
+
+        const rchunk = self.loaded_chunks.get(chunk_pos) orelse return false;
+
+        // Convert to local coordinates (0-15)
+        const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
+        const local_y: u32 = @intCast(@mod(world_y, CHUNK_SIZE));
+        const local_z: u32 = @intCast(@mod(world_z, CHUNK_SIZE));
+
+        rchunk.chunk.setBlockEntry(local_x, local_y, local_z, entry);
+
+        // Mark chunk for re-meshing
+        self.queueChunkRemesh(chunk_pos, rchunk);
+
+        // Also remesh neighbors if block is on chunk boundary
+        if (local_x == 0) self.remeshNeighborIfLoaded(chunk_pos.x - 1, chunk_pos.z, chunk_pos.section_y);
+        if (local_x == CHUNK_SIZE - 1) self.remeshNeighborIfLoaded(chunk_pos.x + 1, chunk_pos.z, chunk_pos.section_y);
+        if (local_y == 0) self.remeshNeighborIfLoaded(chunk_pos.x, chunk_pos.z, chunk_pos.section_y - 1);
+        if (local_y == CHUNK_SIZE - 1) self.remeshNeighborIfLoaded(chunk_pos.x, chunk_pos.z, chunk_pos.section_y + 1);
+        if (local_z == 0) self.remeshNeighborIfLoaded(chunk_pos.x, chunk_pos.z - 1, chunk_pos.section_y);
+        if (local_z == CHUNK_SIZE - 1) self.remeshNeighborIfLoaded(chunk_pos.x, chunk_pos.z + 1, chunk_pos.section_y);
+
+        return true;
+    }
+
+    /// Check if a block at world position is solid (for raycasting)
+    pub fn isBlockSolid(self: *Self, world_x: i32, world_y: i32, world_z: i32) bool {
+        const entry = self.getBlockAt(world_x, world_y, world_z) orelse return false;
+        return !entry.isAir() and entry.isSolid();
+    }
+
+    /// Helper to remesh a neighbor chunk if loaded
+    fn remeshNeighborIfLoaded(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
+        const neighbor_pos = ChunkPos{ .x = chunk_x, .z = chunk_z, .section_y = section_y };
+        if (self.loaded_chunks.get(neighbor_pos)) |neighbor_chunk| {
+            if (neighbor_chunk.state == .ready) {
+                self.queueChunkRemesh(neighbor_pos, neighbor_chunk);
+            }
+        }
+    }
+
+    /// Queue a chunk for re-meshing
+    fn queueChunkRemesh(self: *Self, pos: ChunkPos, render_chunk_ptr: *RenderChunk) void {
+        // Free existing buffer allocation
+        if (self.buffer_manager) |buf_mgr| {
+            if (render_chunk_ptr.getBufferAllocation()) |alloc| {
+                buf_mgr.free(alloc);
+            }
+        }
+
+        // Clear existing mesh
+        if (render_chunk_ptr.mesh) |*m| {
+            m.deinit();
+            render_chunk_ptr.mesh = null;
+        }
+
+        render_chunk_ptr.state = .meshing;
+
+        // Create task data
+        const task_data = self.allocator.create(ChunkTask) catch return;
+        task_data.* = ChunkTask{
+            .pos = pos,
+            .chunk = render_chunk_ptr.chunk,
+            .neighbors = self.getNeighborChunks(pos),
+        };
+
+        // Submit to thread pool
+        self.pool.submit(Task{
+            .task_type = .generate_and_mesh,
+            .data = @ptrCast(task_data),
+        }) catch {
+            self.allocator.destroy(task_data);
+            return;
+        };
+    }
+
     /// Unload chunks beyond unload distance
     fn unloadDistantChunks(self: *Self) void {
         var to_unload: std.ArrayListUnmanaged(ChunkPos) = .{};

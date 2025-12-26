@@ -6,6 +6,8 @@ const platform = @import("Platform");
 const renderer = @import("Renderer");
 const world = @import("World");
 const client_player = @import("player/Player.zig");
+const block_interaction = @import("BlockInteraction.zig");
+const BlockInteraction = block_interaction.BlockInteraction;
 
 const GameConfig = shared.GameConfig;
 const Logger = shared.Logger;
@@ -57,6 +59,8 @@ pub const FarHorizonsClient = struct {
     allocator: std.mem.Allocator,
     /// Use async chunk loading (set to false for legacy single-chunk mode)
     use_async_chunks: bool,
+    /// Block interaction handler
+    block_interaction: ?BlockInteraction,
 
     pub fn init(allocator: std.mem.Allocator, config: GameConfig) Self {
         const display_data = DisplayData{
@@ -82,6 +86,7 @@ pub const FarHorizonsClient = struct {
             .local_player = undefined, // Initialized in run() after keyboard_input is ready
             .allocator = allocator,
             .use_async_chunks = true, // Enable async chunk loading by default
+            .block_interaction = null, // Initialized in run() after chunk_manager
         };
     }
 
@@ -147,6 +152,8 @@ pub const FarHorizonsClient = struct {
             try self.chunk_manager.?.start();
             // Trigger initial chunk loading based on player position
             self.chunk_manager.?.updatePlayerPosition(self.local_player.getPosition(0));
+            // Initialize block interaction handler
+            self.block_interaction = BlockInteraction.init(&self.chunk_manager.?);
             logger.info("Async chunk loading enabled", .{});
         } else {
             // Legacy single-chunk mode
@@ -202,10 +209,16 @@ pub const FarHorizonsClient = struct {
                 self.local_player.setYRot(self.local_player.getYRot() + @as(f32, @floatCast(rotation.yaw)));
                 self.local_player.setXRot(self.local_player.getXRot() + @as(f32, @floatCast(rotation.pitch)));
 
-                // Handle scroll wheel for flying speed (spectator mode)
+                // Handle scroll wheel: flying speed in spectator mode, block selection otherwise
                 const scroll = self.mouse_handler.getAccumulatedScroll();
                 if (scroll != 0) {
-                    self.local_player.getAbilities().adjustFlyingSpeed(@floatCast(scroll));
+                    if (self.window.isKeyPressed(InputConstants.KEY_LEFT_SHIFT)) {
+                        // Shift+scroll = change flying speed
+                        self.local_player.getAbilities().adjustFlyingSpeed(@floatCast(scroll));
+                    } else if (self.block_interaction) |*bi| {
+                        // Scroll = cycle selected block
+                        bi.cycleSelectedBlock(scroll > 0);
+                    }
                 }
             }
 
@@ -226,6 +239,27 @@ pub const FarHorizonsClient = struct {
                 if (self.chunk_manager) |*cm| {
                     cm.updatePlayerPosition(self.local_player.getPosition(0));
                 }
+
+                // Update block interaction
+                if (self.block_interaction) |*bi| {
+                    bi.tick();
+
+                    // Handle block interaction input (only when mouse is grabbed)
+                    if (self.mouse_handler.isMouseGrabbed()) {
+                        // Left click = break block
+                        if (self.mouse_handler.isLeftPressed()) {
+                            _ = bi.handleLeftClick();
+                        }
+                        // Right click = place block
+                        if (self.mouse_handler.isRightPressed()) {
+                            _ = bi.handleRightClick();
+                        }
+                        // Middle click = pick block
+                        if (self.mouse_handler.isMiddlePressed()) {
+                            bi.handleMiddleClick();
+                        }
+                    }
+                }
             }
 
             // Process completed chunk meshes (main thread only)
@@ -243,6 +277,11 @@ pub const FarHorizonsClient = struct {
             // Rotation is NOT interpolated - mouse look must be instant
             self.camera.position = self.local_player.getPosition(partial_tick);
             self.camera.setRotation(self.local_player.getYRot(), self.local_player.getXRot());
+
+            // Update block interaction raycast (every frame for responsive crosshair)
+            if (self.block_interaction) |*bi| {
+                bi.updateHitResult(&self.camera);
+            }
 
             // Update MVP matrices
             const aspect = self.render_system.getAspectRatio();

@@ -1,0 +1,13 @@
+{
+  "variants": {
+    "type=bottom": {
+      "model": "farhorizons:block/birch_slab"
+    },
+    "type=double": {
+      "model": "farhorizons:block/birch_planks"
+    },
+    "type=top": {
+      "model": "farhorizons:block/birch_slab_top"
+    }
+  }
+}

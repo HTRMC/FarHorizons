@@ -1,0 +1,8 @@
+{
+  "parent": "farhorizons:block/slab_top",
+  "textures": {
+    "bottom": "farhorizons:block/birch_planks",
+    "side": "farhorizons:block/birch_planks",
+    "top": "farhorizons:block/birch_planks"
+  }
+}
