@@ -1928,11 +1928,12 @@ pub const RenderSystem = struct {
             .maxDepthBounds = 1.0,
         };
 
-        // Alpha blending for UI
+        // Invert blend mode for crosshair (like Minecraft)
+        // result = src * (1 - dst) + dst * (1 - src) = inverts background where crosshair is drawn
         const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
             .blendEnable = vk.VK_TRUE,
-            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
-            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR,
             .colorBlendOp = vk.VK_BLEND_OP_ADD,
             .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
             .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
