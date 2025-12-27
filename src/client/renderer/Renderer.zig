@@ -2,7 +2,9 @@
 
 pub const RenderSystem = @import("RenderSystem.zig").RenderSystem;
 pub const Vertex = @import("RenderSystem.zig").Vertex;
+pub const LineVertex = @import("RenderSystem.zig").LineVertex;
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
+pub const BlockOutlineRenderer = @import("BlockOutlineRenderer.zig").BlockOutlineRenderer;
 pub const block = @import("block/Model.zig");
 
 // Buffer management

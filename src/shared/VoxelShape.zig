@@ -271,6 +271,33 @@ pub const VoxelShape = union(enum) {
     }
 
     // =====================
+    // Edge Iteration (for block outline rendering)
+    // =====================
+
+    /// Callback type for edge iteration
+    /// Called with (x1, y1, z1, x2, y2, z2) for each edge in normalized coordinates (0-1)
+    pub const EdgeConsumer = *const fn (x1: f64, y1: f64, z1: f64, x2: f64, y2: f64, z2: f64, ctx: *anyopaque) void;
+
+    /// Iterate over all visible edges of the shape
+    /// Edges are reported in normalized coordinates (0-1 range)
+    /// This is used for rendering block outlines like Minecraft
+    pub fn forAllEdges(self: *const Self, consumer: EdgeConsumer, ctx: *anyopaque) void {
+        switch (self.*) {
+            .empty => {}, // No edges for empty shape
+            .block => {
+                // Full block has 12 edges
+                emitBoxEdges(0, 0, 0, 1, 1, 1, consumer, ctx);
+            },
+            .cube => |*s| {
+                forAllEdgesDiscrete(s, consumer, ctx);
+            },
+            .array => |*s| {
+                forAllEdgesDiscreteArray(s, consumer, ctx);
+            },
+        }
+    }
+
+    // =====================
     // Cleanup
     // =====================
 
@@ -481,6 +508,55 @@ pub fn rotateHorizontalWithInitial(north_shape: VoxelShape, initial: OctahedralG
         rotate(north_shape, OctahedralGroup.BLOCK_ROT_Y_180.compose(initial)), // South
         rotate(north_shape, OctahedralGroup.BLOCK_ROT_Y_270.compose(initial)), // West
     };
+}
+
+// =====================
+// Edge Iteration Helpers
+// =====================
+
+/// Emit the 12 edges of an axis-aligned box
+fn emitBoxEdges(
+    x1: f64,
+    y1: f64,
+    z1: f64,
+    x2: f64,
+    y2: f64,
+    z2: f64,
+    consumer: VoxelShape.EdgeConsumer,
+    ctx: *anyopaque,
+) void {
+    // Bottom face edges (y = y1)
+    consumer(x1, y1, z1, x2, y1, z1, ctx); // Front edge
+    consumer(x1, y1, z2, x2, y1, z2, ctx); // Back edge
+    consumer(x1, y1, z1, x1, y1, z2, ctx); // Left edge
+    consumer(x2, y1, z1, x2, y1, z2, ctx); // Right edge
+
+    // Top face edges (y = y2)
+    consumer(x1, y2, z1, x2, y2, z1, ctx); // Front edge
+    consumer(x1, y2, z2, x2, y2, z2, ctx); // Back edge
+    consumer(x1, y2, z1, x1, y2, z2, ctx); // Left edge
+    consumer(x2, y2, z1, x2, y2, z2, ctx); // Right edge
+
+    // Vertical edges connecting top and bottom
+    consumer(x1, y1, z1, x1, y2, z1, ctx); // Front-left
+    consumer(x2, y1, z1, x2, y2, z1, ctx); // Front-right
+    consumer(x1, y1, z2, x1, y2, z2, ctx); // Back-left
+    consumer(x2, y1, z2, x2, y2, z2, ctx); // Back-right
+}
+
+/// Edge iteration for CubeVoxelShape
+/// Simpler implementation: emit bounding box edges based on the shape's bounds
+fn forAllEdgesDiscrete(shape: *const CubeVoxelShape, consumer: VoxelShape.EdgeConsumer, ctx: *anyopaque) void {
+    // Get bounds in normalized coordinates
+    const bounds = shape.getBounds();
+    emitBoxEdges(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], consumer, ctx);
+}
+
+/// Edge iteration for ArrayVoxelShape
+fn forAllEdgesDiscreteArray(shape: *const ArrayVoxelShape, consumer: VoxelShape.EdgeConsumer, ctx: *anyopaque) void {
+    // Get bounds in normalized coordinates
+    const bounds = shape.getBounds();
+    emitBoxEdges(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], consumer, ctx);
 }
 
 // =====================

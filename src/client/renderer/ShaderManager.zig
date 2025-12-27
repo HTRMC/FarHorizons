@@ -19,6 +19,9 @@ pub const ShaderManager = struct {
     /// Cached UI shaders
     ui_vert_spv: ?[]u8,
     ui_frag_spv: ?[]u8,
+    /// Cached line shaders (for block outline)
+    line_vert_spv: ?[]u8,
+    line_frag_spv: ?[]u8,
 
     /// Base path for default shaders
     const default_shader_path = "assets/farhorizons/shaders/";
@@ -37,6 +40,8 @@ pub const ShaderManager = struct {
         var default_frag: ?[]u8 = null;
         var ui_vert: ?[]u8 = null;
         var ui_frag: ?[]u8 = null;
+        var line_vert: ?[]u8 = null;
+        var line_frag: ?[]u8 = null;
 
         if (enable_runtime_compilation) {
             var total_timer = std.time.Timer.start() catch unreachable;
@@ -74,6 +79,17 @@ pub const ShaderManager = struct {
             ui_frag_compiled.deinit();
             log.info("UI shaders compiled", .{});
 
+            // Compile line shaders (for block outline)
+            log.info("Compiling line shaders...", .{});
+            var line_vert_compiled = try compiler.?.compileFile(default_shader_path ++ "line.vert");
+            line_vert = try allocator.dupe(u8, line_vert_compiled.spv_data);
+            line_vert_compiled.deinit();
+
+            var line_frag_compiled = try compiler.?.compileFile(default_shader_path ++ "line.frag");
+            line_frag = try allocator.dupe(u8, line_frag_compiled.spv_data);
+            line_frag_compiled.deinit();
+            log.info("Line shaders compiled", .{});
+
             const total_time_ms = @as(f64, @floatFromInt(total_timer.read())) / @as(f64, std.time.ns_per_ms);
             const cache_stats = compiler.?.getCacheStats();
             log.info("Shader loading complete in {d:.2}ms (cache: {d} hits, {d} misses)", .{
@@ -92,6 +108,8 @@ pub const ShaderManager = struct {
             .default_frag_spv = default_frag,
             .ui_vert_spv = ui_vert,
             .ui_frag_spv = ui_frag,
+            .line_vert_spv = line_vert,
+            .line_frag_spv = line_frag,
         };
     }
 
@@ -121,6 +139,12 @@ pub const ShaderManager = struct {
         if (self.ui_frag_spv) |spv| {
             self.allocator.free(spv);
         }
+        if (self.line_vert_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.line_frag_spv) |spv| {
+            self.allocator.free(spv);
+        }
 
         if (self.compiler) |*c| {
             c.deinit();
@@ -145,6 +169,16 @@ pub const ShaderManager = struct {
     /// Get the UI fragment shader (compiled at runtime)
     pub fn getUIFragmentShader(self: *ShaderManager) ?[]const u8 {
         return self.ui_frag_spv;
+    }
+
+    /// Get the line vertex shader (compiled at runtime)
+    pub fn getLineVertexShader(self: *ShaderManager) ?[]const u8 {
+        return self.line_vert_spv;
+    }
+
+    /// Get the line fragment shader (compiled at runtime)
+    pub fn getLineFragmentShader(self: *ShaderManager) ?[]const u8 {
+        return self.line_frag_spv;
     }
 
     /// Get default vertex shader as u32 words for Vulkan

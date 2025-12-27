@@ -26,6 +26,7 @@ const InputConstants = platform.InputConstants;
 const RenderSystem = renderer.RenderSystem;
 const Vertex = renderer.Vertex;
 const TextureManager = renderer.TextureManager;
+const BlockOutlineRenderer = renderer.BlockOutlineRenderer;
 const ModelLoader = renderer.block.ModelLoader;
 const FaceBakery = renderer.block.FaceBakery;
 const BakedQuad = renderer.block.BakedQuad;
@@ -61,6 +62,8 @@ pub const FarHorizonsClient = struct {
     use_async_chunks: bool,
     /// Block interaction handler
     block_interaction: ?BlockInteraction,
+    /// Block outline renderer
+    block_outline_renderer: BlockOutlineRenderer,
 
     pub fn init(allocator: std.mem.Allocator, config: GameConfig) Self {
         const display_data = DisplayData{
@@ -87,6 +90,7 @@ pub const FarHorizonsClient = struct {
             .allocator = allocator,
             .use_async_chunks = true, // Enable async chunk loading by default
             .block_interaction = null, // Initialized in run() after chunk_manager
+            .block_outline_renderer = BlockOutlineRenderer.init(),
         };
     }
 
@@ -281,6 +285,21 @@ pub const FarHorizonsClient = struct {
             // Update block interaction raycast (every frame for responsive crosshair)
             if (self.block_interaction) |*bi| {
                 bi.updateHitResult(&self.camera);
+
+                // Update block outline based on hit result
+                if (bi.hit_result) |hit| {
+                    // Get the block's VoxelShape (for now use full block shape)
+                    // TODO: Get actual shape from block registry
+                    const block_shape = shared.voxel_shape.BLOCK;
+                    _ = self.block_outline_renderer.generateOutline(hit.block_pos, &block_shape);
+                    self.block_outline_renderer.uploadToRenderSystem(&self.render_system) catch |err| {
+                        logger.err("Failed to upload block outline: {}", .{err});
+                    };
+                } else {
+                    // No block targeted, clear outline
+                    self.block_outline_renderer.clear();
+                    self.render_system.clearLineVertices();
+                }
             }
 
             // Update MVP matrices

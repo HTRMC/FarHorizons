@@ -115,6 +115,13 @@ pub const RenderSystem = struct {
     crosshair_texture_view: vk.VkImageView = null,
     crosshair_sampler: vk.VkSampler = null,
 
+    // Line Pipeline (for block outline rendering)
+    line_pipeline_layout: vk.VkPipelineLayout = null,
+    line_pipeline: vk.VkPipeline = null,
+    line_vertex_buffer: vk.VkBuffer = null,
+    line_vertex_buffer_memory: vk.VkDeviceMemory = null,
+    line_vertex_count: u32 = 0,
+
     // Vertex/Index buffers
     vertex_buffer: vk.VkBuffer = null,
     vertex_buffer_memory: vk.VkDeviceMemory = null,
@@ -200,6 +207,7 @@ pub const RenderSystem = struct {
         try self.createGraphicsPipeline();
         try self.createUIDescriptorSetLayout();
         try self.createUIPipeline();
+        try self.createLinePipeline();
         try self.createFramebuffers();
         try self.createCommandPool();
         try self.loadCrosshairTexture();
@@ -422,6 +430,94 @@ pub const RenderSystem = struct {
             const dest: *UniformBufferObject = @ptrCast(@alignCast(mapped));
             dest.* = ubo;
         }
+    }
+
+    /// Upload line vertices for block outline rendering
+    /// Vertices should be pairs of points defining line segments
+    pub fn uploadLineVertices(self: *Self, vertices: []const LineVertex) !void {
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
+
+        if (vertices.len == 0) {
+            self.line_vertex_count = 0;
+            return;
+        }
+
+        const buffer_size: vk.VkDeviceSize = @intCast(@sizeOf(LineVertex) * vertices.len);
+
+        // Destroy old buffer if exists
+        if (self.line_vertex_buffer) |b| {
+            vkDestroyBuffer(self.device, b, null);
+            self.line_vertex_buffer = null;
+        }
+        if (self.line_vertex_buffer_memory) |m| {
+            vkFreeMemory(self.device, m, null);
+            self.line_vertex_buffer_memory = null;
+        }
+
+        // Create new buffer
+        const buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = buffer_size,
+            .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        if (vkCreateBuffer(self.device, &buffer_info, null, &self.line_vertex_buffer) != vk.VK_SUCCESS) {
+            return error.BufferCreationFailed;
+        }
+
+        // Get memory requirements
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetBufferMemoryRequirements(self.device, self.line_vertex_buffer.?, &mem_requirements);
+
+        const mem_type = try self.findMemoryType(
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = mem_type,
+        };
+
+        if (vkAllocateMemory(self.device, &alloc_info, null, &self.line_vertex_buffer_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+
+        if (vkBindBufferMemory(self.device, self.line_vertex_buffer.?, self.line_vertex_buffer_memory.?, 0) != vk.VK_SUCCESS) {
+            return error.BufferBindFailed;
+        }
+
+        // Copy data
+        var data: ?*anyopaque = null;
+        if (vkMapMemory(self.device, self.line_vertex_buffer_memory.?, 0, buffer_size, 0, &data) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+
+        const dest: [*]LineVertex = @ptrCast(@alignCast(data.?));
+        @memcpy(dest[0..vertices.len], vertices);
+
+        vkUnmapMemory(self.device, self.line_vertex_buffer_memory.?);
+
+        self.line_vertex_count = @intCast(vertices.len);
+    }
+
+    /// Clear line vertices (no outline to render)
+    pub fn clearLineVertices(self: *Self) void {
+        self.line_vertex_count = 0;
     }
 
     /// Get the current swapchain aspect ratio
@@ -697,6 +793,26 @@ pub const RenderSystem = struct {
             );
         }
 
+        // Draw block outline (lines)
+        if (self.line_pipeline != null and self.line_vertex_buffer != null and self.line_vertex_count > 0) {
+            const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+            const vkCmdSetLineWidth = vk.vkCmdSetLineWidth orelse return error.VulkanFunctionNotLoaded;
+
+            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline);
+
+            // Use same descriptor set for MVP uniforms
+            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline_layout, 0, 1, &descriptor_sets, 0, null);
+
+            const line_vertex_buffers = [_]vk.VkBuffer{self.line_vertex_buffer.?};
+            const line_offsets = [_]vk.VkDeviceSize{0};
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, &line_vertex_buffers, &line_offsets);
+
+            // Set line width (Minecraft uses 2.0 for normal, 7.0 for high contrast)
+            vkCmdSetLineWidth(command_buffer, 2.0);
+
+            vkCmdDraw(command_buffer, self.line_vertex_count, 1, 0, 0);
+        }
+
         // Draw crosshair (UI overlay)
         if (self.ui_pipeline != null and self.crosshair_vertex_buffer != null) {
             const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
@@ -963,6 +1079,26 @@ pub const RenderSystem = struct {
 
         // Draw indexed
         vkCmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
+
+        // Draw block outline (lines)
+        if (self.line_pipeline != null and self.line_vertex_buffer != null and self.line_vertex_count > 0) {
+            const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+            const vkCmdSetLineWidth = vk.vkCmdSetLineWidth orelse return error.VulkanFunctionNotLoaded;
+
+            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline);
+
+            // Use same descriptor set for MVP uniforms
+            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline_layout, 0, 1, &descriptor_sets, 0, null);
+
+            const line_vertex_buffers = [_]vk.VkBuffer{self.line_vertex_buffer.?};
+            const line_offsets = [_]vk.VkDeviceSize{0};
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, &line_vertex_buffers, &line_offsets);
+
+            // Set line width (Minecraft uses 2.0 for normal, 7.0 for high contrast)
+            vkCmdSetLineWidth(command_buffer, 2.0);
+
+            vkCmdDraw(command_buffer, self.line_vertex_count, 1, 0, 0);
+        }
 
         // Draw crosshair (UI overlay)
         if (self.ui_pipeline != null and self.crosshair_vertex_buffer != null) {
@@ -1800,6 +1936,37 @@ pub const RenderSystem = struct {
         }
     };
 
+    /// Line Vertex for block outline rendering (3D position + color)
+    pub const LineVertex = extern struct {
+        pos: [3]f32,
+        color: [4]f32,
+
+        pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
+            return .{
+                .binding = 0,
+                .stride = @sizeOf(LineVertex),
+                .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
+            };
+        }
+
+        pub fn getAttributeDescriptions() [2]vk.VkVertexInputAttributeDescription {
+            return .{
+                .{
+                    .binding = 0,
+                    .location = 0,
+                    .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
+                    .offset = @offsetOf(LineVertex, "pos"),
+                },
+                .{
+                    .binding = 0,
+                    .location = 1,
+                    .format = vk.VK_FORMAT_R32G32B32A32_SFLOAT,
+                    .offset = @offsetOf(LineVertex, "color"),
+                },
+            };
+        }
+    };
+
     fn createUIPipeline(self: *Self) !void {
         const vkCreateShaderModule = vk.vkCreateShaderModule orelse return error.VulkanFunctionNotLoaded;
         const vkDestroyShaderModule = vk.vkDestroyShaderModule orelse return error.VulkanFunctionNotLoaded;
@@ -1995,6 +2162,203 @@ pub const RenderSystem = struct {
         }
 
         logger.info("UI pipeline created", .{});
+    }
+
+    fn createLinePipeline(self: *Self) !void {
+        const vkCreateShaderModule = vk.vkCreateShaderModule orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyShaderModule = vk.vkDestroyShaderModule orelse return error.VulkanFunctionNotLoaded;
+        const vkCreatePipelineLayout = vk.vkCreatePipelineLayout orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateGraphicsPipelines = vk.vkCreateGraphicsPipelines orelse return error.VulkanFunctionNotLoaded;
+
+        // Get line shaders from ShaderManager
+        const vert_shader_code = if (self.shader_manager) |*sm|
+            sm.getLineVertexShader() orelse return error.ShaderNotAvailable
+        else
+            return error.ShaderManagerNotInitialized;
+
+        const frag_shader_code = if (self.shader_manager) |*sm|
+            sm.getLineFragmentShader() orelse return error.ShaderNotAvailable
+        else
+            return error.ShaderManagerNotInitialized;
+
+        const vert_module = try self.createShaderModule(vkCreateShaderModule, vert_shader_code);
+        defer vkDestroyShaderModule(self.device, vert_module, null);
+
+        const frag_module = try self.createShaderModule(vkCreateShaderModule, frag_shader_code);
+        defer vkDestroyShaderModule(self.device, frag_module, null);
+
+        const shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stage = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vert_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = frag_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+            },
+        };
+
+        const dynamic_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR, vk.VK_DYNAMIC_STATE_LINE_WIDTH };
+        const dynamic_state = vk.VkPipelineDynamicStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .dynamicStateCount = dynamic_states.len,
+            .pDynamicStates = &dynamic_states,
+        };
+
+        const binding_description = LineVertex.getBindingDescription();
+        const attribute_descriptions = LineVertex.getAttributeDescriptions();
+
+        const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &binding_description,
+            .vertexAttributeDescriptionCount = attribute_descriptions.len,
+            .pVertexAttributeDescriptions = &attribute_descriptions,
+        };
+
+        // Use LINE_LIST topology for rendering lines
+        const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .topology = vk.VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
+            .primitiveRestartEnable = vk.VK_FALSE,
+        };
+
+        const viewport_state = vk.VkPipelineViewportStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = null,
+            .scissorCount = 1,
+            .pScissors = null,
+        };
+
+        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthClampEnable = vk.VK_FALSE,
+            .rasterizerDiscardEnable = vk.VK_FALSE,
+            .polygonMode = vk.VK_POLYGON_MODE_FILL,
+            .cullMode = vk.VK_CULL_MODE_NONE, // No culling for lines
+            .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = vk.VK_FALSE,
+            .depthBiasConstantFactor = 0.0,
+            .depthBiasClamp = 0.0,
+            .depthBiasSlopeFactor = 0.0,
+            .lineWidth = 1.0, // Will be set dynamically
+        };
+
+        const multisampling = vk.VkPipelineMultisampleStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = vk.VK_FALSE,
+            .minSampleShading = 1.0,
+            .pSampleMask = null,
+            .alphaToCoverageEnable = vk.VK_FALSE,
+            .alphaToOneEnable = vk.VK_FALSE,
+        };
+
+        // Enable depth testing but with slight offset to render on top of blocks
+        const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_TRUE,
+            .depthWriteEnable = vk.VK_FALSE, // Don't write depth for outlines
+            .depthCompareOp = vk.VK_COMPARE_OP_LESS_OR_EQUAL,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
+        };
+
+        // Alpha blending for semi-transparent outline
+        const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        const color_blending = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = vk.VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        // Use main descriptor set layout for MVP uniforms
+        const descriptor_set_layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout};
+        const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &descriptor_set_layouts,
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges = null,
+        };
+
+        if (vkCreatePipelineLayout(self.device, &pipeline_layout_info, null, &self.line_pipeline_layout) != vk.VK_SUCCESS) {
+            return error.PipelineLayoutCreationFailed;
+        }
+
+        const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stageCount = shader_stages.len,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_stencil,
+            .pColorBlendState = &color_blending,
+            .pDynamicState = &dynamic_state,
+            .layout = self.line_pipeline_layout,
+            .renderPass = self.render_pass,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        if (vkCreateGraphicsPipelines(self.device, null, 1, &pipeline_info, null, &self.line_pipeline) != vk.VK_SUCCESS) {
+            return error.PipelineCreationFailed;
+        }
+
+        logger.info("Line pipeline created", .{});
     }
 
     fn loadCrosshairTexture(self: *Self) !void {
@@ -2956,6 +3320,24 @@ pub const RenderSystem = struct {
         if (self.ui_descriptor_set_layout) |layout| {
             if (vk.vkDestroyDescriptorSetLayout) |destroy| destroy(self.device, layout, null);
             self.ui_descriptor_set_layout = null;
+        }
+        // Destroy line pipeline
+        if (self.line_pipeline) |p| {
+            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+            self.line_pipeline = null;
+        }
+        if (self.line_pipeline_layout) |l| {
+            if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
+            self.line_pipeline_layout = null;
+        }
+        // Destroy line buffer
+        if (self.line_vertex_buffer) |b| {
+            if (vk.vkDestroyBuffer) |destroy| destroy(self.device, b, null);
+            self.line_vertex_buffer = null;
+        }
+        if (self.line_vertex_buffer_memory) |m| {
+            if (vk.vkFreeMemory) |free| free(self.device, m, null);
+            self.line_vertex_buffer_memory = null;
         }
     }
 
