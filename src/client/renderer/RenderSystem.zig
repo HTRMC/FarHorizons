@@ -702,83 +702,32 @@ pub const RenderSystem = struct {
     /// Upload line vertices for block outline rendering
     /// Vertices should be pairs of points defining line segments
     pub fn uploadLineVertices(self: *Self, vertices: []const LineVertex) !void {
-        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
-
         if (vertices.len == 0) {
             self.line_vertex_count = 0;
             return;
         }
 
-        const buffer_size: vk.VkDeviceSize = @intCast(@sizeOf(LineVertex) * vertices.len);
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
         // Destroy old buffer if exists
-        if (self.line_vertex_buffer) |b| {
-            vkDestroyBuffer(self.device, b, null);
+        if (self.line_vertex_buffer != null or self.line_vertex_buffer_memory != null) {
+            gpu.destroyBufferRaw(.{
+                .handle = self.line_vertex_buffer,
+                .memory = self.line_vertex_buffer_memory,
+            });
             self.line_vertex_buffer = null;
-        }
-        if (self.line_vertex_buffer_memory) |m| {
-            vkFreeMemory(self.device, m, null);
             self.line_vertex_buffer_memory = null;
         }
 
-        // Create new buffer
-        const buffer_info = vk.VkBufferCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .size = buffer_size,
-            .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-        };
-
-        if (vkCreateBuffer(self.device, &buffer_info, null, &self.line_vertex_buffer) != vk.VK_SUCCESS) {
-            return error.BufferCreationFailed;
-        }
-
-        // Get memory requirements
-        var mem_requirements: vk.VkMemoryRequirements = undefined;
-        vkGetBufferMemoryRequirements(self.device, self.line_vertex_buffer.?, &mem_requirements);
-
-        const mem_type = try self.findMemoryType(
-            mem_requirements.memoryTypeBits,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        // Create new buffer with data
+        const result = try gpu.createBufferWithDataRaw(
+            LineVertex,
+            vertices,
+            vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
         );
 
-        const alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = mem_requirements.size,
-            .memoryTypeIndex = mem_type,
-        };
-
-        if (vkAllocateMemory(self.device, &alloc_info, null, &self.line_vertex_buffer_memory) != vk.VK_SUCCESS) {
-            return error.MemoryAllocationFailed;
-        }
-
-        if (vkBindBufferMemory(self.device, self.line_vertex_buffer.?, self.line_vertex_buffer_memory.?, 0) != vk.VK_SUCCESS) {
-            return error.BufferBindFailed;
-        }
-
-        // Copy data
-        var data: ?*anyopaque = null;
-        if (vkMapMemory(self.device, self.line_vertex_buffer_memory.?, 0, buffer_size, 0, &data) != vk.VK_SUCCESS) {
-            return error.MemoryMapFailed;
-        }
-
-        const dest: [*]LineVertex = @ptrCast(@alignCast(data.?));
-        @memcpy(dest[0..vertices.len], vertices);
-
-        vkUnmapMemory(self.device, self.line_vertex_buffer_memory.?);
-
+        self.line_vertex_buffer = result.handle;
+        self.line_vertex_buffer_memory = result.memory;
         self.line_vertex_count = @intCast(vertices.len);
     }
 
@@ -854,139 +803,32 @@ pub const RenderSystem = struct {
     /// Upload new mesh data (vertices and indices)
     pub fn uploadMesh(self: *Self, vertices: []const Vertex, indices: []const u16) !void {
         const vkDeviceWaitIdle = vk.vkDeviceWaitIdle orelse return error.VulkanFunctionNotLoaded;
-        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
         // Wait for device to be idle before modifying buffers
         _ = vkDeviceWaitIdle(self.device);
 
         // Destroy old buffers
-        if (self.vertex_buffer != null) {
-            vkDestroyBuffer(self.device, self.vertex_buffer, null);
+        if (self.vertex_buffer != null or self.vertex_buffer_memory != null) {
+            gpu.destroyBufferRaw(.{ .handle = self.vertex_buffer, .memory = self.vertex_buffer_memory });
             self.vertex_buffer = null;
-        }
-        if (self.vertex_buffer_memory != null) {
-            vkFreeMemory(self.device, self.vertex_buffer_memory, null);
             self.vertex_buffer_memory = null;
         }
-        if (self.index_buffer != null) {
-            vkDestroyBuffer(self.device, self.index_buffer, null);
+        if (self.index_buffer != null or self.index_buffer_memory != null) {
+            gpu.destroyBufferRaw(.{ .handle = self.index_buffer, .memory = self.index_buffer_memory });
             self.index_buffer = null;
-        }
-        if (self.index_buffer_memory != null) {
-            vkFreeMemory(self.device, self.index_buffer_memory, null);
             self.index_buffer_memory = null;
         }
 
         // Create vertex buffer
-        const vertex_buffer_size: vk.VkDeviceSize = @sizeOf(Vertex) * vertices.len;
-        {
-            const buffer_info = vk.VkBufferCreateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .pNext = null,
-                .flags = 0,
-                .size = vertex_buffer_size,
-                .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-                .queueFamilyIndexCount = 0,
-                .pQueueFamilyIndices = null,
-            };
-
-            if (vkCreateBuffer(self.device, &buffer_info, null, &self.vertex_buffer) != vk.VK_SUCCESS) {
-                return error.BufferCreationFailed;
-            }
-
-            var mem_requirements: vk.VkMemoryRequirements = undefined;
-            vkGetBufferMemoryRequirements(self.device, self.vertex_buffer, &mem_requirements);
-
-            const mem_type = try self.findMemoryType(
-                mem_requirements.memoryTypeBits,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            );
-
-            const alloc_info = vk.VkMemoryAllocateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                .pNext = null,
-                .allocationSize = mem_requirements.size,
-                .memoryTypeIndex = mem_type,
-            };
-
-            if (vkAllocateMemory(self.device, &alloc_info, null, &self.vertex_buffer_memory) != vk.VK_SUCCESS) {
-                return error.MemoryAllocationFailed;
-            }
-
-            if (vkBindBufferMemory(self.device, self.vertex_buffer, self.vertex_buffer_memory, 0) != vk.VK_SUCCESS) {
-                return error.BufferMemoryBindFailed;
-            }
-
-            var data: ?*anyopaque = null;
-            if (vkMapMemory(self.device, self.vertex_buffer_memory, 0, vertex_buffer_size, 0, &data) != vk.VK_SUCCESS) {
-                return error.MemoryMapFailed;
-            }
-
-            const dest: [*]Vertex = @ptrCast(@alignCast(data));
-            @memcpy(dest[0..vertices.len], vertices);
-
-            vkUnmapMemory(self.device, self.vertex_buffer_memory);
-        }
+        const vertex_result = try gpu.createBufferWithDataRaw(Vertex, vertices, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        self.vertex_buffer = vertex_result.handle;
+        self.vertex_buffer_memory = vertex_result.memory;
 
         // Create index buffer
-        const index_buffer_size: vk.VkDeviceSize = @sizeOf(u16) * indices.len;
-        {
-            const buffer_info = vk.VkBufferCreateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .pNext = null,
-                .flags = 0,
-                .size = index_buffer_size,
-                .usage = vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-                .queueFamilyIndexCount = 0,
-                .pQueueFamilyIndices = null,
-            };
-
-            if (vkCreateBuffer(self.device, &buffer_info, null, &self.index_buffer) != vk.VK_SUCCESS) {
-                return error.BufferCreationFailed;
-            }
-
-            var mem_requirements: vk.VkMemoryRequirements = undefined;
-            vkGetBufferMemoryRequirements(self.device, self.index_buffer, &mem_requirements);
-
-            const mem_type = try self.findMemoryType(
-                mem_requirements.memoryTypeBits,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            );
-
-            const alloc_info = vk.VkMemoryAllocateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                .pNext = null,
-                .allocationSize = mem_requirements.size,
-                .memoryTypeIndex = mem_type,
-            };
-
-            if (vkAllocateMemory(self.device, &alloc_info, null, &self.index_buffer_memory) != vk.VK_SUCCESS) {
-                return error.MemoryAllocationFailed;
-            }
-
-            if (vkBindBufferMemory(self.device, self.index_buffer, self.index_buffer_memory, 0) != vk.VK_SUCCESS) {
-                return error.BufferMemoryBindFailed;
-            }
-
-            var data: ?*anyopaque = null;
-            if (vkMapMemory(self.device, self.index_buffer_memory, 0, index_buffer_size, 0, &data) != vk.VK_SUCCESS) {
-                return error.MemoryMapFailed;
-            }
-
-            const dest: [*]u16 = @ptrCast(@alignCast(data));
-            @memcpy(dest[0..indices.len], indices);
-
-            vkUnmapMemory(self.device, self.index_buffer_memory);
-        }
+        const index_result = try gpu.createBufferWithDataRaw(u16, indices, vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+        self.index_buffer = index_result.handle;
+        self.index_buffer_memory = index_result.memory;
 
         self.index_count = @intCast(indices.len);
         logger.info("Mesh uploaded: {d} vertices, {d} indices", .{ vertices.len, indices.len });
@@ -2259,13 +2101,7 @@ pub const RenderSystem = struct {
         const vkBindImageMemory = vk.vkBindImageMemory orelse return error.VulkanFunctionNotLoaded;
         const vkCreateImageView = vk.vkCreateImageView orelse return error.VulkanFunctionNotLoaded;
         const vkCreateSampler = vk.vkCreateSampler orelse return error.VulkanFunctionNotLoaded;
-        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
         // Load crosshair PNG using stb_image
         const crosshair_path = "assets/farhorizons/textures/gui/crosshair.png";
@@ -2280,51 +2116,12 @@ pub const RenderSystem = struct {
         const height: u32 = @intCast(image.height);
         logger.info("Loaded crosshair texture: {}x{}", .{ width, height });
 
-        // Create staging buffer
-        const image_size: vk.VkDeviceSize = @as(u64, width) * @as(u64, height) * 4;
-        var staging_buffer: vk.VkBuffer = null;
-        var staging_memory: vk.VkDeviceMemory = null;
+        // Create staging buffer and copy pixel data
+        const image_size: u64 = @as(u64, width) * @as(u64, height) * 4;
+        const staging = try gpu.createMappedBufferRaw(image_size, vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        defer gpu.destroyMappedBufferRaw(staging);
 
-        const staging_buffer_info = vk.VkBufferCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .size = image_size,
-            .usage = vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-        };
-
-        if (vkCreateBuffer(self.device, &staging_buffer_info, null, &staging_buffer) != vk.VK_SUCCESS) {
-            return error.BufferCreationFailed;
-        }
-
-        var staging_mem_req: vk.VkMemoryRequirements = undefined;
-        vkGetBufferMemoryRequirements(self.device, staging_buffer, &staging_mem_req);
-
-        const staging_alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = staging_mem_req.size,
-            .memoryTypeIndex = try self.findMemoryType(staging_mem_req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
-        };
-
-        if (vkAllocateMemory(self.device, &staging_alloc_info, null, &staging_memory) != vk.VK_SUCCESS) {
-            return error.MemoryAllocationFailed;
-        }
-
-        if (vkBindBufferMemory(self.device, staging_buffer, staging_memory, 0) != vk.VK_SUCCESS) {
-            return error.BufferBindFailed;
-        }
-
-        // Copy pixel data to staging buffer
-        var data: ?*anyopaque = null;
-        if (vkMapMemory(self.device, staging_memory, 0, image_size, 0, &data) != vk.VK_SUCCESS) {
-            return error.MemoryMapFailed;
-        }
-        @memcpy(@as([*]u8, @ptrCast(data.?))[0..@intCast(image_size)], image.data[0..@intCast(image_size)]);
-        vkUnmapMemory(self.device, staging_memory);
+        @memcpy(@as([*]u8, @ptrCast(staging.mapped.?))[0..@intCast(image_size)], image.data[0..@intCast(image_size)]);
 
         // Create image
         const image_info = vk.VkImageCreateInfo{
@@ -2369,12 +2166,8 @@ pub const RenderSystem = struct {
 
         // Transition image and copy from staging buffer
         try self.transitionImageLayout(self.crosshair_texture, vk.VK_IMAGE_LAYOUT_UNDEFINED, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        try self.copyBufferToImage(staging_buffer, self.crosshair_texture, width, height);
+        try self.copyBufferToImage(staging.handle, self.crosshair_texture, width, height);
         try self.transitionImageLayout(self.crosshair_texture, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-        // Cleanup staging buffer
-        vkDestroyBuffer(self.device, staging_buffer, null);
-        vkFreeMemory(self.device, staging_memory, null);
 
         // Create image view
         const view_info = vk.VkImageViewCreateInfo{
@@ -2708,90 +2501,34 @@ pub const RenderSystem = struct {
     }
 
     fn createCrosshairBuffer(self: *Self) !void {
-        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
         // Crosshair is rendered as a textured quad
         // Minecraft uses GUI scale - at scale 2, each texture pixel = 2 screen pixels
-        // The 15x15 texture at GUI scale 2 = 30x30 screen pixels
         const screen_height: f32 = @floatFromInt(self.swapchain_extent.height);
         const screen_width: f32 = @floatFromInt(self.swapchain_extent.width);
 
         // Calculate appropriate GUI scale based on screen height (like Minecraft)
-        // Minecraft auto-selects: 1 for <480, 2 for <720, 3 for <1080, etc.
         const gui_scale: f32 = if (screen_height < 480) 1.0 else if (screen_height < 720) 2.0 else if (screen_height < 1080) 2.0 else 3.0;
 
-        // Crosshair size in screen pixels
+        // Crosshair size in screen pixels, convert to NDC
         const crosshair_pixels: f32 = 15.0 * gui_scale;
-
-        // Convert to NDC (screen goes from -1 to 1, so total range is 2)
-        // half_size = (crosshair_pixels / screen_dimension) since NDC range is 2
         const half_size_y: f32 = crosshair_pixels / screen_height;
         const half_size_x: f32 = crosshair_pixels / screen_width;
 
         // 6 vertices for 2 triangles (textured quad)
         const vertices = [_]UIVertex{
-            // Triangle 1
             .{ .pos = .{ -half_size_x, -half_size_y }, .uv = .{ 0.0, 0.0 } },
             .{ .pos = .{ half_size_x, -half_size_y }, .uv = .{ 1.0, 0.0 } },
             .{ .pos = .{ half_size_x, half_size_y }, .uv = .{ 1.0, 1.0 } },
-            // Triangle 2
             .{ .pos = .{ -half_size_x, -half_size_y }, .uv = .{ 0.0, 0.0 } },
             .{ .pos = .{ half_size_x, half_size_y }, .uv = .{ 1.0, 1.0 } },
             .{ .pos = .{ -half_size_x, half_size_y }, .uv = .{ 0.0, 1.0 } },
         };
 
-        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(vertices));
-
-        const buffer_info = vk.VkBufferCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .size = buffer_size,
-            .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-        };
-
-        if (vkCreateBuffer(self.device, &buffer_info, null, &self.crosshair_vertex_buffer) != vk.VK_SUCCESS) {
-            return error.BufferCreationFailed;
-        }
-
-        var mem_requirements: vk.VkMemoryRequirements = undefined;
-        vkGetBufferMemoryRequirements(self.device, self.crosshair_vertex_buffer, &mem_requirements);
-
-        const mem_type = try self.findMemoryType(
-            mem_requirements.memoryTypeBits,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-        );
-
-        const alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = mem_requirements.size,
-            .memoryTypeIndex = mem_type,
-        };
-
-        if (vkAllocateMemory(self.device, &alloc_info, null, &self.crosshair_vertex_buffer_memory) != vk.VK_SUCCESS) {
-            return error.MemoryAllocationFailed;
-        }
-
-        if (vkBindBufferMemory(self.device, self.crosshair_vertex_buffer, self.crosshair_vertex_buffer_memory, 0) != vk.VK_SUCCESS) {
-            return error.BufferBindFailed;
-        }
-
-        // Copy vertex data
-        var data: ?*anyopaque = null;
-        if (vkMapMemory(self.device, self.crosshair_vertex_buffer_memory, 0, buffer_size, 0, &data) != vk.VK_SUCCESS) {
-            return error.MemoryMapFailed;
-        }
-        @memcpy(@as([*]u8, @ptrCast(data.?))[0..buffer_size], std.mem.asBytes(&vertices));
-        vkUnmapMemory(self.device, self.crosshair_vertex_buffer_memory);
+        const result = try gpu.createBufferWithDataRaw(UIVertex, &vertices, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        self.crosshair_vertex_buffer = result.handle;
+        self.crosshair_vertex_buffer_memory = result.memory;
 
         logger.info("Crosshair buffer created", .{});
     }
@@ -2860,57 +2597,14 @@ pub const RenderSystem = struct {
     // Note: Vertex/Index buffers are created dynamically by uploadMesh()
 
     fn createUniformBuffers(self: *Self) !void {
-        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
-
-        const buffer_size: vk.VkDeviceSize = @sizeOf(UniformBufferObject);
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+        const buffer_size: u64 = @sizeOf(UniformBufferObject);
 
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-            const buffer_info = vk.VkBufferCreateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-                .pNext = null,
-                .flags = 0,
-                .size = buffer_size,
-                .usage = vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-                .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-                .queueFamilyIndexCount = 0,
-                .pQueueFamilyIndices = null,
-            };
-
-            if (vkCreateBuffer(self.device, &buffer_info, null, &self.uniform_buffers[i]) != vk.VK_SUCCESS) {
-                return error.BufferCreationFailed;
-            }
-
-            var mem_requirements: vk.VkMemoryRequirements = undefined;
-            vkGetBufferMemoryRequirements(self.device, self.uniform_buffers[i], &mem_requirements);
-
-            const mem_type = try self.findMemoryType(
-                mem_requirements.memoryTypeBits,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            );
-
-            const alloc_info = vk.VkMemoryAllocateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-                .pNext = null,
-                .allocationSize = mem_requirements.size,
-                .memoryTypeIndex = mem_type,
-            };
-
-            if (vkAllocateMemory(self.device, &alloc_info, null, &self.uniform_buffers_memory[i]) != vk.VK_SUCCESS) {
-                return error.MemoryAllocationFailed;
-            }
-
-            if (vkBindBufferMemory(self.device, self.uniform_buffers[i], self.uniform_buffers_memory[i], 0) != vk.VK_SUCCESS) {
-                return error.BufferMemoryBindFailed;
-            }
-
-            // Map memory persistently (we'll update it every frame)
-            if (vkMapMemory(self.device, self.uniform_buffers_memory[i], 0, buffer_size, 0, &self.uniform_buffers_mapped[i]) != vk.VK_SUCCESS) {
-                return error.MemoryMapFailed;
-            }
+            const result = try gpu.createMappedBufferRaw(buffer_size, vk.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            self.uniform_buffers[i] = result.handle;
+            self.uniform_buffers_memory[i] = result.memory;
+            self.uniform_buffers_mapped[i] = result.mapped;
         }
 
         logger.info("Uniform buffers created", .{});

@@ -165,6 +165,158 @@ pub const GpuDevice = struct {
     }
 
     // ============================================================
+    // Raw Buffer Creation (for backward compatibility)
+    // ============================================================
+
+    /// Result of raw buffer creation
+    pub const RawBuffer = struct {
+        handle: vk.VkBuffer,
+        memory: vk.VkDeviceMemory,
+    };
+
+    /// Create a buffer and return raw Vulkan handles (for legacy code integration)
+    pub fn createBufferRaw(
+        self: *Self,
+        size: u64,
+        vk_usage: vk.VkBufferUsageFlags,
+        memory_properties: vk.VkMemoryPropertyFlags,
+    ) !RawBuffer {
+        if (size == 0) return error.InvalidBufferSize;
+
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+
+        const buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = size,
+            .usage = vk_usage,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        var handle: vk.VkBuffer = null;
+        if (vkCreateBuffer(self.device, &buffer_info, null, &handle) != vk.VK_SUCCESS) {
+            return error.BufferCreationFailed;
+        }
+        errdefer if (vk.vkDestroyBuffer) |destroy| destroy(self.device, handle, null);
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetBufferMemoryRequirements(self.device, handle, &mem_requirements);
+
+        const mem_type = try self.findMemoryType(mem_requirements.memoryTypeBits, memory_properties);
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = mem_type,
+        };
+
+        var memory: vk.VkDeviceMemory = null;
+        if (vkAllocateMemory(self.device, &alloc_info, null, &memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+        errdefer if (vk.vkFreeMemory) |free| free(self.device, memory, null);
+
+        if (vkBindBufferMemory(self.device, handle, memory, 0) != vk.VK_SUCCESS) {
+            return error.BufferMemoryBindFailed;
+        }
+
+        return .{ .handle = handle, .memory = memory };
+    }
+
+    /// Create a buffer and write data to it, returning raw handles
+    pub fn createBufferWithDataRaw(
+        self: *Self,
+        comptime T: type,
+        data: []const T,
+        vk_usage: vk.VkBufferUsageFlags,
+    ) !RawBuffer {
+        const size: u64 = @sizeOf(T) * data.len;
+        const memory_props = vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+
+        const result = try self.createBufferRaw(size, vk_usage, memory_props);
+        errdefer {
+            if (vk.vkDestroyBuffer) |destroy| destroy(self.device, result.handle, null);
+            if (vk.vkFreeMemory) |free| free(self.device, result.memory, null);
+        }
+
+        // Map and copy data
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+
+        var mapped: ?*anyopaque = null;
+        if (vkMapMemory(self.device, result.memory, 0, size, 0, &mapped) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+
+        const dest: [*]T = @ptrCast(@alignCast(mapped.?));
+        @memcpy(dest[0..data.len], data);
+        vkUnmapMemory(self.device, result.memory);
+
+        return result;
+    }
+
+    /// Destroy a raw buffer
+    pub fn destroyBufferRaw(self: *Self, buffer: RawBuffer) void {
+        if (vk.vkDestroyBuffer) |destroy| {
+            if (buffer.handle != null) destroy(self.device, buffer.handle, null);
+        }
+        if (vk.vkFreeMemory) |free| {
+            if (buffer.memory != null) free(self.device, buffer.memory, null);
+        }
+    }
+
+    /// Result of mapped buffer creation
+    pub const MappedBuffer = struct {
+        handle: vk.VkBuffer,
+        memory: vk.VkDeviceMemory,
+        mapped: ?*anyopaque,
+    };
+
+    /// Create a buffer with persistent mapping (for uniform buffers that update every frame)
+    pub fn createMappedBufferRaw(
+        self: *Self,
+        size: u64,
+        vk_usage: vk.VkBufferUsageFlags,
+    ) !MappedBuffer {
+        const result = try self.createBufferRaw(
+            size,
+            vk_usage,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+        errdefer self.destroyBufferRaw(.{ .handle = result.handle, .memory = result.memory });
+
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+
+        var mapped: ?*anyopaque = null;
+        if (vkMapMemory(self.device, result.memory, 0, size, 0, &mapped) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+
+        return .{
+            .handle = result.handle,
+            .memory = result.memory,
+            .mapped = mapped,
+        };
+    }
+
+    /// Unmap and destroy a mapped buffer
+    pub fn destroyMappedBufferRaw(self: *Self, buffer: MappedBuffer) void {
+        if (buffer.mapped != null) {
+            if (vk.vkUnmapMemory) |unmap| {
+                unmap(self.device, buffer.memory);
+            }
+        }
+        self.destroyBufferRaw(.{ .handle = buffer.handle, .memory = buffer.memory });
+    }
+
+    // ============================================================
     // Command Execution Helpers
     // ============================================================
 
