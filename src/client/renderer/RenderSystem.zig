@@ -9,6 +9,12 @@ const platform = @import("Platform");
 const ShaderManager = @import("ShaderManager.zig").ShaderManager;
 const stb_image = @import("stb_image");
 
+// New abstraction modules
+const GpuBuffer = @import("GpuBuffer.zig");
+const GpuDevice = @import("GpuDevice.zig").GpuDevice;
+const RenderPass = @import("RenderPass.zig");
+const RenderPipelines = @import("RenderPipelines.zig");
+
 const MAX_FRAMES_IN_FLIGHT = 2;
 
 // Uniform buffer object matching shader uniform
@@ -156,6 +162,9 @@ pub const RenderSystem = struct {
     // Allocator for dynamic arrays
     allocator: std.mem.Allocator = undefined,
 
+    // GPU device abstraction for resource creation
+    gpu_device: ?GpuDevice = null,
+
     // Window reference for swapchain recreation
     window: ?*platform.Window = null,
 
@@ -210,6 +219,16 @@ pub const RenderSystem = struct {
         try self.createLinePipeline();
         try self.createFramebuffers();
         try self.createCommandPool();
+
+        // Initialize GPU device abstraction
+        self.gpu_device = GpuDevice.init(
+            self.device,
+            self.physical_device,
+            self.command_pool,
+            self.graphics_queue,
+            self.allocator,
+        );
+
         try self.loadCrosshairTexture();
         try self.createUIDescriptorPool();
         try self.createUIDescriptorSets();
@@ -343,12 +362,32 @@ pub const RenderSystem = struct {
         return self.graphics_queue;
     }
 
-    pub fn drawFrame(self: *Self) !void {
+    /// Get the GPU device abstraction for resource creation
+    pub fn getGpuDevice(self: *Self) ?*GpuDevice {
+        if (self.gpu_device) |*dev| {
+            return dev;
+        }
+        return null;
+    }
+
+    // ============================================================
+    // Frame Management Helpers (DRY)
+    // ============================================================
+
+    /// Context for a frame being rendered
+    pub const FrameContext = struct {
+        image_index: u32,
+        command_buffer: vk.VkCommandBuffer,
+        fence: vk.VkFence,
+        current_frame: u32,
+    };
+
+    /// Begin a new frame - handles fence wait and image acquisition
+    /// Returns null if swapchain needs recreation
+    fn beginFrame(self: *Self) !?FrameContext {
         const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
         const vkResetFences = vk.vkResetFences orelse return error.VulkanFunctionNotLoaded;
         const vkAcquireNextImageKHR = vk.vkAcquireNextImageKHR orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueuePresentKHR = vk.vkQueuePresentKHR orelse return error.VulkanFunctionNotLoaded;
 
         const fence = self.in_flight_fences[self.current_frame];
         _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
@@ -365,19 +404,30 @@ pub const RenderSystem = struct {
 
         if (acquire_result == vk.VK_ERROR_OUT_OF_DATE_KHR) {
             try self.recreateSwapchain();
-            return;
+            return null;
         } else if (acquire_result != vk.VK_SUCCESS and acquire_result != vk.VK_SUBOPTIMAL_KHR) {
             return error.SwapchainAcquireFailed;
         }
 
         _ = vkResetFences(self.device, 1, &fence);
 
-        try self.recordCommandBuffer(self.command_buffers[self.current_frame], image_index);
+        return FrameContext{
+            .image_index = image_index,
+            .command_buffer = self.command_buffers[self.current_frame],
+            .fence = fence,
+            .current_frame = self.current_frame,
+        };
+    }
 
-        const wait_semaphores = [_]vk.VkSemaphore{self.image_available_semaphores[self.current_frame]};
+    /// End frame - handles submission and presentation
+    fn endFrame(self: *Self, ctx: FrameContext) !void {
+        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
+        const vkQueuePresentKHR = vk.vkQueuePresentKHR orelse return error.VulkanFunctionNotLoaded;
+
+        const wait_semaphores = [_]vk.VkSemaphore{self.image_available_semaphores[ctx.current_frame]};
         const wait_stages = [_]vk.VkPipelineStageFlags{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        const signal_semaphores = [_]vk.VkSemaphore{self.render_finished_semaphores[self.current_frame]};
-        const cmd_buffers = [_]vk.VkCommandBuffer{self.command_buffers[self.current_frame]};
+        const signal_semaphores = [_]vk.VkSemaphore{self.render_finished_semaphores[ctx.current_frame]};
+        const cmd_buffers = [_]vk.VkCommandBuffer{ctx.command_buffer};
 
         const submit_info = vk.VkSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -391,11 +441,12 @@ pub const RenderSystem = struct {
             .pSignalSemaphores = &signal_semaphores,
         };
 
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, fence) != vk.VK_SUCCESS) {
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, ctx.fence) != vk.VK_SUCCESS) {
             return error.QueueSubmitFailed;
         }
 
         const swapchains = [_]vk.VkSwapchainKHR{self.swapchain};
+        var image_index = ctx.image_index;
         const present_info = vk.VkPresentInfoKHR{
             .sType = vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .pNext = null,
@@ -416,6 +467,222 @@ pub const RenderSystem = struct {
         }
 
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    /// Draw parameters for unified command recording
+    pub const DrawParams = struct {
+        /// External vertex buffer (null = use self.vertex_buffer)
+        vertex_buffer: ?vk.VkBuffer = null,
+        /// External index buffer (null = use self.index_buffer)
+        index_buffer: ?vk.VkBuffer = null,
+        /// Multi-chunk draw commands (null = single draw with self.index_count)
+        draw_commands: ?[]const ChunkDrawCommand = null,
+        /// Staging copies to execute before rendering
+        staging_copies: []const StagingCopy = &.{},
+    };
+
+    /// Unified command buffer recording
+    fn recordRenderCommands(self: *Self, command_buffer: vk.VkCommandBuffer, image_index: u32, params: DrawParams) !void {
+        const vkResetCommandBuffer = vk.vkResetCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBeginRenderPass = vk.vkCmdBeginRenderPass orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindIndexBuffer = vk.vkCmdBindIndexBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdSetViewport = vk.vkCmdSetViewport orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdSetScissor = vk.vkCmdSetScissor orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdDrawIndexed = vk.vkCmdDrawIndexed orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdEndRenderPass = vk.vkCmdEndRenderPass orelse return error.VulkanFunctionNotLoaded;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+
+        _ = vkResetCommandBuffer(command_buffer, 0);
+
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = 0,
+            .pInheritanceInfo = null,
+        };
+
+        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
+            return error.CommandBufferBeginFailed;
+        }
+
+        // Record staging buffer copies before render pass
+        if (params.staging_copies.len > 0) {
+            try self.recordStagingCopies(command_buffer, params.staging_copies);
+        }
+
+        const clear_values = [_]vk.VkClearValue{
+            .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
+            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+        };
+
+        const render_pass_info = vk.VkRenderPassBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .pNext = null,
+            .renderPass = self.render_pass,
+            .framebuffer = self.framebuffers[image_index],
+            .renderArea = .{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = self.swapchain_extent,
+            },
+            .clearValueCount = clear_values.len,
+            .pClearValues = &clear_values,
+        };
+
+        vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+
+        // Set viewport and scissor
+        const viewport = vk.VkViewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapchain_extent.width),
+            .height = @floatFromInt(self.swapchain_extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        };
+        vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+        const scissor = vk.VkRect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        };
+        vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+        // Bind descriptor set
+        const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
+        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
+
+        // Determine which buffers to use
+        const vertex_buf = params.vertex_buffer orelse self.vertex_buffer;
+        const index_buf = params.index_buffer orelse self.index_buffer;
+
+        // Bind vertex and index buffers
+        const vertex_buffers = [_]vk.VkBuffer{vertex_buf};
+        const offsets = [_]vk.VkDeviceSize{0};
+        vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers, &offsets);
+
+        // Use u32 indices for multi-chunk, u16 for legacy single mesh
+        const index_type: c_uint = if (params.draw_commands != null) vk.VK_INDEX_TYPE_UINT32 else vk.VK_INDEX_TYPE_UINT16;
+        vkCmdBindIndexBuffer(command_buffer, index_buf, 0, index_type);
+
+        // Draw geometry
+        if (params.draw_commands) |commands| {
+            // Multi-chunk drawing
+            for (commands) |cmd| {
+                if (cmd.index_count == 0) continue;
+                const first_index: u32 = @intCast(cmd.index_offset / 4);
+                const vertex_offset: i32 = @intCast(cmd.vertex_offset / @sizeOf(Vertex));
+                vkCmdDrawIndexed(command_buffer, cmd.index_count, 1, first_index, vertex_offset, 0);
+            }
+        } else {
+            // Single mesh drawing
+            vkCmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
+        }
+
+        // Draw block outline (lines)
+        try self.drawBlockOutline(command_buffer, &descriptor_sets);
+
+        // Draw crosshair (UI overlay)
+        try self.drawCrosshair(command_buffer);
+
+        vkCmdEndRenderPass(command_buffer);
+
+        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferEndFailed;
+        }
+    }
+
+    /// Record staging buffer copy commands
+    fn recordStagingCopies(self: *Self, command_buffer: vk.VkCommandBuffer, staging_copies: []const StagingCopy) !void {
+        const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
+
+        _ = self;
+
+        for (staging_copies) |copy| {
+            const region = vk.VkBufferCopy{
+                .srcOffset = copy.src_offset,
+                .dstOffset = copy.dst_offset,
+                .size = copy.size,
+            };
+            vkCmdCopyBuffer(command_buffer, copy.src_buffer, copy.dst_buffer, 1, &region);
+        }
+
+        // Memory barrier: transfer writes must complete before vertex/index reads
+        const barrier = vk.VkMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | vk.VK_ACCESS_INDEX_READ_BIT,
+        };
+        vkCmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+            vk.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+            0,
+            1,
+            &barrier,
+            0,
+            null,
+            0,
+            null,
+        );
+    }
+
+    /// Draw block outline (lines) - extracted for DRY
+    fn drawBlockOutline(self: *Self, command_buffer: vk.VkCommandBuffer, descriptor_sets: []const vk.VkDescriptorSet) !void {
+        if (self.line_pipeline == null or self.line_vertex_buffer == null or self.line_vertex_count == 0) return;
+
+        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdSetLineWidth = vk.vkCmdSetLineWidth orelse return error.VulkanFunctionNotLoaded;
+
+        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline);
+        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline_layout, 0, 1, descriptor_sets.ptr, 0, null);
+
+        const line_vertex_buffers = [_]vk.VkBuffer{self.line_vertex_buffer.?};
+        const line_offsets = [_]vk.VkDeviceSize{0};
+        vkCmdBindVertexBuffers(command_buffer, 0, 1, &line_vertex_buffers, &line_offsets);
+
+        vkCmdSetLineWidth(command_buffer, 2.0);
+        vkCmdDraw(command_buffer, self.line_vertex_count, 1, 0, 0);
+    }
+
+    /// Draw crosshair UI - extracted for DRY
+    fn drawCrosshair(self: *Self, command_buffer: vk.VkCommandBuffer) !void {
+        if (self.ui_pipeline == null or self.crosshair_vertex_buffer == null) return;
+
+        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+
+        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline);
+
+        const ui_descriptor_sets = [_]vk.VkDescriptorSet{self.ui_descriptor_sets[self.current_frame]};
+        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline_layout, 0, 1, &ui_descriptor_sets, 0, null);
+
+        const ui_vertex_buffers = [_]vk.VkBuffer{self.crosshair_vertex_buffer.?};
+        const ui_offsets = [_]vk.VkDeviceSize{0};
+        vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vertex_buffers, &ui_offsets);
+
+        vkCmdDraw(command_buffer, 6, 1, 0, 0);
+    }
+
+    // ============================================================
+    // Public Draw Methods (now using unified helpers)
+    // ============================================================
+
+    pub fn drawFrame(self: *Self) !void {
+        const ctx = try self.beginFrame() orelse return;
+        try self.recordRenderCommands(ctx.command_buffer, ctx.image_index, .{});
+        try self.endFrame(ctx);
     }
 
     /// Update the uniform buffer with MVP matrices for the current frame
@@ -572,269 +839,16 @@ pub const RenderSystem = struct {
         staging_buffer: ?vk.VkBuffer,
         staging_copies: []const StagingCopy,
     ) !void {
-        const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
-        const vkResetFences = vk.vkResetFences orelse return error.VulkanFunctionNotLoaded;
-        const vkAcquireNextImageKHR = vk.vkAcquireNextImageKHR orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueuePresentKHR = vk.vkQueuePresentKHR orelse return error.VulkanFunctionNotLoaded;
-
         _ = staging_buffer;
 
-        const fence = self.in_flight_fences[self.current_frame];
-        _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
-
-        var image_index: u32 = 0;
-        const acquire_result = vkAcquireNextImageKHR(
-            self.device,
-            self.swapchain,
-            std.math.maxInt(u64),
-            self.image_available_semaphores[self.current_frame],
-            null,
-            &image_index,
-        );
-
-        if (acquire_result == vk.VK_ERROR_OUT_OF_DATE_KHR) {
-            try self.recreateSwapchain();
-            return;
-        } else if (acquire_result != vk.VK_SUCCESS and acquire_result != vk.VK_SUBOPTIMAL_KHR) {
-            return error.SwapchainAcquireFailed;
-        }
-
-        _ = vkResetFences(self.device, 1, &fence);
-
-        try self.recordMultiChunkCommandBuffer(
-            self.command_buffers[self.current_frame],
-            image_index,
-            vertex_buffer,
-            index_buffer,
-            draw_commands,
-            staging_copies,
-        );
-
-        const wait_semaphores = [_]vk.VkSemaphore{self.image_available_semaphores[self.current_frame]};
-        const wait_stages = [_]vk.VkPipelineStageFlags{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        const signal_semaphores = [_]vk.VkSemaphore{self.render_finished_semaphores[self.current_frame]};
-        const cmd_buffers = [_]vk.VkCommandBuffer{self.command_buffers[self.current_frame]};
-
-        const submit_info = vk.VkSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &wait_semaphores,
-            .pWaitDstStageMask = &wait_stages,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &cmd_buffers,
-            .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &signal_semaphores,
-        };
-
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, fence) != vk.VK_SUCCESS) {
-            return error.QueueSubmitFailed;
-        }
-
-        const swapchains = [_]vk.VkSwapchainKHR{self.swapchain};
-        const present_info = vk.VkPresentInfoKHR{
-            .sType = vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .pNext = null,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &signal_semaphores,
-            .swapchainCount = 1,
-            .pSwapchains = &swapchains,
-            .pImageIndices = &image_index,
-            .pResults = null,
-        };
-
-        const present_result = vkQueuePresentKHR(self.present_queue, &present_info);
-
-        if (present_result == vk.VK_ERROR_OUT_OF_DATE_KHR or present_result == vk.VK_SUBOPTIMAL_KHR) {
-            try self.recreateSwapchain();
-        } else if (present_result != vk.VK_SUCCESS) {
-            return error.PresentFailed;
-        }
-
-        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
-    }
-
-    /// Record command buffer for multi-chunk rendering
-    fn recordMultiChunkCommandBuffer(
-        self: *Self,
-        command_buffer: vk.VkCommandBuffer,
-        image_index: u32,
-        vertex_buffer: vk.VkBuffer,
-        index_buffer: vk.VkBuffer,
-        draw_commands: []const ChunkDrawCommand,
-        staging_copies: []const StagingCopy,
-    ) !void {
-        const vkResetCommandBuffer = vk.vkResetCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBeginRenderPass = vk.vkCmdBeginRenderPass orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBindIndexBuffer = vk.vkCmdBindIndexBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdSetViewport = vk.vkCmdSetViewport orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdSetScissor = vk.vkCmdSetScissor orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdDrawIndexed = vk.vkCmdDrawIndexed orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdEndRenderPass = vk.vkCmdEndRenderPass orelse return error.VulkanFunctionNotLoaded;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
-
-        _ = vkResetCommandBuffer(command_buffer, 0);
-
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = 0,
-            .pInheritanceInfo = null,
-        };
-
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            return error.CommandBufferBeginFailed;
-        }
-
-        // Record staging buffer copies before render pass
-        if (staging_copies.len > 0) {
-            for (staging_copies) |copy| {
-                const region = vk.VkBufferCopy{
-                    .srcOffset = copy.src_offset,
-                    .dstOffset = copy.dst_offset,
-                    .size = copy.size,
-                };
-                vkCmdCopyBuffer(command_buffer, copy.src_buffer, copy.dst_buffer, 1, &region);
-            }
-
-            // Memory barrier: transfer writes must complete before vertex/index reads
-            const barrier = vk.VkMemoryBarrier{
-                .sType = vk.VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-                .pNext = null,
-                .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
-                .dstAccessMask = vk.VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | vk.VK_ACCESS_INDEX_READ_BIT,
-            };
-            vkCmdPipelineBarrier(
-                command_buffer,
-                vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-                vk.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-                0,
-                1,
-                &barrier,
-                0,
-                null,
-                0,
-                null,
-            );
-        }
-
-        const clear_values = [_]vk.VkClearValue{
-            .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
-            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
-        };
-
-        const render_pass_info = vk.VkRenderPassBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .pNext = null,
-            .renderPass = self.render_pass,
-            .framebuffer = self.framebuffers[image_index],
-            .renderArea = .{
-                .offset = .{ .x = 0, .y = 0 },
-                .extent = self.swapchain_extent,
-            },
-            .clearValueCount = clear_values.len,
-            .pClearValues = &clear_values,
-        };
-
-        vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
-
-        // Bind descriptor set for current frame
-        const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
-        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
-
-        const viewport = vk.VkViewport{
-            .x = 0.0,
-            .y = 0.0,
-            .width = @floatFromInt(self.swapchain_extent.width),
-            .height = @floatFromInt(self.swapchain_extent.height),
-            .minDepth = 0.0,
-            .maxDepth = 1.0,
-        };
-        vkCmdSetViewport(command_buffer, 0, 1, &viewport);
-
-        const scissor = vk.VkRect2D{
-            .offset = .{ .x = 0, .y = 0 },
-            .extent = self.swapchain_extent,
-        };
-        vkCmdSetScissor(command_buffer, 0, 1, &scissor);
-
-        // Bind vertex buffer once (with offset 0, we'll use vertex_base per-draw)
-        const vertex_buffers = [_]vk.VkBuffer{vertex_buffer};
-        const offsets = [_]vk.VkDeviceSize{0};
-        vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers, &offsets);
-
-        // Bind index buffer (u32 indices for larger meshes)
-        vkCmdBindIndexBuffer(command_buffer, index_buffer, 0, vk.VK_INDEX_TYPE_UINT32);
-
-        // Draw each chunk
-        for (draw_commands) |cmd| {
-            if (cmd.index_count == 0) continue;
-
-            // Calculate first index from byte offset
-            const first_index: u32 = @intCast(cmd.index_offset / 4); // u32 indices = 4 bytes each
-            // Calculate vertex offset from byte offset
-            const vertex_offset: i32 = @intCast(cmd.vertex_offset / @sizeOf(Vertex));
-
-            vkCmdDrawIndexed(
-                command_buffer,
-                cmd.index_count, // indexCount
-                1, // instanceCount
-                first_index, // firstIndex
-                vertex_offset, // vertexOffset
-                0, // firstInstance
-            );
-        }
-
-        // Draw block outline (lines)
-        if (self.line_pipeline != null and self.line_vertex_buffer != null and self.line_vertex_count > 0) {
-            const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
-            const vkCmdSetLineWidth = vk.vkCmdSetLineWidth orelse return error.VulkanFunctionNotLoaded;
-
-            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline);
-
-            // Use same descriptor set for MVP uniforms
-            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline_layout, 0, 1, &descriptor_sets, 0, null);
-
-            const line_vertex_buffers = [_]vk.VkBuffer{self.line_vertex_buffer.?};
-            const line_offsets = [_]vk.VkDeviceSize{0};
-            vkCmdBindVertexBuffers(command_buffer, 0, 1, &line_vertex_buffers, &line_offsets);
-
-            // Set line width (Minecraft uses 2.0 for normal, 7.0 for high contrast)
-            vkCmdSetLineWidth(command_buffer, 2.0);
-
-            vkCmdDraw(command_buffer, self.line_vertex_count, 1, 0, 0);
-        }
-
-        // Draw crosshair (UI overlay)
-        if (self.ui_pipeline != null and self.crosshair_vertex_buffer != null) {
-            const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
-
-            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline);
-
-            // Bind UI descriptor set for crosshair texture
-            const ui_descriptor_sets = [_]vk.VkDescriptorSet{self.ui_descriptor_sets[self.current_frame]};
-            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline_layout, 0, 1, &ui_descriptor_sets, 0, null);
-
-            const ui_vertex_buffers = [_]vk.VkBuffer{self.crosshair_vertex_buffer.?};
-            const ui_offsets = [_]vk.VkDeviceSize{0};
-            vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vertex_buffers, &ui_offsets);
-
-            vkCmdDraw(command_buffer, 6, 1, 0, 0); // 6 vertices for textured quad
-        }
-
-        vkCmdEndRenderPass(command_buffer);
-
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferEndFailed;
-        }
+        const ctx = try self.beginFrame() orelse return;
+        try self.recordRenderCommands(ctx.command_buffer, ctx.image_index, .{
+            .vertex_buffer = vertex_buffer,
+            .index_buffer = index_buffer,
+            .draw_commands = draw_commands,
+            .staging_copies = staging_copies,
+        });
+        try self.endFrame(ctx);
     }
 
     /// Upload new mesh data (vertices and indices)
@@ -999,129 +1013,6 @@ pub const RenderSystem = struct {
         try self.createFramebuffers();
 
         logger.info("Swapchain recreated: {}x{}", .{ self.swapchain_extent.width, self.swapchain_extent.height });
-    }
-
-    fn recordCommandBuffer(self: *Self, command_buffer: vk.VkCommandBuffer, image_index: u32) !void {
-        const vkResetCommandBuffer = vk.vkResetCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBeginRenderPass = vk.vkCmdBeginRenderPass orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdBindIndexBuffer = vk.vkCmdBindIndexBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdSetViewport = vk.vkCmdSetViewport orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdSetScissor = vk.vkCmdSetScissor orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdDrawIndexed = vk.vkCmdDrawIndexed orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdEndRenderPass = vk.vkCmdEndRenderPass orelse return error.VulkanFunctionNotLoaded;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-
-        _ = vkResetCommandBuffer(command_buffer, 0);
-
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = 0,
-            .pInheritanceInfo = null,
-        };
-
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            return error.CommandBufferBeginFailed;
-        }
-
-        const clear_values = [_]vk.VkClearValue{
-            .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
-            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
-        };
-
-        const render_pass_info = vk.VkRenderPassBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .pNext = null,
-            .renderPass = self.render_pass,
-            .framebuffer = self.framebuffers[image_index],
-            .renderArea = .{
-                .offset = .{ .x = 0, .y = 0 },
-                .extent = self.swapchain_extent,
-            },
-            .clearValueCount = clear_values.len,
-            .pClearValues = &clear_values,
-        };
-
-        vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
-
-        // Bind descriptor set for current frame
-        const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
-        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
-
-        // Bind vertex buffer
-        const vertex_buffers = [_]vk.VkBuffer{self.vertex_buffer};
-        const offsets = [_]vk.VkDeviceSize{0};
-        vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers, &offsets);
-
-        // Bind index buffer
-        vkCmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT16);
-
-        const viewport = vk.VkViewport{
-            .x = 0.0,
-            .y = 0.0,
-            .width = @floatFromInt(self.swapchain_extent.width),
-            .height = @floatFromInt(self.swapchain_extent.height),
-            .minDepth = 0.0,
-            .maxDepth = 1.0,
-        };
-        vkCmdSetViewport(command_buffer, 0, 1, &viewport);
-
-        const scissor = vk.VkRect2D{
-            .offset = .{ .x = 0, .y = 0 },
-            .extent = self.swapchain_extent,
-        };
-        vkCmdSetScissor(command_buffer, 0, 1, &scissor);
-
-        // Draw indexed
-        vkCmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
-
-        // Draw block outline (lines)
-        if (self.line_pipeline != null and self.line_vertex_buffer != null and self.line_vertex_count > 0) {
-            const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
-            const vkCmdSetLineWidth = vk.vkCmdSetLineWidth orelse return error.VulkanFunctionNotLoaded;
-
-            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline);
-
-            // Use same descriptor set for MVP uniforms
-            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.line_pipeline_layout, 0, 1, &descriptor_sets, 0, null);
-
-            const line_vertex_buffers = [_]vk.VkBuffer{self.line_vertex_buffer.?};
-            const line_offsets = [_]vk.VkDeviceSize{0};
-            vkCmdBindVertexBuffers(command_buffer, 0, 1, &line_vertex_buffers, &line_offsets);
-
-            // Set line width (Minecraft uses 2.0 for normal, 7.0 for high contrast)
-            vkCmdSetLineWidth(command_buffer, 2.0);
-
-            vkCmdDraw(command_buffer, self.line_vertex_count, 1, 0, 0);
-        }
-
-        // Draw crosshair (UI overlay)
-        if (self.ui_pipeline != null and self.crosshair_vertex_buffer != null) {
-            const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
-
-            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline);
-
-            // Bind UI descriptor set for crosshair texture
-            const ui_descriptor_sets = [_]vk.VkDescriptorSet{self.ui_descriptor_sets[self.current_frame]};
-            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline_layout, 0, 1, &ui_descriptor_sets, 0, null);
-
-            const ui_vertex_buffers = [_]vk.VkBuffer{self.crosshair_vertex_buffer.?};
-            const ui_offsets = [_]vk.VkDeviceSize{0};
-            vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vertex_buffers, &ui_offsets);
-
-            vkCmdDraw(command_buffer, 6, 1, 0, 0); // 6 vertices for textured quad
-        }
-
-        vkCmdEndRenderPass(command_buffer);
-
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferEndFailed;
-        }
     }
 
     fn createInstance(self: *Self) !void {
