@@ -25,9 +25,6 @@ pub const BlockOutlineRenderer = struct {
     /// Outline color: black with 40% alpha (like Minecraft: ARGB.black(102) = 102/255 ≈ 0.4)
     const OUTLINE_COLOR: [4]f32 = .{ 0.0, 0.0, 0.0, 0.4 };
 
-    /// Small offset to push outline slightly away from block surface to prevent z-fighting
-    const OUTLINE_OFFSET: f32 = 0.002;
-
     pub fn init() Self {
         return .{};
     }
@@ -100,10 +97,7 @@ pub const BlockOutlineRenderer = struct {
         }
 
         // Convert normalized coords (0-1) to world coords
-        // Apply small offset to prevent z-fighting
-        const offset = OUTLINE_OFFSET;
-
-        // Calculate offset direction for each vertex based on which face it's on
+        // Note: z-fighting is handled by view-space scaling in the vertex shader (like Minecraft)
         const fx1: f32 = @floatCast(x1);
         const fy1: f32 = @floatCast(y1);
         const fz1: f32 = @floatCast(z1);
@@ -111,20 +105,12 @@ pub const BlockOutlineRenderer = struct {
         const fy2: f32 = @floatCast(y2);
         const fz2: f32 = @floatCast(z2);
 
-        // Apply offset outward from block center (0.5, 0.5, 0.5)
-        const ox1 = if (fx1 < 0.5) -offset else if (fx1 > 0.5) offset else 0.0;
-        const oy1 = if (fy1 < 0.5) -offset else if (fy1 > 0.5) offset else 0.0;
-        const oz1 = if (fz1 < 0.5) -offset else if (fz1 > 0.5) offset else 0.0;
-        const ox2 = if (fx2 < 0.5) -offset else if (fx2 > 0.5) offset else 0.0;
-        const oy2 = if (fy2 < 0.5) -offset else if (fy2 > 0.5) offset else 0.0;
-        const oz2 = if (fz2 < 0.5) -offset else if (fz2 > 0.5) offset else 0.0;
-
         // First vertex
         self.line_vertices[self.vertex_count] = .{
             .pos = .{
-                ctx.block_x + fx1 + ox1,
-                ctx.block_y + fy1 + oy1,
-                ctx.block_z + fz1 + oz1,
+                ctx.block_x + fx1,
+                ctx.block_y + fy1,
+                ctx.block_z + fz1,
             },
             .color = OUTLINE_COLOR,
         };
@@ -133,9 +119,9 @@ pub const BlockOutlineRenderer = struct {
         // Second vertex
         self.line_vertices[self.vertex_count] = .{
             .pos = .{
-                ctx.block_x + fx2 + ox2,
-                ctx.block_y + fy2 + oy2,
-                ctx.block_z + fz2 + oz2,
+                ctx.block_x + fx2,
+                ctx.block_y + fy2,
+                ctx.block_z + fz2,
             },
             .color = OUTLINE_COLOR,
         };
