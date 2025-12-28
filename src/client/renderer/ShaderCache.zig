@@ -1,10 +1,11 @@
 const std = @import("std");
-
-const log = std.log.scoped(.shader_cache);
+const shared = @import("Shared");
 
 /// Disk-based shader cache that stores compiled SPIR-V indexed by source hash.
 /// This avoids recompiling shaders when the source hasn't changed.
 pub const ShaderCache = struct {
+    const logger = shared.Logger.init("ShaderCache");
+    
     allocator: std.mem.Allocator,
     cache_dir: []const u8,
 
@@ -16,7 +17,7 @@ pub const ShaderCache = struct {
 
         // Ensure cache directory exists
         std.fs.cwd().makePath(dir) catch |err| {
-            log.warn("Failed to create shader cache directory '{s}': {}", .{ dir, err });
+            logger.warn("Failed to create shader cache directory '{s}': {}", .{ dir, err });
         };
 
         return .{
@@ -49,7 +50,7 @@ pub const ShaderCache = struct {
 
         // SPIR-V must be 4-byte aligned and have valid header
         if (size < 20 or size % 4 != 0) {
-            log.warn("Invalid cached SPIR-V size: {d}", .{size});
+            logger.warn("Invalid cached SPIR-V size: {d}", .{size});
             return null;
         }
 
@@ -69,7 +70,7 @@ pub const ShaderCache = struct {
         // Validate SPIR-V magic number (0x07230203)
         const magic = std.mem.readInt(u32, buffer[0..4], .little);
         if (magic != 0x07230203) {
-            log.warn("Invalid SPIR-V magic in cache: 0x{x}", .{magic});
+            logger.warn("Invalid SPIR-V magic in cache: 0x{x}", .{magic});
             self.allocator.free(buffer);
             return null;
         }
@@ -83,17 +84,17 @@ pub const ShaderCache = struct {
         defer self.allocator.free(cache_path);
 
         const file = std.fs.cwd().createFile(cache_path, .{}) catch |err| {
-            log.warn("Failed to create cache file '{s}': {}", .{ cache_path, err });
+            logger.warn("Failed to create cache file '{s}': {}", .{ cache_path, err });
             return err;
         };
         defer file.close();
 
         file.writeAll(spv_data) catch |err| {
-            log.warn("Failed to write cache file: {}", .{err});
+            logger.warn("Failed to write cache file: {}", .{err});
             return err;
         };
 
-        log.debug("Cached SPIR-V: {s} ({d} bytes)", .{ cache_path, spv_data.len });
+        logger.debug("Cached SPIR-V: {s} ({d} bytes)", .{ cache_path, spv_data.len });
     }
 
     /// Get the cache file path for a given hash.
@@ -115,7 +116,7 @@ pub const ShaderCache = struct {
             }
         }
 
-        log.info("Shader cache cleared", .{});
+        logger.info("Shader cache cleared", .{});
     }
 
     /// Get cache statistics.

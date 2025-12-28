@@ -1,9 +1,10 @@
 const std = @import("std");
-
-const log = std.log.scoped(.shader_preprocessor);
+const shared = @import("Shared");
 
 /// Shader preprocessor that handles #fh_import directives
 pub const ShaderPreprocessor = struct {
+    const logger = shared.Logger.init("GlslPreprocessor");
+
     allocator: std.mem.Allocator,
     /// Map of namespace -> base path (e.g., "farhorizons" -> "shaders/include/")
     namespace_paths: std.StringHashMap([]const u8),
@@ -70,7 +71,7 @@ pub const ShaderPreprocessor = struct {
 
     fn processInternal(self: *ShaderPreprocessor, source: []const u8, depth: u32) ![]const u8 {
         if (depth > self.max_depth) {
-            log.err("Maximum import depth ({}) exceeded - possible circular import", .{self.max_depth});
+            logger.err("Maximum import depth ({}) exceeded - possible circular import", .{self.max_depth});
             return error.MaxImportDepthExceeded;
         }
 
@@ -91,7 +92,7 @@ pub const ShaderPreprocessor = struct {
 
                 // Check for circular import
                 if (self.included_files.contains(import_path)) {
-                    log.warn("Skipping already included file: {s}", .{import_path});
+                    logger.warn("Skipping already included file: {s}", .{import_path});
                     // Add a comment noting the skip
                     try result.appendSlice(self.allocator, "// [already included: ");
                     try result.appendSlice(self.allocator, import_path);
@@ -105,7 +106,7 @@ pub const ShaderPreprocessor = struct {
 
                 // Read and process the imported file
                 const imported_source = self.readFile(import_path) catch |err| {
-                    log.err("Failed to read import '{s}': {}", .{ import_path, err });
+                    logger.err("Failed to read import '{s}': {}", .{ import_path, err });
                     return error.ImportReadFailed;
                 };
                 defer self.allocator.free(imported_source);
@@ -142,12 +143,12 @@ pub const ShaderPreprocessor = struct {
         const after_import = std.mem.trimLeft(u8, line["#fh_import".len..], " \t");
 
         if (after_import.len == 0 or after_import[0] != '<') {
-            log.err("Line {}: Invalid #fh_import syntax, expected '<'", .{line_num});
+            logger.err("Line {}: Invalid #fh_import syntax, expected '<'", .{line_num});
             return error.InvalidImportSyntax;
         }
 
         const end_bracket = std.mem.indexOf(u8, after_import, ">") orelse {
-            log.err("Line {}: Invalid #fh_import syntax, missing '>'", .{line_num});
+            logger.err("Line {}: Invalid #fh_import syntax, missing '>'", .{line_num});
             return error.InvalidImportSyntax;
         };
 
@@ -155,7 +156,7 @@ pub const ShaderPreprocessor = struct {
 
         // Parse namespace:path
         const colon_pos = std.mem.indexOf(u8, import_spec, ":") orelse {
-            log.err("Line {}: Invalid import spec '{s}', expected 'namespace:path'", .{ line_num, import_spec });
+            logger.err("Line {}: Invalid import spec '{s}', expected 'namespace:path'", .{ line_num, import_spec });
             return error.InvalidImportSyntax;
         };
 
@@ -163,13 +164,13 @@ pub const ShaderPreprocessor = struct {
         const relative_path = import_spec[colon_pos + 1 ..];
 
         if (namespace.len == 0 or relative_path.len == 0) {
-            log.err("Line {}: Empty namespace or path in import", .{line_num});
+            logger.err("Line {}: Empty namespace or path in import", .{line_num});
             return error.InvalidImportSyntax;
         }
 
         // Resolve namespace to base path
         const base_path = self.namespace_paths.get(namespace) orelse {
-            log.err("Line {}: Unknown namespace '{s}'", .{ line_num, namespace });
+            logger.err("Line {}: Unknown namespace '{s}'", .{ line_num, namespace });
             return error.UnknownNamespace;
         };
 
@@ -179,7 +180,7 @@ pub const ShaderPreprocessor = struct {
 
     fn readFile(self: *ShaderPreprocessor, path: []const u8) ![]const u8 {
         const file = std.fs.cwd().openFile(path, .{}) catch |err| {
-            log.err("Cannot open file '{s}': {}", .{ path, err });
+            logger.err("Cannot open file '{s}': {}", .{ path, err });
             return err;
         };
         defer file.close();
