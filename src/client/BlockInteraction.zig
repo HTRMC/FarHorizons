@@ -21,9 +21,6 @@ pub const BlockInteraction = struct {
     /// Maximum reach distance for block interaction (in blocks)
     pub const BLOCK_REACH: f32 = 5.0;
 
-    /// Cooldown between block breaks/places (in ticks)
-    pub const INTERACTION_COOLDOWN: u32 = 4;
-
     /// Current hit result from raycasting
     hit_result: ?BlockHitResult = null,
 
@@ -115,7 +112,6 @@ pub const BlockInteraction = struct {
         // Set to air
         if (self.chunk_manager.setBlockAt(pos.x, pos.y, pos.z, BlockEntry.AIR)) {
             logger.info("Broke block at ({}, {}, {})", .{ pos.x, pos.y, pos.z });
-            self.cooldown = INTERACTION_COOLDOWN;
             return true;
         }
 
@@ -143,7 +139,6 @@ pub const BlockInteraction = struct {
         // Place the selected block
         if (self.chunk_manager.setBlockAt(place_pos.x, place_pos.y, place_pos.z, self.selected_block)) {
             logger.info("Placed block at ({}, {}, {})", .{ place_pos.x, place_pos.y, place_pos.z });
-            self.cooldown = INTERACTION_COOLDOWN;
             return true;
         }
 

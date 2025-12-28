@@ -1,12 +1,15 @@
 const std = @import("std");
+const shared = @import("Shared");
 const ShaderCompiler = @import("ShaderCompiler.zig").ShaderCompiler;
 const ShaderKind = @import("ShaderCompiler.zig").ShaderKind;
 const CompiledShader = @import("ShaderCompiler.zig").CompiledShader;
 
-const log = std.log.scoped(.shader_manager);
+const Logger = shared.Logger;
 
 /// Manages runtime-compiled shaders loaded from assets
 pub const ShaderManager = struct {
+    const logger = Logger.init("ShaderManager");
+    
     allocator: std.mem.Allocator,
     compiler: ?ShaderCompiler,
     /// Cache of runtime-compiled shaders
@@ -52,24 +55,24 @@ pub const ShaderManager = struct {
             try compiler.?.registerNamespace("farhorizons", default_include_path);
 
             // Compile default shaders at startup from assets directory
-            log.info("Compiling default vertex shader...", .{});
+            logger.info("Compiling default vertex shader...", .{});
             var vert_timer = std.time.Timer.start() catch unreachable;
             var vert_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle.vert");
             const vert_time_us = vert_timer.read() / std.time.ns_per_us;
             default_vert = try allocator.dupe(u8, vert_compiled.spv_data);
             vert_compiled.deinit();
-            log.info("Vertex shader compiled in {d}us ({d} bytes SPIR-V)", .{ vert_time_us, default_vert.?.len });
+            logger.info("Vertex shader compiled in {d}us ({d} bytes SPIR-V)", .{ vert_time_us, default_vert.?.len });
 
-            log.info("Compiling default fragment shader...", .{});
+            logger.info("Compiling default fragment shader...", .{});
             var frag_timer = std.time.Timer.start() catch unreachable;
             var frag_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle.frag");
             const frag_time_us = frag_timer.read() / std.time.ns_per_us;
             default_frag = try allocator.dupe(u8, frag_compiled.spv_data);
             frag_compiled.deinit();
-            log.info("Fragment shader compiled in {d}us ({d} bytes SPIR-V)", .{ frag_time_us, default_frag.?.len });
+            logger.info("Fragment shader compiled in {d}us ({d} bytes SPIR-V)", .{ frag_time_us, default_frag.?.len });
 
             // Compile UI shaders
-            log.info("Compiling UI shaders...", .{});
+            logger.info("Compiling UI shaders...", .{});
             var ui_vert_compiled = try compiler.?.compileFile(default_shader_path ++ "ui.vert");
             ui_vert = try allocator.dupe(u8, ui_vert_compiled.spv_data);
             ui_vert_compiled.deinit();
@@ -77,10 +80,10 @@ pub const ShaderManager = struct {
             var ui_frag_compiled = try compiler.?.compileFile(default_shader_path ++ "ui.frag");
             ui_frag = try allocator.dupe(u8, ui_frag_compiled.spv_data);
             ui_frag_compiled.deinit();
-            log.info("UI shaders compiled", .{});
+            logger.info("UI shaders compiled", .{});
 
             // Compile line shaders (for block outline)
-            log.info("Compiling line shaders...", .{});
+            logger.info("Compiling line shaders...", .{});
             var line_vert_compiled = try compiler.?.compileFile(default_shader_path ++ "line.vert");
             line_vert = try allocator.dupe(u8, line_vert_compiled.spv_data);
             line_vert_compiled.deinit();
@@ -88,11 +91,11 @@ pub const ShaderManager = struct {
             var line_frag_compiled = try compiler.?.compileFile(default_shader_path ++ "line.frag");
             line_frag = try allocator.dupe(u8, line_frag_compiled.spv_data);
             line_frag_compiled.deinit();
-            log.info("Line shaders compiled", .{});
+            logger.info("Line shaders compiled", .{});
 
             const total_time_ms = @as(f64, @floatFromInt(total_timer.read())) / @as(f64, std.time.ns_per_ms);
             const cache_stats = compiler.?.getCacheStats();
-            log.info("Shader loading complete in {d:.2}ms (cache: {d} hits, {d} misses)", .{
+            logger.info("Shader loading complete in {d:.2}ms (cache: {d} hits, {d} misses)", .{
                 total_time_ms,
                 cache_stats.hits,
                 cache_stats.misses,
@@ -210,12 +213,11 @@ pub const ShaderManager = struct {
     ///     pack.json     (optional metadata)
     pub fn loadShaderPack(self: *ShaderManager, pack_path: []const u8) !void {
         if (self.compiler == null) {
-            log.err("Runtime shader compilation is disabled", .{});
+            logger.err("Runtime shader compilation is disabled", .{});
             return error.RuntimeCompilationDisabled;
         }
 
-        log.info("Loading shader pack from: {s}", .{pack_path});
-
+        logger.info("Loading shader pack from: {s}", .{pack_path});
         // Clear existing cache
         self.clearCache();
 
@@ -233,9 +235,9 @@ pub const ShaderManager = struct {
         if (std.fs.cwd().openDir(include_path, .{})) |dir| {
             dir.close();
             try self.compiler.?.registerNamespace("pack", include_path);
-            log.info("Registered pack include path: {s}", .{include_path});
+            logger.info("Registered pack include path: {s}", .{include_path});
         } else |_| {
-            log.info("No custom include directory in shader pack", .{});
+            logger.info("No custom include directory in shader pack", .{});
         }
     }
 
@@ -320,7 +322,7 @@ pub const ShaderManager = struct {
             self.allocator.free(pack);
             self.active_pack = null;
         }
-        log.info("Shader pack unloaded, using default shaders", .{});
+        logger.info("Shader pack unloaded, using default shaders", .{});
     }
 
     /// Check if runtime compilation is enabled

@@ -1,13 +1,16 @@
 const std = @import("std");
+const shared = @import("Shared");
 const shaderc = @import("shaderc");
 const ShaderPreprocessor = @import("GlslPreprocessor.zig").ShaderPreprocessor;
 const ShaderCache = @import("ShaderCache.zig").ShaderCache;
 
-const log = std.log.scoped(.shader_compiler);
+const Logger = shared.Logger;
 
 /// Shader compiler that handles preprocessing (#fh_import) and GLSL->SPIR-V compilation
 /// Includes disk-based caching to avoid recompiling unchanged shaders.
 pub const ShaderCompiler = struct {
+    const logger = Logger.init("ShaderCompiler");
+
     allocator: std.mem.Allocator,
     preprocessor: ShaderPreprocessor,
     compiler: shaderc.Compiler,
@@ -81,7 +84,7 @@ pub const ShaderCompiler = struct {
         // Check cache first
         if (self.cache.load(source_hash)) |cached_spv| {
             self.cache_hits += 1;
-            log.info("Cache hit for '{s}' ({d} bytes SPIR-V)", .{ filename, cached_spv.len });
+            logger.info("Cache hit for '{s}' ({d} bytes SPIR-V)", .{ filename, cached_spv.len });
             return CompiledShader{
                 .allocator = self.allocator,
                 .spv_data = cached_spv,
@@ -112,17 +115,17 @@ pub const ShaderCompiler = struct {
         // Log any warnings
         if (result.getNumWarnings() > 0) {
             if (result.getErrorMessage()) |msg| {
-                log.warn("Shader '{s}' compilation warnings:\n{s}", .{ filename, msg });
+                logger.warn("Shader '{s}' compilation warnings:\n{s}", .{ filename, msg });
             }
         }
 
-        log.info("Compiled shader '{s}' ({d} bytes SPIR-V)", .{ filename, owned_spv.len });
+        logger.info("Compiled shader '{s}' ({d} bytes SPIR-V)", .{ filename, owned_spv.len });
 
         result.release();
 
         // Store in cache for next time
         self.cache.store(source_hash, owned_spv) catch |err| {
-            log.warn("Failed to cache shader '{s}': {}", .{ filename, err });
+            logger.warn("Failed to cache shader '{s}': {}", .{ filename, err });
         };
 
         return CompiledShader{
@@ -136,13 +139,13 @@ pub const ShaderCompiler = struct {
     pub fn compileFile(self: *ShaderCompiler, path: []const u8) !CompiledShader {
         // Determine shader kind from extension
         const kind = ShaderKind.fromExtension(path) orelse {
-            log.err("Unknown shader extension for file: {s}", .{path});
+            logger.err("Unknown shader extension for file: {s}", .{path});
             return error.UnknownShaderType;
         };
 
         // Read source file
         const file = std.fs.cwd().openFile(path, .{}) catch |err| {
-            log.err("Failed to open shader file '{s}': {}", .{ path, err });
+            logger.err("Failed to open shader file '{s}': {}", .{ path, err });
             return err;
         };
         defer file.close();
