@@ -25,6 +25,9 @@ pub const ShaderManager = struct {
     /// Cached line shaders (for block outline)
     line_vert_spv: ?[]u8,
     line_frag_spv: ?[]u8,
+    /// Cached entity shaders
+    entity_vert_spv: ?[]u8,
+    entity_frag_spv: ?[]u8,
 
     /// Base path for default shaders
     const default_shader_path = "assets/farhorizons/shaders/";
@@ -45,6 +48,8 @@ pub const ShaderManager = struct {
         var ui_frag: ?[]u8 = null;
         var line_vert: ?[]u8 = null;
         var line_frag: ?[]u8 = null;
+        var entity_vert: ?[]u8 = null;
+        var entity_frag: ?[]u8 = null;
 
         if (enable_runtime_compilation) {
             var total_timer = std.time.Timer.start() catch unreachable;
@@ -93,6 +98,17 @@ pub const ShaderManager = struct {
             line_frag_compiled.deinit();
             logger.info("Line shaders compiled", .{});
 
+            // Compile entity shaders
+            logger.info("Compiling entity shaders...", .{});
+            var entity_vert_compiled = try compiler.?.compileFile(default_shader_path ++ "entity.vert");
+            entity_vert = try allocator.dupe(u8, entity_vert_compiled.spv_data);
+            entity_vert_compiled.deinit();
+
+            var entity_frag_compiled = try compiler.?.compileFile(default_shader_path ++ "entity.frag");
+            entity_frag = try allocator.dupe(u8, entity_frag_compiled.spv_data);
+            entity_frag_compiled.deinit();
+            logger.info("Entity shaders compiled", .{});
+
             const total_time_ms = @as(f64, @floatFromInt(total_timer.read())) / @as(f64, std.time.ns_per_ms);
             const cache_stats = compiler.?.getCacheStats();
             logger.info("Shader loading complete in {d:.2}ms (cache: {d} hits, {d} misses)", .{
@@ -113,6 +129,8 @@ pub const ShaderManager = struct {
             .ui_frag_spv = ui_frag,
             .line_vert_spv = line_vert,
             .line_frag_spv = line_frag,
+            .entity_vert_spv = entity_vert,
+            .entity_frag_spv = entity_frag,
         };
     }
 
@@ -146,6 +164,12 @@ pub const ShaderManager = struct {
             self.allocator.free(spv);
         }
         if (self.line_frag_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.entity_vert_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.entity_frag_spv) |spv| {
             self.allocator.free(spv);
         }
 
@@ -182,6 +206,14 @@ pub const ShaderManager = struct {
     /// Get the line fragment shader (compiled at runtime)
     pub fn getLineFragmentShader(self: *ShaderManager) ?[]const u8 {
         return self.line_frag_spv;
+    }
+
+    pub fn getEntityVertSpv(self: *const ShaderManager) ?[]const u8 {
+        return self.entity_vert_spv;
+    }
+
+    pub fn getEntityFragSpv(self: *const ShaderManager) ?[]const u8 {
+        return self.entity_frag_spv;
     }
 
     /// Get default vertex shader as u32 words for Vulkan

@@ -36,6 +36,10 @@ const BlockModelShaper = renderer.block.BlockModelShaper;
 const LocalPlayer = client_player.LocalPlayer;
 const ChunkManager = world.ChunkManager;
 const ChunkConfig = world.chunk_manager.ChunkConfig;
+const entity = @import("entity/Entity.zig");
+const EntityManager = entity.EntityManager;
+const EntityType = entity.EntityType;
+const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
 
 // VoxelShape culling
 const VoxelDirection = shared.Direction;
@@ -64,6 +68,8 @@ pub const FarHorizonsClient = struct {
     block_interaction: ?BlockInteraction,
     /// Block outline renderer
     block_outline_renderer: BlockOutlineRenderer,
+    entity_manager: ?EntityManager,
+    entity_renderer: ?EntityRenderer,
 
     pub fn init(allocator: std.mem.Allocator, config: GameConfig) Self {
         const display_data = DisplayData{
@@ -91,6 +97,8 @@ pub const FarHorizonsClient = struct {
             .use_async_chunks = true, // Enable async chunk loading by default
             .block_interaction = null, // Initialized in run() after chunk_manager
             .block_outline_renderer = BlockOutlineRenderer.init(),
+            .entity_manager = null,
+            .entity_renderer = null,
         };
     }
 
@@ -183,6 +191,16 @@ pub const FarHorizonsClient = struct {
         };
         var tick_accumulator: f64 = 0;
 
+        // Initialize entity system
+        self.entity_manager = EntityManager.init(self.allocator);
+        self.entity_renderer = EntityRenderer.init(
+            self.allocator,
+            self.render_system.getGpuDevice().?,
+        );
+
+        // Spawn a test cow
+        _ = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 10, .y = 5, .z = 10 });
+
         // Main loop
         logger.info("Entering main loop", .{});
         while (!self.window.shouldClose()) {
@@ -264,6 +282,10 @@ pub const FarHorizonsClient = struct {
                         }
                     }
                 }
+
+                if (self.entity_manager) |*em| {
+                    em.tickAll();
+                }
             }
 
             // Process completed chunk meshes (main thread only)
@@ -275,6 +297,15 @@ pub const FarHorizonsClient = struct {
 
             // Calculate partial tick for interpolation (0.0 to 1.0)
             const partial_tick: f32 = @floatCast(tick_accumulator / MS_PER_TICK);
+
+            // Update entity meshes for rendering
+            if (self.entity_renderer) |*er| {
+                if (self.entity_manager) |*em| {
+                    er.update(em, partial_tick) catch |err| {
+                        logger.err("Failed to update entity meshes: {}", .{err});
+                    };
+                }
+            }
 
             // Sync camera with interpolated player position for smooth rendering
             // Position is interpolated between ticks for smooth movement
@@ -319,6 +350,11 @@ pub const FarHorizonsClient = struct {
                     const draw_commands = cm.getDrawCommands();
                     const staging_copies = cm.getStagingCopies();
 
+                    // Get entity rendering info
+                    const entity_vb = if (self.entity_renderer) |*er| er.getVertexBuffer() else null;
+                    const entity_ib = if (self.entity_renderer) |*er| er.getIndexBuffer() else null;
+                    const entity_ic = if (self.entity_renderer) |*er| er.getIndexCount() else 0;
+
                     if (vertex_buffer != null and index_buffer != null and draw_commands.len > 0) {
                         self.render_system.drawFrameMultiChunk(
                             vertex_buffer.?,
@@ -326,6 +362,9 @@ pub const FarHorizonsClient = struct {
                             draw_commands,
                             null, // staging buffer (not needed, included in copies)
                             staging_copies,
+                            entity_vb,
+                            entity_ib,
+                            entity_ic,
                         ) catch |err| {
                             logger.err("Failed to draw multi-chunk frame: {}", .{err});
                         };
@@ -339,6 +378,9 @@ pub const FarHorizonsClient = struct {
                             &.{},
                             null,
                             staging_copies,
+                            entity_vb,
+                            entity_ib,
+                            entity_ic,
                         ) catch |err| {
                             logger.err("Failed to draw frame with staging: {}", .{err});
                         };
@@ -360,6 +402,14 @@ pub const FarHorizonsClient = struct {
                     logger.err("Failed to draw frame: {}", .{err});
                 };
             }
+        }
+
+        // Cleanup entity system
+        if (self.entity_renderer) |*er| {
+            er.deinit();
+        }
+        if (self.entity_manager) |*em| {
+            em.deinit();
         }
 
         logger.info("Main loop ended, shutting down", .{});

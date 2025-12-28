@@ -128,6 +128,9 @@ pub const RenderSystem = struct {
     line_vertex_buffer_memory: vk.VkDeviceMemory = null,
     line_vertex_count: u32 = 0,
 
+    // Entity Pipeline
+    entity_pipeline: vk.VkPipeline = null,
+
     // Vertex/Index buffers
     vertex_buffer: vk.VkBuffer = null,
     vertex_buffer_memory: vk.VkDeviceMemory = null,
@@ -217,6 +220,7 @@ pub const RenderSystem = struct {
         try self.createUIDescriptorSetLayout();
         try self.createUIPipeline();
         try self.createLinePipeline();
+        try self.createEntityPipeline();
         try self.createFramebuffers();
         try self.createCommandPool();
 
@@ -479,6 +483,12 @@ pub const RenderSystem = struct {
         draw_commands: ?[]const ChunkDrawCommand = null,
         /// Staging copies to execute before rendering
         staging_copies: []const StagingCopy = &.{},
+        /// Entity vertex buffer (for mob rendering)
+        entity_vertex_buffer: ?vk.VkBuffer = null,
+        /// Entity index buffer
+        entity_index_buffer: ?vk.VkBuffer = null,
+        /// Entity index count
+        entity_index_count: u32 = 0,
     };
 
     /// Unified command buffer recording
@@ -581,6 +591,24 @@ pub const RenderSystem = struct {
         } else {
             // Single mesh drawing
             vkCmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
+        }
+
+        // Draw entities (mobs)
+        if (params.entity_vertex_buffer != null and params.entity_index_buffer != null and params.entity_index_count > 0) {
+            // Bind entity pipeline (uses same descriptor set layout)
+            if (self.entity_pipeline) |entity_pipeline| {
+                vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, entity_pipeline);
+
+                const entity_vertex_buffers = [_]vk.VkBuffer{params.entity_vertex_buffer.?};
+                const entity_offsets = [_]vk.VkDeviceSize{0};
+                vkCmdBindVertexBuffers(command_buffer, 0, 1, &entity_vertex_buffers, &entity_offsets);
+                vkCmdBindIndexBuffer(command_buffer, params.entity_index_buffer.?, 0, vk.VK_INDEX_TYPE_UINT32);
+
+                vkCmdDrawIndexed(command_buffer, params.entity_index_count, 1, 0, 0, 0);
+
+                // Switch back to main graphics pipeline for subsequent drawing
+                vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+            }
         }
 
         // Draw block outline (lines)
@@ -787,6 +815,9 @@ pub const RenderSystem = struct {
         draw_commands: []const ChunkDrawCommand,
         staging_buffer: ?vk.VkBuffer,
         staging_copies: []const StagingCopy,
+        entity_vertex_buffer: ?vk.VkBuffer,
+        entity_index_buffer: ?vk.VkBuffer,
+        entity_index_count: u32,
     ) !void {
         _ = staging_buffer;
 
@@ -796,6 +827,9 @@ pub const RenderSystem = struct {
             .index_buffer = index_buffer,
             .draw_commands = draw_commands,
             .staging_copies = staging_copies,
+            .entity_vertex_buffer = entity_vertex_buffer,
+            .entity_index_buffer = entity_index_buffer,
+            .entity_index_count = entity_index_count,
         });
         try self.endFrame(ctx);
     }
@@ -2094,6 +2128,184 @@ pub const RenderSystem = struct {
         logger.info("Line pipeline created", .{});
     }
 
+    fn createEntityPipeline(self: *Self) !void {
+        const vkCreateShaderModule = vk.vkCreateShaderModule orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyShaderModule = vk.vkDestroyShaderModule orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateGraphicsPipelines = vk.vkCreateGraphicsPipelines orelse return error.VulkanFunctionNotLoaded;
+
+        // Get entity shaders from ShaderManager
+        const vert_shader_code = if (self.shader_manager) |*sm|
+            sm.getEntityVertSpv() orelse return error.ShaderNotAvailable
+        else
+            return error.ShaderManagerNotInitialized;
+
+        const frag_shader_code = if (self.shader_manager) |*sm|
+            sm.getEntityFragSpv() orelse return error.ShaderNotAvailable
+        else
+            return error.ShaderManagerNotInitialized;
+
+        const vert_module = try self.createShaderModule(vkCreateShaderModule, vert_shader_code);
+        defer vkDestroyShaderModule(self.device, vert_module, null);
+
+        const frag_module = try self.createShaderModule(vkCreateShaderModule, frag_shader_code);
+        defer vkDestroyShaderModule(self.device, frag_module, null);
+
+        const shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stage = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vert_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = frag_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+            },
+        };
+
+        const dynamic_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR };
+        const dynamic_state = vk.VkPipelineDynamicStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .dynamicStateCount = dynamic_states.len,
+            .pDynamicStates = &dynamic_states,
+        };
+
+        const binding_description = Vertex.getBindingDescription();
+        const attribute_descriptions = Vertex.getAttributeDescriptions();
+
+        const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &binding_description,
+            .vertexAttributeDescriptionCount = attribute_descriptions.len,
+            .pVertexAttributeDescriptions = &attribute_descriptions,
+        };
+
+        const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .topology = vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = vk.VK_FALSE,
+        };
+
+        const viewport_state = vk.VkPipelineViewportStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = null,
+            .scissorCount = 1,
+            .pScissors = null,
+        };
+
+        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthClampEnable = vk.VK_FALSE,
+            .rasterizerDiscardEnable = vk.VK_FALSE,
+            .polygonMode = vk.VK_POLYGON_MODE_FILL,
+            .cullMode = vk.VK_CULL_MODE_BACK_BIT,
+            .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = vk.VK_FALSE,
+            .depthBiasConstantFactor = 0.0,
+            .depthBiasClamp = 0.0,
+            .depthBiasSlopeFactor = 0.0,
+            .lineWidth = 1.0,
+        };
+
+        const multisampling = vk.VkPipelineMultisampleStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = vk.VK_FALSE,
+            .minSampleShading = 1.0,
+            .pSampleMask = null,
+            .alphaToCoverageEnable = vk.VK_FALSE,
+            .alphaToOneEnable = vk.VK_FALSE,
+        };
+
+        const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_TRUE,
+            .depthWriteEnable = vk.VK_TRUE,
+            .depthCompareOp = vk.VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
+        };
+
+        const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_FALSE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        const color_blending = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = vk.VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        // Reuse main pipeline layout (same descriptor set layout)
+        const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stageCount = shader_stages.len,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_stencil,
+            .pColorBlendState = &color_blending,
+            .pDynamicState = &dynamic_state,
+            .layout = self.pipeline_layout,
+            .renderPass = self.render_pass,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        if (vkCreateGraphicsPipelines(self.device, null, 1, &pipeline_info, null, &self.entity_pipeline) != vk.VK_SUCCESS) {
+            return error.PipelineCreationFailed;
+        }
+
+        logger.info("Entity pipeline created", .{});
+    }
+
     fn loadCrosshairTexture(self: *Self) !void {
         const vkCreateImage = vk.vkCreateImage orelse return error.VulkanFunctionNotLoaded;
         const vkGetImageMemoryRequirements = vk.vkGetImageMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
@@ -2924,6 +3136,11 @@ pub const RenderSystem = struct {
             if (vk.vkFreeMemory) |free| free(self.device, m, null);
             self.line_vertex_buffer_memory = null;
         }
+        // Destroy entity pipeline
+        if (self.entity_pipeline) |p| {
+            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+            self.entity_pipeline = null;
+        }
     }
 
     fn destroyDescriptorSetLayout(self: *Self) void {
@@ -3004,5 +3221,9 @@ pub const RenderSystem = struct {
 
     pub fn getInstance(self: *const Self) vk.VkInstance {
         return self.instance;
+    }
+
+    pub fn getEntityPipeline(self: *const Self) vk.VkPipeline {
+        return self.entity_pipeline;
     }
 };
