@@ -362,7 +362,12 @@ pub const ChunkManager = struct {
                 };
                 chunk_mesh.setBufferAllocation(allocation);
 
-                // Store mesh in render chunk
+                // Free OLD buffer allocation BEFORE swapping (atomic swap pattern)
+                if (render_chunk_ptr.getBufferAllocation()) |old_alloc| {
+                    buf_mgr.free(old_alloc);
+                }
+
+                // Store mesh in render chunk (this frees old mesh CPU data)
                 render_chunk_ptr.setMesh(chunk_mesh);
 
                 // Remove from pending
@@ -392,7 +397,9 @@ pub const ChunkManager = struct {
         var iter = self.loaded_chunks.iterator();
         while (iter.next()) |entry| {
             const chunk = entry.value_ptr.*;
-            if (!chunk.isReady()) continue;
+            
+            // Render chunks that are ready OR dirty (dirty = rebuilding, till has old mesh)
+            if (chunk.state != .ready and chunk.state != .dirty) continue;
 
             const m = chunk.mesh orelse continue;
             if (!m.hasValidAllocation()) continue;
@@ -647,20 +654,9 @@ pub const ChunkManager = struct {
 
     /// Queue a chunk for re-meshing
     fn queueChunkRemesh(self: *Self, pos: ChunkPos, render_chunk_ptr: *RenderChunk) void {
-        // Free existing buffer allocation
-        if (self.buffer_manager) |buf_mgr| {
-            if (render_chunk_ptr.getBufferAllocation()) |alloc| {
-                buf_mgr.free(alloc);
-            }
-        }
-
-        // Clear existing mesh
-        if (render_chunk_ptr.mesh) |*m| {
-            m.deinit();
-            render_chunk_ptr.mesh = null;
-        }
-
-        render_chunk_ptr.state = .meshing;
+        // Don't clear mesh - keep rendering old mesh until new one arrives
+        // Mark as dirty as we know a rebuild is pending
+        render_chunk_ptr.state = .dirty;
 
         // Create task data
         const task_data = self.allocator.create(ChunkTask) catch return;
