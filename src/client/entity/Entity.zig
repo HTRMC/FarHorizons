@@ -275,34 +275,44 @@ pub const Entity = struct {
         }
     }
 
+    // Step height - entities can walk up this many blocks without jumping (like MC)
+    const STEP_HEIGHT: f32 = 0.6;
+
     /// Apply physics: gravity, movement, and terrain collision
     fn applyPhysics(self: *Self, terrain: TerrainQuery) void {
+        const half_width = self.width / 2.0;
+
         // Apply gravity if not on ground
         if (!self.on_ground) {
             self.velocity.y -= GRAVITY;
         }
 
-        // Apply drag
+        // Apply drag to Y velocity
         self.velocity.y *= DRAG;
 
-        // Apply friction when on ground
-        if (self.on_ground) {
-            self.velocity.x *= GROUND_FRICTION;
-            self.velocity.z *= GROUND_FRICTION;
-        }
-
-        // Calculate new position
+        // Calculate new position (friction applied AFTER movement like MC)
         var new_x = self.position.x + self.velocity.x;
         var new_y = self.position.y + self.velocity.y;
         var new_z = self.position.z + self.velocity.z;
 
-        // Check vertical collision (Y axis)
-        const half_width = self.width / 2.0;
+        // === Horizontal collision with step-up ===
+        const is_moving_horizontally = self.velocity.x != 0 or self.velocity.z != 0;
+
+        if (is_moving_horizontally) {
+            // Try to move horizontally, with step-up if blocked
+            const move_result = self.tryMoveHorizontal(terrain, new_x, new_y, new_z, half_width);
+            new_x = move_result.x;
+            new_y = move_result.y;
+            new_z = move_result.z;
+            if (move_result.blocked_x) self.velocity.x = 0;
+            if (move_result.blocked_z) self.velocity.z = 0;
+        }
+
+        // === Vertical collision ===
         self.on_ground = false;
 
-        if (self.velocity.y < 0) {
-            // Falling - check ground collision
-            // Check corners of bounding box at feet level
+        if (self.velocity.y <= 0) {
+            // Falling or stationary - check ground collision
             const feet_y: i32 = @intFromFloat(@floor(new_y));
             const check_positions = [_][2]f32{
                 .{ new_x - half_width + 0.01, new_z - half_width + 0.01 },
@@ -323,7 +333,25 @@ pub const Entity = struct {
                     break;
                 }
             }
-        } else if (self.velocity.y > 0) {
+
+            // If not falling but was on ground, check if still on ground (step-down)
+            if (!self.on_ground and self.velocity.y >= -0.01) {
+                // Check for ground slightly below (max step down distance)
+                const step_down_y: i32 = @intFromFloat(@floor(new_y - STEP_HEIGHT));
+                for (check_positions) |pos| {
+                    const block_x: i32 = @intFromFloat(@floor(pos[0]));
+                    const block_z: i32 = @intFromFloat(@floor(pos[1]));
+
+                    if (terrain(block_x, step_down_y, block_z)) {
+                        // Ground below - snap down to it
+                        new_y = @as(f32, @floatFromInt(step_down_y + 1));
+                        self.velocity.y = 0;
+                        self.on_ground = true;
+                        break;
+                    }
+                }
+            }
+        } else {
             // Rising - check ceiling collision
             const head_y: i32 = @intFromFloat(@floor(new_y + self.height));
             const check_positions = [_][2]f32{
@@ -336,7 +364,6 @@ pub const Entity = struct {
                 const block_z: i32 = @intFromFloat(@floor(pos[1]));
 
                 if (terrain(block_x, head_y, block_z)) {
-                    // Hit ceiling
                     new_y = @as(f32, @floatFromInt(head_y)) - self.height;
                     self.velocity.y = 0;
                     break;
@@ -344,73 +371,140 @@ pub const Entity = struct {
             }
         }
 
-        // Check horizontal collision (X axis)
+        // Update position
+        self.position.x = new_x;
+        self.position.y = new_y;
+        self.position.z = new_z;
+
+        // Apply friction AFTER movement (like MC)
+        if (self.on_ground) {
+            self.velocity.x *= GROUND_FRICTION;
+            self.velocity.z *= GROUND_FRICTION;
+        }
+    }
+
+    /// Try to move horizontally with step-up capability
+    fn tryMoveHorizontal(
+        self: *Self,
+        terrain: TerrainQuery,
+        target_x: f32,
+        target_y: f32,
+        target_z: f32,
+        half_width: f32,
+    ) struct { x: f32, y: f32, z: f32, blocked_x: bool, blocked_z: bool } {
+        var new_x = target_x;
+        var new_y = target_y;
+        var new_z = target_z;
+        var blocked_x = false;
+        var blocked_z = false;
+
+        // Check X collision
         if (self.velocity.x != 0) {
             const check_x: i32 = if (self.velocity.x > 0)
                 @intFromFloat(@floor(new_x + half_width))
             else
                 @intFromFloat(@floor(new_x - half_width));
 
-            // Check at multiple heights
-            var blocked_x = false;
-            const feet_y_int: i32 = @intFromFloat(@floor(new_y + 0.01));
-            const mid_y_int: i32 = @intFromFloat(@floor(new_y + self.height * 0.5));
-
-            for ([_]i32{ feet_y_int, mid_y_int }) |check_y| {
-                const block_z1: i32 = @intFromFloat(@floor(new_z - half_width + 0.01));
-                const block_z2: i32 = @intFromFloat(@floor(new_z + half_width - 0.01));
-
-                if (terrain(check_x, check_y, block_z1) or terrain(check_x, check_y, block_z2)) {
-                    blocked_x = true;
-                    break;
-                }
-            }
-
-            if (blocked_x) {
-                if (self.velocity.x > 0) {
-                    new_x = @as(f32, @floatFromInt(check_x)) - half_width;
+            if (self.isBlockedAtHeight(terrain, check_x, new_y, new_z, half_width)) {
+                // Blocked - try stepping up
+                const step_y = new_y + STEP_HEIGHT;
+                if (!self.isBlockedAtHeight(terrain, check_x, step_y, new_z, half_width)) {
+                    // Can step up - find exact step height
+                    new_y = self.findStepHeight(terrain, new_x, new_y, new_z, half_width, check_x, true);
                 } else {
-                    new_x = @as(f32, @floatFromInt(check_x + 1)) + half_width;
+                    // Can't step up - stop at wall
+                    if (self.velocity.x > 0) {
+                        new_x = @as(f32, @floatFromInt(check_x)) - half_width - 0.001;
+                    } else {
+                        new_x = @as(f32, @floatFromInt(check_x + 1)) + half_width + 0.001;
+                    }
+                    blocked_x = true;
                 }
-                self.velocity.x = 0;
             }
         }
 
-        // Check horizontal collision (Z axis)
+        // Check Z collision
         if (self.velocity.z != 0) {
             const check_z: i32 = if (self.velocity.z > 0)
                 @intFromFloat(@floor(new_z + half_width))
             else
                 @intFromFloat(@floor(new_z - half_width));
 
-            var blocked_z = false;
-            const feet_y_int: i32 = @intFromFloat(@floor(new_y + 0.01));
-            const mid_y_int: i32 = @intFromFloat(@floor(new_y + self.height * 0.5));
-
-            for ([_]i32{ feet_y_int, mid_y_int }) |check_y| {
-                const block_x1: i32 = @intFromFloat(@floor(new_x - half_width + 0.01));
-                const block_x2: i32 = @intFromFloat(@floor(new_x + half_width - 0.01));
-
-                if (terrain(block_x1, check_y, check_z) or terrain(block_x2, check_y, check_z)) {
-                    blocked_z = true;
-                    break;
-                }
-            }
-
-            if (blocked_z) {
-                if (self.velocity.z > 0) {
-                    new_z = @as(f32, @floatFromInt(check_z)) - half_width;
+            if (self.isBlockedAtHeightZ(terrain, check_z, new_y, new_x, half_width)) {
+                // Blocked - try stepping up
+                const step_y = new_y + STEP_HEIGHT;
+                if (!self.isBlockedAtHeightZ(terrain, check_z, step_y, new_x, half_width)) {
+                    // Can step up
+                    new_y = self.findStepHeightZ(terrain, new_x, new_y, new_z, half_width, check_z, true);
                 } else {
-                    new_z = @as(f32, @floatFromInt(check_z + 1)) + half_width;
+                    // Can't step up - stop at wall
+                    if (self.velocity.z > 0) {
+                        new_z = @as(f32, @floatFromInt(check_z)) - half_width - 0.001;
+                    } else {
+                        new_z = @as(f32, @floatFromInt(check_z + 1)) + half_width + 0.001;
+                    }
+                    blocked_z = true;
                 }
-                self.velocity.z = 0;
             }
         }
 
-        // Update position
-        self.position.x = new_x;
-        self.position.y = new_y;
-        self.position.z = new_z;
+        return .{ .x = new_x, .y = new_y, .z = new_z, .blocked_x = blocked_x, .blocked_z = blocked_z };
+    }
+
+    /// Check if blocked at a given height for X movement
+    fn isBlockedAtHeight(self: *Self, terrain: TerrainQuery, check_x: i32, y: f32, z: f32, half_width: f32) bool {
+        const feet_y: i32 = @intFromFloat(@floor(y + 0.01));
+        const mid_y: i32 = @intFromFloat(@floor(y + self.height * 0.5));
+        const block_z1: i32 = @intFromFloat(@floor(z - half_width + 0.01));
+        const block_z2: i32 = @intFromFloat(@floor(z + half_width - 0.01));
+
+        for ([_]i32{ feet_y, mid_y }) |check_y| {
+            if (terrain(check_x, check_y, block_z1) or terrain(check_x, check_y, block_z2)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Check if blocked at a given height for Z movement
+    fn isBlockedAtHeightZ(self: *Self, terrain: TerrainQuery, check_z: i32, y: f32, x: f32, half_width: f32) bool {
+        const feet_y: i32 = @intFromFloat(@floor(y + 0.01));
+        const mid_y: i32 = @intFromFloat(@floor(y + self.height * 0.5));
+        const block_x1: i32 = @intFromFloat(@floor(x - half_width + 0.01));
+        const block_x2: i32 = @intFromFloat(@floor(x + half_width - 0.01));
+
+        for ([_]i32{ feet_y, mid_y }) |check_y| {
+            if (terrain(block_x1, check_y, check_z) or terrain(block_x2, check_y, check_z)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Find the exact step height needed for X movement
+    fn findStepHeight(_: *Self, terrain: TerrainQuery, _: f32, y: f32, z: f32, half_width: f32, check_x: i32, _: bool) f32 {
+        // Find the top of the blocking block
+        const feet_y: i32 = @intFromFloat(@floor(y + 0.01));
+        const block_z1: i32 = @intFromFloat(@floor(z - half_width + 0.01));
+        const block_z2: i32 = @intFromFloat(@floor(z + half_width - 0.01));
+
+        // Check if there's a block at feet level we need to step onto
+        if (terrain(check_x, feet_y, block_z1) or terrain(check_x, feet_y, block_z2)) {
+            return @as(f32, @floatFromInt(feet_y + 1));
+        }
+        return y;
+    }
+
+    /// Find the exact step height needed for Z movement
+    fn findStepHeightZ(_: *Self, terrain: TerrainQuery, x: f32, y: f32, _: f32, half_width: f32, check_z: i32, _: bool) f32 {
+        const feet_y: i32 = @intFromFloat(@floor(y + 0.01));
+        const block_x1: i32 = @intFromFloat(@floor(x - half_width + 0.01));
+        const block_x2: i32 = @intFromFloat(@floor(x + half_width - 0.01));
+
+        if (terrain(block_x1, feet_y, check_z) or terrain(block_x2, feet_y, check_z)) {
+            return @as(f32, @floatFromInt(feet_y + 1));
+        }
+        return y;
     }
 
     /// Rotate body toward head direction, keeping head within max_angle of body

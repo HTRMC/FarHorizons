@@ -144,26 +144,39 @@ pub const RandomStrollGoal = struct {
         // Calculate target yaw (cow model faces -Z, so use -dz)
         const target_yaw = std.math.atan2(dx, -dz) * 180.0 / std.math.pi;
 
-        // Smooth rotation toward target (like MC's MoveControl.rotlerp)
-        // Max turn speed ~30 degrees per tick for smooth turning
-        const max_turn: f32 = 30.0;
+        // Calculate yaw difference
         var yaw_diff = target_yaw - self.entity.yaw;
         // Normalize to -180..180
         while (yaw_diff > 180.0) yaw_diff -= 360.0;
         while (yaw_diff < -180.0) yaw_diff += 360.0;
-        // Clamp rotation speed
-        yaw_diff = std.math.clamp(yaw_diff, -max_turn, max_turn);
-        self.entity.yaw += yaw_diff;
 
-        // Move in the direction the entity is FACING (like MC)
-        // This prevents the weird snap-back from diagonal movement
-        const facing_rad = self.entity.yaw * std.math.pi / 180.0;
-        const forward_x = @sin(facing_rad);
-        const forward_z = -@cos(facing_rad); // -cos because model faces -Z
+        const abs_yaw_diff = @abs(yaw_diff);
 
-        // Set velocity in facing direction
-        self.entity.velocity.x = forward_x * self.speed;
-        self.entity.velocity.z = forward_z * self.speed;
+        // Smooth rotation toward target (like MC's MoveControl.rotlerp)
+        // Max turn speed ~30 degrees per tick for smooth turning
+        const max_turn: f32 = 30.0;
+        const clamped_diff = std.math.clamp(yaw_diff, -max_turn, max_turn);
+        self.entity.yaw += clamped_diff;
+
+        // Only walk forward when roughly facing the target (within 45 degrees)
+        // This prevents walking in circles or away from target while turning
+        if (abs_yaw_diff < 45.0) {
+            // Move in the direction the entity is FACING (like MC)
+            const facing_rad = self.entity.yaw * std.math.pi / 180.0;
+            const forward_x = @sin(facing_rad);
+            const forward_z = -@cos(facing_rad); // -cos because model faces -Z
+
+            // Scale speed based on how well-aligned we are (full speed when facing target)
+            const alignment = 1.0 - (abs_yaw_diff / 45.0) * 0.5; // 100% to 50% speed
+            const move_speed = self.speed * alignment;
+
+            self.entity.velocity.x = forward_x * move_speed;
+            self.entity.velocity.z = forward_z * move_speed;
+        } else {
+            // Turning sharply - stand still until facing target
+            self.entity.velocity.x = 0;
+            self.entity.velocity.z = 0;
+        }
     }
 
     fn stop(goal: *Goal) void {
