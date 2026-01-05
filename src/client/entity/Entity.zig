@@ -60,8 +60,12 @@ pub const Entity = struct {
     // Body rotation offset from yaw
     body_yaw_offset: f32 = 0,
 
-    // Whether entity is on ground
-    on_ground: bool = true,
+    // Whether entity is on ground (default false so entities fall when spawned)
+    on_ground: bool = false,
+
+    // Bounding box dimensions (set based on entity type)
+    width: f32 = 0.9, // Cow default: 0.9 blocks wide
+    height: f32 = 1.4, // Cow default: 1.4 blocks tall
 
     // Animation time (ticks)
     tick_count: u64 = 0,
@@ -100,15 +104,29 @@ pub const Entity = struct {
     const BODY_TURN_DURATION: u32 = 10; // Ticks to complete the turn
     const BODY_ROT_SPEED: f32 = 10.0 * std.math.pi / 180.0; // Body rotation speed
 
+    // Physics constants (matching Minecraft)
+    const GRAVITY: f32 = 0.08; // Blocks per tick^2 (MC uses 0.08)
+    const DRAG: f32 = 0.98; // Velocity multiplier per tick
+    const GROUND_FRICTION: f32 = 0.91; // Horizontal friction when on ground
+
+    /// Terrain query function type - returns true if block at position is solid
+    pub const TerrainQuery = *const fn (x: i32, y: i32, z: i32) bool;
+
     /// Update entity state (call once per tick)
     /// player_pos: Position of the player (or null if no player tracking)
-    pub fn tick(self: *Self, player_pos: ?Vec3) void {
+    /// terrain: Optional terrain query function for collision
+    pub fn tick(self: *Self, player_pos: ?Vec3, terrain: ?TerrainQuery) void {
         self.prev_position = self.position;
         self.prev_yaw = self.yaw;
         self.prev_walk_animation = self.walk_animation;
         self.prev_head_pitch = self.head_pitch;
         self.prev_head_yaw = self.head_yaw;
         self.tick_count += 1;
+
+        // Apply physics if terrain is available
+        if (terrain) |query_terrain| {
+            self.applyPhysics(query_terrain);
+        }
 
         // Update walk animation based on velocity (like MC's limb swing)
         const horizontal_speed = @sqrt(self.velocity.x * self.velocity.x + self.velocity.z * self.velocity.z);
@@ -253,6 +271,144 @@ pub const Entity = struct {
         }
     }
 
+    /// Apply physics: gravity, movement, and terrain collision
+    fn applyPhysics(self: *Self, terrain: TerrainQuery) void {
+        // Apply gravity if not on ground
+        if (!self.on_ground) {
+            self.velocity.y -= GRAVITY;
+        }
+
+        // Apply drag
+        self.velocity.y *= DRAG;
+
+        // Apply friction when on ground
+        if (self.on_ground) {
+            self.velocity.x *= GROUND_FRICTION;
+            self.velocity.z *= GROUND_FRICTION;
+        }
+
+        // Calculate new position
+        var new_x = self.position.x + self.velocity.x;
+        var new_y = self.position.y + self.velocity.y;
+        var new_z = self.position.z + self.velocity.z;
+
+        // Check vertical collision (Y axis)
+        const half_width = self.width / 2.0;
+        self.on_ground = false;
+
+        if (self.velocity.y < 0) {
+            // Falling - check ground collision
+            // Check corners of bounding box at feet level
+            const feet_y: i32 = @intFromFloat(@floor(new_y));
+            const check_positions = [_][2]f32{
+                .{ new_x - half_width + 0.01, new_z - half_width + 0.01 },
+                .{ new_x + half_width - 0.01, new_z - half_width + 0.01 },
+                .{ new_x - half_width + 0.01, new_z + half_width - 0.01 },
+                .{ new_x + half_width - 0.01, new_z + half_width - 0.01 },
+            };
+
+            for (check_positions) |pos| {
+                const block_x: i32 = @intFromFloat(@floor(pos[0]));
+                const block_z: i32 = @intFromFloat(@floor(pos[1]));
+
+                if (terrain(block_x, feet_y, block_z)) {
+                    // Hit ground - snap to top of block
+                    new_y = @as(f32, @floatFromInt(feet_y + 1));
+                    self.velocity.y = 0;
+                    self.on_ground = true;
+                    break;
+                }
+            }
+        } else if (self.velocity.y > 0) {
+            // Rising - check ceiling collision
+            const head_y: i32 = @intFromFloat(@floor(new_y + self.height));
+            const check_positions = [_][2]f32{
+                .{ new_x - half_width + 0.01, new_z - half_width + 0.01 },
+                .{ new_x + half_width - 0.01, new_z + half_width - 0.01 },
+            };
+
+            for (check_positions) |pos| {
+                const block_x: i32 = @intFromFloat(@floor(pos[0]));
+                const block_z: i32 = @intFromFloat(@floor(pos[1]));
+
+                if (terrain(block_x, head_y, block_z)) {
+                    // Hit ceiling
+                    new_y = @as(f32, @floatFromInt(head_y)) - self.height;
+                    self.velocity.y = 0;
+                    break;
+                }
+            }
+        }
+
+        // Check horizontal collision (X axis)
+        if (self.velocity.x != 0) {
+            const check_x: i32 = if (self.velocity.x > 0)
+                @intFromFloat(@floor(new_x + half_width))
+            else
+                @intFromFloat(@floor(new_x - half_width));
+
+            // Check at multiple heights
+            var blocked_x = false;
+            const feet_y_int: i32 = @intFromFloat(@floor(new_y + 0.01));
+            const mid_y_int: i32 = @intFromFloat(@floor(new_y + self.height * 0.5));
+
+            for ([_]i32{ feet_y_int, mid_y_int }) |check_y| {
+                const block_z1: i32 = @intFromFloat(@floor(new_z - half_width + 0.01));
+                const block_z2: i32 = @intFromFloat(@floor(new_z + half_width - 0.01));
+
+                if (terrain(check_x, check_y, block_z1) or terrain(check_x, check_y, block_z2)) {
+                    blocked_x = true;
+                    break;
+                }
+            }
+
+            if (blocked_x) {
+                if (self.velocity.x > 0) {
+                    new_x = @as(f32, @floatFromInt(check_x)) - half_width;
+                } else {
+                    new_x = @as(f32, @floatFromInt(check_x + 1)) + half_width;
+                }
+                self.velocity.x = 0;
+            }
+        }
+
+        // Check horizontal collision (Z axis)
+        if (self.velocity.z != 0) {
+            const check_z: i32 = if (self.velocity.z > 0)
+                @intFromFloat(@floor(new_z + half_width))
+            else
+                @intFromFloat(@floor(new_z - half_width));
+
+            var blocked_z = false;
+            const feet_y_int: i32 = @intFromFloat(@floor(new_y + 0.01));
+            const mid_y_int: i32 = @intFromFloat(@floor(new_y + self.height * 0.5));
+
+            for ([_]i32{ feet_y_int, mid_y_int }) |check_y| {
+                const block_x1: i32 = @intFromFloat(@floor(new_x - half_width + 0.01));
+                const block_x2: i32 = @intFromFloat(@floor(new_x + half_width - 0.01));
+
+                if (terrain(block_x1, check_y, check_z) or terrain(block_x2, check_y, check_z)) {
+                    blocked_z = true;
+                    break;
+                }
+            }
+
+            if (blocked_z) {
+                if (self.velocity.z > 0) {
+                    new_z = @as(f32, @floatFromInt(check_z)) - half_width;
+                } else {
+                    new_z = @as(f32, @floatFromInt(check_z + 1)) + half_width;
+                }
+                self.velocity.z = 0;
+            }
+        }
+
+        // Update position
+        self.position.x = new_x;
+        self.position.y = new_y;
+        self.position.z = new_z;
+    }
+
     /// Rotate body toward head direction, keeping head within max_angle of body
     fn rotateBodyTowardHead(self: *Self, max_angle: f32) void {
         // If head is turned beyond max_angle, rotate body to compensate
@@ -390,10 +546,11 @@ pub const EntityManager = struct {
 
     /// Tick all entities
     /// player_pos: Position of the player for look-at behavior
-    pub fn tickAll(self: *Self, player_pos: ?Vec3) void {
+    /// terrain: Optional terrain query function for collision
+    pub fn tickAll(self: *Self, player_pos: ?Vec3, terrain: ?Entity.TerrainQuery) void {
         var iter = self.entities.valueIterator();
         while (iter.next()) |entity| {
-            entity.tick(player_pos);
+            entity.tick(player_pos, terrain);
         }
     }
 

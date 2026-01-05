@@ -40,7 +40,18 @@ const ChunkConfig = world.chunk_manager.ChunkConfig;
 const entity = @import("entity/Entity.zig");
 const EntityManager = entity.EntityManager;
 const EntityType = entity.EntityType;
+const Entity = entity.Entity;
 const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
+
+// Terrain query for entity physics
+var terrain_query_cm: ?*ChunkManager = null;
+
+fn terrainQueryFn(x: i32, y: i32, z: i32) bool {
+    if (terrain_query_cm) |cm| {
+        return cm.isBlockSolid(x, y, z);
+    }
+    return false;
+}
 
 // VoxelShape culling
 const VoxelDirection = shared.Direction;
@@ -297,8 +308,12 @@ pub const FarHorizonsClient = struct {
                 }
 
                 if (self.entity_manager) |*em| {
-                    // Pass player position for entity look-at behavior
-                    em.tickAll(self.local_player.getPosition(0));
+                    // Set up terrain query for entity physics
+                    terrain_query_cm = if (self.chunk_manager) |*cm| cm else null;
+
+                    // Pass player position and terrain query for entity behavior
+                    const terrain_fn: ?Entity.TerrainQuery = if (terrain_query_cm != null) &terrainQueryFn else null;
+                    em.tickAll(self.local_player.getPosition(0), terrain_fn);
                 }
             }
 
