@@ -228,19 +228,19 @@ pub const CowModel = struct {
         // Bottom face (Y-) - after Y-flip this is at TOP, viewed from +Y
         // CCW from +Y: 0,4,5,1
         try self.addQuad(vertices, indices, base_idx + 0, corners, .{ 0, 4, 5, 1 }, white, .{
-            .{ (u + d) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w) * u_scale, (v) * v_scale },
-            .{ (u + d) * u_scale, (v) * v_scale },
+            .{ (u + d) * u_scale, (v + d) * v_scale }, // corner 0
+            .{ (u + d) * u_scale, (v) * v_scale }, // corner 4 (was uv3)
+            .{ (u + d + w) * u_scale, (v) * v_scale }, // corner 5 (was uv2)
+            .{ (u + d + w) * u_scale, (v + d) * v_scale }, // corner 1 (was uv1)
         }, box.mirror);
 
         // Top face (Y+) - after Y-flip this is at BOTTOM, viewed from -Y
         // CCW from -Y: 3,2,6,7
         try self.addQuad(vertices, indices, base_idx + 4, corners, .{ 3, 2, 6, 7 }, white, .{
-            .{ (u + d + w) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w) * u_scale, (v) * v_scale },
-            .{ (u + d + w + w) * u_scale, (v) * v_scale },
-            .{ (u + d + w + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d) * v_scale }, // corner 3
+            .{ (u + d + w + w) * u_scale, (v + d) * v_scale }, // corner 2 (was uv3)
+            .{ (u + d + w + w) * u_scale, (v) * v_scale }, // corner 6 (was uv2)
+            .{ (u + d + w) * u_scale, (v) * v_scale }, // corner 7 (was uv1)
         }, box.mirror);
 
         // West face (X-) - viewed from -X
@@ -264,19 +264,19 @@ pub const CowModel = struct {
         // North face (Z-) - viewed from -Z (this is FRONT of cow)
         // CCW from -Z: 0,1,2,3
         try self.addQuad(vertices, indices, base_idx + 16, corners, .{ 0, 1, 2, 3 }, white, .{
-            .{ (u + d + w) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d) * v_scale }, // corner 0
+            .{ (u + d) * u_scale, (v + d) * v_scale }, // corner 1 (was uv3)
+            .{ (u + d) * u_scale, (v + d + h) * v_scale }, // corner 2 (was uv2)
+            .{ (u + d + w) * u_scale, (v + d + h) * v_scale }, // corner 3 (was uv1)
         }, box.mirror);
 
         // South face (Z+) - viewed from +Z (this is BACK of cow)
         // CCW from +Z: 4,7,6,5
         try self.addQuad(vertices, indices, base_idx + 20, corners, .{ 4, 7, 6, 5 }, white, .{
-            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w + d + w) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d) * v_scale }, // corner 4
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale }, // corner 7 (was uv3)
+            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale }, // corner 6 (was uv2)
+            .{ (u + d + w + d + w) * u_scale, (v + d) * v_scale }, // corner 5 (was uv1)
         }, box.mirror);
     }
 
