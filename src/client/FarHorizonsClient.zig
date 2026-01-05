@@ -214,7 +214,7 @@ pub const FarHorizonsClient = struct {
         // Spawn a test cow with velocity for walk animation testing
         const cow_id = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 10, .y = 5, .z = 10 });
         if (self.entity_manager.?.get(cow_id)) |cow| {
-            cow.velocity = Vec3{ .x = 0.1, .y = 0, .z = 0 }; // Give it some velocity to animate
+            cow.velocity = Vec3{ .x = 0.5, .y = 0, .z = 0.5 }; // Give it some velocity to animate
         }
 
         // Main loop
