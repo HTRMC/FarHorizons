@@ -51,6 +51,7 @@ pub const CowModel = struct {
             .rotation = .{ 0, 0, 0 },
             .boxes = &[_]Box{
                 .{ .origin = .{ -4, -4, -6 }, .size = .{ 8, 8, 6 }, .uv = .{ 0, 0 } }, // head
+                .{ .origin = .{ -3, 1, -7 }, .size = .{ 6, 3, 1 }, .uv = .{ 1, 33 } }, // snout
                 .{ .origin = .{ -5, -5, -5 }, .size = .{ 1, 3, 1 }, .uv = .{ 22, 0 } }, // right horn
                 .{ .origin = .{ 4, -5, -5 }, .size = .{ 1, 3, 1 }, .uv = .{ 22, 0 } }, // left horn
             },
@@ -235,30 +236,31 @@ pub const CowModel = struct {
         }, box.mirror);
 
         // Top face (Y+) - after Y-flip this is at BOTTOM, viewed from -Y
+        // For body: becomes back face after 90° X rotation
         // CCW from -Y: 3,2,6,7
         try self.addQuad(vertices, indices, base_idx + 4, corners, .{ 3, 2, 6, 7 }, white, .{
-            .{ (u + d + w) * u_scale, (v + d) * v_scale }, // corner 3
-            .{ (u + d + w + w) * u_scale, (v + d) * v_scale }, // corner 2 (was uv3)
-            .{ (u + d + w + w) * u_scale, (v) * v_scale }, // corner 6 (was uv2)
-            .{ (u + d + w) * u_scale, (v) * v_scale }, // corner 7 (was uv1)
+            .{ (u + d + w + w) * u_scale, (v + d) * v_scale }, // corner 3: U flipped
+            .{ (u + d + w) * u_scale, (v + d) * v_scale }, // corner 2: U flipped
+            .{ (u + d + w) * u_scale, (v) * v_scale }, // corner 6: U flipped
+            .{ (u + d + w + w) * u_scale, (v) * v_scale }, // corner 7: U flipped
         }, box.mirror);
 
         // West face (X-) - viewed from -X
-        // CCW from -X: 0,3,7,4
+        // CCW from -X: 0,3,7,4 (using East UV region - swapped)
         try self.addQuad(vertices, indices, base_idx + 8, corners, .{ 0, 3, 7, 4 }, white, .{
-            .{ (u + d) * u_scale, (v + d) * v_scale },
-            .{ (u + d) * u_scale, (v + d + h) * v_scale },
-            .{ (u) * u_scale, (v + d + h) * v_scale },
-            .{ (u) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
         }, box.mirror);
 
         // East face (X+) - viewed from +X
-        // CCW from +X: 1,5,6,2
+        // CCW from +X: 1,5,6,2 (using West UV region - swapped)
         try self.addQuad(vertices, indices, base_idx + 12, corners, .{ 1, 5, 6, 2 }, white, .{
-            .{ (u + d + w) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d) * u_scale, (v + d) * v_scale },
+            .{ (u) * u_scale, (v + d) * v_scale },
+            .{ (u) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d) * u_scale, (v + d + h) * v_scale },
         }, box.mirror);
 
         // North face (Z-) - viewed from -Z (this is FRONT of cow)
@@ -271,12 +273,13 @@ pub const CowModel = struct {
         }, box.mirror);
 
         // South face (Z+) - viewed from +Z (this is BACK of cow)
+        // For body: becomes top face after 90° X rotation
         // CCW from +Z: 4,7,6,5
         try self.addQuad(vertices, indices, base_idx + 20, corners, .{ 4, 7, 6, 5 }, white, .{
             .{ (u + d + w + d) * u_scale, (v + d) * v_scale }, // corner 4
-            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale }, // corner 7 (was uv3)
-            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale }, // corner 6 (was uv2)
-            .{ (u + d + w + d + w) * u_scale, (v + d) * v_scale }, // corner 5 (was uv1)
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale }, // corner 7
+            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale }, // corner 6
+            .{ (u + d + w + d + w) * u_scale, (v + d) * v_scale }, // corner 5
         }, box.mirror);
     }
 
