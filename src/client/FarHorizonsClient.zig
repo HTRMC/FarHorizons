@@ -211,11 +211,8 @@ pub const FarHorizonsClient = struct {
             self.entity_renderer.?.getTextureSampler(),
         );
 
-        // Spawn a test cow with velocity for walk animation testing
-        const cow_id = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 10, .y = 5, .z = 10 });
-        if (self.entity_manager.?.get(cow_id)) |cow| {
-            cow.velocity = Vec3{ .x = 0.5, .y = 0, .z = 0.5 }; // Give it some velocity to animate
-        }
+        // Spawn a test cow (stationary to test head/body rotation)
+        _ = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 10, .y = 5, .z = 10 });
 
         // Main loop
         logger.info("Entering main loop", .{});

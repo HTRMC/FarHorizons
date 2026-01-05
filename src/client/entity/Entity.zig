@@ -53,6 +53,10 @@ pub const Entity = struct {
     // Look-at target tracking
     is_looking_at_target: bool = false,
 
+    // Body rotation following head (like MC's BodyRotationControl)
+    last_stable_head_yaw: f32 = 0, // Last head yaw when stable
+    head_stable_time: u32 = 0, // Ticks head has been stable
+
     // Body rotation offset from yaw
     body_yaw_offset: f32 = 0,
 
@@ -89,6 +93,12 @@ pub const Entity = struct {
     const HEAD_YAW_SPEED: f32 = 10.0 * std.math.pi / 180.0; // 10 degrees/tick
     const HEAD_PITCH_SPEED: f32 = 40.0 * std.math.pi / 180.0; // 40 degrees/tick
     const IDLE_ROT_SPEED: f32 = 5.0 * std.math.pi / 180.0; // Slower for idle movement
+
+    // Body rotation constants (from MC's BodyRotationControl)
+    const HEAD_STABLE_ANGLE: f32 = 15.0 * std.math.pi / 180.0; // Head movement threshold to reset timer
+    const BODY_TURN_DELAY: u32 = 10; // Ticks before body starts turning
+    const BODY_TURN_DURATION: u32 = 10; // Ticks to complete the turn
+    const BODY_ROT_SPEED: f32 = 10.0 * std.math.pi / 180.0; // Body rotation speed
 
     /// Update entity state (call once per tick)
     /// player_pos: Position of the player (or null if no player tracking)
@@ -194,6 +204,80 @@ pub const Entity = struct {
         // Rotate head toward target using MC's rotateTowards approach (fixed speed, not lerp)
         self.head_pitch = rotateTowards(self.head_pitch, self.head_target_pitch, pitch_speed);
         self.head_yaw = rotateTowards(self.head_yaw, self.head_target_yaw, yaw_speed);
+
+        // Body rotation following head (like MC's BodyRotationControl)
+        self.updateBodyRotation();
+    }
+
+    /// Update body rotation to follow head when stationary
+    fn updateBodyRotation(self: *Self) void {
+        const is_moving = (self.velocity.x * self.velocity.x + self.velocity.z * self.velocity.z) > 0.0001;
+
+        if (is_moving) {
+            // When moving, body faces movement direction
+            // Head is clamped to stay within MAX_HEAD_YAW of body
+            self.head_yaw = std.math.clamp(self.head_yaw, -MAX_HEAD_YAW, MAX_HEAD_YAW);
+            self.last_stable_head_yaw = self.head_yaw;
+            self.head_stable_time = 0;
+        } else {
+            // When stationary, track head stability
+            const head_moved = @abs(self.head_yaw - self.last_stable_head_yaw) > HEAD_STABLE_ANGLE;
+
+            if (head_moved) {
+                // Head moved significantly - reset timer and update stable position
+                self.head_stable_time = 0;
+                self.last_stable_head_yaw = self.head_yaw;
+
+                // Rotate body toward head if head is turned far
+                if (@abs(self.head_yaw) > MAX_HEAD_YAW * 0.5) {
+                    self.rotateBodyTowardHead(MAX_HEAD_YAW);
+                }
+            } else {
+                // Head is stable
+                self.head_stable_time += 1;
+
+                if (self.head_stable_time > BODY_TURN_DELAY) {
+                    // Body starts turning toward head direction
+                    // Gradually reduce the max angle difference over BODY_TURN_DURATION ticks
+                    const time_since_start = self.head_stable_time - BODY_TURN_DELAY;
+                    const turn_progress = std.math.clamp(
+                        @as(f32, @floatFromInt(time_since_start)) / @as(f32, @floatFromInt(BODY_TURN_DURATION)),
+                        0.0,
+                        1.0,
+                    );
+                    // As turn_progress goes 0->1, max_angle goes MAX_HEAD_YAW -> 0
+                    const max_angle = MAX_HEAD_YAW * (1.0 - turn_progress);
+                    self.rotateBodyTowardHead(max_angle);
+                }
+            }
+        }
+    }
+
+    /// Rotate body toward head direction, keeping head within max_angle of body
+    fn rotateBodyTowardHead(self: *Self, max_angle: f32) void {
+        // If head is turned beyond max_angle, rotate body to compensate
+        if (@abs(self.head_yaw) > max_angle) {
+            // Calculate how much to rotate body
+            const excess = if (self.head_yaw > 0)
+                self.head_yaw - max_angle
+            else
+                self.head_yaw + max_angle;
+
+            // Clamp rotation speed
+            const body_rotation = std.math.clamp(excess, -BODY_ROT_SPEED, BODY_ROT_SPEED);
+
+            // Rotate body (yaw is in degrees, body_rotation is in radians)
+            // Negate because positive head_yaw = head right, need body to turn right (decrease yaw)
+            self.yaw -= body_rotation * 180.0 / std.math.pi;
+
+            // Reduce head_yaw since body now faces closer to where head was looking
+            // Don't adjust head_target_yaw - it gets recalculated each tick
+            self.head_yaw -= body_rotation;
+
+            // Normalize body yaw to 0-360
+            while (self.yaw > 360) self.yaw -= 360;
+            while (self.yaw < 0) self.yaw += 360;
+        }
     }
 
     /// Rotate from current angle toward target by at most maxRot (like MC's rotateTowards)
