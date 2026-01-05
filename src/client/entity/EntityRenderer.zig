@@ -490,6 +490,7 @@ pub const EntityRenderer = struct {
                 .cow => {
                     const mesh = try self.cow_model.generateMesh(
                         entity.getWalkAnimation(partial_tick),
+                        entity.getWalkSpeed(partial_tick),
                         entity.getHeadPitch(partial_tick),
                         entity.getHeadYaw(partial_tick),
                     );

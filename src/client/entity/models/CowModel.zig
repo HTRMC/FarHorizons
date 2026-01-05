@@ -29,9 +29,11 @@ pub const CowModel = struct {
     }
 
     /// Generate cow mesh exactly like Minecraft
+    /// walk_animation: position in walk cycle (increases while walking)
+    /// walk_speed: amplitude of leg swing (0=stationary, 1=full swing)
     /// head_pitch: vertical head rotation (positive = look down)
     /// head_yaw: horizontal head rotation (positive = look right)
-    pub fn generateMesh(self: *Self, walk_animation: f32, head_pitch: f32, head_yaw: f32) !struct { vertices: []Vertex, indices: []u32 } {
+    pub fn generateMesh(self: *Self, walk_animation: f32, walk_speed: f32, head_pitch: f32, head_yaw: f32) !struct { vertices: []Vertex, indices: []u32 } {
         var vertices: std.ArrayList(Vertex) = .empty;
         var indices: std.ArrayList(u32) = .empty;
 
@@ -40,11 +42,10 @@ pub const CowModel = struct {
         // leftHindLeg.xRot = cos(animPos * 0.6662 + PI) * 1.4 * animSpeed
         // rightFrontLeg.xRot = cos(animPos * 0.6662 + PI) * 1.4 * animSpeed
         // leftFrontLeg.xRot = cos(animPos * 0.6662) * 1.4 * animSpeed
-        const anim_speed: f32 = 1.0;
-        const right_hind_rot = @cos(walk_animation * 0.6662) * 1.4 * anim_speed;
-        const left_hind_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * anim_speed;
-        const right_front_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * anim_speed;
-        const left_front_rot = @cos(walk_animation * 0.6662) * 1.4 * anim_speed;
+        const right_hind_rot = @cos(walk_animation * 0.6662) * 1.4 * walk_speed;
+        const left_hind_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * walk_speed;
+        const right_front_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * walk_speed;
+        const left_front_rot = @cos(walk_animation * 0.6662) * 1.4 * walk_speed;
 
         // Head: PartPose.offset(0, 4, -8)
         // box(-4, -4, -6, 8, 8, 6) texOffs(0, 0)

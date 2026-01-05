@@ -76,8 +76,11 @@ pub const Entity = struct {
     // Previous walk animation (for interpolation)
     prev_walk_animation: f32 = 0,
 
-    // Walk animation speed
+    // Walk animation speed (amplitude of leg swing)
     walk_speed: f32 = 0,
+
+    // Previous walk speed (for interpolation)
+    prev_walk_speed: f32 = 0,
 
     /// Create a new entity
     pub fn init(id: u64, entity_type: EntityType, position: Vec3) Self {
@@ -119,6 +122,7 @@ pub const Entity = struct {
         self.prev_position = self.position;
         self.prev_yaw = self.yaw;
         self.prev_walk_animation = self.walk_animation;
+        self.prev_walk_speed = self.walk_speed;
         self.prev_head_pitch = self.head_pitch;
         self.prev_head_yaw = self.head_yaw;
         self.tick_count += 1;
@@ -468,6 +472,11 @@ pub const Entity = struct {
     /// Get interpolated walk animation for rendering
     pub fn getWalkAnimation(self: *const Self, partial_tick: f32) f32 {
         return self.prev_walk_animation + (self.walk_animation - self.prev_walk_animation) * partial_tick;
+    }
+
+    /// Get interpolated walk speed (leg swing amplitude) for rendering
+    pub fn getWalkSpeed(self: *const Self, partial_tick: f32) f32 {
+        return self.prev_walk_speed + (self.walk_speed - self.prev_walk_speed) * partial_tick;
     }
 
     /// Get interpolated head pitch for rendering
