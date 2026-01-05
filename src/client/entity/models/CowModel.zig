@@ -59,11 +59,13 @@ pub const CowModel = struct {
 
         // Body: PartPose.offsetAndRotation(0, 5, 2, PI/2, 0, 0)
         // box(-6, -10, -7, 12, 18, 10) texOffs(18, 4)
+        // box(-2, 2, -8, 4, 6, 1) texOffs(52, 0) - udder
         try self.addModelPart(&vertices, &indices, .{
             .pivot = .{ 0, 5, 2 },
             .rotation = .{ std.math.pi / 2.0, 0, 0 },
             .boxes = &[_]Box{
-                .{ .origin = .{ -6, -10, -7 }, .size = .{ 12, 18, 10 }, .uv = .{ 18, 4 } },
+                .{ .origin = .{ -6, -10, -7 }, .size = .{ 12, 18, 10 }, .uv = .{ 18, 4 } }, // body
+                .{ .origin = .{ -2, 2, -8 }, .size = .{ 4, 6, 1 }, .uv = .{ 52, 0 } }, // udder
             },
         });
 
