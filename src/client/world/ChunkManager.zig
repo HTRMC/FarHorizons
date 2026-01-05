@@ -597,12 +597,29 @@ pub const ChunkManager = struct {
     // ========== Block Access Methods ==========
 
     /// Get block entry at world position
-    /// Returns null if chunk is not loaded
+    /// Returns null if chunk is not loaded or not ready (for rendering)
     pub fn getBlockAt(self: *Self, world_x: i32, world_y: i32, world_z: i32) ?shared.BlockEntry {
         const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
 
         const rchunk = self.loaded_chunks.get(chunk_pos) orelse return null;
         if (rchunk.state != .ready) return null;
+
+        // Convert to local coordinates (0-15)
+        const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
+        const local_y: u32 = @intCast(@mod(world_y, CHUNK_SIZE));
+        const local_z: u32 = @intCast(@mod(world_z, CHUNK_SIZE));
+
+        return rchunk.chunk.getBlockEntry(local_x, local_y, local_z);
+    }
+
+    /// Get block entry at world position regardless of chunk state
+    /// Used for collision - block data is valid even during remeshing
+    /// Returns null only if chunk is completely unloaded
+    pub fn getBlockAtForCollision(self: *Self, world_x: i32, world_y: i32, world_z: i32) ?shared.BlockEntry {
+        const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
+
+        const rchunk = self.loaded_chunks.get(chunk_pos) orelse return null;
+        // Don't check state - block data is always valid once chunk is loaded
 
         // Convert to local coordinates (0-15)
         const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
@@ -640,9 +657,10 @@ pub const ChunkManager = struct {
         return true;
     }
 
-    /// Check if a block at world position is solid (for raycasting)
+    /// Check if a block at world position is solid (for collision/raycasting)
+    /// Uses collision-safe block access that works during chunk remeshing
     pub fn isBlockSolid(self: *Self, world_x: i32, world_y: i32, world_z: i32) bool {
-        const entry = self.getBlockAt(world_x, world_y, world_z) orelse return false;
+        const entry = self.getBlockAtForCollision(world_x, world_y, world_z) orelse return false;
         return !entry.isAir() and entry.isSolid();
     }
 
