@@ -223,16 +223,16 @@ pub const CowModel = struct {
         // Top row: [depth][top][depth][bottom]
         // Bottom row: [left][front][right][back]
 
-        // Bottom face (Y-) - at uv (u+d, v) size (w, d)
-        try self.addQuad(vertices, indices, base_idx + 0, corners, .{ 1, 0, 4, 5 }, white, .{
-            .{ (u + d + w) * u_scale, (v) * v_scale },
+        // Bottom face (Y-) - at uv (u+d, v) size (w, d) - reversed corners due to Y-flip
+        try self.addQuad(vertices, indices, base_idx + 0, corners, .{ 0, 1, 5, 4 }, white, .{
             .{ (u + d) * u_scale, (v) * v_scale },
-            .{ (u + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v) * v_scale },
             .{ (u + d + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d) * u_scale, (v + d) * v_scale },
         }, box.mirror);
 
-        // Top face (Y+) - at uv (u+d+w, v) size (w, d)
-        try self.addQuad(vertices, indices, base_idx + 4, corners, .{ 3, 2, 6, 7 }, white, .{
+        // Top face (Y+) - at uv (u+d+w, v) size (w, d) - reversed corners due to Y-flip
+        try self.addQuad(vertices, indices, base_idx + 4, corners, .{ 2, 3, 7, 6 }, white, .{
             .{ (u + d + w) * u_scale, (v) * v_scale },
             .{ (u + d + w + w) * u_scale, (v) * v_scale },
             .{ (u + d + w + w) * u_scale, (v + d) * v_scale },
