@@ -141,17 +141,29 @@ pub const RandomStrollGoal = struct {
             return;
         }
 
-        // Normalize and apply speed
-        const nx = dx / dist;
-        const nz = dz / dist;
+        // Calculate target yaw (cow model faces -Z, so use -dz)
+        const target_yaw = std.math.atan2(dx, -dz) * 180.0 / std.math.pi;
 
-        // Set velocity toward target
-        self.entity.velocity.x = nx * self.speed;
-        self.entity.velocity.z = nz * self.speed;
+        // Smooth rotation toward target (like MC's MoveControl.rotlerp)
+        // Max turn speed ~30 degrees per tick for smooth turning
+        const max_turn: f32 = 30.0;
+        var yaw_diff = target_yaw - self.entity.yaw;
+        // Normalize to -180..180
+        while (yaw_diff > 180.0) yaw_diff -= 360.0;
+        while (yaw_diff < -180.0) yaw_diff += 360.0;
+        // Clamp rotation speed
+        yaw_diff = std.math.clamp(yaw_diff, -max_turn, max_turn);
+        self.entity.yaw += yaw_diff;
 
-        // Face movement direction (cow model faces -Z, so use -nz)
-        const target_yaw = std.math.atan2(nx, -nz) * 180.0 / std.math.pi;
-        self.entity.yaw = target_yaw;
+        // Move in the direction the entity is FACING (like MC)
+        // This prevents the weird snap-back from diagonal movement
+        const facing_rad = self.entity.yaw * std.math.pi / 180.0;
+        const forward_x = @sin(facing_rad);
+        const forward_z = -@cos(facing_rad); // -cos because model faces -Z
+
+        // Set velocity in facing direction
+        self.entity.velocity.x = forward_x * self.speed;
+        self.entity.velocity.z = forward_z * self.speed;
     }
 
     fn stop(goal: *Goal) void {
