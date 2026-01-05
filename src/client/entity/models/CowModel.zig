@@ -255,20 +255,20 @@ pub const CowModel = struct {
             .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
         }, box.mirror);
 
-        // North face (Z-) - at uv (u+d+w+d, v+d) size (w, h)
+        // North face (Z-) - this is the FRONT of entities facing -Z, at uv (u+d, v+d) size (w, h)
         try self.addQuad(vertices, indices, base_idx + 16, corners, .{ 1, 0, 3, 2 }, white, .{
-            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w + d + w) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
-        }, box.mirror);
-
-        // South face (Z+) - at uv (u+d, v+d) size (w, h)
-        try self.addQuad(vertices, indices, base_idx + 20, corners, .{ 4, 5, 6, 7 }, white, .{
             .{ (u + d) * u_scale, (v + d) * v_scale },
             .{ (u + d + w) * u_scale, (v + d) * v_scale },
             .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
             .{ (u + d) * u_scale, (v + d + h) * v_scale },
+        }, box.mirror);
+
+        // South face (Z+) - this is the BACK of entities facing -Z, at uv (u+d+w+d, v+d) size (w, h)
+        try self.addQuad(vertices, indices, base_idx + 20, corners, .{ 4, 5, 6, 7 }, white, .{
+            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w + d + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
         }, box.mirror);
     }
 
@@ -296,12 +296,12 @@ pub const CowModel = struct {
             try vertices.append(self.allocator, .{ .pos = corners[corner_indices[3]], .color = color, .uv = uvs[3], .tex_index = 0 });
         }
 
-        // Two triangles for the quad
+        // Two triangles for the quad (CW winding due to Y-flip)
         try indices.append(self.allocator, base_idx + 0);
+        try indices.append(self.allocator, base_idx + 2);
         try indices.append(self.allocator, base_idx + 1);
-        try indices.append(self.allocator, base_idx + 2);
         try indices.append(self.allocator, base_idx + 0);
-        try indices.append(self.allocator, base_idx + 2);
         try indices.append(self.allocator, base_idx + 3);
+        try indices.append(self.allocator, base_idx + 2);
     }
 };
