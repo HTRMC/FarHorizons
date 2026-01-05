@@ -29,7 +29,9 @@ pub const CowModel = struct {
     }
 
     /// Generate cow mesh exactly like Minecraft
-    pub fn generateMesh(self: *Self, walk_animation: f32) !struct { vertices: []Vertex, indices: []u32 } {
+    /// head_pitch: vertical head rotation (positive = look down)
+    /// head_yaw: horizontal head rotation (positive = look right)
+    pub fn generateMesh(self: *Self, walk_animation: f32, head_pitch: f32, head_yaw: f32) !struct { vertices: []Vertex, indices: []u32 } {
         var vertices: std.ArrayList(Vertex) = .empty;
         var indices: std.ArrayList(u32) = .empty;
 
@@ -46,9 +48,10 @@ pub const CowModel = struct {
 
         // Head: PartPose.offset(0, 4, -8)
         // box(-4, -4, -6, 8, 8, 6) texOffs(0, 0)
+        // Apply head pitch (X rotation) and yaw (Y rotation)
         try self.addModelPart(&vertices, &indices, .{
             .pivot = .{ 0, 4, -8 },
-            .rotation = .{ 0, 0, 0 },
+            .rotation = .{ head_pitch, head_yaw, 0 },
             .boxes = &[_]Box{
                 .{ .origin = .{ -4, -4, -6 }, .size = .{ 8, 8, 6 }, .uv = .{ 0, 0 } }, // head
                 .{ .origin = .{ -3, 1, -7 }, .size = .{ 6, 3, 1 }, .uv = .{ 1, 33 } }, // snout

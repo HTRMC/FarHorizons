@@ -37,8 +37,18 @@ pub const Entity = struct {
     // Previous yaw (for interpolation)
     prev_yaw: f32 = 0,
 
-    // Head rotation (pitch) in degrees
+    // Head rotation (pitch and yaw) in radians
     head_pitch: f32 = 0,
+    head_yaw: f32 = 0,
+
+    // Previous head rotation (for interpolation)
+    prev_head_pitch: f32 = 0,
+    prev_head_yaw: f32 = 0,
+
+    // Head animation targets for smooth idle movement
+    head_target_pitch: f32 = 0,
+    head_target_yaw: f32 = 0,
+    head_idle_timer: u32 = 0,
 
     // Body rotation offset from yaw
     body_yaw_offset: f32 = 0,
@@ -73,6 +83,8 @@ pub const Entity = struct {
         self.prev_position = self.position;
         self.prev_yaw = self.yaw;
         self.prev_walk_animation = self.walk_animation;
+        self.prev_head_pitch = self.head_pitch;
+        self.prev_head_yaw = self.head_yaw;
         self.tick_count += 1;
 
         // Update walk animation based on velocity (like MC's limb swing)
@@ -85,6 +97,32 @@ pub const Entity = struct {
         } else {
             self.walk_speed *= 0.9; // Smoothly reduce animation speed when stopping
         }
+
+        // Head idle animation
+        if (self.head_idle_timer == 0) {
+            // Pick new random target using simple hash of tick_count and id
+            const hash = self.tick_count *% 2654435761 +% self.id *% 1597334677;
+            const hash2 = hash *% 2654435761;
+
+            // Random pitch: -20 to +30 degrees (looking down to up)
+            const pitch_range: f32 = 50.0 * std.math.pi / 180.0;
+            const pitch_offset: f32 = -20.0 * std.math.pi / 180.0;
+            self.head_target_pitch = (@as(f32, @floatFromInt(hash % 1000)) / 1000.0) * pitch_range + pitch_offset;
+
+            // Random yaw: -45 to +45 degrees (looking left to right)
+            const yaw_range: f32 = 90.0 * std.math.pi / 180.0;
+            self.head_target_yaw = (@as(f32, @floatFromInt(hash2 % 1000)) / 1000.0 - 0.5) * yaw_range;
+
+            // Random delay: 40-120 ticks (2-6 seconds at 20 tps)
+            self.head_idle_timer = @intCast(40 + (hash >> 16) % 80);
+        } else {
+            self.head_idle_timer -= 1;
+        }
+
+        // Smoothly interpolate head toward target (lerp factor ~0.1)
+        const lerp_speed: f32 = 0.1;
+        self.head_pitch += (self.head_target_pitch - self.head_pitch) * lerp_speed;
+        self.head_yaw += (self.head_target_yaw - self.head_yaw) * lerp_speed;
     }
 
     /// Get interpolated position for rendering
@@ -108,6 +146,16 @@ pub const Entity = struct {
     /// Get interpolated walk animation for rendering
     pub fn getWalkAnimation(self: *const Self, partial_tick: f32) f32 {
         return self.prev_walk_animation + (self.walk_animation - self.prev_walk_animation) * partial_tick;
+    }
+
+    /// Get interpolated head pitch for rendering
+    pub fn getHeadPitch(self: *const Self, partial_tick: f32) f32 {
+        return self.prev_head_pitch + (self.head_pitch - self.prev_head_pitch) * partial_tick;
+    }
+
+    /// Get interpolated head yaw for rendering
+    pub fn getHeadYaw(self: *const Self, partial_tick: f32) f32 {
+        return self.prev_head_yaw + (self.head_yaw - self.prev_head_yaw) * partial_tick;
     }
 
     /// Set position (also updates prev_position)
