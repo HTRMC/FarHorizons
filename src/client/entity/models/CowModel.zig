@@ -296,13 +296,23 @@ pub const CowModel = struct {
         uvs: [4][2]f32,
         mirror: bool,
     ) !void {
-        _ = mirror; // TODO: implement UV mirroring if needed
+        // Apply UV mirroring by swapping U coordinates horizontally
+        var final_uvs = uvs;
+        if (mirror) {
+            // Swap left and right UVs (0↔1 and 3↔2)
+            const tmp0 = final_uvs[0];
+            final_uvs[0] = final_uvs[1];
+            final_uvs[1] = tmp0;
+            const tmp3 = final_uvs[3];
+            final_uvs[3] = final_uvs[2];
+            final_uvs[2] = tmp3;
+        }
 
         // Vertices in order matching corner_indices
-        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[0]], .color = color, .uv = uvs[0], .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[1]], .color = color, .uv = uvs[1], .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[2]], .color = color, .uv = uvs[2], .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[3]], .color = color, .uv = uvs[3], .tex_index = 0 });
+        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[0]], .color = color, .uv = final_uvs[0], .tex_index = 0 });
+        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[1]], .color = color, .uv = final_uvs[1], .tex_index = 0 });
+        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[2]], .color = color, .uv = final_uvs[2], .tex_index = 0 });
+        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[3]], .color = color, .uv = final_uvs[3], .tex_index = 0 });
 
         // Two triangles for the quad (CCW winding)
         try indices.append(self.allocator, base_idx + 0);
