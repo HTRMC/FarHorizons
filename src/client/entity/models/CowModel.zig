@@ -229,10 +229,10 @@ pub const CowModel = struct {
         // Bottom face (Y-) - after Y-flip this is at TOP, viewed from +Y
         // CCW from +Y: 0,4,5,1
         try self.addQuad(vertices, indices, base_idx + 0, corners, .{ 0, 4, 5, 1 }, white, .{
-            .{ (u + d) * u_scale, (v + d) * v_scale }, // corner 0
-            .{ (u + d) * u_scale, (v) * v_scale }, // corner 4 (was uv3)
-            .{ (u + d + w) * u_scale, (v) * v_scale }, // corner 5 (was uv2)
-            .{ (u + d + w) * u_scale, (v + d) * v_scale }, // corner 1 (was uv1)
+            .{ (u + d + w) * u_scale, (v + d) * v_scale }, // corner 0: U flipped
+            .{ (u + d + w) * u_scale, (v) * v_scale }, // corner 4: U flipped
+            .{ (u + d) * u_scale, (v) * v_scale }, // corner 5: U flipped
+            .{ (u + d) * u_scale, (v + d) * v_scale }, // corner 1: U flipped
         }, box.mirror);
 
         // Top face (Y+) - after Y-flip this is at BOTTOM, viewed from -Y
@@ -246,12 +246,12 @@ pub const CowModel = struct {
         }, box.mirror);
 
         // West face (X-) - viewed from -X
-        // CCW from -X: 0,3,7,4 (using East UV region - swapped)
+        // CCW from -X: 0,3,7,4 (using East UV region - swapped, U+V flipped)
         try self.addQuad(vertices, indices, base_idx + 8, corners, .{ 0, 3, 7, 4 }, white, .{
-            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d) * v_scale }, // U+V flipped
+            .{ (u + d + w) * u_scale, (v + d + h) * v_scale }, // U+V flipped
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale }, // U+V flipped
+            .{ (u + d + w + d) * u_scale, (v + d) * v_scale }, // U+V flipped
         }, box.mirror);
 
         // East face (X+) - viewed from +X
