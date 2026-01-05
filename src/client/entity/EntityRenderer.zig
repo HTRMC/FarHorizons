@@ -488,7 +488,7 @@ pub const EntityRenderer = struct {
             // Generated mesh based on entity type
             switch (entity.entity_type) {
                 .cow => {
-                    const mesh = try self.cow_model.generateMesh(entity.walk_animation);
+                    const mesh = try self.cow_model.generateMesh(entity.getWalkAnimation(partial_tick));
                     defer self.allocator.free(mesh.vertices);
                     defer self.allocator.free(mesh.indices);
 

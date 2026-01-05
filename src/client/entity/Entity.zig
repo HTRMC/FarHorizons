@@ -49,8 +49,11 @@ pub const Entity = struct {
     // Animation time (ticks)
     tick_count: u64 = 0,
 
-    // Walk animation parameter (0-1 cycle)
+    // Walk animation parameter
     walk_animation: f32 = 0,
+
+    // Previous walk animation (for interpolation)
+    prev_walk_animation: f32 = 0,
 
     // Walk animation speed
     walk_speed: f32 = 0,
@@ -69,6 +72,7 @@ pub const Entity = struct {
     pub fn tick(self: *Self) void {
         self.prev_position = self.position;
         self.prev_yaw = self.yaw;
+        self.prev_walk_animation = self.walk_animation;
         self.tick_count += 1;
 
         // Update walk animation based on velocity (like MC's limb swing)
@@ -99,6 +103,11 @@ pub const Entity = struct {
         while (delta > 180) delta -= 360;
         while (delta < -180) delta += 360;
         return self.prev_yaw + delta * partial_tick;
+    }
+
+    /// Get interpolated walk animation for rendering
+    pub fn getWalkAnimation(self: *const Self, partial_tick: f32) f32 {
+        return self.prev_walk_animation + (self.walk_animation - self.prev_walk_animation) * partial_tick;
     }
 
     /// Set position (also updates prev_position)
