@@ -136,9 +136,9 @@ pub const Entity = struct {
         const horizontal_speed = @sqrt(self.velocity.x * self.velocity.x + self.velocity.z * self.velocity.z);
         if (horizontal_speed > 0.01) {
             self.walk_speed = @min(1.0, horizontal_speed * 4.0);
-            // Just increment - cos() in the model handles periodicity naturally
-            // The 0.6662 multiplier in the model creates the proper walk cycle
-            self.walk_animation += horizontal_speed;
+            // Scale animation so legs move at reasonable speed
+            // At speed 0.1, this gives ~0.6 per tick, completing a leg cycle in ~16 ticks
+            self.walk_animation += horizontal_speed * 6.0;
         } else {
             self.walk_speed *= 0.9; // Smoothly reduce animation speed when stopping
         }
