@@ -149,8 +149,8 @@ pub const RandomStrollGoal = struct {
         self.entity.velocity.x = nx * self.speed;
         self.entity.velocity.z = nz * self.speed;
 
-        // Face movement direction
-        const target_yaw = std.math.atan2(nx, nz) * 180.0 / std.math.pi;
+        // Face movement direction (cow model faces -Z, so use -nz)
+        const target_yaw = std.math.atan2(nx, -nz) * 180.0 / std.math.pi;
         self.entity.yaw = target_yaw;
     }
 
