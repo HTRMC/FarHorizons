@@ -100,7 +100,7 @@ pub const TextureManager = struct {
         defer self.allocator.free(texture_dir);
 
         // Open directory and collect PNG files
-        var dir = Dir.cwd().openDir(self.io, texture_dir, .{}) catch |err| {
+        var dir = Dir.cwd().openDir(self.io, texture_dir, .{ .iterate = true }) catch |err| {
             logger.err("Failed to open texture directory: {s} - {}", .{ texture_dir, err });
             return error.TextureDirectoryNotFound;
         };
@@ -126,7 +126,7 @@ pub const TextureManager = struct {
         try self.createTextureArray(count);
 
         // Second pass: load each texture
-        dir = Dir.cwd().openDir(self.io, texture_dir, .{}) catch {
+        dir = Dir.cwd().openDir(self.io, texture_dir, .{ .iterate = true }) catch {
             return error.TextureDirectoryNotFound;
         };
         iter = dir.iterate();

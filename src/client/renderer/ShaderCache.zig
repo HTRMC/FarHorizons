@@ -111,7 +111,7 @@ pub const ShaderCache = struct {
 
     /// Clear all cached shaders.
     pub fn clearAll(self: *Self) void {
-        var dir = Dir.cwd().openDir(self.io, self.cache_dir, .{}) catch return;
+        var dir = Dir.cwd().openDir(self.io, self.cache_dir, .{ .iterate = true }) catch return;
         defer dir.close(self.io);
 
         var iter = dir.iterate();
@@ -128,7 +128,7 @@ pub const ShaderCache = struct {
     pub fn getStats(self: *const Self) CacheStats {
         var stats = CacheStats{};
 
-        var dir = Dir.cwd().openDir(self.io, self.cache_dir, .{}) catch return stats;
+        var dir = Dir.cwd().openDir(self.io, self.cache_dir, .{ .iterate = true }) catch return stats;
         defer dir.close(self.io);
 
         var iter = dir.iterate();
