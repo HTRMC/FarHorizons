@@ -42,6 +42,9 @@ const EntityManager = entity.EntityManager;
 const EntityType = entity.EntityType;
 const Entity = entity.Entity;
 const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
+const ai = @import("entity/ai/ai.zig");
+const GoalSelector = ai.GoalSelector;
+const RandomStrollGoal = ai.RandomStrollGoal;
 
 // Terrain query for entity physics
 var terrain_query_cm: ?*ChunkManager = null;
@@ -85,6 +88,10 @@ pub const FarHorizonsClient = struct {
     entity_manager: ?EntityManager,
     entity_renderer: ?EntityRenderer,
 
+    // AI system for entities
+    cow_goal_selector: ?GoalSelector,
+    cow_stroll_goal: ?RandomStrollGoal,
+
     pub fn init(allocator: std.mem.Allocator, config: GameConfig, io: Io) Self {
         const display_data = DisplayData{
             .width = @intCast(config.display.width),
@@ -114,6 +121,8 @@ pub const FarHorizonsClient = struct {
             .block_outline_renderer = BlockOutlineRenderer.init(),
             .entity_manager = null,
             .entity_renderer = null,
+            .cow_goal_selector = null,
+            .cow_stroll_goal = null,
         };
     }
 
@@ -222,8 +231,15 @@ pub const FarHorizonsClient = struct {
             self.entity_renderer.?.getTextureSampler(),
         );
 
-        // Spawn a test cow (stationary to test head/body rotation)
-        _ = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 10, .y = 5, .z = 10 });
+        // Spawn a test cow with AI
+        const cow_id = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 10, .y = 5, .z = 10 });
+
+        // Set up AI goal system for the cow
+        if (self.entity_manager.?.get(cow_id)) |cow_entity| {
+            self.cow_stroll_goal = RandomStrollGoal.init(cow_entity, 0.1, 120); // speed=0.1, interval=120 ticks
+            self.cow_goal_selector = GoalSelector.init(self.allocator);
+            self.cow_goal_selector.?.addGoal(7, self.cow_stroll_goal.?.asGoal()); // Priority 7 (low priority)
+        }
 
         // Main loop
         logger.info("Entering main loop", .{});
@@ -310,6 +326,11 @@ pub const FarHorizonsClient = struct {
                 if (self.entity_manager) |*em| {
                     // Set up terrain query for entity physics
                     terrain_query_cm = if (self.chunk_manager) |*cm| cm else null;
+
+                    // Tick AI goal system before entity updates
+                    if (self.cow_goal_selector) |*gs| {
+                        gs.tick();
+                    }
 
                     // Pass player position and terrain query for entity behavior
                     const terrain_fn: ?Entity.TerrainQuery = if (terrain_query_cm != null) &terrainQueryFn else null;
