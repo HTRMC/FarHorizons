@@ -13,7 +13,7 @@ pub const CowModel = struct {
 
     /// Texture dimensions
     const TEX_WIDTH: f32 = 64.0;
-    const TEX_HEIGHT: f32 = 32.0;
+    const TEX_HEIGHT: f32 = 64.0;
 
     /// Body dimensions (in blocks, scaled down from pixel coords)
     const SCALE: f32 = 1.0 / 16.0; // Convert pixels to blocks
