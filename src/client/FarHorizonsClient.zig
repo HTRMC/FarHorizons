@@ -1,6 +1,7 @@
 // FarHorizons Client - main client orchestration
 
 const std = @import("std");
+const Io = std.Io;
 const shared = @import("Shared");
 const platform = @import("Platform");
 const renderer = @import("Renderer");
@@ -62,6 +63,8 @@ pub const FarHorizonsClient = struct {
     camera: Camera,
     local_player: LocalPlayer,
     allocator: std.mem.Allocator,
+    /// I/O context for file operations
+    io: Io,
     /// Use async chunk loading (set to false for legacy single-chunk mode)
     use_async_chunks: bool,
     /// Block interaction handler
@@ -71,7 +74,7 @@ pub const FarHorizonsClient = struct {
     entity_manager: ?EntityManager,
     entity_renderer: ?EntityRenderer,
 
-    pub fn init(allocator: std.mem.Allocator, config: GameConfig) Self {
+    pub fn init(allocator: std.mem.Allocator, config: GameConfig, io: Io) Self {
         const display_data = DisplayData{
             .width = @intCast(config.display.width),
             .height = @intCast(config.display.height),
@@ -88,12 +91,13 @@ pub const FarHorizonsClient = struct {
             .window = Window.init(display_data),
             .mouse_handler = undefined, // Initialized in run() after struct is at final location
             .keyboard_input = undefined, // Initialized in run() after struct is at final location
-            .render_system = RenderSystem.init(allocator),
+            .render_system = RenderSystem.init(allocator, io),
             .texture_manager = null, // Initialized in run() after render_system
             .chunk_manager = null, // Initialized in run() after texture_manager
             .camera = camera,
             .local_player = undefined, // Initialized in run() after keyboard_input is ready
             .allocator = allocator,
+            .io = io,
             .use_async_chunks = true, // Enable async chunk loading by default
             .block_interaction = null, // Initialized in run() after chunk_manager
             .block_outline_renderer = BlockOutlineRenderer.init(),
@@ -131,6 +135,7 @@ pub const FarHorizonsClient = struct {
         // Initialize texture manager and load block textures
         self.texture_manager = TextureManager.init(
             self.allocator,
+            self.io,
             self.config.location.asset_directory,
             self.render_system.getDevice(),
             self.render_system.getPhysicalDevice(),
@@ -150,6 +155,7 @@ pub const FarHorizonsClient = struct {
         if (self.use_async_chunks) {
             self.chunk_manager = try ChunkManager.init(
                 self.allocator,
+                self.io,
                 &self.render_system,
                 &self.texture_manager.?,
                 self.config.location.asset_directory,
@@ -193,9 +199,16 @@ pub const FarHorizonsClient = struct {
 
         // Initialize entity system
         self.entity_manager = EntityManager.init(self.allocator);
-        self.entity_renderer = EntityRenderer.init(
+        self.entity_renderer = try EntityRenderer.init(
             self.allocator,
             self.render_system.getGpuDevice().?,
+            self.config.location.asset_directory,
+        );
+
+        // Set entity texture resources in render system
+        try self.render_system.setEntityTextureResources(
+            self.entity_renderer.?.getTextureView(),
+            self.entity_renderer.?.getTextureSampler(),
         );
 
         // Spawn a test cow
@@ -419,10 +432,10 @@ pub const FarHorizonsClient = struct {
         logger.info("Loading and baking chunk...", .{});
 
         // Initialize model loading system
-        var model_loader = ModelLoader.init(self.allocator, self.config.location.asset_directory);
+        var model_loader = ModelLoader.init(self.allocator, self.io, self.config.location.asset_directory);
         defer model_loader.deinit();
 
-        var blockstate_loader = BlockstateLoader.init(self.allocator, self.config.location.asset_directory);
+        var blockstate_loader = BlockstateLoader.init(self.allocator, self.io, self.config.location.asset_directory);
         defer blockstate_loader.deinit();
 
         var block_model_shaper = BlockModelShaper.init(

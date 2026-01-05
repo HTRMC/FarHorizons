@@ -1,6 +1,8 @@
 /// TextureManager - Loads block textures into a Vulkan texture array
 /// Uses sampler2DArray for bindless-style texture access
 const std = @import("std");
+const Io = std.Io;
+const Dir = Io.Dir;
 const volk = @import("volk");
 const vk = volk.c;
 const stb_image = @import("stb_image");
@@ -16,6 +18,7 @@ pub const TextureManager = struct {
     pub const MAX_TEXTURES: u32 = 256; // Max textures in array
 
     allocator: std.mem.Allocator,
+    io: Io,
     assets_path: []const u8,
 
     // Texture name -> array layer index
@@ -36,6 +39,7 @@ pub const TextureManager = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        io: Io,
         assets_path: []const u8,
         device: vk.VkDevice,
         physical_device: vk.VkPhysicalDevice,
@@ -44,6 +48,7 @@ pub const TextureManager = struct {
     ) Self {
         return .{
             .allocator = allocator,
+            .io = io,
             .assets_path = assets_path,
             .texture_indices = std.StringHashMap(u32).init(allocator),
             .texture_count = 0,
@@ -95,16 +100,16 @@ pub const TextureManager = struct {
         defer self.allocator.free(texture_dir);
 
         // Open directory and collect PNG files
-        var dir = std.fs.cwd().openDir(texture_dir, .{ .iterate = true }) catch |err| {
+        var dir = Dir.cwd().openDir(self.io, texture_dir, .{}) catch |err| {
             logger.err("Failed to open texture directory: {s} - {}", .{ texture_dir, err });
             return error.TextureDirectoryNotFound;
         };
-        defer dir.close();
+        defer dir.close(self.io);
 
         // First pass: count textures
         var count: u32 = 0;
         var iter = dir.iterate();
-        while (try iter.next()) |entry| {
+        while (try iter.next(self.io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".png")) {
                 count += 1;
             }
@@ -121,13 +126,13 @@ pub const TextureManager = struct {
         try self.createTextureArray(count);
 
         // Second pass: load each texture
-        dir = std.fs.cwd().openDir(texture_dir, .{ .iterate = true }) catch {
+        dir = Dir.cwd().openDir(self.io, texture_dir, .{}) catch {
             return error.TextureDirectoryNotFound;
         };
         iter = dir.iterate();
 
         var layer_index: u32 = 0;
-        while (try iter.next()) |entry| {
+        while (try iter.next(self.io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".png")) {
                 // Build null-terminated path using stack buffer
                 var path_buf: [512:0]u8 = undefined;

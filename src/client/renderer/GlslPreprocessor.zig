@@ -1,4 +1,6 @@
 const std = @import("std");
+const Io = std.Io;
+const Dir = Io.Dir;
 const shared = @import("Shared");
 
 /// Shader preprocessor that handles #fh_import directives
@@ -6,6 +8,7 @@ pub const ShaderPreprocessor = struct {
     const logger = shared.Logger.init("GlslPreprocessor");
 
     allocator: std.mem.Allocator,
+    io: Io,
     /// Map of namespace -> base path (e.g., "farhorizons" -> "shaders/include/")
     namespace_paths: std.StringHashMap([]const u8),
     /// Track already included files to prevent circular imports
@@ -13,9 +16,10 @@ pub const ShaderPreprocessor = struct {
     /// Maximum recursion depth for imports
     max_depth: u32 = 32,
 
-    pub fn init(allocator: std.mem.Allocator) ShaderPreprocessor {
+    pub fn init(allocator: std.mem.Allocator, io: Io) ShaderPreprocessor {
         return .{
             .allocator = allocator,
+            .io = io,
             .namespace_paths = std.StringHashMap([]const u8).init(allocator),
             .included_files = std.StringHashMap(void).init(allocator),
         };
@@ -140,7 +144,7 @@ pub const ShaderPreprocessor = struct {
     /// Returns the resolved file path
     fn parseImportDirective(self: *ShaderPreprocessor, line: []const u8, line_num: usize) ![]const u8 {
         // Expected format: #fh_import <namespace:path>
-        const after_import = std.mem.trimLeft(u8, line["#fh_import".len..], " \t");
+        const after_import = std.mem.trimStart(u8, line["#fh_import".len..], " \t");
 
         if (after_import.len == 0 or after_import[0] != '<') {
             logger.err("Line {}: Invalid #fh_import syntax, expected '<'", .{line_num});
@@ -175,17 +179,17 @@ pub const ShaderPreprocessor = struct {
         };
 
         // Combine base path and relative path
-        return std.fs.path.join(self.allocator, &.{ base_path, relative_path });
+        return Dir.path.join(self.allocator, &.{ base_path, relative_path });
     }
 
     fn readFile(self: *ShaderPreprocessor, path: []const u8) ![]const u8 {
-        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        const file = Dir.cwd().openFile(self.io, path, .{}) catch |err| {
             logger.err("Cannot open file '{s}': {}", .{ path, err });
             return err;
         };
-        defer file.close();
+        defer file.close(self.io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(self.io);
         const size: usize = @intCast(stat.size);
         if (size > 1024 * 1024) { // 1MB limit
             return error.FileTooLarge;
@@ -194,7 +198,7 @@ pub const ShaderPreprocessor = struct {
         const buffer = try self.allocator.alloc(u8, size);
         errdefer self.allocator.free(buffer);
 
-        const bytes_read = try file.preadAll(buffer, 0);
+        const bytes_read = try file.readPositionalAll(self.io, buffer, 0);
         if (bytes_read != size) {
             return error.UnexpectedEOF;
         }
@@ -207,7 +211,7 @@ pub const ShaderPreprocessor = struct {
 test "parse simple import" {
     const allocator = std.testing.allocator;
 
-    var preprocessor = ShaderPreprocessor.init(allocator);
+    var preprocessor = ShaderPreprocessor.init(allocator, std.testing.io);
     defer preprocessor.deinit();
 
     try preprocessor.registerNamespace("farhorizons", "shaders/include");

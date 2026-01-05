@@ -1,4 +1,6 @@
 const std = @import("std");
+const Io = std.Io;
+const Dir = Io.Dir;
 const builtin = @import("builtin");
 const Logger = @import("Logger.zig").Logger;
 
@@ -32,6 +34,7 @@ pub const CrashReport = struct {
     const logger = Logger.init("CrashReport");
 
     allocator: std.mem.Allocator,
+    io: Io,
     title: []const u8,
     error_msg: ?[]const u8,
     stack_trace: ?*std.builtin.StackTrace,
@@ -41,9 +44,10 @@ pub const CrashReport = struct {
     timestamp: i64,
 
     /// Create a new crash report with a title and optional error.
-    pub fn init(allocator: std.mem.Allocator, title: []const u8, err: ?anyerror) Self {
+    pub fn init(allocator: std.mem.Allocator, io: Io, title: []const u8, err: ?anyerror) Self {
         return Self{
             .allocator = allocator,
+            .io = io,
             .title = title,
             .error_msg = if (err) |e| @errorName(e) else null,
             .stack_trace = @errorReturnTrace(),
@@ -62,8 +66,8 @@ pub const CrashReport = struct {
     }
 
     /// Create a crash report from an error.
-    pub fn forError(allocator: std.mem.Allocator, err: anyerror, title: []const u8) Self {
-        return Self.init(allocator, title, err);
+    pub fn forError(allocator: std.mem.Allocator, err: anyerror, title: []const u8, io: Io) Self {
+        return Self.init(allocator, io, title, err);
     }
 
     /// Add a new category to the crash report.
@@ -170,7 +174,7 @@ pub const CrashReport = struct {
     }
 
     /// Save the crash report to a file.
-    pub fn saveToFile(self: *Self, dir_path: []const u8) ![]const u8 {
+    pub fn saveToFile(self: *Self, io: Io, dir_path: []const u8) ![]const u8 {
         const report = try self.getFriendlyReport();
         defer self.allocator.free(report);
 
@@ -178,18 +182,18 @@ pub const CrashReport = struct {
         var filename_buf: [64]u8 = undefined;
         const filename = try std.fmt.bufPrint(&filename_buf, "crash-{d}.txt", .{self.timestamp});
 
-        const full_path = try std.fs.path.join(self.allocator, &.{ dir_path, filename });
+        const full_path = try Dir.path.join(self.allocator, &.{ dir_path, filename });
 
         // Ensure directory exists
-        std.fs.cwd().makePath(dir_path) catch |err| {
+        Dir.cwd().createDirPath(io, dir_path) catch |err| {
             logger.err("Failed to create crash report directory: {s}", .{@errorName(err)});
             return err;
         };
 
         // Write the file
-        const file = try std.fs.cwd().createFile(full_path, .{});
-        defer file.close();
-        try file.writeAll(report);
+        const file = try Dir.cwd().createFile(io, full_path, .{});
+        defer file.close(io);
+        try file.writeStreamingAll(io, report);
 
         self.save_file = full_path;
         logger.info("Crash report saved to {s}", .{full_path});
@@ -198,12 +202,12 @@ pub const CrashReport = struct {
     }
 
     /// Pre-load crash reporting system (warm up allocations, etc.)
-    pub fn preload(allocator: std.mem.Allocator) void {
+    pub fn preload(allocator: std.mem.Allocator, io: Io) void {
         // Pre-allocate memory reserve for OOM situations
         MemoryReserve.allocate();
 
         // Create a dummy crash report to ensure all code paths are loaded
-        var dummy = CrashReport.init(allocator, "Don't panic!", null);
+        var dummy = CrashReport.init(allocator, io, "Don't panic!", null);
         defer dummy.deinit();
 
         _ = dummy.getFriendlyReport() catch {};

@@ -1,6 +1,8 @@
 /// BlockstateLoader - Loads and caches blockstate definitions from JSON files
 /// Loads blockstates from assets/namespace/blockstates/*.json
 const std = @import("std");
+const Io = std.Io;
+const Dir = Io.Dir;
 const Allocator = std.mem.Allocator;
 const shared = @import("Shared");
 const Logger = shared.Logger;
@@ -12,13 +14,15 @@ pub const BlockstateLoader = struct {
     const logger = Logger.init("BlockstateLoader");
 
     allocator: Allocator,
+    io: Io,
     assets_path: []const u8,
     /// Cache of loaded blockstate definitions: block name -> BlockstateDefinition
     cache: std.StringHashMap(BlockstateDefinition),
 
-    pub fn init(allocator: Allocator, assets_path: []const u8) Self {
+    pub fn init(allocator: Allocator, io: Io, assets_path: []const u8) Self {
         return .{
             .allocator = allocator,
+            .io = io,
             .assets_path = assets_path,
             .cache = std.StringHashMap(BlockstateDefinition).init(allocator),
         };
@@ -50,7 +54,7 @@ pub const BlockstateLoader = struct {
         logger.info("Reading blockstate file: {s}", .{file_path});
 
         // Read file
-        const json_data = std.fs.cwd().readFileAlloc(file_path, self.allocator, .limited(1024 * 64)) catch |err| {
+        const json_data = Dir.cwd().readFileAlloc(self.io, file_path, self.allocator, .limited(1024 * 64)) catch |err| {
             logger.err("Failed to read blockstate file: {s} - {any}", .{ file_path, err });
             return error.BlockstateFileNotFound;
         };
@@ -93,8 +97,8 @@ pub const BlockstateLoader = struct {
         const file_path = self.blockNameToPath(block_name) catch return false;
         defer self.allocator.free(file_path);
 
-        const file = std.fs.cwd().openFile(file_path, .{}) catch return false;
-        file.close();
+        const file = Dir.cwd().openFile(self.io, file_path, .{}) catch return false;
+        file.close(self.io);
         return true;
     }
 };

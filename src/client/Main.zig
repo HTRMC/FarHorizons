@@ -1,4 +1,5 @@
 const std = @import("std");
+const Io = std.Io;
 const shared = @import("Shared");
 const Logger = shared.Logger;
 const GameConfig = shared.GameConfig;
@@ -18,7 +19,7 @@ pub const Main = struct {
         return Self{};
     }
 
-    pub fn run() !void {
+    pub fn run(io: Io) !void {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         defer _ = gpa.deinit();
         const allocator = gpa.allocator();
@@ -37,9 +38,9 @@ pub const Main = struct {
         const folder_data = FolderData{
             .game_directory = parsed_args.game_dir,
             .asset_directory = parsed_args.assets_dir orelse
-                try std.fs.path.join(arena_allocator, &.{ parsed_args.game_dir, "assets" }),
+                try Io.Dir.path.join(arena_allocator, &.{ parsed_args.game_dir, "assets" }),
             .resource_pack_directory = parsed_args.resource_pack_dir orelse
-                try std.fs.path.join(arena_allocator, &.{ parsed_args.game_dir, "resourcepacks" }),
+                try Io.Dir.path.join(arena_allocator, &.{ parsed_args.game_dir, "resourcepacks" }),
         };
 
         const config = GameConfig{
@@ -60,7 +61,7 @@ pub const Main = struct {
             return error.TestCrash;
         }
 
-        var client = FarHorizonsClient.init(allocator, config);
+        var client = FarHorizonsClient.init(allocator, config, io);
         try client.run();
     }
 
@@ -145,22 +146,27 @@ pub fn main() void {
     // Use page allocator for crash reporting (most reliable)
     const crash_allocator = std.heap.page_allocator;
 
+    // Initialize the I/O subsystem
+    var io_threaded = Io.Threaded.init(crash_allocator, .{});
+    defer io_threaded.deinit();
+    const io = io_threaded.io();
+
     // Preload crash reporting system
-    CrashReport.preload(crash_allocator);
+    CrashReport.preload(crash_allocator, io);
 
     // Run the client
-    Main.run() catch |err| {
+    Main.run(io) catch |err| {
         Main.logger.err("Fatal error: {s}", .{@errorName(err)});
 
         // Generate crash report
-        var report = CrashReport.forError(crash_allocator, err, "Running FarHorizons Client");
+        var report = CrashReport.forError(crash_allocator, err, "Running FarHorizons Client", io);
 
         // Add initialization category
         const init_cat = report.addCategory("Initialization");
         _ = init_cat.setDetail("Stage", "Client startup");
 
         // Try to save the crash report
-        _ = report.saveToFile("crash-reports") catch |save_err| {
+        _ = report.saveToFile(io, "crash-reports") catch |save_err| {
             Main.logger.err("Failed to save crash report: {s}", .{@errorName(save_err)});
         };
 

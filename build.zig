@@ -11,7 +11,7 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     const target = exe.root_module.resolved_target.?;
     const t = target.result;
 
-    exe.linkLibC();
+    exe.root_module.link_libc = true;
 
     const deps_name = b.fmt("farhorizons_deps_{s}-{s}-{s}", .{
         @tagName(t.cpu.arch),
@@ -24,27 +24,27 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
         std.log.info("Downloading headers...", .{});
         return;
     };
-    exe.addIncludePath(headers_dep.path(""));
+    exe.root_module.addIncludePath(headers_dep.path(""));
 
     // Get platform-specific library dependency
     const lib_dep = b.lazyDependency(deps_name, .{}) orelse {
         std.log.info("Downloading {s}...", .{deps_name});
         return;
     };
-    exe.addObjectFile(lib_dep.path(libName(b, "glfw")));
-    exe.addObjectFile(lib_dep.path(libName(b, "volk")));
-    exe.addObjectFile(lib_dep.path(libName(b, "stb_image")));
-    exe.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
+    exe.root_module.addObjectFile(lib_dep.path(libName(b, "glfw")));
+    exe.root_module.addObjectFile(lib_dep.path(libName(b, "volk")));
+    exe.root_module.addObjectFile(lib_dep.path(libName(b, "stb_image")));
+    exe.root_module.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
 
     // shaderc requires C++ standard library
-    exe.linkLibCpp();
+    exe.root_module.link_libcpp = true;
 
     // Link system libraries
     if (t.os.tag == .windows) {
-        exe.linkSystemLibrary("gdi32");
-        exe.linkSystemLibrary("user32");
-        exe.linkSystemLibrary("shell32");
-        exe.linkSystemLibrary("opengl32");
+        exe.root_module.linkSystemLibrary("gdi32", .{});
+        exe.root_module.linkSystemLibrary("user32", .{});
+        exe.root_module.linkSystemLibrary("shell32", .{});
+        exe.root_module.linkSystemLibrary("opengl32", .{});
     }
 }
 

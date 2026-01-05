@@ -1,4 +1,6 @@
 const std = @import("std");
+const Io = std.Io;
+const Dir = Io.Dir;
 const shared = @import("Shared");
 const ShaderCompiler = @import("ShaderCompiler.zig").ShaderCompiler;
 const ShaderKind = @import("ShaderCompiler.zig").ShaderKind;
@@ -9,8 +11,9 @@ const Logger = shared.Logger;
 /// Manages runtime-compiled shaders loaded from assets
 pub const ShaderManager = struct {
     const logger = Logger.init("ShaderManager");
-    
+
     allocator: std.mem.Allocator,
+    io: Io,
     compiler: ?ShaderCompiler,
     /// Cache of runtime-compiled shaders
     shader_cache: std.StringHashMap(CachedShader),
@@ -40,7 +43,7 @@ pub const ShaderManager = struct {
 
     /// Initialize shader manager
     /// Set enable_runtime_compilation to true to allow loading player shader packs
-    pub fn init(allocator: std.mem.Allocator, enable_runtime_compilation: bool) !ShaderManager {
+    pub fn init(allocator: std.mem.Allocator, io: Io, enable_runtime_compilation: bool) !ShaderManager {
         var compiler: ?ShaderCompiler = null;
         var default_vert: ?[]u8 = null;
         var default_frag: ?[]u8 = null;
@@ -54,7 +57,7 @@ pub const ShaderManager = struct {
         if (enable_runtime_compilation) {
             var total_timer = std.time.Timer.start() catch unreachable;
 
-            compiler = try ShaderCompiler.init(allocator);
+            compiler = try ShaderCompiler.init(allocator, io);
 
             // Register default namespace for built-in includes
             try compiler.?.registerNamespace("farhorizons", default_include_path);
@@ -120,6 +123,7 @@ pub const ShaderManager = struct {
 
         return .{
             .allocator = allocator,
+            .io = io,
             .compiler = compiler,
             .shader_cache = std.StringHashMap(CachedShader).init(allocator),
             .active_pack = null,
@@ -260,12 +264,12 @@ pub const ShaderManager = struct {
         self.active_pack = try self.allocator.dupe(u8, pack_path);
 
         // Register the pack's include directory
-        const include_path = try std.fs.path.join(self.allocator, &.{ pack_path, "shaders", "include" });
+        const include_path = try Dir.path.join(self.allocator, &.{ pack_path, "shaders", "include" });
         defer self.allocator.free(include_path);
 
         // Check if include directory exists before registering
-        if (std.fs.cwd().openDir(include_path, .{})) |dir| {
-            dir.close();
+        if (Dir.cwd().openDir(self.io, include_path, .{})) |dir| {
+            dir.close(self.io);
             try self.compiler.?.registerNamespace("pack", include_path);
             logger.info("Registered pack include path: {s}", .{include_path});
         } else |_| {
@@ -301,7 +305,7 @@ pub const ShaderManager = struct {
                 .tess_evaluation => ".tese",
             };
 
-            const shader_path = try std.fs.path.join(self.allocator, &.{
+            const shader_path = try Dir.path.join(self.allocator, &.{
                 self.active_pack.?,
                 "shaders",
                 try std.mem.concat(self.allocator, u8, &.{ name, ext }),

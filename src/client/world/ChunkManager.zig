@@ -1,6 +1,7 @@
 /// ChunkManager - Manages chunk loading, unloading, and meshing
 /// Coordinates between main thread and worker threads
 const std = @import("std");
+const Io = std.Io;
 const shared = @import("Shared");
 const renderer = @import("Renderer");
 const volk = @import("volk");
@@ -71,6 +72,7 @@ pub const ChunkManager = struct {
     const PosSet = std.HashMap(ChunkPos, void, ChunkPosContext, std.hash_map.default_max_load_percentage);
 
     allocator: std.mem.Allocator,
+    io: Io,
 
     /// Currently loaded chunks
     loaded_chunks: ChunkMap,
@@ -116,6 +118,7 @@ pub const ChunkManager = struct {
     /// Initialize the chunk manager
     pub fn init(
         allocator: std.mem.Allocator,
+        io: Io,
         render_system: *RenderSystem,
         texture_manager: *TextureManager,
         asset_directory: []const u8,
@@ -125,6 +128,7 @@ pub const ChunkManager = struct {
 
         var self = Self{
             .allocator = allocator,
+            .io = io,
             .loaded_chunks = ChunkMap.init(allocator),
             .pending_loads = PosSet.init(allocator),
             .completed_queue = ThreadSafeQueue(CompletedMesh).init(allocator),
@@ -165,12 +169,12 @@ pub const ChunkManager = struct {
         for (0..self.config.worker_count) |i| {
             // Create model loader for this worker
             const model_loader = try self.allocator.create(ModelLoader);
-            model_loader.* = ModelLoader.init(self.allocator, self.asset_directory);
+            model_loader.* = ModelLoader.init(self.allocator, self.io, self.asset_directory);
             self.worker_model_loaders[i] = model_loader;
 
             // Create blockstate loader for this worker
             const blockstate_loader = try self.allocator.create(BlockstateLoader);
-            blockstate_loader.* = BlockstateLoader.init(self.allocator, self.asset_directory);
+            blockstate_loader.* = BlockstateLoader.init(self.allocator, self.io, self.asset_directory);
             self.worker_blockstate_loaders[i] = blockstate_loader;
 
             // Create block model shaper for this worker

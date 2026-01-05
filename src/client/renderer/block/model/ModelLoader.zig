@@ -1,4 +1,6 @@
 const std = @import("std");
+const Io = std.Io;
+const Dir = Io.Dir;
 const shared = @import("Shared");
 const Allocator = std.mem.Allocator;
 const BlockModel = @import("BlockModel.zig").BlockModel;
@@ -11,12 +13,14 @@ pub const ModelLoader = struct {
     const logger = Logger.init("ModelLoader");
 
     allocator: Allocator,
+    io: Io,
     assets_path: []const u8,
     model_cache: std.StringHashMap(BlockModel),
 
-    pub fn init(allocator: Allocator, assets_path: []const u8) Self {
+    pub fn init(allocator: Allocator, io: Io, assets_path: []const u8) Self {
         return .{
             .allocator = allocator,
+            .io = io,
             .assets_path = assets_path,
             .model_cache = std.StringHashMap(BlockModel).init(allocator),
         };
@@ -81,7 +85,7 @@ pub const ModelLoader = struct {
         logger.info("Reading model file: {s}", .{file_path});
 
         // Read the file
-        const json_data = std.fs.cwd().readFileAlloc(file_path, self.allocator, .limited(1024 * 1024)) catch |err| {
+        const json_data = Dir.cwd().readFileAlloc(self.io, file_path, self.allocator, .limited(1024 * 1024)) catch |err| {
             logger.err("Failed to read model file: {s} - {any}", .{ file_path, err });
             return error.ModelFileNotFound;
         };

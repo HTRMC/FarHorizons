@@ -1,4 +1,6 @@
 const std = @import("std");
+const Io = std.Io;
+const Dir = Io.Dir;
 const shared = @import("Shared");
 const shaderc = @import("shaderc");
 const ShaderPreprocessor = @import("GlslPreprocessor.zig").ShaderPreprocessor;
@@ -12,6 +14,7 @@ pub const ShaderCompiler = struct {
     const logger = Logger.init("ShaderCompiler");
 
     allocator: std.mem.Allocator,
+    io: Io,
     preprocessor: ShaderPreprocessor,
     compiler: shaderc.Compiler,
     default_options: ?shaderc.CompileOptions,
@@ -21,14 +24,14 @@ pub const ShaderCompiler = struct {
     cache_hits: u32 = 0,
     cache_misses: u32 = 0,
 
-    pub fn init(allocator: std.mem.Allocator) !ShaderCompiler {
-        var preprocessor = ShaderPreprocessor.init(allocator);
+    pub fn init(allocator: std.mem.Allocator, io: Io) !ShaderCompiler {
+        var preprocessor = ShaderPreprocessor.init(allocator, io);
         errdefer preprocessor.deinit();
 
         var compiler = try shaderc.Compiler.init();
         errdefer compiler.deinit();
 
-        var cache = try ShaderCache.init(allocator, null);
+        var cache = try ShaderCache.init(allocator, io, null);
         errdefer cache.deinit();
 
         // Set up default compilation options
@@ -39,6 +42,7 @@ pub const ShaderCompiler = struct {
 
         return .{
             .allocator = allocator,
+            .io = io,
             .preprocessor = preprocessor,
             .compiler = compiler,
             .default_options = options,
@@ -144,13 +148,13 @@ pub const ShaderCompiler = struct {
         };
 
         // Read source file
-        const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        const file = Dir.cwd().openFile(self.io, path, .{}) catch |err| {
             logger.err("Failed to open shader file '{s}': {}", .{ path, err });
             return err;
         };
-        defer file.close();
+        defer file.close(self.io);
 
-        const stat = try file.stat();
+        const stat = try file.stat(self.io);
         const size: usize = @intCast(stat.size);
         if (size > 1024 * 1024) {
             return error.FileTooLarge;
@@ -159,7 +163,7 @@ pub const ShaderCompiler = struct {
         const source = try self.allocator.alloc(u8, size);
         defer self.allocator.free(source);
 
-        const bytes_read = try file.preadAll(source, 0);
+        const bytes_read = try file.readPositionalAll(self.io, source, 0);
         if (bytes_read != size) {
             return error.UnexpectedEOF;
         }
@@ -219,7 +223,7 @@ pub const ShaderKind = enum {
 
     /// Determine shader kind from file extension
     pub fn fromExtension(path: []const u8) ?ShaderKind {
-        const ext = std.fs.path.extension(path);
+        const ext = Dir.path.extension(path);
         if (std.mem.eql(u8, ext, ".vert")) return .vertex;
         if (std.mem.eql(u8, ext, ".frag")) return .fragment;
         if (std.mem.eql(u8, ext, ".comp")) return .compute;

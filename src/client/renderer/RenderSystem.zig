@@ -1,6 +1,7 @@
 // Render system - Vulkan state management
 
 const std = @import("std");
+const Io = std.Io;
 const volk = @import("volk");
 const vk = volk.c;
 const shared = @import("Shared");
@@ -152,6 +153,10 @@ pub const RenderSystem = struct {
     descriptor_pool: vk.VkDescriptorPool = null,
     descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
+    // Entity descriptors
+    entity_descriptor_pool: vk.VkDescriptorPool = null,
+    entity_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
+
     // Command buffers
     command_pool: vk.VkCommandPool = null,
     command_buffers: []vk.VkCommandBuffer = &.{},
@@ -165,6 +170,9 @@ pub const RenderSystem = struct {
     // Allocator for dynamic arrays
     allocator: std.mem.Allocator = undefined,
 
+    // I/O context for file operations
+    io: Io = undefined,
+
     // GPU device abstraction for resource creation
     gpu_device: ?GpuDevice = null,
 
@@ -174,8 +182,8 @@ pub const RenderSystem = struct {
     // Shader management (supports runtime shader packs)
     shader_manager: ?ShaderManager = null,
 
-    pub fn init(allocator: std.mem.Allocator) Self {
-        return .{ .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator, io: Io) Self {
+        return .{ .allocator = allocator, .io = io };
     }
 
     pub fn initBackend(self: *Self, window: *platform.Window) !void {
@@ -184,10 +192,10 @@ pub const RenderSystem = struct {
         // Initialize shader manager (enable runtime compilation for shader pack support)
         // Set to false if you want to disable runtime shader compilation
         const enable_runtime_shaders = true;
-        self.shader_manager = ShaderManager.init(self.allocator, enable_runtime_shaders) catch |err| blk: {
+        self.shader_manager = ShaderManager.init(self.allocator, self.io, enable_runtime_shaders) catch |err| blk: {
             logger.warn("Failed to initialize shader manager with runtime compilation: {}", .{err});
             // Fall back to embedded shaders only
-            break :blk ShaderManager.init(self.allocator, false) catch null;
+            break :blk ShaderManager.init(self.allocator, self.io, false) catch null;
         };
 
         if (!platform.isVulkanSupported()) {
@@ -344,6 +352,15 @@ pub const RenderSystem = struct {
         try self.createDescriptorSets();
 
         logger.info("Texture resources set and descriptors created", .{});
+    }
+
+    /// Set entity texture resources and create entity descriptors
+    pub fn setEntityTextureResources(self: *Self, image_view: vk.VkImageView, sampler: vk.VkSampler) !void {
+        // Create entity descriptor pool and sets
+        try self.createEntityDescriptorPool();
+        try self.createEntityDescriptorSets(image_view, sampler);
+
+        logger.info("Entity texture resources set and descriptors created", .{});
     }
 
     /// Get Vulkan device (for TextureManager)
@@ -598,6 +615,12 @@ pub const RenderSystem = struct {
             // Bind entity pipeline (uses same descriptor set layout)
             if (self.entity_pipeline) |entity_pipeline| {
                 vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, entity_pipeline);
+
+                // Bind entity descriptor set (with entity texture)
+                if (self.entity_descriptor_sets[self.current_frame] != null) {
+                    const entity_descriptor_sets_arr = [_]vk.VkDescriptorSet{self.entity_descriptor_sets[self.current_frame]};
+                    vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &entity_descriptor_sets_arr, 0, null);
+                }
 
                 const entity_vertex_buffers = [_]vk.VkBuffer{params.entity_vertex_buffer.?};
                 const entity_offsets = [_]vk.VkDeviceSize{0};
@@ -2917,6 +2940,101 @@ pub const RenderSystem = struct {
         }
 
         logger.info("Descriptor sets created", .{});
+    }
+
+    fn createEntityDescriptorPool(self: *Self) !void {
+        const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
+
+        const pool_sizes = [_]vk.VkDescriptorPoolSize{
+            .{
+                .type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+            },
+            .{
+                .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+            },
+        };
+
+        const pool_info = vk.VkDescriptorPoolCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .maxSets = MAX_FRAMES_IN_FLIGHT,
+            .poolSizeCount = pool_sizes.len,
+            .pPoolSizes = &pool_sizes,
+        };
+
+        if (vkCreateDescriptorPool(self.device, &pool_info, null, &self.entity_descriptor_pool) != vk.VK_SUCCESS) {
+            return error.DescriptorPoolCreationFailed;
+        }
+
+        logger.info("Entity descriptor pool created", .{});
+    }
+
+    fn createEntityDescriptorSets(self: *Self, texture_view: vk.VkImageView, texture_sampler: vk.VkSampler) !void {
+        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+
+        const layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout} ** MAX_FRAMES_IN_FLIGHT;
+
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.entity_descriptor_pool,
+            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+            .pSetLayouts = &layouts,
+        };
+
+        if (vkAllocateDescriptorSets(self.device, &alloc_info, &self.entity_descriptor_sets) != vk.VK_SUCCESS) {
+            return error.DescriptorSetAllocationFailed;
+        }
+
+        // Configure each descriptor set to point to its uniform buffer and entity texture
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const buffer_info = vk.VkDescriptorBufferInfo{
+                .buffer = self.uniform_buffers[i],
+                .offset = 0,
+                .range = @sizeOf(UniformBufferObject),
+            };
+
+            const image_info = vk.VkDescriptorImageInfo{
+                .sampler = texture_sampler,
+                .imageView = texture_view,
+                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+
+            const descriptor_writes = [_]vk.VkWriteDescriptorSet{
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = self.entity_descriptor_sets[i],
+                    .dstBinding = 0,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pImageInfo = null,
+                    .pBufferInfo = &buffer_info,
+                    .pTexelBufferView = null,
+                },
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = self.entity_descriptor_sets[i],
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &image_info,
+                    .pBufferInfo = null,
+                    .pTexelBufferView = null,
+                },
+            };
+
+            vkUpdateDescriptorSets(self.device, descriptor_writes.len, &descriptor_writes, 0, null);
+        }
+
+        logger.info("Entity descriptor sets created", .{});
     }
 
     fn findMemoryType(self: *Self, type_filter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
