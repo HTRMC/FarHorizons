@@ -223,54 +223,60 @@ pub const CowModel = struct {
         // Top row: [depth][top][depth][bottom]
         // Bottom row: [left][front][right][back]
 
-        // All faces use CCW winding (viewed from outside) which becomes correct after Y-flip
+        // All faces use CCW winding when viewed from outside after Y-flip
 
-        // Bottom face (Y-) - at uv (u+d, v) size (w, d)
+        // Bottom face (Y-) - after Y-flip this is at TOP, viewed from +Y
+        // CCW from +Y: 0,4,5,1
         try self.addQuad(vertices, indices, base_idx + 0, corners, .{ 0, 4, 5, 1 }, white, .{
-            .{ (u + d) * u_scale, (v) * v_scale },
             .{ (u + d) * u_scale, (v + d) * v_scale },
             .{ (u + d + w) * u_scale, (v + d) * v_scale },
             .{ (u + d + w) * u_scale, (v) * v_scale },
+            .{ (u + d) * u_scale, (v) * v_scale },
         }, box.mirror);
 
-        // Top face (Y+) - at uv (u+d+w, v) size (w, d)
+        // Top face (Y+) - after Y-flip this is at BOTTOM, viewed from -Y
+        // CCW from -Y: 3,2,6,7
         try self.addQuad(vertices, indices, base_idx + 4, corners, .{ 3, 2, 6, 7 }, white, .{
+            .{ (u + d + w) * u_scale, (v + d) * v_scale },
             .{ (u + d + w) * u_scale, (v) * v_scale },
             .{ (u + d + w + w) * u_scale, (v) * v_scale },
             .{ (u + d + w + w) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w) * u_scale, (v + d) * v_scale },
         }, box.mirror);
 
-        // West face (X-) - at uv (u, v+d) size (d, h)
-        try self.addQuad(vertices, indices, base_idx + 8, corners, .{ 0, 4, 7, 3 }, white, .{
+        // West face (X-) - viewed from -X
+        // CCW from -X: 0,3,7,4
+        try self.addQuad(vertices, indices, base_idx + 8, corners, .{ 0, 3, 7, 4 }, white, .{
             .{ (u + d) * u_scale, (v + d) * v_scale },
-            .{ (u) * u_scale, (v + d) * v_scale },
+            .{ (u + d) * u_scale, (v + d + h) * v_scale },
             .{ (u) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d) * u_scale, (v + d + h) * v_scale },
+            .{ (u) * u_scale, (v + d) * v_scale },
         }, box.mirror);
 
-        // East face (X+) - at uv (u+d+w, v+d) size (d, h)
-        try self.addQuad(vertices, indices, base_idx + 12, corners, .{ 1, 2, 6, 5 }, white, .{
-            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
+        // East face (X+) - viewed from +X
+        // CCW from +X: 1,5,6,2
+        try self.addQuad(vertices, indices, base_idx + 12, corners, .{ 1, 5, 6, 2 }, white, .{
             .{ (u + d + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
         }, box.mirror);
 
-        // North face (Z-) - this is the FRONT of entities facing -Z, at uv (u+d, v+d) size (w, h)
-        try self.addQuad(vertices, indices, base_idx + 16, corners, .{ 0, 3, 2, 1 }, white, .{
+        // North face (Z-) - viewed from -Z (this is FRONT of cow)
+        // CCW from -Z: 0,1,2,3
+        try self.addQuad(vertices, indices, base_idx + 16, corners, .{ 0, 1, 2, 3 }, white, .{
             .{ (u + d + w) * u_scale, (v + d) * v_scale },
             .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
             .{ (u + d) * u_scale, (v + d + h) * v_scale },
             .{ (u + d) * u_scale, (v + d) * v_scale },
         }, box.mirror);
 
-        // South face (Z+) - this is the BACK of entities facing -Z, at uv (u+d+w+d, v+d) size (w, h)
+        // South face (Z+) - viewed from +Z (this is BACK of cow)
+        // CCW from +Z: 4,7,6,5
         try self.addQuad(vertices, indices, base_idx + 20, corners, .{ 4, 7, 6, 5 }, white, .{
             .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
-            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
-            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale },
             .{ (u + d + w + d + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
         }, box.mirror);
     }
 
@@ -285,21 +291,15 @@ pub const CowModel = struct {
         uvs: [4][2]f32,
         mirror: bool,
     ) !void {
-        if (!mirror) {
-            // Normal winding (swapped due to Y-flip)
-            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[1]], .color = color, .uv = uvs[0], .tex_index = 0 });
-            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[0]], .color = color, .uv = uvs[1], .tex_index = 0 });
-            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[3]], .color = color, .uv = uvs[2], .tex_index = 0 });
-            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[2]], .color = color, .uv = uvs[3], .tex_index = 0 });
-        } else {
-            // Mirrored - original order
-            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[0]], .color = color, .uv = uvs[0], .tex_index = 0 });
-            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[1]], .color = color, .uv = uvs[1], .tex_index = 0 });
-            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[2]], .color = color, .uv = uvs[2], .tex_index = 0 });
-            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[3]], .color = color, .uv = uvs[3], .tex_index = 0 });
-        }
+        _ = mirror; // TODO: implement UV mirroring if needed
 
-        // Two triangles for the quad (consistent winding)
+        // Vertices in order matching corner_indices
+        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[0]], .color = color, .uv = uvs[0], .tex_index = 0 });
+        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[1]], .color = color, .uv = uvs[1], .tex_index = 0 });
+        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[2]], .color = color, .uv = uvs[2], .tex_index = 0 });
+        try vertices.append(self.allocator, .{ .pos = corners[corner_indices[3]], .color = color, .uv = uvs[3], .tex_index = 0 });
+
+        // Two triangles for the quad (CCW winding)
         try indices.append(self.allocator, base_idx + 0);
         try indices.append(self.allocator, base_idx + 1);
         try indices.append(self.allocator, base_idx + 2);
