@@ -6,49 +6,17 @@ const Vec3 = shared.Vec3;
 const Mat4 = shared.Mat4;
 const Vertex = renderer.Vertex;
 
-/// Cow model dimensions (in pixels, 1 block = 16 pixels)
-/// Based on Minecraft cow model
+/// Minecraft-style cow model
+/// Replicates MC's coordinate system exactly:
+/// - Y=24 is ground level in model space
+/// - Parts have pivot points (PartPose.offset)
+/// - Boxes are defined relative to pivot
+/// - Final output is scaled to world coords (1 block = 16 pixels)
 pub const CowModel = struct {
     const Self = @This();
 
-    /// Texture dimensions
     const TEX_WIDTH: f32 = 64.0;
     const TEX_HEIGHT: f32 = 64.0;
-
-    /// Body dimensions (in blocks, scaled down from pixel coords)
-    const SCALE: f32 = 1.0 / 16.0; // Convert pixels to blocks
-
-    /// Model part offsets and sizes
-    const Body = struct {
-        // Body box: 12x18x10 pixels, positioned at center
-        const width: f32 = 12.0 * SCALE;
-        const height: f32 = 10.0 * SCALE;
-        const depth: f32 = 18.0 * SCALE;
-        const y_offset: f32 = 11.0 * SCALE; // Height from ground to body bottom
-    };
-
-    const Head = struct {
-        // Head box: 8x8x6 pixels
-        const width: f32 = 8.0 * SCALE;
-        const height: f32 = 8.0 * SCALE;
-        const depth: f32 = 6.0 * SCALE;
-        const y_offset: f32 = 16.0 * SCALE;
-        const z_offset: f32 = -8.0 * SCALE; // Forward from body
-    };
-
-    const Leg = struct {
-        // Leg box: 4x12x4 pixels
-        const width: f32 = 4.0 * SCALE;
-        const height: f32 = 12.0 * SCALE;
-        const depth: f32 = 4.0 * SCALE;
-    };
-
-    const Horn = struct {
-        // Horn box: 1x3x1 pixels
-        const width: f32 = 1.0 * SCALE;
-        const height: f32 = 3.0 * SCALE;
-        const depth: f32 = 1.0 * SCALE;
-    };
 
     allocator: std.mem.Allocator,
 
@@ -56,134 +24,84 @@ pub const CowModel = struct {
         return .{ .allocator = allocator };
     }
 
-    /// Generate cow mesh vertices and indices
-    /// Returns owned slices that caller must free
+    pub fn deinit(self: *Self) void {
+        _ = self;
+    }
+
+    /// Generate cow mesh exactly like Minecraft
     pub fn generateMesh(self: *Self, walk_animation: f32) !struct { vertices: []Vertex, indices: []u32 } {
         var vertices: std.ArrayList(Vertex) = .empty;
         var indices: std.ArrayList(u32) = .empty;
 
-        // Calculate leg rotation from walk animation
-        const leg_angle = @sin(walk_animation) * 0.5; // +/- 0.5 radians
+        // Animation from QuadrupedModel.setupAnim()
+        // rightHindLeg.xRot = cos(animPos * 0.6662) * 1.4 * animSpeed
+        // leftHindLeg.xRot = cos(animPos * 0.6662 + PI) * 1.4 * animSpeed
+        // rightFrontLeg.xRot = cos(animPos * 0.6662 + PI) * 1.4 * animSpeed
+        // leftFrontLeg.xRot = cos(animPos * 0.6662) * 1.4 * animSpeed
+        const anim_speed: f32 = 1.0;
+        const right_hind_rot = @cos(walk_animation * 0.6662) * 1.4 * anim_speed;
+        const left_hind_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * anim_speed;
+        const right_front_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * anim_speed;
+        const left_front_rot = @cos(walk_animation * 0.6662) * 1.4 * anim_speed;
 
-        // Body (centered at origin, y_offset up from ground)
-        try self.addBox(
-            &vertices,
-            &indices,
-            -Body.width / 2.0,
-            Body.y_offset,
-            -Body.depth / 2.0,
-            Body.width,
-            Body.height,
-            Body.depth,
-            18, 4, // UV offset in texture
-            .{ 1.0, 1.0, 1.0 }, // White color (texture provides color)
-        );
+        // Head: PartPose.offset(0, 4, -8)
+        // box(-4, -4, -6, 8, 8, 6) texOffs(0, 0)
+        try self.addModelPart(&vertices, &indices, .{
+            .pivot = .{ 0, 4, -8 },
+            .rotation = .{ 0, 0, 0 },
+            .boxes = &[_]Box{
+                .{ .origin = .{ -4, -4, -6 }, .size = .{ 8, 8, 6 }, .uv = .{ 0, 0 } }, // head
+                .{ .origin = .{ -5, -5, -5 }, .size = .{ 1, 3, 1 }, .uv = .{ 22, 0 } }, // right horn
+                .{ .origin = .{ 4, -5, -5 }, .size = .{ 1, 3, 1 }, .uv = .{ 22, 0 } }, // left horn
+            },
+        });
 
-        // Head
-        try self.addBox(
-            &vertices,
-            &indices,
-            -Head.width / 2.0,
-            Head.y_offset,
-            Head.z_offset - Head.depth,
-            Head.width,
-            Head.height,
-            Head.depth,
-            0, 0,
-            .{ 1.0, 1.0, 1.0 },
-        );
+        // Body: PartPose.offsetAndRotation(0, 5, 2, PI/2, 0, 0)
+        // box(-6, -10, -7, 12, 18, 10) texOffs(18, 4)
+        try self.addModelPart(&vertices, &indices, .{
+            .pivot = .{ 0, 5, 2 },
+            .rotation = .{ std.math.pi / 2.0, 0, 0 },
+            .boxes = &[_]Box{
+                .{ .origin = .{ -6, -10, -7 }, .size = .{ 12, 18, 10 }, .uv = .{ 18, 4 } },
+            },
+        });
 
-        // Left horn
-        try self.addBox(
-            &vertices,
-            &indices,
-            -Head.width / 2.0 - Horn.width,
-            Head.y_offset + Head.height - Horn.height,
-            Head.z_offset - Head.depth / 2.0 - Horn.depth / 2.0,
-            Horn.width,
-            Horn.height,
-            Horn.depth,
-            22, 0,
-            .{ 0.9, 0.9, 0.8 },
-        );
+        // Right hind leg: PartPose.offset(-4, 12, 7)
+        // box(-2, 0, -2, 4, 12, 4) texOffs(0, 16)
+        try self.addModelPart(&vertices, &indices, .{
+            .pivot = .{ -4, 12, 7 },
+            .rotation = .{ right_hind_rot, 0, 0 },
+            .boxes = &[_]Box{
+                .{ .origin = .{ -2, 0, -2 }, .size = .{ 4, 12, 4 }, .uv = .{ 0, 16 } },
+            },
+        });
 
-        // Right horn
-        try self.addBox(
-            &vertices,
-            &indices,
-            Head.width / 2.0,
-            Head.y_offset + Head.height - Horn.height,
-            Head.z_offset - Head.depth / 2.0 - Horn.depth / 2.0,
-            Horn.width,
-            Horn.height,
-            Horn.depth,
-            22, 0,
-            .{ 0.9, 0.9, 0.8 },
-        );
+        // Left hind leg: PartPose.offset(4, 12, 7)
+        try self.addModelPart(&vertices, &indices, .{
+            .pivot = .{ 4, 12, 7 },
+            .rotation = .{ left_hind_rot, 0, 0 },
+            .boxes = &[_]Box{
+                .{ .origin = .{ -2, 0, -2 }, .size = .{ 4, 12, 4 }, .uv = .{ 0, 16 }, .mirror = true },
+            },
+        });
 
-        // Front left leg (animated)
-        try self.addRotatedBox(
-            &vertices,
-            &indices,
-            -Body.width / 2.0,
-            0,
-            -Body.depth / 2.0 + Leg.depth,
-            Leg.width,
-            Leg.height,
-            Leg.depth,
-            0, 16,
-            .{ 1.0, 1.0, 1.0 },
-            leg_angle, // Rotation
-            0, Leg.height, 0, // Pivot at top of leg
-        );
+        // Right front leg: PartPose.offset(-4, 12, -5)
+        try self.addModelPart(&vertices, &indices, .{
+            .pivot = .{ -4, 12, -5 },
+            .rotation = .{ right_front_rot, 0, 0 },
+            .boxes = &[_]Box{
+                .{ .origin = .{ -2, 0, -2 }, .size = .{ 4, 12, 4 }, .uv = .{ 0, 16 } },
+            },
+        });
 
-        // Front right leg (animated, opposite phase)
-        try self.addRotatedBox(
-            &vertices,
-            &indices,
-            Body.width / 2.0 - Leg.width,
-            0,
-            -Body.depth / 2.0 + Leg.depth,
-            Leg.width,
-            Leg.height,
-            Leg.depth,
-            0, 16,
-            .{ 1.0, 1.0, 1.0 },
-            -leg_angle,
-            0, Leg.height, 0,
-        );
-
-        // Back left leg (animated, opposite to front left)
-        try self.addRotatedBox(
-            &vertices,
-            &indices,
-            -Body.width / 2.0,
-            0,
-            Body.depth / 2.0 - Leg.depth * 2,
-            Leg.width,
-            Leg.height,
-            Leg.depth,
-            0, 16,
-            .{ 1.0, 1.0, 1.0 },
-            -leg_angle,
-            0, Leg.height, 0,
-        );
-
-        // Back right leg (animated)
-        try self.addRotatedBox(
-            &vertices,
-            &indices,
-            Body.width / 2.0 - Leg.width,
-            0,
-            Body.depth / 2.0 - Leg.depth * 2,
-            Leg.width,
-            Leg.height,
-            Leg.depth,
-            0, 16,
-            .{ 1.0, 1.0, 1.0 },
-            leg_angle,
-            0, Leg.height, 0,
-        );
+        // Left front leg: PartPose.offset(4, 12, -5)
+        try self.addModelPart(&vertices, &indices, .{
+            .pivot = .{ 4, 12, -5 },
+            .rotation = .{ left_front_rot, 0, 0 },
+            .boxes = &[_]Box{
+                .{ .origin = .{ -2, 0, -2 }, .size = .{ 4, 12, 4 }, .uv = .{ 0, 16 }, .mirror = true },
+            },
+        });
 
         return .{
             .vertices = try vertices.toOwnedSlice(self.allocator),
@@ -191,191 +109,199 @@ pub const CowModel = struct {
         };
     }
 
-    /// Add a box with 6 faces
+    const Box = struct {
+        origin: [3]f32, // x, y, z offset from pivot
+        size: [3]f32, // width, height, depth
+        uv: [2]f32, // texture offset
+        mirror: bool = false,
+    };
+
+    const ModelPart = struct {
+        pivot: [3]f32, // pivot point in model space
+        rotation: [3]f32, // x, y, z rotation in radians
+        boxes: []const Box,
+    };
+
+    /// Add a model part with pivot, rotation, and boxes
+    fn addModelPart(
+        self: *Self,
+        vertices: *std.ArrayList(Vertex),
+        indices: *std.ArrayList(u32),
+        part: ModelPart,
+    ) !void {
+        for (part.boxes) |box| {
+            try self.addBox(vertices, indices, part.pivot, part.rotation, box);
+        }
+    }
+
+    /// Add a single box with transformation
     fn addBox(
         self: *Self,
         vertices: *std.ArrayList(Vertex),
         indices: *std.ArrayList(u32),
-        x: f32,
-        y: f32,
-        z: f32,
-        width: f32,
-        height: f32,
-        depth: f32,
-        u: f32,
-        v: f32,
-        color: [3]f32,
+        pivot: [3]f32,
+        rotation: [3]f32,
+        box: Box,
     ) !void {
-        const base_index: u32 = @intCast(vertices.items.len);
+        const base_idx: u32 = @intCast(vertices.items.len);
 
-        // Calculate UV coordinates for each face (Minecraft box UV layout)
+        const ox = box.origin[0];
+        const oy = box.origin[1];
+        const oz = box.origin[2];
+        const w = box.size[0];
+        const h = box.size[1];
+        const d = box.size[2];
+        const u = box.uv[0];
+        const v = box.uv[1];
+
+        // 8 corners of the box in local space (relative to pivot)
+        var corners: [8][3]f32 = .{
+            .{ ox, oy, oz }, // 0: min
+            .{ ox + w, oy, oz }, // 1
+            .{ ox + w, oy + h, oz }, // 2
+            .{ ox, oy + h, oz }, // 3
+            .{ ox, oy, oz + d }, // 4
+            .{ ox + w, oy, oz + d }, // 5
+            .{ ox + w, oy + h, oz + d }, // 6: max
+            .{ ox, oy + h, oz + d }, // 7
+        };
+
+        // Apply rotation around pivot (in local space, so pivot is origin)
+        const cos_x = @cos(rotation[0]);
+        const sin_x = @sin(rotation[0]);
+        const cos_y = @cos(rotation[1]);
+        const sin_y = @sin(rotation[1]);
+        const cos_z = @cos(rotation[2]);
+        const sin_z = @sin(rotation[2]);
+
+        for (&corners) |*corner| {
+            var x = corner[0];
+            var y = corner[1];
+            var z = corner[2];
+
+            // Rotate around X axis
+            if (rotation[0] != 0) {
+                const ny = y * cos_x - z * sin_x;
+                const nz = y * sin_x + z * cos_x;
+                y = ny;
+                z = nz;
+            }
+
+            // Rotate around Y axis
+            if (rotation[1] != 0) {
+                const nx = x * cos_y + z * sin_y;
+                const nz = -x * sin_y + z * cos_y;
+                x = nx;
+                z = nz;
+            }
+
+            // Rotate around Z axis
+            if (rotation[2] != 0) {
+                const nx = x * cos_z - y * sin_z;
+                const ny = x * sin_z + y * cos_z;
+                x = nx;
+                y = ny;
+            }
+
+            // Add pivot offset and convert to world space
+            // MC model: Y=24 is ground, we want Y=0 as ground
+            // Scale: 1/16 (pixels to blocks)
+            const scale: f32 = 1.0 / 16.0;
+            corner[0] = (x + pivot[0]) * scale;
+            corner[1] = (24.0 - (y + pivot[1])) * scale; // Flip Y and offset to ground
+            corner[2] = (z + pivot[2]) * scale;
+        }
+
+        // UV calculations - Minecraft box UV layout
         const u_scale = 1.0 / TEX_WIDTH;
         const v_scale = 1.0 / TEX_HEIGHT;
 
-        // 8 corners of the box
-        const corners = [8][3]f32{
-            .{ x, y, z }, // 0: bottom-back-left
-            .{ x + width, y, z }, // 1: bottom-back-right
-            .{ x + width, y + height, z }, // 2: top-back-right
-            .{ x, y + height, z }, // 3: top-back-left
-            .{ x, y, z + depth }, // 4: bottom-front-left
-            .{ x + width, y, z + depth }, // 5: bottom-front-right
-            .{ x + width, y + height, z + depth }, // 6: top-front-right
-            .{ x, y + height, z + depth }, // 7: top-front-left
-        };
+        const white = [3]f32{ 1.0, 1.0, 1.0 };
 
-        // Front face (+Z)
-        try vertices.append(self.allocator, .{ .pos = corners[4], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[5], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[6], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[7], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
+        // Face vertices with proper UV mapping
+        // Minecraft UV layout for a box:
+        // Top row: [depth][top][depth][bottom]
+        // Bottom row: [left][front][right][back]
 
-        // Back face (-Z)
-        try vertices.append(self.allocator, .{ .pos = corners[1], .color = color, .uv = .{ (u + depth * 2 + width) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[0], .color = color, .uv = .{ (u + depth * 2 + width * 2) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[3], .color = color, .uv = .{ (u + depth * 2 + width * 2) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[2], .color = color, .uv = .{ (u + depth * 2 + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
+        // Bottom face (Y-) - at uv (u+d, v) size (w, d)
+        try self.addQuad(vertices, indices, base_idx + 0, corners, .{ 1, 0, 4, 5 }, white, .{
+            .{ (u + d + w) * u_scale, (v) * v_scale },
+            .{ (u + d) * u_scale, (v) * v_scale },
+            .{ (u + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d) * v_scale },
+        }, box.mirror);
 
-        // Left face (-X)
-        try vertices.append(self.allocator, .{ .pos = corners[0], .color = color, .uv = .{ u * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[4], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[7], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[3], .color = color, .uv = .{ u * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
+        // Top face (Y+) - at uv (u+d+w, v) size (w, d)
+        try self.addQuad(vertices, indices, base_idx + 4, corners, .{ 3, 2, 6, 7 }, white, .{
+            .{ (u + d + w) * u_scale, (v) * v_scale },
+            .{ (u + d + w + w) * u_scale, (v) * v_scale },
+            .{ (u + d + w + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d) * v_scale },
+        }, box.mirror);
 
-        // Right face (+X)
-        try vertices.append(self.allocator, .{ .pos = corners[5], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[1], .color = color, .uv = .{ (u + depth * 2 + width) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[2], .color = color, .uv = .{ (u + depth * 2 + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[6], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
+        // West face (X-) - at uv (u, v+d) size (d, h)
+        try self.addQuad(vertices, indices, base_idx + 8, corners, .{ 0, 4, 7, 3 }, white, .{
+            .{ (u + d) * u_scale, (v + d) * v_scale },
+            .{ (u) * u_scale, (v + d) * v_scale },
+            .{ (u) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d) * u_scale, (v + d + h) * v_scale },
+        }, box.mirror);
 
-        // Top face (+Y)
-        try vertices.append(self.allocator, .{ .pos = corners[7], .color = color, .uv = .{ (u + depth) * u_scale, v * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[6], .color = color, .uv = .{ (u + depth + width) * u_scale, v * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[2], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[3], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
+        // East face (X+) - at uv (u+d+w, v+d) size (d, h)
+        try self.addQuad(vertices, indices, base_idx + 12, corners, .{ 5, 1, 2, 6 }, white, .{
+            .{ (u + d + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
+        }, box.mirror);
 
-        // Bottom face (-Y)
-        try vertices.append(self.allocator, .{ .pos = corners[0], .color = color, .uv = .{ (u + depth + width) * u_scale, v * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[1], .color = color, .uv = .{ (u + depth + width * 2) * u_scale, v * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[5], .color = color, .uv = .{ (u + depth + width * 2) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[4], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
+        // North face (Z-) - at uv (u+d+w+d, v+d) size (w, h)
+        try self.addQuad(vertices, indices, base_idx + 16, corners, .{ 1, 0, 3, 2 }, white, .{
+            .{ (u + d + w + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w + d + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w + d + w) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d + w + d) * u_scale, (v + d + h) * v_scale },
+        }, box.mirror);
 
-        // Add indices for all 6 faces (2 triangles per face, 6 faces)
-        var i: u32 = 0;
-        while (i < 6) : (i += 1) {
-            const face_base = base_index + i * 4;
-            try indices.append(self.allocator, face_base + 0);
-            try indices.append(self.allocator, face_base + 1);
-            try indices.append(self.allocator, face_base + 2);
-            try indices.append(self.allocator, face_base + 0);
-            try indices.append(self.allocator, face_base + 2);
-            try indices.append(self.allocator, face_base + 3);
-        }
+        // South face (Z+) - at uv (u+d, v+d) size (w, h)
+        try self.addQuad(vertices, indices, base_idx + 20, corners, .{ 4, 5, 6, 7 }, white, .{
+            .{ (u + d) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d) * v_scale },
+            .{ (u + d + w) * u_scale, (v + d + h) * v_scale },
+            .{ (u + d) * u_scale, (v + d + h) * v_scale },
+        }, box.mirror);
     }
 
-    /// Add a rotated box (for animated legs)
-    fn addRotatedBox(
+    fn addQuad(
         self: *Self,
         vertices: *std.ArrayList(Vertex),
         indices: *std.ArrayList(u32),
-        x: f32,
-        y: f32,
-        z: f32,
-        width: f32,
-        height: f32,
-        depth: f32,
-        u: f32,
-        v: f32,
+        base_idx: u32,
+        corners: [8][3]f32,
+        corner_indices: [4]u3,
         color: [3]f32,
-        rotation: f32, // Rotation around X axis (radians)
-        pivot_x: f32,
-        pivot_y: f32,
-        pivot_z: f32,
+        uvs: [4][2]f32,
+        mirror: bool,
     ) !void {
-        const base_index: u32 = @intCast(vertices.items.len);
-        const u_scale = 1.0 / TEX_WIDTH;
-        const v_scale = 1.0 / TEX_HEIGHT;
-
-        const cos_r = @cos(rotation);
-        const sin_r = @sin(rotation);
-
-        // Helper to rotate a point around X axis at pivot
-        const rotatePoint = struct {
-            fn f(px: f32, py: f32, pz: f32, ox: f32, oy: f32, oz: f32, c: f32, s: f32) [3]f32 {
-                // Translate to pivot
-                const ly = py - oy;
-                const lz = pz - oz;
-                // Rotate around X
-                const ry = ly * c - lz * s;
-                const rz = ly * s + lz * c;
-                // Translate back
-                return .{ px + ox, ry + oy, rz + oz };
-            }
-        }.f;
-
-        // 8 corners, rotated
-        const corners = [8][3]f32{
-            rotatePoint(x, y, z, x + pivot_x, y + pivot_y, z + pivot_z, cos_r, sin_r),
-            rotatePoint(x + width, y, z, x + pivot_x, y + pivot_y, z + pivot_z, cos_r, sin_r),
-            rotatePoint(x + width, y + height, z, x + pivot_x, y + pivot_y, z + pivot_z, cos_r, sin_r),
-            rotatePoint(x, y + height, z, x + pivot_x, y + pivot_y, z + pivot_z, cos_r, sin_r),
-            rotatePoint(x, y, z + depth, x + pivot_x, y + pivot_y, z + pivot_z, cos_r, sin_r),
-            rotatePoint(x + width, y, z + depth, x + pivot_x, y + pivot_y, z + pivot_z, cos_r, sin_r),
-            rotatePoint(x + width, y + height, z + depth, x + pivot_x, y + pivot_y, z + pivot_z, cos_r, sin_r),
-            rotatePoint(x, y + height, z + depth, x + pivot_x, y + pivot_y, z + pivot_z, cos_r, sin_r),
-        };
-
-        // Same face generation as addBox but with rotated corners
-        // Front face
-        try vertices.append(self.allocator, .{ .pos = corners[4], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[5], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[6], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[7], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-
-        // Back face
-        try vertices.append(self.allocator, .{ .pos = corners[1], .color = color, .uv = .{ (u + depth * 2 + width) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[0], .color = color, .uv = .{ (u + depth * 2 + width * 2) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[3], .color = color, .uv = .{ (u + depth * 2 + width * 2) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[2], .color = color, .uv = .{ (u + depth * 2 + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-
-        // Left face
-        try vertices.append(self.allocator, .{ .pos = corners[0], .color = color, .uv = .{ u * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[4], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[7], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[3], .color = color, .uv = .{ u * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-
-        // Right face
-        try vertices.append(self.allocator, .{ .pos = corners[5], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[1], .color = color, .uv = .{ (u + depth * 2 + width) * u_scale, (v + depth + height) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[2], .color = color, .uv = .{ (u + depth * 2 + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[6], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-
-        // Top face
-        try vertices.append(self.allocator, .{ .pos = corners[7], .color = color, .uv = .{ (u + depth) * u_scale, v * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[6], .color = color, .uv = .{ (u + depth + width) * u_scale, v * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[2], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[3], .color = color, .uv = .{ (u + depth) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-
-        // Bottom face
-        try vertices.append(self.allocator, .{ .pos = corners[0], .color = color, .uv = .{ (u + depth + width) * u_scale, v * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[1], .color = color, .uv = .{ (u + depth + width * 2) * u_scale, v * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[5], .color = color, .uv = .{ (u + depth + width * 2) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-        try vertices.append(self.allocator, .{ .pos = corners[4], .color = color, .uv = .{ (u + depth + width) * u_scale, (v + depth) * v_scale }, .tex_index = 0 });
-
-        // Indices
-        var i: u32 = 0;
-        while (i < 6) : (i += 1) {
-            const face_base = base_index + i * 4;
-            try indices.append(self.allocator, face_base + 0);
-            try indices.append(self.allocator, face_base + 1);
-            try indices.append(self.allocator, face_base + 2);
-            try indices.append(self.allocator, face_base + 0);
-            try indices.append(self.allocator, face_base + 2);
-            try indices.append(self.allocator, face_base + 3);
+        if (mirror) {
+            // Mirrored winding
+            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[1]], .color = color, .uv = uvs[0], .tex_index = 0 });
+            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[0]], .color = color, .uv = uvs[1], .tex_index = 0 });
+            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[3]], .color = color, .uv = uvs[2], .tex_index = 0 });
+            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[2]], .color = color, .uv = uvs[3], .tex_index = 0 });
+        } else {
+            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[0]], .color = color, .uv = uvs[0], .tex_index = 0 });
+            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[1]], .color = color, .uv = uvs[1], .tex_index = 0 });
+            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[2]], .color = color, .uv = uvs[2], .tex_index = 0 });
+            try vertices.append(self.allocator, .{ .pos = corners[corner_indices[3]], .color = color, .uv = uvs[3], .tex_index = 0 });
         }
-    }
 
-    pub fn deinit(self: *Self) void {
-        _ = self;
+        // Two triangles for the quad
+        try indices.append(self.allocator, base_idx + 0);
+        try indices.append(self.allocator, base_idx + 1);
+        try indices.append(self.allocator, base_idx + 2);
+        try indices.append(self.allocator, base_idx + 0);
+        try indices.append(self.allocator, base_idx + 2);
+        try indices.append(self.allocator, base_idx + 3);
     }
 };
