@@ -300,7 +300,8 @@ pub const FarHorizonsClient = struct {
                 }
 
                 if (self.entity_manager) |*em| {
-                    em.tickAll();
+                    // Pass player position for entity look-at behavior
+                    em.tickAll(self.local_player.getPosition(0));
                 }
             }
 

@@ -50,6 +50,9 @@ pub const Entity = struct {
     head_target_yaw: f32 = 0,
     head_idle_timer: u32 = 0,
 
+    // Look-at target tracking
+    is_looking_at_target: bool = false,
+
     // Body rotation offset from yaw
     body_yaw_offset: f32 = 0,
 
@@ -78,8 +81,18 @@ pub const Entity = struct {
         };
     }
 
+    // Constants for look-at behavior (matching Minecraft's Mob defaults)
+    const LOOK_AT_DISTANCE: f32 = 8.0; // Blocks - how close player must be to trigger look-at
+    const MAX_HEAD_YAW: f32 = 75.0 * std.math.pi / 180.0; // Max head turn from body (MC: 75 degrees)
+    const MAX_HEAD_PITCH: f32 = 40.0 * std.math.pi / 180.0; // Max head pitch (radians)
+    // Rotation speeds in radians per tick (MC uses degrees: yaw=10, pitch=40)
+    const HEAD_YAW_SPEED: f32 = 10.0 * std.math.pi / 180.0; // 10 degrees/tick
+    const HEAD_PITCH_SPEED: f32 = 40.0 * std.math.pi / 180.0; // 40 degrees/tick
+    const IDLE_ROT_SPEED: f32 = 5.0 * std.math.pi / 180.0; // Slower for idle movement
+
     /// Update entity state (call once per tick)
-    pub fn tick(self: *Self) void {
+    /// player_pos: Position of the player (or null if no player tracking)
+    pub fn tick(self: *Self, player_pos: ?Vec3) void {
         self.prev_position = self.position;
         self.prev_yaw = self.yaw;
         self.prev_walk_animation = self.walk_animation;
@@ -98,31 +111,100 @@ pub const Entity = struct {
             self.walk_speed *= 0.9; // Smoothly reduce animation speed when stopping
         }
 
-        // Head idle animation
-        if (self.head_idle_timer == 0) {
-            // Pick new random target using simple hash of tick_count and id
-            const hash = self.tick_count *% 2654435761 +% self.id *% 1597334677;
-            const hash2 = hash *% 2654435761;
+        // Head look-at logic
+        var yaw_speed: f32 = IDLE_ROT_SPEED;
+        var pitch_speed: f32 = IDLE_ROT_SPEED;
 
-            // Random pitch: -20 to +30 degrees (looking down to up)
-            const pitch_range: f32 = 50.0 * std.math.pi / 180.0;
-            const pitch_offset: f32 = -20.0 * std.math.pi / 180.0;
-            self.head_target_pitch = (@as(f32, @floatFromInt(hash % 1000)) / 1000.0) * pitch_range + pitch_offset;
+        if (player_pos) |pp| {
+            // Calculate distance to player
+            const dx = pp.x - self.position.x;
+            const dy = pp.y - (self.position.y + 1.0); // Approximate eye height
+            const dz = pp.z - self.position.z;
+            const horizontal_dist = @sqrt(dx * dx + dz * dz);
+            const distance = @sqrt(dx * dx + dy * dy + dz * dz);
 
-            // Random yaw: -45 to +45 degrees (looking left to right)
-            const yaw_range: f32 = 90.0 * std.math.pi / 180.0;
-            self.head_target_yaw = (@as(f32, @floatFromInt(hash2 % 1000)) / 1000.0 - 0.5) * yaw_range;
+            if (distance < LOOK_AT_DISTANCE and distance > 0.1) {
+                // Player is close enough - look at them
+                self.is_looking_at_target = true;
+                yaw_speed = HEAD_YAW_SPEED;
+                pitch_speed = HEAD_PITCH_SPEED;
 
-            // Random delay: 40-120 ticks (2-6 seconds at 20 tps)
-            self.head_idle_timer = @intCast(40 + (hash >> 16) % 80);
+                // Calculate look-at angles using atan2 (like MC)
+                // MC formula: atan2(zd, xd) * 180/PI - 90 gives world yaw in degrees
+                // We need: angle from cow to player, relative to cow's body facing direction
+
+                // World yaw to player (angle from +Z axis, since our model faces -Z by default)
+                const target_world_yaw = std.math.atan2(dx, -dz);
+
+                // Convert entity body yaw to radians (body yaw is in degrees)
+                const body_yaw_rad = self.yaw * std.math.pi / 180.0;
+
+                // Head yaw is relative to body - negate because model Y rotation is inverted
+                var target_head_yaw = -(target_world_yaw - body_yaw_rad);
+
+                // Normalize to -PI to PI
+                while (target_head_yaw > std.math.pi) target_head_yaw -= 2.0 * std.math.pi;
+                while (target_head_yaw < -std.math.pi) target_head_yaw += 2.0 * std.math.pi;
+
+                // Clamp head yaw relative to body
+                target_head_yaw = std.math.clamp(target_head_yaw, -MAX_HEAD_YAW, MAX_HEAD_YAW);
+
+                // Pitch: vertical angle (negate because model X rotation is inverted)
+                var target_head_pitch = -std.math.atan2(dy, horizontal_dist);
+                target_head_pitch = std.math.clamp(target_head_pitch, -MAX_HEAD_PITCH, MAX_HEAD_PITCH);
+
+                self.head_target_pitch = target_head_pitch;
+                self.head_target_yaw = target_head_yaw;
+
+                // Reset idle timer when looking at player
+                self.head_idle_timer = 20; // Small delay before resuming idle
+            } else {
+                self.is_looking_at_target = false;
+            }
         } else {
-            self.head_idle_timer -= 1;
+            self.is_looking_at_target = false;
         }
 
-        // Smoothly interpolate head toward target (lerp factor ~0.1)
-        const lerp_speed: f32 = 0.1;
-        self.head_pitch += (self.head_target_pitch - self.head_pitch) * lerp_speed;
-        self.head_yaw += (self.head_target_yaw - self.head_yaw) * lerp_speed;
+        // Idle head animation (when not looking at player)
+        if (!self.is_looking_at_target) {
+            if (self.head_idle_timer == 0) {
+                // Pick new random target using simple hash of tick_count and id
+                const hash = self.tick_count *% 2654435761 +% self.id *% 1597334677;
+                const hash2 = hash *% 2654435761;
+
+                // Random pitch: -20 to +30 degrees (looking down to up)
+                const pitch_range: f32 = 50.0 * std.math.pi / 180.0;
+                const pitch_offset: f32 = -20.0 * std.math.pi / 180.0;
+                self.head_target_pitch = (@as(f32, @floatFromInt(hash % 1000)) / 1000.0) * pitch_range + pitch_offset;
+
+                // Random yaw: -45 to +45 degrees (looking left to right)
+                const yaw_range: f32 = 90.0 * std.math.pi / 180.0;
+                self.head_target_yaw = (@as(f32, @floatFromInt(hash2 % 1000)) / 1000.0 - 0.5) * yaw_range;
+
+                // Clamp idle yaw to max head rotation
+                self.head_target_yaw = std.math.clamp(self.head_target_yaw, -MAX_HEAD_YAW, MAX_HEAD_YAW);
+
+                // Random delay: 40-120 ticks (2-6 seconds at 20 tps)
+                self.head_idle_timer = @intCast(40 + (hash >> 16) % 80);
+            } else {
+                self.head_idle_timer -= 1;
+            }
+        }
+
+        // Rotate head toward target using MC's rotateTowards approach (fixed speed, not lerp)
+        self.head_pitch = rotateTowards(self.head_pitch, self.head_target_pitch, pitch_speed);
+        self.head_yaw = rotateTowards(self.head_yaw, self.head_target_yaw, yaw_speed);
+    }
+
+    /// Rotate from current angle toward target by at most maxRot (like MC's rotateTowards)
+    fn rotateTowards(from: f32, to: f32, max_rot: f32) f32 {
+        var diff = to - from;
+        // Normalize difference to -PI to PI
+        while (diff > std.math.pi) diff -= 2.0 * std.math.pi;
+        while (diff < -std.math.pi) diff += 2.0 * std.math.pi;
+        // Clamp to max rotation speed
+        const clamped = std.math.clamp(diff, -max_rot, max_rot);
+        return from + clamped;
     }
 
     /// Get interpolated position for rendering
@@ -223,10 +305,11 @@ pub const EntityManager = struct {
     }
 
     /// Tick all entities
-    pub fn tickAll(self: *Self) void {
+    /// player_pos: Position of the player for look-at behavior
+    pub fn tickAll(self: *Self, player_pos: ?Vec3) void {
         var iter = self.entities.valueIterator();
         while (iter.next()) |entity| {
-            entity.tick();
+            entity.tick(player_pos);
         }
     }
 
