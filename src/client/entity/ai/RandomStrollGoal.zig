@@ -105,16 +105,8 @@ pub const RandomStrollGoal = struct {
         const dz = self.target_z - self.entity.position.z;
         const dist_sq = dx * dx + dz * dz;
 
-        // Stop if we're close enough (within 0.5 blocks)
-        if (dist_sq < 0.25) {
-            return false;
-        }
-
-        // Stop if we're stuck (velocity very low but not at target)
-        const vel_sq = self.entity.velocity.x * self.entity.velocity.x +
-            self.entity.velocity.z * self.entity.velocity.z;
-        if (vel_sq < 0.0001 and self.entity.on_ground) {
-            // We're stuck, give up
+        // Stop if we're close enough (within 1 block)
+        if (dist_sq < 1.0) {
             return false;
         }
 
@@ -136,7 +128,7 @@ pub const RandomStrollGoal = struct {
         const dz = self.target_z - self.entity.position.z;
         const dist = @sqrt(dx * dx + dz * dz);
 
-        if (dist < 0.1) {
+        if (dist < 0.5) {
             self.has_target = false;
             return;
         }
@@ -168,7 +160,11 @@ pub const RandomStrollGoal = struct {
 
             // Scale speed based on how well-aligned we are (full speed when facing target)
             const alignment = 1.0 - (abs_yaw_diff / 45.0) * 0.5; // 100% to 50% speed
-            const move_speed = self.speed * alignment;
+
+            // Slow down as we approach the target (smooth deceleration)
+            const distance_factor = std.math.clamp(dist / 3.0, 0.3, 1.0);
+
+            const move_speed = self.speed * alignment * distance_factor;
 
             self.entity.velocity.x = forward_x * move_speed;
             self.entity.velocity.z = forward_z * move_speed;
@@ -182,9 +178,8 @@ pub const RandomStrollGoal = struct {
     fn stop(goal: *Goal) void {
         const self: *Self = @fieldParentPtr("base", goal);
 
-        // Stop moving
-        self.entity.velocity.x = 0;
-        self.entity.velocity.z = 0;
+        // Don't abruptly stop - let friction naturally slow the cow down
+        // Just clear the target so we stop setting velocity
         self.has_target = false;
 
         // Set cooldown before next wander
