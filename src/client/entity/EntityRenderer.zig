@@ -8,6 +8,7 @@ const Entity = @import("Entity.zig").Entity;
 const EntityType = @import("Entity.zig").EntityType;
 const EntityManager = @import("Entity.zig").EntityManager;
 const CowModel = @import("models/CowModel.zig").CowModel;
+const BabyCowModel = @import("models/BabyCowModel.zig").BabyCowModel;
 const Vertex = renderer.Vertex;
 const GpuDevice = renderer.GpuDevice;
 const Logger = shared.Logger;
@@ -22,8 +23,9 @@ pub const EntityRenderer = struct {
     gpu_device: *GpuDevice,
     asset_directory: []const u8,
 
-    // Cow model
+    // Cow models (adult and baby)
     cow_model: CowModel,
+    baby_cow_model: BabyCowModel,
 
     // GPU buffers for entity rendering
     vertex_buffer: vk.VkBuffer = null,
@@ -51,6 +53,7 @@ pub const EntityRenderer = struct {
             .gpu_device = gpu_device,
             .asset_directory = asset_directory,
             .cow_model = CowModel.init(allocator),
+            .baby_cow_model = BabyCowModel.init(allocator),
         };
 
         // Load cow texture
@@ -63,6 +66,7 @@ pub const EntityRenderer = struct {
         self.destroyBuffers();
         self.destroyTexture();
         self.cow_model.deinit();
+        self.baby_cow_model.deinit();
 
         if (self.cached_vertices) |verts| {
             self.allocator.free(verts);
@@ -488,34 +492,62 @@ pub const EntityRenderer = struct {
             // Generated mesh based on entity type
             switch (entity.entity_type) {
                 .cow => {
-                    const mesh = try self.cow_model.generateMesh(
-                        entity.getWalkAnimation(partial_tick),
-                        entity.getWalkSpeed(partial_tick),
-                        entity.getHeadPitch(partial_tick),
-                        entity.getHeadYaw(partial_tick),
-                    );
-                    defer self.allocator.free(mesh.vertices);
-                    defer self.allocator.free(mesh.indices);
-
-                    // Transform vertices by entity model matrix
+                    // Select model based on baby state (like MC's AdultAndBabyModelPair)
+                    // Get model matrix for transforming vertices
                     const m = entity.getModelMatrix(partial_tick);
 
-                    for (mesh.vertices) |vert| {
-                        var transformed = vert;
-                        // Manual matrix * point multiplication (column-major)
-                        const x = vert.pos[0];
-                        const y = vert.pos[1];
-                        const z = vert.pos[2];
-                        transformed.pos = .{
-                            m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
-                            m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
-                            m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
-                        };
-                        try all_vertices.append(self.allocator, transformed);
-                    }
+                    if (entity.is_baby) {
+                        const mesh = try self.baby_cow_model.generateMesh(
+                            entity.getWalkAnimation(partial_tick),
+                            entity.getWalkSpeed(partial_tick),
+                            entity.getHeadPitch(partial_tick),
+                            entity.getHeadYaw(partial_tick),
+                        );
+                        defer self.allocator.free(mesh.vertices);
+                        defer self.allocator.free(mesh.indices);
 
-                    for (mesh.indices) |idx| {
-                        try all_indices.append(self.allocator, base_vertex + idx);
+                        for (mesh.vertices) |vert| {
+                            var transformed = vert;
+                            const x = vert.pos[0];
+                            const y = vert.pos[1];
+                            const z = vert.pos[2];
+                            transformed.pos = .{
+                                m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
+                                m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
+                                m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
+                            };
+                            try all_vertices.append(self.allocator, transformed);
+                        }
+
+                        for (mesh.indices) |idx| {
+                            try all_indices.append(self.allocator, base_vertex + idx);
+                        }
+                    } else {
+                        const mesh = try self.cow_model.generateMesh(
+                            entity.getWalkAnimation(partial_tick),
+                            entity.getWalkSpeed(partial_tick),
+                            entity.getHeadPitch(partial_tick),
+                            entity.getHeadYaw(partial_tick),
+                        );
+                        defer self.allocator.free(mesh.vertices);
+                        defer self.allocator.free(mesh.indices);
+
+                        for (mesh.vertices) |vert| {
+                            var transformed = vert;
+                            const x = vert.pos[0];
+                            const y = vert.pos[1];
+                            const z = vert.pos[2];
+                            transformed.pos = .{
+                                m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
+                                m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
+                                m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
+                            };
+                            try all_vertices.append(self.allocator, transformed);
+                        }
+
+                        for (mesh.indices) |idx| {
+                            try all_indices.append(self.allocator, base_vertex + idx);
+                        }
                     }
                 },
                 else => {

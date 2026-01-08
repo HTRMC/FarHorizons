@@ -88,6 +88,7 @@ pub const FarHorizonsClient = struct {
 
     // Cow AI (like MC's AbstractCow with registerGoals)
     cow: ?Cow,
+    baby_cow: ?Cow,
 
     pub fn init(allocator: std.mem.Allocator, config: GameConfig, io: Io) Self {
         const display_data = DisplayData{
@@ -119,6 +120,7 @@ pub const FarHorizonsClient = struct {
             .entity_manager = null,
             .entity_renderer = null,
             .cow = null,
+            .baby_cow = null,
         };
     }
 
@@ -234,6 +236,15 @@ pub const FarHorizonsClient = struct {
         if (self.entity_manager.?.get(cow_id)) |cow_entity| {
             self.cow = Cow.init(cow_entity, self.allocator);
             self.cow.?.registerGoals();
+        }
+
+        // Spawn a baby cow next to the adult
+        const baby_cow_id = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 12, .y = 5, .z = 10 });
+
+        // Set up AI for the baby cow
+        if (self.entity_manager.?.get(baby_cow_id)) |baby_entity| {
+            self.baby_cow = Cow.initBaby(baby_entity, self.allocator);
+            self.baby_cow.?.registerGoals();
         }
 
         // Main loop
@@ -453,6 +464,9 @@ pub const FarHorizonsClient = struct {
         // Cleanup entity system
         if (self.cow) |*c| {
             c.deinit();
+        }
+        if (self.baby_cow) |*bc| {
+            bc.deinit();
         }
         if (self.entity_renderer) |*er| {
             er.deinit();

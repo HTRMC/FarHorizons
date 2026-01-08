@@ -28,10 +28,26 @@ pub const Cow = struct {
         };
     }
 
+    /// Initialize a baby cow with the default variant
+    pub fn initBaby(entity: *Entity, allocator: std.mem.Allocator) Self {
+        return .{
+            .base = AbstractCow.initBaby(entity, allocator),
+            .variant = CowVariants.DEFAULT,
+        };
+    }
+
     /// Initialize a cow with a specific variant
     pub fn initWithVariant(entity: *Entity, allocator: std.mem.Allocator, variant: *const CowVariant) Self {
         return .{
             .base = AbstractCow.init(entity, allocator),
+            .variant = variant,
+        };
+    }
+
+    /// Initialize a baby cow with a specific variant
+    pub fn initBabyWithVariant(entity: *Entity, allocator: std.mem.Allocator, variant: *const CowVariant) Self {
+        return .{
+            .base = AbstractCow.initBaby(entity, allocator),
             .variant = variant,
         };
     }
@@ -99,11 +115,26 @@ pub const Cow = struct {
 
     /// Get the underlying entity
     pub fn getEntity(self: *Self) *Entity {
-        return self.base.entity;
+        return self.base.getEntity();
     }
 
     /// Get the goal selector
     pub fn getGoalSelector(self: *Self) *@import("../../ai/ai.zig").GoalSelector {
         return &self.base.goal_selector;
+    }
+
+    /// Check if this is a baby cow
+    pub fn isBaby(self: *const Self) bool {
+        return self.base.isBaby();
+    }
+
+    /// Get scale for rendering (0.5 for babies, 1.0 for adults)
+    pub fn getScale(self: *const Self) f32 {
+        return self.base.getScale();
+    }
+
+    /// Set baby state
+    pub fn setBaby(self: *Self, baby: bool) void {
+        self.base.setBaby(baby);
     }
 };

@@ -87,6 +87,9 @@ pub const Entity = struct {
     // Previous walk speed (for interpolation)
     prev_walk_speed: f32 = 0,
 
+    // Baby flag (affects model selection in renderer)
+    is_baby: bool = false,
+
     /// Create a new entity
     pub fn init(id: u64, entity_type: EntityType, position: Vec3) Self {
         return Self{
