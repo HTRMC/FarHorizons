@@ -238,7 +238,7 @@ pub const Entity = struct {
 
         if (self.velocity.y <= 0) {
             // Falling or stationary - check ground collision
-            const feet_y: i32 = @intFromFloat(@floor(new_y));
+            // Use swept collision to prevent tunneling through terrain at high velocities
             const check_positions = [_][2]f32{
                 .{ new_x - half_width + 0.01, new_z - half_width + 0.01 },
                 .{ new_x + half_width - 0.01, new_z - half_width + 0.01 },
@@ -246,17 +246,28 @@ pub const Entity = struct {
                 .{ new_x + half_width - 0.01, new_z + half_width - 0.01 },
             };
 
-            for (check_positions) |pos| {
-                const block_x: i32 = @intFromFloat(@floor(pos[0]));
-                const block_z: i32 = @intFromFloat(@floor(pos[1]));
+            // Calculate the range of Y blocks to check (swept collision)
+            const start_feet_y: i32 = @intFromFloat(@floor(self.position.y));
+            const end_feet_y: i32 = @intFromFloat(@floor(new_y));
 
-                if (terrain(block_x, feet_y, block_z)) {
-                    // Hit ground - snap to top of block
-                    new_y = @as(f32, @floatFromInt(feet_y + 1));
-                    self.velocity.y = 0;
-                    self.on_ground = true;
-                    break;
+            // Check all Y layers from top to bottom (start to end) to find first collision
+            var check_y = start_feet_y;
+            var found_ground = false;
+            while (check_y >= end_feet_y) : (check_y -= 1) {
+                for (check_positions) |pos| {
+                    const block_x: i32 = @intFromFloat(@floor(pos[0]));
+                    const block_z: i32 = @intFromFloat(@floor(pos[1]));
+
+                    if (terrain(block_x, check_y, block_z)) {
+                        // Hit ground - snap to top of this block
+                        new_y = @as(f32, @floatFromInt(check_y + 1));
+                        self.velocity.y = 0;
+                        self.on_ground = true;
+                        found_ground = true;
+                        break;
+                    }
                 }
+                if (found_ground) break;
             }
 
             // If not falling but was on ground, check if still on ground (step-down)
