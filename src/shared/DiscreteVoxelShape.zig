@@ -4,6 +4,7 @@
 /// is either filled or empty. The shape has dimensions (xSize, ySize, zSize)
 /// and stores which cells are filled.
 const std = @import("std");
+pub const Axis = @import("Axis.zig").Axis;
 
 /// Abstract discrete voxel shape interface
 /// Concrete implementations: BitSetDiscreteVoxelShape
@@ -177,21 +178,6 @@ pub const DiscreteVoxelShape = struct {
             }
         }
         return true;
-    }
-};
-
-/// Axis enumeration
-pub const Axis = enum(u2) {
-    x = 0,
-    y = 1,
-    z = 2,
-
-    pub fn choose(self: Axis, x: anytype, y: @TypeOf(x), z: @TypeOf(x)) @TypeOf(x) {
-        return switch (self) {
-            .x => x,
-            .y => y,
-            .z => z,
-        };
     }
 };
 

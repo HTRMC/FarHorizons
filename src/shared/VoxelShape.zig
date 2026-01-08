@@ -544,19 +544,57 @@ fn emitBoxEdges(
     consumer(x2, y1, z2, x2, y2, z2, ctx); // Back-right
 }
 
-/// Edge iteration for CubeVoxelShape
-/// Simpler implementation: emit bounding box edges based on the shape's bounds
-fn forAllEdgesDiscrete(shape: *const CubeVoxelShape, consumer: VoxelShape.EdgeConsumer, ctx: *anyopaque) void {
-    // Get bounds in normalized coordinates
-    const bounds = shape.getBounds();
-    emitBoxEdges(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], consumer, ctx);
+/// Context for edge iteration that converts discrete coords to normalized
+const EdgeIterContext = struct {
+    consumer: VoxelShape.EdgeConsumer,
+    user_ctx: *anyopaque,
+    x_size: u8,
+    y_size: u8,
+    z_size: u8,
+};
+
+/// Callback that converts discrete coordinates to normalized (0-1) and forwards to user consumer
+fn discreteToNormalizedEdge(x1: u8, y1: u8, z1: u8, x2: u8, y2: u8, z2: u8, ctx_ptr: *anyopaque) void {
+    const ctx: *const EdgeIterContext = @ptrCast(@alignCast(ctx_ptr));
+
+    // Convert discrete voxel coordinates to normalized (0-1)
+    const fx1 = @as(f64, @floatFromInt(x1)) / @as(f64, @floatFromInt(ctx.x_size));
+    const fy1 = @as(f64, @floatFromInt(y1)) / @as(f64, @floatFromInt(ctx.y_size));
+    const fz1 = @as(f64, @floatFromInt(z1)) / @as(f64, @floatFromInt(ctx.z_size));
+    const fx2 = @as(f64, @floatFromInt(x2)) / @as(f64, @floatFromInt(ctx.x_size));
+    const fy2 = @as(f64, @floatFromInt(y2)) / @as(f64, @floatFromInt(ctx.y_size));
+    const fz2 = @as(f64, @floatFromInt(z2)) / @as(f64, @floatFromInt(ctx.z_size));
+
+    ctx.consumer(fx1, fy1, fz1, fx2, fy2, fz2, ctx.user_ctx);
 }
 
-/// Edge iteration for ArrayVoxelShape
+/// Edge iteration for CubeVoxelShape using proper voxel-based edge detection
+/// This correctly handles complex shapes like stairs by detecting actual shape edges
+fn forAllEdgesDiscrete(shape: *const CubeVoxelShape, consumer: VoxelShape.EdgeConsumer, ctx: *anyopaque) void {
+    var iter_ctx = EdgeIterContext{
+        .consumer = consumer,
+        .user_ctx = ctx,
+        .x_size = shape.shape.base.x_size,
+        .y_size = shape.shape.base.y_size,
+        .z_size = shape.shape.base.z_size,
+    };
+
+    // Use the proper edge detection algorithm with neighbor merging
+    shape.shape.forAllEdges(&discreteToNormalizedEdge, @ptrCast(&iter_ctx), true);
+}
+
+/// Edge iteration for ArrayVoxelShape using proper voxel-based edge detection
 fn forAllEdgesDiscreteArray(shape: *const ArrayVoxelShape, consumer: VoxelShape.EdgeConsumer, ctx: *anyopaque) void {
-    // Get bounds in normalized coordinates
-    const bounds = shape.getBounds();
-    emitBoxEdges(bounds[0], bounds[1], bounds[2], bounds[3], bounds[4], bounds[5], consumer, ctx);
+    var iter_ctx = EdgeIterContext{
+        .consumer = consumer,
+        .user_ctx = ctx,
+        .x_size = shape.shape.base.x_size,
+        .y_size = shape.shape.base.y_size,
+        .z_size = shape.shape.base.z_size,
+    };
+
+    // Use the proper edge detection algorithm with neighbor merging
+    shape.shape.forAllEdges(&discreteToNormalizedEdge, @ptrCast(&iter_ctx), true);
 }
 
 // =====================

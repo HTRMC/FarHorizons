@@ -10,6 +10,7 @@ const std = @import("std");
 const voxel_shape = @import("VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const CubeVoxelShape = voxel_shape.CubeVoxelShape;
+const ArrayVoxelShape = voxel_shape.ArrayVoxelShape;
 const BitSetDiscreteVoxelShape = voxel_shape.BitSetDiscreteVoxelShape;
 const BitSetDiscreteVoxelShape2D = voxel_shape.BitSetDiscreteVoxelShape2D;
 const Direction = voxel_shape.Direction;
@@ -17,6 +18,13 @@ const Axis = voxel_shape.Axis;
 const OctahedralGroup = voxel_shape.OctahedralGroup;
 const rotate = voxel_shape.rotate;
 const rotateHorizontal = voxel_shape.rotateHorizontal;
+
+// IndexMerger for mixed-resolution operations
+const index_merger = @import("IndexMerger.zig");
+const MergerUnion = index_merger.MergerUnion;
+const createMerger = index_merger.createMerger;
+const DiscreteCubeMerger = index_merger.DiscreteCubeMerger;
+const isUniformRange = index_merger.isUniformRange;
 
 /// Boolean operations for shape joining
 pub const BooleanOp = enum {
@@ -353,9 +361,167 @@ pub fn join(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) VoxelShap
         }
     }
 
-    // For different resolutions or types, would need coordinate merging
-    // For now, return first shape as fallback
-    return a.*;
+    // For different resolutions or types, use IndexMerger-based join
+    return joinUnoptimized(a, b, op);
+}
+
+/// Join two shapes with potentially different resolutions using IndexMergers
+/// This is the general case that handles any combination of shape types/resolutions
+fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) VoxelShape {
+    // Determine which shape's emptiness matters for this operation
+    const first_only_matters = switch (op) {
+        .only_first, .not_and => true,
+        else => false,
+    };
+    const second_only_matters = switch (op) {
+        .only_second, .not_and => true,
+        else => false,
+    };
+
+    // Get coordinate lists for each shape on each axis
+    const a_x = getShapeCoords(a, .x);
+    const a_y = getShapeCoords(a, .y);
+    const a_z = getShapeCoords(a, .z);
+    const b_x = getShapeCoords(b, .x);
+    const b_y = getShapeCoords(b, .y);
+    const b_z = getShapeCoords(b, .z);
+
+    // Use page allocator for temporary mergers
+    const allocator = std.heap.page_allocator;
+
+    // Create mergers for each axis with cost optimization
+    var x_merger = createMerger(allocator, 1, a_x, b_x, first_only_matters, second_only_matters) catch return a.*;
+    defer x_merger.deinit();
+
+    const x_size = x_merger.size();
+    var y_merger = createMerger(allocator, x_size - 1, a_y, b_y, first_only_matters, second_only_matters) catch return a.*;
+    defer y_merger.deinit();
+
+    const y_size = y_merger.size();
+    var z_merger = createMerger(allocator, (x_size - 1) * (y_size - 1), a_z, b_z, first_only_matters, second_only_matters) catch return a.*;
+    defer z_merger.deinit();
+
+    const z_size = z_merger.size();
+
+    // Create result discrete shape
+    if (x_size < 2 or y_size < 2 or z_size < 2) {
+        return Shapes.EMPTY;
+    }
+
+    var result_shape = BitSetDiscreteVoxelShape.init(
+        @intCast(x_size - 1),
+        @intCast(y_size - 1),
+        @intCast(z_size - 1),
+    );
+
+    // Get discrete shapes for voxel queries
+    const a_discrete = getDiscreteShape(a);
+    const b_discrete = getDiscreteShape(b);
+
+    for (0..x_size - 1) |xr| {
+        const x1 = mapIndexToFirst(&x_merger, xr);
+        const x2 = mapIndexToSecond(&x_merger, xr);
+
+        for (0..y_size - 1) |yr| {
+            const y1 = mapIndexToFirst(&y_merger, yr);
+            const y2 = mapIndexToSecond(&y_merger, yr);
+
+            for (0..z_size - 1) |zr| {
+                const z1 = mapIndexToFirst(&z_merger, zr);
+                const z2 = mapIndexToSecond(&z_merger, zr);
+
+                const a_full = if (a_discrete) |ad| ad.isFullWide(@intCast(x1), @intCast(y1), @intCast(z1)) else false;
+                const b_full = if (b_discrete) |bd| bd.isFullWide(@intCast(x2), @intCast(y2), @intCast(z2)) else false;
+
+                if (op.apply(a_full, b_full)) {
+                    result_shape.setDirect(@intCast(xr), @intCast(yr), @intCast(zr), true);
+                }
+            }
+        }
+    }
+
+    // Check for empty or full block result
+    if (result_shape.base.isEmpty()) return Shapes.EMPTY;
+    if (result_shape.base.isFullBlock()) return Shapes.BLOCK;
+
+    // Determine result shape type based on mergers
+    const x_coords = x_merger.getList();
+    const y_coords = y_merger.getList();
+    const z_coords = z_merger.getList();
+
+    const all_uniform = isUniformRange(x_coords) and isUniformRange(y_coords) and isUniformRange(z_coords);
+
+    if (all_uniform) {
+        // Can use CubeVoxelShape
+        return .{ .cube = CubeVoxelShape.fromDiscrete(result_shape) };
+    } else {
+        // Need ArrayVoxelShape for non-uniform coordinates
+        const array_shape = ArrayVoxelShape.initWithDiscreteAndCoords(
+            result_shape,
+            x_coords,
+            y_coords,
+            z_coords,
+        ) catch return a.*;
+        return .{ .array = array_shape };
+    }
+}
+
+/// Helper to get coordinate slice from a shape
+fn getShapeCoords(shape: *const VoxelShape, axis: Axis) []const f64 {
+    return switch (shape.*) {
+        .cube => |*c| c.getCoordList(axis).constSlice(),
+        .array => |*arr| arr.getCoords(axis),
+        .empty => &[_]f64{ 0.0, 1.0 },
+        .block => &[_]f64{ 0.0, 1.0 },
+    };
+}
+
+/// Helper to get discrete shape from VoxelShape
+fn getDiscreteShape(shape: *const VoxelShape) ?*const BitSetDiscreteVoxelShape {
+    return switch (shape.*) {
+        .cube => |*c| &c.shape,
+        .array => |*arr| &arr.shape,
+        .empty => null,
+        .block => null,
+    };
+}
+
+/// Map result index to first shape index (simplified - uses merger size ratios)
+fn mapIndexToFirst(merger: *const MergerUnion, result_idx: usize) usize {
+    return switch (merger.*) {
+        .identical => result_idx,
+        .discrete_cube => |*dc| {
+            const scale = dc.result_size / dc.first_size;
+            return result_idx / scale;
+        },
+        .indirect => |*im| {
+            if (result_idx < im.result_len) {
+                const idx = im.first_indices[result_idx];
+                return if (idx >= 0) @intCast(idx) else 0;
+            }
+            return 0;
+        },
+        .non_overlapping => result_idx,
+    };
+}
+
+/// Map result index to second shape index
+fn mapIndexToSecond(merger: *const MergerUnion, result_idx: usize) usize {
+    return switch (merger.*) {
+        .identical => result_idx,
+        .discrete_cube => |*dc| {
+            const scale = dc.result_size / dc.second_size;
+            return result_idx / scale;
+        },
+        .indirect => |*im| {
+            if (result_idx < im.result_len) {
+                const idx = im.second_indices[result_idx];
+                return if (idx >= 0) @intCast(idx) else 0;
+            }
+            return 0;
+        },
+        .non_overlapping => result_idx,
+    };
 }
 
 /// Join two same-resolution CubeVoxelShapes directly

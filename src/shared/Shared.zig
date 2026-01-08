@@ -39,11 +39,14 @@ pub const BlockType = chunk.BlockType;
 pub const BlockEntry = chunk.BlockEntry;
 pub const CHUNK_SIZE = chunk.CHUNK_SIZE;
 
+// Axis and coordinate transformation
+pub const Axis = @import("Axis.zig").Axis;
+pub const AxisCycle = @import("AxisCycle.zig").AxisCycle;
+
 // VoxelShape system for face culling
 pub const voxel_shape = @import("VoxelShape.zig");
 pub const VoxelShape = voxel_shape.VoxelShape;
 pub const Direction = voxel_shape.Direction;
-pub const Axis = voxel_shape.Axis;
 pub const CubeVoxelShape = voxel_shape.CubeVoxelShape;
 pub const ArrayVoxelShape = voxel_shape.ArrayVoxelShape;
 pub const BitSetDiscreteVoxelShape = voxel_shape.BitSetDiscreteVoxelShape;

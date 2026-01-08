@@ -150,6 +150,41 @@ pub const ArrayVoxelShape = struct {
         };
     }
 
+    /// Create from an existing BitSetDiscreteVoxelShape and coordinate slices (for IndexMerger results)
+    pub fn initWithDiscreteAndCoords(
+        discrete: BitSetDiscreteVoxelShape,
+        x_slice: []const f64,
+        y_slice: []const f64,
+        z_slice: []const f64,
+    ) !Self {
+        if (x_slice.len > MAX_COORDS or y_slice.len > MAX_COORDS or z_slice.len > MAX_COORDS) {
+            return error.CoordsTooLong;
+        }
+
+        var x_coords = CoordArray.init();
+        var y_coords = CoordArray.init();
+        var z_coords = CoordArray.init();
+
+        for (x_slice) |v| {
+            x_coords.appendAssumeCapacity(v);
+        }
+        for (y_slice) |v| {
+            y_coords.appendAssumeCapacity(v);
+        }
+        for (z_slice) |v| {
+            z_coords.appendAssumeCapacity(v);
+        }
+
+        return .{
+            .shape = discrete,
+            .x_coords = x_coords,
+            .y_coords = y_coords,
+            .z_coords = z_coords,
+            .face_cache = [_]?BitSetDiscreteVoxelShape2D{null} ** 6,
+            .allocator = std.heap.page_allocator,
+        };
+    }
+
     pub fn deinit(self: *Self) void {
         _ = self;
         // BoundedArrays don't need deallocation

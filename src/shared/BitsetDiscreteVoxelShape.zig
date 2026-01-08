@@ -302,6 +302,180 @@ pub const BitSetDiscreteVoxelShape = struct {
         return result;
     }
 
+    // === Edge Iteration (for block outline rendering) ===
+
+    /// Callback type for edge iteration
+    /// Called with (x1, y1, z1, x2, y2, z2) for each edge in discrete voxel coordinates
+    pub const IntEdgeConsumer = *const fn (x1: u8, y1: u8, z1: u8, x2: u8, y2: u8, z2: u8, ctx: *anyopaque) void;
+
+    /// Iterate over all visible edges of the shape
+    /// This implements Minecraft's edge detection algorithm that correctly handles
+    /// complex shapes like stairs by checking adjacent voxel configurations.
+    ///
+    /// An edge is drawn when:
+    /// - Exactly 1 adjacent voxel is filled (external edge)
+    /// - Exactly 3 adjacent voxels are filled (concave corner)
+    /// - Exactly 2 diagonal voxels are filled (internal corner)
+    ///
+    /// merge_neighbors: if true, collinear edge segments are merged into single lines
+    pub fn forAllEdges(self: *const Self, consumer: IntEdgeConsumer, ctx: *anyopaque, merge_neighbors: bool) void {
+        // Process edges along each axis
+        // X-axis edges (lines parallel to X)
+        self.forAllAxisEdges(consumer, ctx, merge_neighbors, .x);
+        // Y-axis edges (lines parallel to Y)
+        self.forAllAxisEdges(consumer, ctx, merge_neighbors, .y);
+        // Z-axis edges (lines parallel to Z)
+        self.forAllAxisEdges(consumer, ctx, merge_neighbors, .z);
+    }
+
+    /// Process edges along a specific axis
+    /// edge_axis: the axis that edges run parallel to (the "c" axis in the algorithm)
+    fn forAllAxisEdges(
+        self: *const Self,
+        consumer: IntEdgeConsumer,
+        ctx: *anyopaque,
+        merge_neighbors: bool,
+        edge_axis: @import("DiscreteVoxelShape.zig").Axis,
+    ) void {
+        // Get the two perpendicular axes (a, b) and the edge axis (c)
+        // We iterate over all (a, b) positions and scan along c
+        const a_size: usize = switch (edge_axis) {
+            .x => self.base.y_size,
+            .y => self.base.x_size,
+            .z => self.base.x_size,
+        };
+        const b_size: usize = switch (edge_axis) {
+            .x => self.base.z_size,
+            .y => self.base.z_size,
+            .z => self.base.y_size,
+        };
+        const c_size: usize = switch (edge_axis) {
+            .x => self.base.x_size,
+            .y => self.base.y_size,
+            .z => self.base.z_size,
+        };
+
+        // Iterate over all edge positions in the (a, b) plane
+        // Edges can be at positions 0..=a_size and 0..=b_size (on the boundary)
+        var a: usize = 0;
+        while (a <= a_size) : (a += 1) {
+            var b: usize = 0;
+            while (b <= b_size) : (b += 1) {
+                var last_start: i32 = -1;
+
+                // Scan along the c axis
+                var c: usize = 0;
+                while (c <= c_size) : (c += 1) {
+                    // Check the 4 adjacent voxels around this edge position
+                    // The edge is at the corner of 4 voxels: (a-1,b-1), (a-1,b), (a,b-1), (a,b)
+                    var full_sectors: u8 = 0;
+                    var odd_sectors: u8 = 0;
+
+                    var da: usize = 0;
+                    while (da <= 1) : (da += 1) {
+                        var db: usize = 0;
+                        while (db <= 1) : (db += 1) {
+                            // Calculate voxel coordinates with bounds checking
+                            const va = if (a + da > 0) a + da - 1 else continue;
+                            const vb = if (b + db > 0) b + db - 1 else continue;
+
+                            if (self.isFullWideAxis(edge_axis, va, vb, c)) {
+                                full_sectors += 1;
+                                // XOR for diagonal detection: odd if da != db
+                                odd_sectors ^= @intCast(da ^ db);
+                            }
+                        }
+                    }
+
+                    // Determine if this edge should be drawn
+                    // Edge conditions:
+                    // - 1 voxel filled: external boundary edge
+                    // - 3 voxels filled: concave corner (one voxel missing)
+                    // - 2 voxels filled AND diagonal: internal corner (checkerboard pattern)
+                    const should_draw = (full_sectors == 1) or
+                        (full_sectors == 3) or
+                        (full_sectors == 2 and (odd_sectors & 1) == 0);
+
+                    if (should_draw) {
+                        if (merge_neighbors) {
+                            if (last_start == -1) {
+                                last_start = @intCast(c);
+                            }
+                        } else {
+                            // Emit single unit edge
+                            self.emitEdge(consumer, ctx, edge_axis, a, b, c, c + 1);
+                        }
+                    } else if (last_start != -1) {
+                        // End of merged segment
+                        self.emitEdge(consumer, ctx, edge_axis, a, b, @intCast(last_start), c);
+                        last_start = -1;
+                    }
+                }
+
+                // Handle segment that extends to the end
+                if (last_start != -1) {
+                    self.emitEdge(consumer, ctx, edge_axis, a, b, @intCast(last_start), c_size);
+                }
+            }
+        }
+    }
+
+    /// Check if voxel is filled using axis-relative coordinates
+    /// edge_axis is the axis we're iterating edges along
+    fn isFullWideAxis(self: *const Self, edge_axis: @import("DiscreteVoxelShape.zig").Axis, a: usize, b: usize, c: usize) bool {
+        // Convert axis-relative (a, b, c) to absolute (x, y, z) coordinates
+        const coords = switch (edge_axis) {
+            .x => .{ c, a, b }, // X edges: c=x, a=y, b=z
+            .y => .{ a, c, b }, // Y edges: a=x, c=y, b=z
+            .z => .{ a, b, c }, // Z edges: a=x, b=y, c=z
+        };
+
+        const x = coords[0];
+        const y = coords[1];
+        const z = coords[2];
+
+        if (x >= self.base.x_size or y >= self.base.y_size or z >= self.base.z_size) {
+            return false;
+        }
+
+        return self.getDirect(@intCast(x), @intCast(y), @intCast(z));
+    }
+
+    /// Emit an edge to the consumer, converting from axis-relative to absolute coordinates
+    fn emitEdge(
+        self: *const Self,
+        consumer: IntEdgeConsumer,
+        ctx: *anyopaque,
+        edge_axis: @import("DiscreteVoxelShape.zig").Axis,
+        a: usize,
+        b: usize,
+        c1: usize,
+        c2: usize,
+    ) void {
+        _ = self;
+        // Convert axis-relative coordinates to absolute (x, y, z)
+        const start = switch (edge_axis) {
+            .x => .{ c1, a, b },
+            .y => .{ a, c1, b },
+            .z => .{ a, b, c1 },
+        };
+        const end = switch (edge_axis) {
+            .x => .{ c2, a, b },
+            .y => .{ a, c2, b },
+            .z => .{ a, b, c2 },
+        };
+
+        consumer(
+            @intCast(start[0]),
+            @intCast(start[1]),
+            @intCast(start[2]),
+            @intCast(end[0]),
+            @intCast(end[1]),
+            @intCast(end[2]),
+            ctx,
+        );
+    }
+
     /// Create a 2D slice of the shape along an axis at a given position
     /// Returns a new 2D BitSetDiscreteVoxelShape
     pub fn getSlice(self: *const Self, axis: @import("DiscreteVoxelShape.zig").Axis, pos: u8) BitSetDiscreteVoxelShape2D {
@@ -614,4 +788,129 @@ test "BitSetDiscreteVoxelShape rotate INVERT_Y" {
     try std.testing.expect(!rotated.getDirect(0, 1, 0));
     try std.testing.expect(rotated.getDirect(0, 2, 0));
     try std.testing.expect(rotated.getDirect(0, 3, 0));
+}
+
+test "forAllEdges full block" {
+    // A full 2x2x2 block should have 12 edges (like a cube)
+    const shape = BitSetDiscreteVoxelShape.initFull(2, 2, 2);
+
+    var edge_count: usize = 0;
+    const CountContext = struct {
+        count: *usize,
+    };
+    var ctx = CountContext{ .count = &edge_count };
+
+    shape.forAllEdges(struct {
+        fn callback(_: u8, _: u8, _: u8, _: u8, _: u8, _: u8, ctx_ptr: *anyopaque) void {
+            const c: *CountContext = @ptrCast(@alignCast(ctx_ptr));
+            c.count.* += 1;
+        }
+    }.callback, @ptrCast(&ctx), true);
+
+    // A cube has 12 edges
+    try std.testing.expectEqual(@as(usize, 12), edge_count);
+}
+
+test "forAllEdges single voxel" {
+    // A single 1x1x1 voxel should have 12 edges
+    var shape = BitSetDiscreteVoxelShape.init(1, 1, 1);
+    shape.setDirect(0, 0, 0, true);
+
+    var edge_count: usize = 0;
+    const CountContext = struct {
+        count: *usize,
+    };
+    var ctx = CountContext{ .count = &edge_count };
+
+    shape.forAllEdges(struct {
+        fn callback(_: u8, _: u8, _: u8, _: u8, _: u8, _: u8, ctx_ptr: *anyopaque) void {
+            const c: *CountContext = @ptrCast(@alignCast(ctx_ptr));
+            c.count.* += 1;
+        }
+    }.callback, @ptrCast(&ctx), true);
+
+    try std.testing.expectEqual(@as(usize, 12), edge_count);
+}
+
+test "forAllEdges L-shaped stair" {
+    // Create an L-shaped stair in 2x2x2:
+    // Bottom layer (y=0): all 4 voxels filled
+    // Top layer (y=1): only half filled (x=1)
+    // This is like a stair facing east
+    var shape = BitSetDiscreteVoxelShape.init(2, 2, 2);
+
+    // Fill bottom layer
+    shape.setDirect(0, 0, 0, true);
+    shape.setDirect(0, 0, 1, true);
+    shape.setDirect(1, 0, 0, true);
+    shape.setDirect(1, 0, 1, true);
+
+    // Fill top east half (x=1)
+    shape.setDirect(1, 1, 0, true);
+    shape.setDirect(1, 1, 1, true);
+
+    var edge_count: usize = 0;
+    const CountContext = struct {
+        count: *usize,
+    };
+    var ctx = CountContext{ .count = &edge_count };
+
+    shape.forAllEdges(struct {
+        fn callback(_: u8, _: u8, _: u8, _: u8, _: u8, _: u8, ctx_ptr: *anyopaque) void {
+            const c: *CountContext = @ptrCast(@alignCast(ctx_ptr));
+            c.count.* += 1;
+        }
+    }.callback, @ptrCast(&ctx), true);
+
+    // L-shape should have more than 12 edges (full cube)
+    // Expected: 18 edges for L-shape
+    // - Bottom face: 4 edges
+    // - Top faces: 4 (upper) + 2 (step top) = 6 edges
+    // - Vertical edges: 4 (corners) + 2 (step) = 6 edges
+    // - Step horizontal edge: 2 edges
+    // Total: approximately 18 edges (merged)
+    try std.testing.expect(edge_count > 12);
+    try std.testing.expect(edge_count <= 24); // Reasonable upper bound
+}
+
+test "forAllEdges empty shape" {
+    // Empty shape should have no edges
+    const shape = BitSetDiscreteVoxelShape.init(2, 2, 2);
+
+    var edge_count: usize = 0;
+    const CountContext = struct {
+        count: *usize,
+    };
+    var ctx = CountContext{ .count = &edge_count };
+
+    shape.forAllEdges(struct {
+        fn callback(_: u8, _: u8, _: u8, _: u8, _: u8, _: u8, ctx_ptr: *anyopaque) void {
+            const c: *CountContext = @ptrCast(@alignCast(ctx_ptr));
+            c.count.* += 1;
+        }
+    }.callback, @ptrCast(&ctx), true);
+
+    try std.testing.expectEqual(@as(usize, 0), edge_count);
+}
+
+test "forAllEdges slab shape" {
+    // Bottom slab (half height) should have 12 edges like a full block
+    // since it's still a simple box shape
+    const shape = BitSetDiscreteVoxelShape.withFilledBounds(2, 2, 2, 0, 0, 0, 2, 1, 2);
+
+    var edge_count: usize = 0;
+    const CountContext = struct {
+        count: *usize,
+    };
+    var ctx = CountContext{ .count = &edge_count };
+
+    shape.forAllEdges(struct {
+        fn callback(_: u8, _: u8, _: u8, _: u8, _: u8, _: u8, ctx_ptr: *anyopaque) void {
+            const c: *CountContext = @ptrCast(@alignCast(ctx_ptr));
+            c.count.* += 1;
+        }
+    }.callback, @ptrCast(&ctx), true);
+
+    // Slab is still a box, so 12 edges
+    try std.testing.expectEqual(@as(usize, 12), edge_count);
 }

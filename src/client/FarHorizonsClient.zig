@@ -360,10 +360,15 @@ pub const FarHorizonsClient = struct {
 
                 // Update block outline based on hit result
                 if (bi.hit_result) |hit| {
-                    // Get the block's VoxelShape (for now use full block shape)
-                    // TODO: Get actual shape from block registry
-                    const block_shape = shared.voxel_shape.BLOCK;
-                    _ = self.block_outline_renderer.generateOutline(hit.block_pos, &block_shape);
+                    // Get the block at the hit position and its actual VoxelShape
+                    const block_entry = bi.chunk_manager.getBlockAt(
+                        hit.block_pos.x,
+                        hit.block_pos.y,
+                        hit.block_pos.z,
+                    ) orelse shared.BlockEntry.AIR;
+
+                    const block_shape = block_entry.getShape();
+                    _ = self.block_outline_renderer.generateOutline(hit.block_pos, block_shape);
                     self.block_outline_renderer.uploadToRenderSystem(&self.render_system) catch |err| {
                         logger.err("Failed to upload block outline: {}", .{err});
                     };

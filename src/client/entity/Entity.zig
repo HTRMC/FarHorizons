@@ -2,6 +2,7 @@ const std = @import("std");
 const shared = @import("Shared");
 const Vec3 = shared.Vec3;
 const Mat4 = shared.Mat4;
+const Axis = shared.Axis;
 
 // AI imports
 const ai = @import("ai/ai.zig");
@@ -416,114 +417,57 @@ pub const Entity = struct {
         return result;
     }
 
-    /// Collide on X axis - returns how far the entity can actually move
-    fn collideX(self: *Self, terrain: TerrainQuery, x: f32, y: f32, z: f32, half_width: f32, move_x: f32) f32 {
-        if (@abs(move_x) < EPSILON) return 0;
-
-        // Get AABB bounds
-        const min_z = z - half_width + 0.01;
-        const max_z = z + half_width - 0.01;
-        const min_y = y + 0.01;
-        const max_y = y + self.height - 0.01;
-
-        const block_min_z: i32 = @intFromFloat(@floor(min_z));
-        const block_max_z: i32 = @intFromFloat(@floor(max_z));
-        const block_min_y: i32 = @intFromFloat(@floor(min_y));
-        const block_max_y: i32 = @intFromFloat(@floor(max_y));
-
-        var result = move_x;
-
-        if (move_x > 0) {
-            // Moving in +X direction
-            const edge_x = x + half_width;
-            const target_edge = edge_x + move_x;
-            const start_block_x: i32 = @intFromFloat(@floor(edge_x + 0.01));
-            const end_block_x: i32 = @intFromFloat(@floor(target_edge));
-
-            var check_x = start_block_x;
-            while (check_x <= end_block_x) : (check_x += 1) {
-                var blocked = false;
-                var by = block_min_y;
-                while (by <= block_max_y) : (by += 1) {
-                    var bz = block_min_z;
-                    while (bz <= block_max_z) : (bz += 1) {
-                        if (terrain(check_x, by, bz)) {
-                            blocked = true;
-                            break;
-                        }
-                    }
-                    if (blocked) break;
-                }
-                if (blocked) {
-                    const block_face = @as(f32, @floatFromInt(check_x));
-                    result = @min(result, block_face - edge_x - 0.001);
-                    break;
-                }
-            }
-        } else {
-            // Moving in -X direction
-            const edge_x = x - half_width;
-            const target_edge = edge_x + move_x;
-            const start_block_x: i32 = @intFromFloat(@floor(edge_x - 0.01));
-            const end_block_x: i32 = @intFromFloat(@floor(target_edge));
-
-            var check_x = start_block_x;
-            while (check_x >= end_block_x) : (check_x -= 1) {
-                var blocked = false;
-                var by = block_min_y;
-                while (by <= block_max_y) : (by += 1) {
-                    var bz = block_min_z;
-                    while (bz <= block_max_z) : (bz += 1) {
-                        if (terrain(check_x, by, bz)) {
-                            blocked = true;
-                            break;
-                        }
-                    }
-                    if (blocked) break;
-                }
-                if (blocked) {
-                    const block_face = @as(f32, @floatFromInt(check_x + 1));
-                    result = @max(result, block_face - edge_x + 0.001);
-                    break;
-                }
-            }
-        }
-
-        return result;
+    /// Collide on X axis - wrapper for collideHorizontal
+    fn collideX(self: *Self, terrain: TerrainQuery, x: f32, y: f32, z: f32, half_width: f32, distance: f32) f32 {
+        return self.collideHorizontal(terrain, .x, x, y, z, half_width, distance);
     }
 
-    /// Collide on Z axis - returns how far the entity can actually move
-    fn collideZ(self: *Self, terrain: TerrainQuery, x: f32, y: f32, z: f32, half_width: f32, move_z: f32) f32 {
-        if (@abs(move_z) < EPSILON) return 0;
+    /// Collide on Z axis - wrapper for collideHorizontal
+    fn collideZ(self: *Self, terrain: TerrainQuery, x: f32, y: f32, z: f32, half_width: f32, distance: f32) f32 {
+        return self.collideHorizontal(terrain, .z, x, y, z, half_width, distance);
+    }
 
-        // Get AABB bounds
-        const min_x = x - half_width + 0.01;
-        const max_x = x + half_width - 0.01;
+    /// Collide on horizontal axis (X or Z) - returns how far the entity can actually move
+    /// Unified collision code for both X and Z axes
+    fn collideHorizontal(self: *Self, terrain: TerrainQuery, axis: Axis, x: f32, y: f32, z: f32, half_width: f32, distance: f32) f32 {
+        if (@abs(distance) < EPSILON) return 0;
+
+        // Get position on collision axis (A) and perpendicular axis (C)
+        // Y is always vertical, handled separately
+        const pos_a = if (axis == .x) x else z; // Position on collision axis
+        const pos_c = if (axis == .x) z else x; // Position on perpendicular horizontal axis
+
+        // Get AABB bounds on perpendicular axes
+        const min_c = pos_c - half_width + 0.01;
+        const max_c = pos_c + half_width - 0.01;
         const min_y = y + 0.01;
         const max_y = y + self.height - 0.01;
 
-        const block_min_x: i32 = @intFromFloat(@floor(min_x));
-        const block_max_x: i32 = @intFromFloat(@floor(max_x));
+        const block_min_c: i32 = @intFromFloat(@floor(min_c));
+        const block_max_c: i32 = @intFromFloat(@floor(max_c));
         const block_min_y: i32 = @intFromFloat(@floor(min_y));
         const block_max_y: i32 = @intFromFloat(@floor(max_y));
 
-        var result = move_z;
+        var result = distance;
 
-        if (move_z > 0) {
-            // Moving in +Z direction
-            const edge_z = z + half_width;
-            const target_edge = edge_z + move_z;
-            const start_block_z: i32 = @intFromFloat(@floor(edge_z + 0.01));
-            const end_block_z: i32 = @intFromFloat(@floor(target_edge));
+        if (distance > 0) {
+            // Moving in positive direction on collision axis
+            const edge_a = pos_a + half_width;
+            const target_edge = edge_a + distance;
+            const start_block_a: i32 = @intFromFloat(@floor(edge_a + 0.01));
+            const end_block_a: i32 = @intFromFloat(@floor(target_edge));
 
-            var check_z = start_block_z;
-            while (check_z <= end_block_z) : (check_z += 1) {
+            var check_a = start_block_a;
+            while (check_a <= end_block_a) : (check_a += 1) {
                 var blocked = false;
                 var by = block_min_y;
                 while (by <= block_max_y) : (by += 1) {
-                    var bx = block_min_x;
-                    while (bx <= block_max_x) : (bx += 1) {
-                        if (terrain(bx, by, check_z)) {
+                    var bc = block_min_c;
+                    while (bc <= block_max_c) : (bc += 1) {
+                        // Map back to world coordinates: check_a is collision axis, bc is perpendicular
+                        const bx = if (axis == .x) check_a else bc;
+                        const bz = if (axis == .x) bc else check_a;
+                        if (terrain(bx, by, bz)) {
                             blocked = true;
                             break;
                         }
@@ -531,26 +475,29 @@ pub const Entity = struct {
                     if (blocked) break;
                 }
                 if (blocked) {
-                    const block_face = @as(f32, @floatFromInt(check_z));
-                    result = @min(result, block_face - edge_z - 0.001);
+                    const block_face = @as(f32, @floatFromInt(check_a));
+                    result = @min(result, block_face - edge_a - 0.001);
                     break;
                 }
             }
         } else {
-            // Moving in -Z direction
-            const edge_z = z - half_width;
-            const target_edge = edge_z + move_z;
-            const start_block_z: i32 = @intFromFloat(@floor(edge_z - 0.01));
-            const end_block_z: i32 = @intFromFloat(@floor(target_edge));
+            // Moving in negative direction on collision axis
+            const edge_a = pos_a - half_width;
+            const target_edge = edge_a + distance;
+            const start_block_a: i32 = @intFromFloat(@floor(edge_a - 0.01));
+            const end_block_a: i32 = @intFromFloat(@floor(target_edge));
 
-            var check_z = start_block_z;
-            while (check_z >= end_block_z) : (check_z -= 1) {
+            var check_a = start_block_a;
+            while (check_a >= end_block_a) : (check_a -= 1) {
                 var blocked = false;
                 var by = block_min_y;
                 while (by <= block_max_y) : (by += 1) {
-                    var bx = block_min_x;
-                    while (bx <= block_max_x) : (bx += 1) {
-                        if (terrain(bx, by, check_z)) {
+                    var bc = block_min_c;
+                    while (bc <= block_max_c) : (bc += 1) {
+                        // Map back to world coordinates
+                        const bx = if (axis == .x) check_a else bc;
+                        const bz = if (axis == .x) bc else check_a;
+                        if (terrain(bx, by, bz)) {
                             blocked = true;
                             break;
                         }
@@ -558,8 +505,8 @@ pub const Entity = struct {
                     if (blocked) break;
                 }
                 if (blocked) {
-                    const block_face = @as(f32, @floatFromInt(check_z + 1));
-                    result = @max(result, block_face - edge_z + 0.001);
+                    const block_face = @as(f32, @floatFromInt(check_a + 1));
+                    result = @max(result, block_face - edge_a + 0.001);
                     break;
                 }
             }
