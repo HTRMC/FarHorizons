@@ -223,10 +223,16 @@ pub const FarHorizonsClient = struct {
             self.config.location.asset_directory,
         );
 
-        // Set entity texture resources in render system
+        // Set entity texture resources in render system (adult cow texture)
         try self.render_system.setEntityTextureResources(
             self.entity_renderer.?.getTextureView(),
             self.entity_renderer.?.getTextureSampler(),
+        );
+
+        // Set baby entity texture resources (baby cow texture)
+        try self.render_system.setBabyEntityTextureResources(
+            self.entity_renderer.?.getBabyTextureView(),
+            self.entity_renderer.?.getBabyTextureSampler(),
         );
 
         // Spawn a test cow with AI
@@ -411,6 +417,9 @@ pub const FarHorizonsClient = struct {
                     const entity_vb = if (self.entity_renderer) |*er| er.getVertexBuffer() else null;
                     const entity_ib = if (self.entity_renderer) |*er| er.getIndexBuffer() else null;
                     const entity_ic = if (self.entity_renderer) |*er| er.getIndexCount() else 0;
+                    const adult_ic = if (self.entity_renderer) |*er| er.getAdultIndexCount() else 0;
+                    const baby_is = if (self.entity_renderer) |*er| er.getBabyIndexStart() else 0;
+                    const baby_ic = if (self.entity_renderer) |*er| er.getBabyIndexCount() else 0;
 
                     if (vertex_buffer != null and index_buffer != null and draw_commands.len > 0) {
                         self.render_system.drawFrameMultiChunk(
@@ -422,6 +431,9 @@ pub const FarHorizonsClient = struct {
                             entity_vb,
                             entity_ib,
                             entity_ic,
+                            adult_ic,
+                            baby_is,
+                            baby_ic,
                         ) catch |err| {
                             logger.err("Failed to draw multi-chunk frame: {}", .{err});
                         };
@@ -438,6 +450,9 @@ pub const FarHorizonsClient = struct {
                             entity_vb,
                             entity_ib,
                             entity_ic,
+                            adult_ic,
+                            baby_is,
+                            baby_ic,
                         ) catch |err| {
                             logger.err("Failed to draw frame with staging: {}", .{err});
                         };

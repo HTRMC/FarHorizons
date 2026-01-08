@@ -153,9 +153,12 @@ pub const RenderSystem = struct {
     descriptor_pool: vk.VkDescriptorPool = null,
     descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
-    // Entity descriptors
+    // Entity descriptors (adult cow texture)
     entity_descriptor_pool: vk.VkDescriptorPool = null,
     entity_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
+
+    // Baby entity descriptors (baby cow texture)
+    baby_entity_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
     // Command buffers
     command_pool: vk.VkCommandPool = null,
@@ -363,6 +366,12 @@ pub const RenderSystem = struct {
         logger.info("Entity texture resources set and descriptors created", .{});
     }
 
+    /// Set baby entity texture resources (call after setEntityTextureResources)
+    pub fn setBabyEntityTextureResources(self: *Self, image_view: vk.VkImageView, sampler: vk.VkSampler) !void {
+        try self.createBabyEntityDescriptorSets(image_view, sampler);
+        logger.info("Baby entity texture resources set and descriptors created", .{});
+    }
+
     /// Get Vulkan device (for TextureManager)
     pub fn getDevice(self: *const Self) vk.VkDevice {
         return self.device;
@@ -504,8 +513,14 @@ pub const RenderSystem = struct {
         entity_vertex_buffer: ?vk.VkBuffer = null,
         /// Entity index buffer
         entity_index_buffer: ?vk.VkBuffer = null,
-        /// Entity index count
+        /// Entity index count (total)
         entity_index_count: u32 = 0,
+        /// Adult cow index count (drawn with adult texture)
+        adult_index_count: u32 = 0,
+        /// Baby cow index start offset
+        baby_index_start: u32 = 0,
+        /// Baby cow index count (drawn with baby texture)
+        baby_index_count: u32 = 0,
     };
 
     /// Unified command buffer recording
@@ -610,24 +625,34 @@ pub const RenderSystem = struct {
             vkCmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
         }
 
-        // Draw entities (mobs)
+        // Draw entities (mobs) - adults first with adult texture, then babies with baby texture
         if (params.entity_vertex_buffer != null and params.entity_index_buffer != null and params.entity_index_count > 0) {
             // Bind entity pipeline (uses same descriptor set layout)
             if (self.entity_pipeline) |entity_pipeline| {
                 vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, entity_pipeline);
-
-                // Bind entity descriptor set (with entity texture)
-                if (self.entity_descriptor_sets[self.current_frame] != null) {
-                    const entity_descriptor_sets_arr = [_]vk.VkDescriptorSet{self.entity_descriptor_sets[self.current_frame]};
-                    vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &entity_descriptor_sets_arr, 0, null);
-                }
 
                 const entity_vertex_buffers = [_]vk.VkBuffer{params.entity_vertex_buffer.?};
                 const entity_offsets = [_]vk.VkDeviceSize{0};
                 vkCmdBindVertexBuffers(command_buffer, 0, 1, &entity_vertex_buffers, &entity_offsets);
                 vkCmdBindIndexBuffer(command_buffer, params.entity_index_buffer.?, 0, vk.VK_INDEX_TYPE_UINT32);
 
-                vkCmdDrawIndexed(command_buffer, params.entity_index_count, 1, 0, 0, 0);
+                // Draw adult cows with adult texture
+                if (params.adult_index_count > 0) {
+                    if (self.entity_descriptor_sets[self.current_frame] != null) {
+                        const entity_descriptor_sets_arr = [_]vk.VkDescriptorSet{self.entity_descriptor_sets[self.current_frame]};
+                        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &entity_descriptor_sets_arr, 0, null);
+                    }
+                    vkCmdDrawIndexed(command_buffer, params.adult_index_count, 1, 0, 0, 0);
+                }
+
+                // Draw baby cows with baby texture
+                if (params.baby_index_count > 0) {
+                    if (self.baby_entity_descriptor_sets[self.current_frame] != null) {
+                        const baby_descriptor_sets_arr = [_]vk.VkDescriptorSet{self.baby_entity_descriptor_sets[self.current_frame]};
+                        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &baby_descriptor_sets_arr, 0, null);
+                    }
+                    vkCmdDrawIndexed(command_buffer, params.baby_index_count, 1, params.baby_index_start, 0, 0);
+                }
 
                 // Switch back to main graphics pipeline for subsequent drawing
                 vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
@@ -841,6 +866,9 @@ pub const RenderSystem = struct {
         entity_vertex_buffer: ?vk.VkBuffer,
         entity_index_buffer: ?vk.VkBuffer,
         entity_index_count: u32,
+        adult_index_count: u32,
+        baby_index_start: u32,
+        baby_index_count: u32,
     ) !void {
         _ = staging_buffer;
 
@@ -853,6 +881,9 @@ pub const RenderSystem = struct {
             .entity_vertex_buffer = entity_vertex_buffer,
             .entity_index_buffer = entity_index_buffer,
             .entity_index_count = entity_index_count,
+            .adult_index_count = adult_index_count,
+            .baby_index_start = baby_index_start,
+            .baby_index_count = baby_index_count,
         });
         try self.endFrame(ctx);
     }
@@ -2945,14 +2976,15 @@ pub const RenderSystem = struct {
     fn createEntityDescriptorPool(self: *Self) !void {
         const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
 
+        // Allocate enough for both adult and baby entity descriptor sets
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT * 2, // Adult + Baby
             },
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT * 2, // Adult + Baby
             },
         };
 
@@ -2960,7 +2992,7 @@ pub const RenderSystem = struct {
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .maxSets = MAX_FRAMES_IN_FLIGHT,
+            .maxSets = MAX_FRAMES_IN_FLIGHT * 2, // Adult + Baby
             .poolSizeCount = pool_sizes.len,
             .pPoolSizes = &pool_sizes,
         };
@@ -3035,6 +3067,71 @@ pub const RenderSystem = struct {
         }
 
         logger.info("Entity descriptor sets created", .{});
+    }
+
+    fn createBabyEntityDescriptorSets(self: *Self, texture_view: vk.VkImageView, texture_sampler: vk.VkSampler) !void {
+        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+
+        const layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout} ** MAX_FRAMES_IN_FLIGHT;
+
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.entity_descriptor_pool,
+            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+            .pSetLayouts = &layouts,
+        };
+
+        if (vkAllocateDescriptorSets(self.device, &alloc_info, &self.baby_entity_descriptor_sets) != vk.VK_SUCCESS) {
+            return error.DescriptorSetAllocationFailed;
+        }
+
+        // Configure each descriptor set to point to its uniform buffer and baby entity texture
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const buffer_info = vk.VkDescriptorBufferInfo{
+                .buffer = self.uniform_buffers[i],
+                .offset = 0,
+                .range = @sizeOf(UniformBufferObject),
+            };
+
+            const image_info = vk.VkDescriptorImageInfo{
+                .sampler = texture_sampler,
+                .imageView = texture_view,
+                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
+
+            const descriptor_writes = [_]vk.VkWriteDescriptorSet{
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = self.baby_entity_descriptor_sets[i],
+                    .dstBinding = 0,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    .pImageInfo = null,
+                    .pBufferInfo = &buffer_info,
+                    .pTexelBufferView = null,
+                },
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = self.baby_entity_descriptor_sets[i],
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &image_info,
+                    .pBufferInfo = null,
+                    .pTexelBufferView = null,
+                },
+            };
+
+            vkUpdateDescriptorSets(self.device, descriptor_writes.len, &descriptor_writes, 0, null);
+        }
+
+        logger.info("Baby entity descriptor sets created", .{});
     }
 
     fn findMemoryType(self: *Self, type_filter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
