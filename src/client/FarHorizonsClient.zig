@@ -42,7 +42,7 @@ const EntityManager = entity.EntityManager;
 const EntityType = entity.EntityType;
 const Entity = entity.Entity;
 const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
-const Cow = @import("entity/Cow.zig").Cow;
+const Cow = @import("entity/animal/cow/Cow.zig").Cow;
 
 // Terrain query for entity physics
 var terrain_query_cm: ?*ChunkManager = null;
