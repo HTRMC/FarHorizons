@@ -365,19 +365,24 @@ pub const Entity = struct {
             }
         }
 
-        // === Ground contact check ===
-        // Even if we didn't move in Y, check if we're actually on ground
-        // This fixes the flickering on_ground issue when standing still
-        if (!self.on_ground) {
-            const GROUND_PROBE: f32 = 0.01; // Small probe distance
-            const ground_check = self.collideY(terrain, current_x, current_y, current_z, half_width, -GROUND_PROBE);
-            if (self.entity_type == .cow) {
-                logger.info("GROUND PROBE: y={d:.3} probe={d:.6} result={}", .{ current_y, ground_check, @abs(ground_check) < GROUND_PROBE * 0.5 });
+        // === Ground contact verification ===
+        // Always verify ground contact by probing downward
+        // Probe distance must be at least STEP_HEIGHT to detect ground after walking off edges
+        const GROUND_PROBE: f32 = STEP_HEIGHT + 0.02; // Slightly more than step height
+        const ground_check = self.collideY(terrain, current_x, current_y, current_z, half_width, -GROUND_PROBE);
+
+        // If we hit something within step height, we're on ground
+        // If we can fall the full probe distance, there's no ground
+        if (@abs(ground_check) < STEP_HEIGHT) {
+            // Found ground within step height - snap down to it if needed
+            if (@abs(ground_check) > EPSILON) {
+                current_y += ground_check;
             }
-            if (@abs(ground_check) < GROUND_PROBE * 0.5) {
-                // Couldn't move down much - we're on ground
-                self.on_ground = true;
-            }
+            self.on_ground = true;
+            self.velocity.y = 0;
+        } else if (self.on_ground) {
+            // Was on ground but now there's nothing below - start falling
+            self.on_ground = false;
         }
 
         // Update position
