@@ -112,8 +112,14 @@ pub const Entity = struct {
     const DRAG: f32 = 0.98; // Velocity multiplier per tick
     const GROUND_FRICTION: f32 = 0.91; // Horizontal friction when on ground
 
-    /// Terrain query function type - returns true if block at position is solid
-    pub const TerrainQuery = *const fn (x: i32, y: i32, z: i32) bool;
+    /// VoxelShape import for collision
+    const VoxelShape = @import("Shared").VoxelShape;
+    const VoxelShapeAABB = VoxelShape.AABB;
+    const VoxelShapeAxis = @import("Shared").voxel_shape.Axis;
+
+    /// Terrain query function type - returns VoxelShape for block at position
+    /// Like Minecraft's BlockState.getCollisionShape()
+    pub const TerrainQuery = *const fn (x: i32, y: i32, z: i32) VoxelShape;
 
     /// Update entity state (call once per tick)
     /// player_pos: Position of the player (or null if no player tracking)
@@ -346,78 +352,58 @@ pub const Entity = struct {
     fn collideY(self: *Self, terrain: TerrainQuery, x: f32, y: f32, z: f32, half_width: f32, move_y: f32) f32 {
         if (@abs(move_y) < EPSILON) return 0;
 
-        // Get AABB corners for collision checking
-        const min_x = x - half_width + 0.01;
-        const max_x = x + half_width - 0.01;
-        const min_z = z - half_width + 0.01;
-        const max_z = z + half_width - 0.01;
+        // Entity AABB bounds
+        const min_x = x - half_width;
+        const max_x = x + half_width;
+        const min_y = y;
+        const max_y = y + self.height;
+        const min_z = z - half_width;
+        const max_z = z + half_width;
+
+        // Expand AABB in movement direction to find all potentially colliding blocks
+        const expanded_min_y = if (move_y < 0) min_y + move_y else min_y;
+        const expanded_max_y = if (move_y > 0) max_y + move_y else max_y;
 
         const block_min_x: i32 = @intFromFloat(@floor(min_x));
         const block_max_x: i32 = @intFromFloat(@floor(max_x));
+        const block_min_y: i32 = @intFromFloat(@floor(expanded_min_y));
+        const block_max_y: i32 = @intFromFloat(@floor(expanded_max_y));
         const block_min_z: i32 = @intFromFloat(@floor(min_z));
         const block_max_z: i32 = @intFromFloat(@floor(max_z));
 
-        var result = move_y;
+        var result: f64 = move_y;
 
-        if (move_y < 0) {
-            // Moving down - check blocks below feet
-            const target_y = y + move_y;
-            const start_block_y: i32 = @intFromFloat(@floor(y - 0.01));
-            const end_block_y: i32 = @intFromFloat(@floor(target_y));
+        // Check all blocks in the expanded region
+        var by = block_min_y;
+        while (by <= block_max_y) : (by += 1) {
+            var bx = block_min_x;
+            while (bx <= block_max_x) : (bx += 1) {
+                var bz = block_min_z;
+                while (bz <= block_max_z) : (bz += 1) {
+                    const shape = terrain(bx, by, bz);
+                    if (!shape.isEmpty()) {
+                        // Create AABB relative to block position
+                        const block_x: f64 = @floatFromInt(bx);
+                        const block_y: f64 = @floatFromInt(by);
+                        const block_z: f64 = @floatFromInt(bz);
 
-            // Sweep from current to target
-            var check_y = start_block_y;
-            while (check_y >= end_block_y) : (check_y -= 1) {
-                var blocked = false;
-                var bx = block_min_x;
-                while (bx <= block_max_x) : (bx += 1) {
-                    var bz = block_min_z;
-                    while (bz <= block_max_z) : (bz += 1) {
-                        if (terrain(bx, check_y, bz)) {
-                            blocked = true;
-                            break;
-                        }
+                        const relative_aabb = VoxelShapeAABB{
+                            .min_x = min_x - block_x,
+                            .min_y = min_y - block_y,
+                            .min_z = min_z - block_z,
+                            .max_x = max_x - block_x,
+                            .max_y = max_y - block_y,
+                            .max_z = max_z - block_z,
+                        };
+
+                        // Use VoxelShape.collide for accurate collision
+                        result = shape.collide(.y, relative_aabb, result);
                     }
-                    if (blocked) break;
-                }
-                if (blocked) {
-                    // Limit movement to just above this block
-                    const block_top = @as(f32, @floatFromInt(check_y + 1));
-                    result = @max(result, block_top - y);
-                    break;
-                }
-            }
-        } else {
-            // Moving up - check blocks above head
-            const head_y = y + self.height;
-            const target_head_y = head_y + move_y;
-            const start_block_y: i32 = @intFromFloat(@floor(head_y + 0.01));
-            const end_block_y: i32 = @intFromFloat(@floor(target_head_y));
-
-            var check_y = start_block_y;
-            while (check_y <= end_block_y) : (check_y += 1) {
-                var blocked = false;
-                var bx = block_min_x;
-                while (bx <= block_max_x) : (bx += 1) {
-                    var bz = block_min_z;
-                    while (bz <= block_max_z) : (bz += 1) {
-                        if (terrain(bx, check_y, bz)) {
-                            blocked = true;
-                            break;
-                        }
-                    }
-                    if (blocked) break;
-                }
-                if (blocked) {
-                    // Limit movement to just below this block
-                    const block_bottom = @as(f32, @floatFromInt(check_y));
-                    result = @min(result, block_bottom - head_y);
-                    break;
                 }
             }
         }
 
-        return result;
+        return @floatCast(result);
     }
 
     /// Collide on X axis - wrapper for collideHorizontal
@@ -431,91 +417,71 @@ pub const Entity = struct {
     }
 
     /// Collide on horizontal axis (X or Z) - returns how far the entity can actually move
-    /// Unified collision code for both X and Z axes
+    /// Unified collision code for both X and Z axes, using VoxelShape collision
     fn collideHorizontal(self: *Self, terrain: TerrainQuery, axis: Axis, x: f32, y: f32, z: f32, half_width: f32, distance: f32) f32 {
         if (@abs(distance) < EPSILON) return 0;
 
-        // Get position on collision axis (A) and perpendicular axis (C)
-        // Y is always vertical, handled separately
-        const pos_a = if (axis == .x) x else z; // Position on collision axis
-        const pos_c = if (axis == .x) z else x; // Position on perpendicular horizontal axis
+        // Entity AABB bounds
+        const min_x = x - half_width;
+        const max_x = x + half_width;
+        const min_y = y;
+        const max_y = y + self.height;
+        const min_z = z - half_width;
+        const max_z = z + half_width;
 
-        // Get AABB bounds on perpendicular axes
-        const min_c = pos_c - half_width + 0.01;
-        const max_c = pos_c + half_width - 0.01;
-        const min_y = y + 0.01;
-        const max_y = y + self.height - 0.01;
+        // Expand AABB in movement direction
+        const expanded_min_x = if (axis == .x and distance < 0) min_x + distance else min_x;
+        const expanded_max_x = if (axis == .x and distance > 0) max_x + distance else max_x;
+        const expanded_min_z = if (axis == .z and distance < 0) min_z + distance else min_z;
+        const expanded_max_z = if (axis == .z and distance > 0) max_z + distance else max_z;
 
-        const block_min_c: i32 = @intFromFloat(@floor(min_c));
-        const block_max_c: i32 = @intFromFloat(@floor(max_c));
+        const block_min_x: i32 = @intFromFloat(@floor(expanded_min_x));
+        const block_max_x: i32 = @intFromFloat(@floor(expanded_max_x));
         const block_min_y: i32 = @intFromFloat(@floor(min_y));
         const block_max_y: i32 = @intFromFloat(@floor(max_y));
+        const block_min_z: i32 = @intFromFloat(@floor(expanded_min_z));
+        const block_max_z: i32 = @intFromFloat(@floor(expanded_max_z));
 
-        var result = distance;
+        var result: f64 = distance;
 
-        if (distance > 0) {
-            // Moving in positive direction on collision axis
-            const edge_a = pos_a + half_width;
-            const target_edge = edge_a + distance;
-            const start_block_a: i32 = @intFromFloat(@floor(edge_a + 0.01));
-            const end_block_a: i32 = @intFromFloat(@floor(target_edge));
+        // Convert local Axis to VoxelShape Axis
+        const shape_axis: VoxelShapeAxis = switch (axis) {
+            .x => .x,
+            .y => .y,
+            .z => .z,
+        };
 
-            var check_a = start_block_a;
-            while (check_a <= end_block_a) : (check_a += 1) {
-                var blocked = false;
-                var by = block_min_y;
-                while (by <= block_max_y) : (by += 1) {
-                    var bc = block_min_c;
-                    while (bc <= block_max_c) : (bc += 1) {
-                        // Map back to world coordinates: check_a is collision axis, bc is perpendicular
-                        const bx = if (axis == .x) check_a else bc;
-                        const bz = if (axis == .x) bc else check_a;
-                        if (terrain(bx, by, bz)) {
-                            blocked = true;
-                            break;
-                        }
+        // Check all blocks in the expanded region
+        var by = block_min_y;
+        while (by <= block_max_y) : (by += 1) {
+            var bx = block_min_x;
+            while (bx <= block_max_x) : (bx += 1) {
+                var bz = block_min_z;
+                while (bz <= block_max_z) : (bz += 1) {
+                    const shape = terrain(bx, by, bz);
+                    if (!shape.isEmpty()) {
+                        // Create AABB relative to block position
+                        const block_x: f64 = @floatFromInt(bx);
+                        const block_y: f64 = @floatFromInt(by);
+                        const block_z: f64 = @floatFromInt(bz);
+
+                        const relative_aabb = VoxelShapeAABB{
+                            .min_x = min_x - block_x,
+                            .min_y = min_y - block_y,
+                            .min_z = min_z - block_z,
+                            .max_x = max_x - block_x,
+                            .max_y = max_y - block_y,
+                            .max_z = max_z - block_z,
+                        };
+
+                        // Use VoxelShape.collide for accurate collision
+                        result = shape.collide(shape_axis, relative_aabb, result);
                     }
-                    if (blocked) break;
-                }
-                if (blocked) {
-                    const block_face = @as(f32, @floatFromInt(check_a));
-                    result = @min(result, block_face - edge_a - 0.001);
-                    break;
-                }
-            }
-        } else {
-            // Moving in negative direction on collision axis
-            const edge_a = pos_a - half_width;
-            const target_edge = edge_a + distance;
-            const start_block_a: i32 = @intFromFloat(@floor(edge_a - 0.01));
-            const end_block_a: i32 = @intFromFloat(@floor(target_edge));
-
-            var check_a = start_block_a;
-            while (check_a >= end_block_a) : (check_a -= 1) {
-                var blocked = false;
-                var by = block_min_y;
-                while (by <= block_max_y) : (by += 1) {
-                    var bc = block_min_c;
-                    while (bc <= block_max_c) : (bc += 1) {
-                        // Map back to world coordinates
-                        const bx = if (axis == .x) check_a else bc;
-                        const bz = if (axis == .x) bc else check_a;
-                        if (terrain(bx, by, bz)) {
-                            blocked = true;
-                            break;
-                        }
-                    }
-                    if (blocked) break;
-                }
-                if (blocked) {
-                    const block_face = @as(f32, @floatFromInt(check_a + 1));
-                    result = @max(result, block_face - edge_a + 0.001);
-                    break;
                 }
             }
         }
 
-        return result;
+        return @floatCast(result);
     }
 
     /// Rotate body toward head direction, keeping head within max_angle of body

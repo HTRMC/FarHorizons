@@ -45,14 +45,14 @@ const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
 const EntityTextureManager = @import("entity/EntityTextureManager.zig").EntityTextureManager;
 const Cow = @import("entity/animal/cow/Cow.zig").Cow;
 
-// Terrain query for entity physics
+// Terrain query for entity physics - returns VoxelShape for accurate collision
 var terrain_query_cm: ?*ChunkManager = null;
 
-fn terrainQueryFn(x: i32, y: i32, z: i32) bool {
+fn terrainQueryFn(x: i32, y: i32, z: i32) shared.VoxelShape {
     if (terrain_query_cm) |cm| {
-        return cm.isBlockSolid(x, y, z);
+        return cm.getCollisionShape(x, y, z);
     }
-    return false;
+    return shared.voxel_shape.EMPTY;
 }
 
 // VoxelShape culling

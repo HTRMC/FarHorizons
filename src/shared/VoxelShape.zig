@@ -247,6 +247,60 @@ pub const VoxelShape = union(enum) {
     }
 
     // =====================
+    // Collision Detection
+    // =====================
+
+    /// AABB for collision detection (min/max for each axis)
+    pub const AABB = struct {
+        min_x: f64,
+        min_y: f64,
+        min_z: f64,
+        max_x: f64,
+        max_y: f64,
+        max_z: f64,
+
+        pub fn minAxis(self: AABB, axis: Axis) f64 {
+            return switch (axis) {
+                .x => self.min_x,
+                .y => self.min_y,
+                .z => self.min_z,
+            };
+        }
+
+        pub fn maxAxis(self: AABB, axis: Axis) f64 {
+            return switch (axis) {
+                .x => self.max_x,
+                .y => self.max_y,
+                .z => self.max_z,
+            };
+        }
+    };
+
+    /// Calculate how far an AABB can move along an axis before hitting this shape.
+    /// Like Minecraft's VoxelShape.collide()
+    ///
+    /// The shape is assumed to be at block position (0,0,0) to (1,1,1).
+    /// The AABB coordinates are relative to the block position.
+    /// Returns the clamped movement distance.
+    pub fn collide(self: *const Self, axis: Axis, aabb: AABB, distance: f64) f64 {
+        if (self.isEmpty()) return distance;
+        if (@abs(distance) < 1.0e-7) return 0.0;
+
+        // For full block, use simple AABB collision
+        if (self.isFullBlock()) {
+            return collideWithBox(0.0, 0.0, 0.0, 1.0, 1.0, 1.0, axis, aabb, distance);
+        }
+
+        // For complex shapes, use bounds-based collision
+        const bounds = self.getBounds();
+        return collideWithBox(
+            bounds[0], bounds[1], bounds[2],
+            bounds[3], bounds[4], bounds[5],
+            axis, aabb, distance,
+        );
+    }
+
+    // =====================
     // Voxel Queries
     // =====================
 
@@ -737,6 +791,64 @@ pub fn blockOccludes(shape: *const VoxelShape, occluder: *const VoxelShape, dire
 
 fn fuzzyEquals(a: f64, b: f64, eps: f64) bool {
     return @abs(a - b) < eps;
+}
+
+/// Calculate how far an AABB can move along an axis before hitting a box.
+/// Like Minecraft's AABB collision but for a single box.
+fn collideWithBox(
+    box_min_x: f64,
+    box_min_y: f64,
+    box_min_z: f64,
+    box_max_x: f64,
+    box_max_y: f64,
+    box_max_z: f64,
+    axis: Axis,
+    aabb: VoxelShape.AABB,
+    distance: f64,
+) f64 {
+    const eps = 1.0e-7;
+
+    // Check overlap on perpendicular axes
+    const overlaps = switch (axis) {
+        .x => aabb.max_y > box_min_y + eps and aabb.min_y < box_max_y - eps and
+            aabb.max_z > box_min_z + eps and aabb.min_z < box_max_z - eps,
+        .y => aabb.max_x > box_min_x + eps and aabb.min_x < box_max_x - eps and
+            aabb.max_z > box_min_z + eps and aabb.min_z < box_max_z - eps,
+        .z => aabb.max_x > box_min_x + eps and aabb.min_x < box_max_x - eps and
+            aabb.max_y > box_min_y + eps and aabb.min_y < box_max_y - eps,
+    };
+
+    if (!overlaps) return distance;
+
+    // Get box and AABB bounds along the collision axis
+    const box_min = switch (axis) {
+        .x => box_min_x,
+        .y => box_min_y,
+        .z => box_min_z,
+    };
+    const box_max = switch (axis) {
+        .x => box_max_x,
+        .y => box_max_y,
+        .z => box_max_z,
+    };
+    const aabb_min = aabb.minAxis(axis);
+    const aabb_max = aabb.maxAxis(axis);
+
+    if (distance > 0) {
+        // Moving in positive direction - check if box is ahead
+        const gap = box_min - aabb_max;
+        if (gap >= -eps and gap < distance) {
+            return @max(0, gap - eps);
+        }
+    } else if (distance < 0) {
+        // Moving in negative direction - check if box is behind
+        const gap = box_max - aabb_min;
+        if (gap <= eps and gap > distance) {
+            return @min(0, gap + eps);
+        }
+    }
+
+    return distance;
 }
 
 test "blockOccludes - full blocks" {

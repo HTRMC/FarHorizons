@@ -664,6 +664,16 @@ pub const ChunkManager = struct {
         return !entry.isAir() and entry.isSolid();
     }
 
+    /// Get the collision shape for a block at world position
+    /// Returns VoxelShape.EMPTY for air or out-of-bounds positions
+    /// Like Minecraft's BlockState.getCollisionShape()
+    pub fn getCollisionShape(self: *Self, world_x: i32, world_y: i32, world_z: i32) shared.VoxelShape {
+        const entry = self.getBlockAtForCollision(world_x, world_y, world_z) orelse return shared.voxel_shape.EMPTY;
+        if (entry.isAir()) return shared.voxel_shape.EMPTY;
+        // Get the shape from the block registry
+        return shared.block.getShape(entry.id, entry.state).*;
+    }
+
     /// Helper to remesh a neighbor chunk if loaded
     fn remeshNeighborIfLoaded(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
         const neighbor_pos = ChunkPos{ .x = chunk_x, .z = chunk_z, .section_y = section_y };
