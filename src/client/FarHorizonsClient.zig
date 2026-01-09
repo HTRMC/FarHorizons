@@ -265,8 +265,10 @@ pub const FarHorizonsClient = struct {
             baby_cow_tex_index,
         );
 
-        // Spawn a test cow with AI
-        const cow_id = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 10, .y = 5, .z = 10 });
+        // Spawn a test cow with AI - position outside slab grid to test step-up
+        // Slab grid is at x=10-13, z=10-13, y=1 (bottom slabs)
+        // Cow spawns at x=9, z=9 so it lands on stone at y=1 and must step UP onto slabs
+        const cow_id = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 9, .y = 5, .z = 9 });
 
         // Set up AI for the cow (like MC's AbstractCow.registerGoals)
         if (self.entity_manager.?.get(cow_id)) |cow_entity| {
