@@ -257,9 +257,12 @@ pub const ModelPart = struct {
         const tz = self.pose.z / 16.0;
 
         // Rotation (pose + runtime animation)
-        const rx = self.pose.x_rot + self.x_rot;
+        // X and Z rotations are negated to compensate for the Y-flip in box coordinates.
+        // Mathematically: Y_flip * R_x(θ) * Y_flip = R_x(-θ), same for R_z.
+        // Y rotation is unaffected since the rotation axis is parallel to the flip plane.
+        const rx = -(self.pose.x_rot + self.x_rot);
         const ry = self.pose.y_rot + self.y_rot;
-        const rz = self.pose.z_rot + self.z_rot;
+        const rz = -(self.pose.z_rot + self.z_rot);
 
         return buildTransformMatrix(tx, ty, tz, rx, ry, rz);
     }
