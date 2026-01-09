@@ -42,6 +42,7 @@ const EntityManager = entity.EntityManager;
 const EntityType = entity.EntityType;
 const Entity = entity.Entity;
 const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
+const EntityTextureManager = @import("entity/EntityTextureManager.zig").EntityTextureManager;
 const Cow = @import("entity/animal/cow/Cow.zig").Cow;
 
 // Terrain query for entity physics
@@ -85,6 +86,7 @@ pub const FarHorizonsClient = struct {
     block_outline_renderer: BlockOutlineRenderer,
     entity_manager: ?EntityManager,
     entity_renderer: ?EntityRenderer,
+    entity_texture_manager: ?EntityTextureManager,
 
     // Cow AI (like MC's AbstractCow with registerGoals)
     cow: ?Cow,
@@ -119,6 +121,7 @@ pub const FarHorizonsClient = struct {
             .block_outline_renderer = BlockOutlineRenderer.init(),
             .entity_manager = null,
             .entity_renderer = null,
+            .entity_texture_manager = null,
             .cow = null,
             .baby_cow = null,
         };
@@ -215,24 +218,51 @@ pub const FarHorizonsClient = struct {
         };
         var tick_accumulator: f64 = 0;
 
-        // Initialize entity system
+        // Initialize entity system with bindless textures
         self.entity_manager = EntityManager.init(self.allocator);
-        self.entity_renderer = try EntityRenderer.init(
+
+        // Initialize bindless entity texture manager
+        self.entity_texture_manager = try EntityTextureManager.init(
+            self.allocator,
+            self.render_system.getDevice(),
+            self.render_system.getPhysicalDevice(),
+            self.render_system.getCommandPool(),
+            self.render_system.getGraphicsQueue(),
+        );
+
+        // Load entity textures into the bindless array
+        const cow_tex_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/farhorizons/textures/entity/cow/cow.png",
+            .{self.config.location.asset_directory},
+        );
+        defer self.allocator.free(cow_tex_path);
+
+        const baby_cow_tex_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/farhorizons/textures/entity/cow/cow_baby.png",
+            .{self.config.location.asset_directory},
+        );
+        defer self.allocator.free(baby_cow_tex_path);
+
+        const cow_tex_index = try self.entity_texture_manager.?.loadTexture("cow", cow_tex_path);
+        const baby_cow_tex_index = try self.entity_texture_manager.?.loadTexture("cow_baby", baby_cow_tex_path);
+
+        logger.info("Loaded cow texture at index {}, baby cow at index {}", .{ cow_tex_index, baby_cow_tex_index });
+
+        // Set bindless resources on render system and initialize entity pipeline
+        self.render_system.setBindlessEntityResources(
+            self.entity_texture_manager.?.getDescriptorSetLayout(),
+            self.entity_texture_manager.?.getDescriptorSet(),
+        );
+        try self.render_system.initEntityPipeline();
+
+        // Initialize entity renderer with texture indices
+        self.entity_renderer = try EntityRenderer.initBindless(
             self.allocator,
             self.render_system.getGpuDevice().?,
-            self.config.location.asset_directory,
-        );
-
-        // Set entity texture resources in render system (adult cow texture)
-        try self.render_system.setEntityTextureResources(
-            self.entity_renderer.?.getTextureView(),
-            self.entity_renderer.?.getTextureSampler(),
-        );
-
-        // Set baby entity texture resources (baby cow texture)
-        try self.render_system.setBabyEntityTextureResources(
-            self.entity_renderer.?.getBabyTextureView(),
-            self.entity_renderer.?.getBabyTextureSampler(),
+            cow_tex_index,
+            baby_cow_tex_index,
         );
 
         // Spawn a test cow with AI
@@ -488,6 +518,9 @@ pub const FarHorizonsClient = struct {
         }
         if (self.entity_manager) |*em| {
             em.deinit();
+        }
+        if (self.entity_texture_manager) |*etm| {
+            etm.deinit();
         }
 
         logger.info("Main loop ended, shutting down", .{});

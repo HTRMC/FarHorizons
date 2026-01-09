@@ -33,17 +33,22 @@ pub const EntityRenderer = struct {
     index_buffer: vk.VkBuffer = null,
     index_buffer_memory: vk.VkDeviceMemory = null,
 
-    // Adult cow texture
+    // Adult cow texture (legacy non-bindless)
     texture_image: vk.VkImage = null,
     texture_memory: vk.VkDeviceMemory = null,
     texture_view: vk.VkImageView = null,
     texture_sampler: vk.VkSampler = null,
 
-    // Baby cow texture
+    // Baby cow texture (legacy non-bindless)
     baby_texture_image: vk.VkImage = null,
     baby_texture_memory: vk.VkDeviceMemory = null,
     baby_texture_view: vk.VkImageView = null,
     baby_texture_sampler: vk.VkSampler = null,
+
+    // Bindless texture indices
+    use_bindless: bool = false,
+    cow_tex_index: u32 = 0,
+    baby_cow_tex_index: u32 = 0,
 
     // Current buffer sizes - separate tracking for adults and babies
     vertex_count: u32 = 0,
@@ -56,6 +61,7 @@ pub const EntityRenderer = struct {
     cached_vertices: ?[]Vertex = null,
     cached_indices: ?[]u32 = null,
 
+    /// Legacy init that loads textures directly (non-bindless)
     pub fn init(allocator: std.mem.Allocator, gpu_device: *GpuDevice, asset_directory: []const u8) !Self {
         var self = Self{
             .allocator = allocator,
@@ -63,6 +69,7 @@ pub const EntityRenderer = struct {
             .asset_directory = asset_directory,
             .cow_model = CowModel.init(allocator),
             .baby_cow_model = BabyCowModel.init(allocator),
+            .use_bindless = false,
         };
 
         // Load cow textures
@@ -72,9 +79,29 @@ pub const EntityRenderer = struct {
         return self;
     }
 
+    /// Bindless init that uses texture indices from EntityTextureManager
+    pub fn initBindless(allocator: std.mem.Allocator, gpu_device: *GpuDevice, cow_tex_index: u32, baby_cow_tex_index: u32) !Self {
+        const self = Self{
+            .allocator = allocator,
+            .gpu_device = gpu_device,
+            .asset_directory = "",
+            .cow_model = CowModel.init(allocator),
+            .baby_cow_model = BabyCowModel.init(allocator),
+            .use_bindless = true,
+            .cow_tex_index = cow_tex_index,
+            .baby_cow_tex_index = baby_cow_tex_index,
+        };
+
+        logger.info("EntityRenderer initialized in bindless mode (cow={}, baby={})", .{ cow_tex_index, baby_cow_tex_index });
+        return self;
+    }
+
     pub fn deinit(self: *Self) void {
         self.destroyBuffers();
-        self.destroyTexture();
+        // Only destroy textures in non-bindless mode (bindless textures are managed by EntityTextureManager)
+        if (!self.use_bindless) {
+            self.destroyTexture();
+        }
         self.cow_model.deinit();
         self.baby_cow_model.deinit();
 
@@ -688,6 +715,10 @@ pub const EntityRenderer = struct {
                     m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
                     m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
                 };
+                // Set texture index for bindless rendering
+                if (self.use_bindless) {
+                    transformed.tex_index = self.cow_tex_index;
+                }
                 try all_vertices.append(self.allocator, transformed);
             }
 
@@ -727,6 +758,10 @@ pub const EntityRenderer = struct {
                     m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
                     m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
                 };
+                // Set texture index for bindless rendering
+                if (self.use_bindless) {
+                    transformed.tex_index = self.baby_cow_tex_index;
+                }
                 try all_vertices.append(self.allocator, transformed);
             }
 

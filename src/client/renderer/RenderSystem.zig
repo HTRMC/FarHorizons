@@ -129,8 +129,11 @@ pub const RenderSystem = struct {
     line_vertex_buffer_memory: vk.VkDeviceMemory = null,
     line_vertex_count: u32 = 0,
 
-    // Entity Pipeline
+    // Entity Pipeline (with bindless textures)
+    entity_pipeline_layout: vk.VkPipelineLayout = null,
     entity_pipeline: vk.VkPipeline = null,
+    bindless_entity_descriptor_set_layout: vk.VkDescriptorSetLayout = null,
+    bindless_entity_descriptor_set: vk.VkDescriptorSet = null,
 
     // Vertex/Index buffers
     vertex_buffer: vk.VkBuffer = null,
@@ -231,7 +234,7 @@ pub const RenderSystem = struct {
         try self.createUIDescriptorSetLayout();
         try self.createUIPipeline();
         try self.createLinePipeline();
-        try self.createEntityPipeline();
+        // Entity pipeline created separately via initEntityPipeline() after bindless resources are set
         try self.createFramebuffers();
         try self.createCommandPool();
 
@@ -367,9 +370,55 @@ pub const RenderSystem = struct {
     }
 
     /// Set baby entity texture resources (call after setEntityTextureResources)
+    /// DEPRECATED: Use setBindlessEntityResources for bindless texture support
     pub fn setBabyEntityTextureResources(self: *Self, image_view: vk.VkImageView, sampler: vk.VkSampler) !void {
         try self.createBabyEntityDescriptorSets(image_view, sampler);
         logger.info("Baby entity texture resources set and descriptors created", .{});
+    }
+
+    /// Set bindless entity texture resources from EntityTextureManager
+    /// This must be called before initEntityPipeline
+    pub fn setBindlessEntityResources(
+        self: *Self,
+        descriptor_set_layout: vk.VkDescriptorSetLayout,
+        descriptor_set: vk.VkDescriptorSet,
+    ) void {
+        self.bindless_entity_descriptor_set_layout = descriptor_set_layout;
+        self.bindless_entity_descriptor_set = descriptor_set;
+
+        // Update the UBO binding in the bindless descriptor set to use our uniform buffer
+        // Use uniform_buffers[0] - since the data is updated in-place before each frame,
+        // binding to the buffer handle works for all frames
+        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return;
+
+        const buffer_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.uniform_buffers[0],
+            .offset = 0,
+            .range = @sizeOf(UniformBufferObject),
+        };
+
+        const ubo_write = vk.VkWriteDescriptorSet{
+            .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = null,
+            .dstSet = descriptor_set,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pImageInfo = null,
+            .pBufferInfo = &buffer_info,
+            .pTexelBufferView = null,
+        };
+
+        vkUpdateDescriptorSets(self.device, 1, &ubo_write, 0, null);
+
+        logger.info("Bindless entity resources set", .{});
+    }
+
+    /// Initialize the entity pipeline (call after setBindlessEntityResources)
+    pub fn initEntityPipeline(self: *Self) !void {
+        try self.createEntityPipeline();
+        logger.info("Entity pipeline initialized", .{});
     }
 
     /// Get Vulkan device (for TextureManager)
@@ -625,9 +674,8 @@ pub const RenderSystem = struct {
             vkCmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
         }
 
-        // Draw entities (mobs) - adults first with adult texture, then babies with baby texture
+        // Draw entities (mobs) using bindless textures
         if (params.entity_vertex_buffer != null and params.entity_index_buffer != null and params.entity_index_count > 0) {
-            // Bind entity pipeline (uses same descriptor set layout)
             if (self.entity_pipeline) |entity_pipeline| {
                 vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, entity_pipeline);
 
@@ -636,22 +684,31 @@ pub const RenderSystem = struct {
                 vkCmdBindVertexBuffers(command_buffer, 0, 1, &entity_vertex_buffers, &entity_offsets);
                 vkCmdBindIndexBuffer(command_buffer, params.entity_index_buffer.?, 0, vk.VK_INDEX_TYPE_UINT32);
 
-                // Draw adult cows with adult texture
-                if (params.adult_index_count > 0) {
-                    if (self.entity_descriptor_sets[self.current_frame] != null) {
-                        const entity_descriptor_sets_arr = [_]vk.VkDescriptorSet{self.entity_descriptor_sets[self.current_frame]};
-                        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &entity_descriptor_sets_arr, 0, null);
+                // Bind bindless entity descriptor set (contains all entity textures)
+                if (self.bindless_entity_descriptor_set != null) {
+                    const bindless_sets = [_]vk.VkDescriptorSet{self.bindless_entity_descriptor_set};
+                    vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.entity_pipeline_layout, 0, 1, &bindless_sets, 0, null);
+                    // Single draw call for all entities - texture index is per-vertex
+                    vkCmdDrawIndexed(command_buffer, params.entity_index_count, 1, 0, 0, 0);
+                } else {
+                    // Fallback to old per-texture descriptor sets
+                    // Draw adult cows with adult texture
+                    if (params.adult_index_count > 0) {
+                        if (self.entity_descriptor_sets[self.current_frame] != null) {
+                            const entity_descriptor_sets_arr = [_]vk.VkDescriptorSet{self.entity_descriptor_sets[self.current_frame]};
+                            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.entity_pipeline_layout, 0, 1, &entity_descriptor_sets_arr, 0, null);
+                        }
+                        vkCmdDrawIndexed(command_buffer, params.adult_index_count, 1, 0, 0, 0);
                     }
-                    vkCmdDrawIndexed(command_buffer, params.adult_index_count, 1, 0, 0, 0);
-                }
 
-                // Draw baby cows with baby texture
-                if (params.baby_index_count > 0) {
-                    if (self.baby_entity_descriptor_sets[self.current_frame] != null) {
-                        const baby_descriptor_sets_arr = [_]vk.VkDescriptorSet{self.baby_entity_descriptor_sets[self.current_frame]};
-                        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &baby_descriptor_sets_arr, 0, null);
+                    // Draw baby cows with baby texture
+                    if (params.baby_index_count > 0) {
+                        if (self.baby_entity_descriptor_sets[self.current_frame] != null) {
+                            const baby_descriptor_sets_arr = [_]vk.VkDescriptorSet{self.baby_entity_descriptor_sets[self.current_frame]};
+                            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.entity_pipeline_layout, 0, 1, &baby_descriptor_sets_arr, 0, null);
+                        }
+                        vkCmdDrawIndexed(command_buffer, params.baby_index_count, 1, params.baby_index_start, 0, 0);
                     }
-                    vkCmdDrawIndexed(command_buffer, params.baby_index_count, 1, params.baby_index_start, 0, 0);
                 }
 
                 // Switch back to main graphics pipeline for subsequent drawing
@@ -769,9 +826,19 @@ pub const RenderSystem = struct {
             .proj = proj,
         };
 
+        // Update the current frame's buffer (for main rendering)
         if (self.uniform_buffers_mapped[self.current_frame]) |mapped| {
             const dest: *UniformBufferObject = @ptrCast(@alignCast(mapped));
             dest.* = ubo;
+        }
+
+        // Also update uniform_buffers[0] for bindless entity rendering
+        // The bindless entity descriptor set is bound to uniform_buffers[0]
+        if (self.current_frame != 0) {
+            if (self.uniform_buffers_mapped[0]) |mapped| {
+                const dest: *UniformBufferObject = @ptrCast(@alignCast(mapped));
+                dest.* = ubo;
+            }
         }
     }
 
@@ -960,7 +1027,7 @@ pub const RenderSystem = struct {
             .applicationVersion = vk.VK_MAKE_VERSION(0, 0, 1),
             .pEngineName = "FarHorizons Engine",
             .engineVersion = vk.VK_MAKE_VERSION(0, 0, 1),
-            .apiVersion = vk.VK_API_VERSION_1_0,
+            .apiVersion = vk.VK_API_VERSION_1_2,
         };
 
         const create_info = vk.VkInstanceCreateInfo{
@@ -1115,11 +1182,23 @@ pub const RenderSystem = struct {
 
         const device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
 
-        const device_features: vk.VkPhysicalDeviceFeatures = std.mem.zeroes(vk.VkPhysicalDeviceFeatures);
+        // Enable descriptor indexing features for bindless textures (Vulkan 1.2 core)
+        var indexing_features = std.mem.zeroes(vk.VkPhysicalDeviceDescriptorIndexingFeatures);
+        indexing_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        indexing_features.shaderSampledImageArrayNonUniformIndexing = vk.VK_TRUE;
+        indexing_features.runtimeDescriptorArray = vk.VK_TRUE;
+        indexing_features.descriptorBindingPartiallyBound = vk.VK_TRUE;
+        indexing_features.descriptorBindingVariableDescriptorCount = vk.VK_TRUE;
+        indexing_features.descriptorBindingSampledImageUpdateAfterBind = vk.VK_TRUE;
+
+        var device_features2 = std.mem.zeroes(vk.VkPhysicalDeviceFeatures2);
+        device_features2.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        device_features2.pNext = &indexing_features;
+        // device_features2.features stays zeroed (no extra 1.0 features needed)
 
         const create_info = vk.VkDeviceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pNext = null,
+            .pNext = &device_features2,
             .flags = 0,
             .queueCreateInfoCount = queue_count,
             .pQueueCreateInfos = &queue_create_infos,
@@ -1127,7 +1206,7 @@ pub const RenderSystem = struct {
             .ppEnabledLayerNames = null,
             .enabledExtensionCount = device_extensions.len,
             .ppEnabledExtensionNames = &device_extensions,
-            .pEnabledFeatures = &device_features,
+            .pEnabledFeatures = null, // Using pNext chain instead
         };
 
         if (vkCreateDevice(self.physical_device, &create_info, null, &self.device) != vk.VK_SUCCESS) {
@@ -2186,6 +2265,27 @@ pub const RenderSystem = struct {
         const vkCreateShaderModule = vk.vkCreateShaderModule orelse return error.VulkanFunctionNotLoaded;
         const vkDestroyShaderModule = vk.vkDestroyShaderModule orelse return error.VulkanFunctionNotLoaded;
         const vkCreateGraphicsPipelines = vk.vkCreateGraphicsPipelines orelse return error.VulkanFunctionNotLoaded;
+        const vkCreatePipelineLayout = vk.vkCreatePipelineLayout orelse return error.VulkanFunctionNotLoaded;
+
+        // Create entity pipeline layout using bindless descriptor set layout if available
+        const layout_to_use = if (self.bindless_entity_descriptor_set_layout != null)
+            self.bindless_entity_descriptor_set_layout
+        else
+            self.descriptor_set_layout;
+
+        const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &[_]vk.VkDescriptorSetLayout{layout_to_use},
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges = null,
+        };
+
+        if (vkCreatePipelineLayout(self.device, &pipeline_layout_info, null, &self.entity_pipeline_layout) != vk.VK_SUCCESS) {
+            return error.PipelineLayoutCreationFailed;
+        }
 
         // Get entity shaders from ShaderManager
         const vert_shader_code = if (self.shader_manager) |*sm|
@@ -2330,7 +2430,7 @@ pub const RenderSystem = struct {
             .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
         };
 
-        // Reuse main pipeline layout (same descriptor set layout)
+        // Use entity-specific pipeline layout (supports bindless textures)
         const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
             .pNext = null,
@@ -2346,7 +2446,7 @@ pub const RenderSystem = struct {
             .pDepthStencilState = &depth_stencil,
             .pColorBlendState = &color_blending,
             .pDynamicState = &dynamic_state,
-            .layout = self.pipeline_layout,
+            .layout = self.entity_pipeline_layout,
             .renderPass = self.render_pass,
             .subpass = 0,
             .basePipelineHandle = null,
@@ -3351,10 +3451,14 @@ pub const RenderSystem = struct {
             if (vk.vkFreeMemory) |free| free(self.device, m, null);
             self.line_vertex_buffer_memory = null;
         }
-        // Destroy entity pipeline
+        // Destroy entity pipeline and layout
         if (self.entity_pipeline) |p| {
             if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
             self.entity_pipeline = null;
+        }
+        if (self.entity_pipeline_layout) |l| {
+            if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
+            self.entity_pipeline_layout = null;
         }
     }
 
