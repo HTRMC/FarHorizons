@@ -74,8 +74,8 @@ pub const BabyCowModel = struct {
         var head_builder = CubeListBuilder.create(allocator);
         _ = head_builder.texOffs(0, 18).addBox(-3, -4.569, -4.8333, 6, 6, 5);
         _ = head_builder.texOffs(8, 29).addBox(3, -5.569, -3.8333, 1, 2, 1);
-        _ = head_builder.mirror().texOffs(4, 29).addBox(-4, -5.569, -3.8333, 1, 2, 1);
-        _ = head_builder.mirrorSet(false).texOffs(12, 29).addBox(-2, -1.569, -5.8333, 4, 3, 1);
+        _ = head_builder.texOffs(4, 29).mirror().addBox(-4, -5.569, -3.8333, 1, 2, 1).mirrorSet(false);
+        _ = head_builder.texOffs(12, 29).addBox(-2, -1.569, -5.8333, 4, 3, 1);
         _ = root.addOrReplaceChild("head", &head_builder, PartPose.offset(0, 13.569, -5.1667));
         head_builder.deinit();
 

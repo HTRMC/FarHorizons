@@ -381,27 +381,25 @@ fn bakeCube(def: CubeDefinition, tex_width: u32, tex_height: u32) BakedCube {
     const z0 = oz / 16.0;
     const z1 = (oz + d) / 16.0;
 
-    // UV layout (Minecraft standard):
-    // Top row:    [depth][width][depth][width] - for top/bottom faces
-    // Bottom row: [depth][width][depth][width] - for side faces
+    // UV layout (Minecraft standard cube net):
     //
-    // U coordinates:
-    // tex_u0 = u
-    // tex_u1 = u + d
-    // tex_u2 = u + d + w
-    // tex_u3 = u + d + w + d
-    // tex_u4 = u + d + w + d + w
+    //              +-------+-------+
+    //              |  TOP  | BOTTOM|  <- V: [0, depth]
+    //              | (w×d) |  (w×d)|
+    //       +------+-------+-------+------+
+    //       | WEST | NORTH | EAST  | SOUTH|  <- V: [depth, depth+height]
+    //       | (d×h)| (w×h) | (d×h) | (w×h)|
+    //       +------+-------+-------+------+
+    //       ^      ^       ^       ^      ^
+    //      U=0    U=d    U=d+w  U=d+w+d U=d+w+d+w
     //
-    // V coordinates:
-    // tex_v0 = v
-    // tex_v1 = v + d
-    // tex_v2 = v + d + h
-
-    const tex_u0 = u / tw;
-    const tex_u1 = (u + d) / tw;
-    const tex_u2 = (u + d + w) / tw;
-    const tex_u3 = (u + d + w + d) / tw;
-    const tex_u4 = (u + d + w + d + w) / tw;
+    // Note: TOP/BOTTOM faces use width (w), while EAST face uses depth (d)
+    const tex_u0 = u / tw;                       // Start of WEST
+    const tex_u1 = (u + d) / tw;                 // Start of TOP/NORTH
+    const tex_u2 = (u + d + w) / tw;             // Start of BOTTOM/EAST
+    const tex_u2_bottom = (u + d + w + w) / tw;  // End of BOTTOM (width, not depth!)
+    const tex_u3 = (u + d + w + d) / tw;         // End of EAST / Start of SOUTH
+    const tex_u4 = (u + d + w + d + w) / tw;     // End of SOUTH
     const tex_v0 = v / th;
     const tex_v1 = (v + d) / th;
     const tex_v2 = (v + d + h) / th;
@@ -419,10 +417,10 @@ fn bakeCube(def: CubeDefinition, tex_width: u32, tex_height: u32) BakedCube {
     vertices[3] = .{ .x = x0, .y = y0, .z = z1, .u = tex_u2, .v = tex_v0 };
 
     // UP face (Y+) - top of cube, becomes BOTTOM after Y flip
-    // UV region: (tex_u2, tex_v0) to (tex_u3, tex_v1) - but actually (tex_u1+w, tex_v0) to (tex_u1+w+w, tex_v1)
+    // UV region: (tex_u2, tex_v0) to (tex_u2_bottom, tex_v1) - BOTTOM face in texture (uses width, not depth!)
     vertices[4] = .{ .x = x0, .y = y1, .z = z1, .u = tex_u2, .v = tex_v0 };
-    vertices[5] = .{ .x = x1, .y = y1, .z = z1, .u = tex_u3, .v = tex_v0 };
-    vertices[6] = .{ .x = x1, .y = y1, .z = z0, .u = tex_u3, .v = tex_v1 };
+    vertices[5] = .{ .x = x1, .y = y1, .z = z1, .u = tex_u2_bottom, .v = tex_v0 };
+    vertices[6] = .{ .x = x1, .y = y1, .z = z0, .u = tex_u2_bottom, .v = tex_v1 };
     vertices[7] = .{ .x = x0, .y = y1, .z = z0, .u = tex_u2, .v = tex_v1 };
 
     // WEST face (X-) - left side
