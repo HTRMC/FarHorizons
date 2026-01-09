@@ -182,7 +182,9 @@ pub const MeshDefinition = struct {
     pub fn init(allocator: std.mem.Allocator) MeshDefinition {
         return .{
             .allocator = allocator,
-            .root = PartDefinition.init(allocator, &.{}, PartPose.ZERO),
+            // Root at Y=24 (ground level in model space) so it produces no Y offset
+            // ty = (24 - 24) / 16 = 0
+            .root = PartDefinition.init(allocator, &.{}, PartPose.offset(0, 24, 0)),
         };
     }
 
