@@ -372,12 +372,14 @@ fn bakeCube(def: CubeDefinition, tex_width: u32, tex_height: u32) BakedCube {
     const tw = @as(f32, @floatFromInt(tex_width));
     const th = @as(f32, @floatFromInt(tex_height));
 
-    // 8 corners of the box (in model space, before any transforms)
-    // Minecraft Y is inverted relative to our world (Y=24 is ground)
+    // 8 corners of the box in LOCAL space (relative to part's pivot point)
+    // The pose transform (in buildTransform) handles converting to world space with Y flip.
+    // Box origin is relative to pivot, with positive Y extending "downward" in MC convention.
+    // We negate Y so that after pose transform adds (24-pose.y)/16, the result is correct.
     const x0 = ox / 16.0;
     const x1 = (ox + w) / 16.0;
-    const y0 = (24.0 - (oy + h)) / 16.0; // Flip Y
-    const y1 = (24.0 - oy) / 16.0;
+    const y0 = -(oy + h) / 16.0; // Bottom of box (toward ground)
+    const y1 = -oy / 16.0;        // Top of box (toward pivot)
     const z0 = oz / 16.0;
     const z1 = (oz + d) / 16.0;
 
