@@ -3,7 +3,6 @@ const shared = @import("Shared");
 const Vec3 = shared.Vec3;
 const Mat4 = shared.Mat4;
 const Axis = shared.Axis;
-const Logger = shared.Logger;
 
 // AI imports
 const ai = @import("ai/ai.zig");
@@ -22,7 +21,6 @@ pub const EntityType = enum(u8) {
 /// Base entity data shared by all entity types
 pub const Entity = struct {
     const Self = @This();
-    const logger = Logger.init("Entity");
 
     // Unique entity ID
     id: u64,
@@ -223,10 +221,9 @@ pub const Entity = struct {
     fn applyPhysics(self: *Self, terrain: TerrainQuery) void {
         const half_width = self.width / 2.0;
 
-        // Apply gravity if not on ground
-        if (!self.on_ground) {
-            self.velocity.y -= GRAVITY;
-        }
+        // Apply gravity ALWAYS (like Minecraft)
+        // This ensures collision detection naturally handles ground detection
+        self.velocity.y -= GRAVITY;
 
         // Apply drag to Y velocity
         self.velocity.y *= DRAG;
@@ -249,7 +246,8 @@ pub const Entity = struct {
         const test_x_before_z = @abs(move_x) >= @abs(move_z);
 
         // 1. Always test Y axis first
-        // Don't blindly reset on_ground - only change it based on actual collision results
+        // on_ground is determined by whether downward movement was blocked
+        self.on_ground = false;
         const resolved_y = self.collideY(terrain, current_x, current_y, current_z, half_width, move_y);
         if (@abs(resolved_y - move_y) > EPSILON) {
             // Y movement was blocked
@@ -257,11 +255,7 @@ pub const Entity = struct {
                 self.on_ground = true;
             }
             self.velocity.y = 0;
-        } else if (move_y > EPSILON) {
-            // Moving up without collision means we're airborne
-            self.on_ground = false;
         }
-        // Note: If move_y ≈ 0 (standing still), keep previous on_ground value
         current_y += resolved_y;
 
         // 2. Test horizontal axes in order of magnitude
@@ -298,21 +292,6 @@ pub const Entity = struct {
         const x_was_blocked = @abs(self.velocity.x) < EPSILON and @abs(move_x) > EPSILON;
         const z_was_blocked = @abs(self.velocity.z) < EPSILON and @abs(move_z) > EPSILON;
 
-        // Debug: Log values BEFORE the step-up check to understand why it might not trigger
-        // Only log for cows to filter out player
-        const moved_x = current_x - self.position.x;
-        const moved_z = current_z - self.position.z;
-        if (self.entity_type == .cow and (@abs(move_x) > 0.001 or @abs(move_z) > 0.001)) {
-            logger.info("COW PHYSICS: pos=({d:.2},{d:.2},{d:.2}) on_ground={} vel=({d:.4},{d:.4}) move=({d:.4},{d:.4}) moved=({d:.4},{d:.4}) blocked=({},{})", .{
-                self.position.x, self.position.y, self.position.z,
-                self.on_ground,
-                self.velocity.x, self.velocity.z,
-                move_x, move_z,
-                moved_x, moved_z,
-                x_was_blocked, z_was_blocked,
-            });
-        }
-
         if (self.on_ground and (x_was_blocked or z_was_blocked)) {
             // Try movement from a stepped-up position
             const step_y = self.position.y + STEP_HEIGHT;
@@ -331,16 +310,9 @@ pub const Entity = struct {
             const step_dist_sq = (step_x - self.position.x) * (step_x - self.position.x) +
                 (step_z - self.position.z) * (step_z - self.position.z);
 
-            // Debug: Log step-up attempt
-            logger.info("STEP-UP: pos=({d:.2},{d:.2},{d:.2}) blocked=({},{}) step_move=({d:.4},{d:.4})", .{
-                self.position.x, self.position.y, self.position.z,
-                x_was_blocked, z_was_blocked, step_move_x, step_move_z,
-            });
-
             if (step_dist_sq > original_dist_sq + EPSILON) {
                 // Stepping up helped - find the ground at the stepped position
                 const step_down_y = self.collideY(terrain, step_x, step_y, step_z, half_width, -STEP_HEIGHT - 0.01);
-                logger.info("  STEP-UP SUCCESS! step_down_y={d:.4} new_y={d:.2}", .{ step_down_y, step_y + step_down_y });
                 current_x = step_x;
                 current_y = step_y + step_down_y;
                 current_z = step_z;
@@ -348,8 +320,6 @@ pub const Entity = struct {
                 // Restore velocity if we made progress
                 if (@abs(step_move_x) > EPSILON) self.velocity.x = move_x;
                 if (@abs(step_move_z) > EPSILON) self.velocity.z = move_z;
-            } else {
-                logger.info("  STEP-UP FAILED: no progress (orig={d:.6} step={d:.6})", .{ original_dist_sq, step_dist_sq });
             }
         }
 
@@ -363,26 +333,6 @@ pub const Entity = struct {
                 self.on_ground = true;
                 self.velocity.y = 0;
             }
-        }
-
-        // === Ground contact verification ===
-        // Always verify ground contact by probing downward
-        // Probe distance must be at least STEP_HEIGHT to detect ground after walking off edges
-        const GROUND_PROBE: f32 = STEP_HEIGHT + 0.02; // Slightly more than step height
-        const ground_check = self.collideY(terrain, current_x, current_y, current_z, half_width, -GROUND_PROBE);
-
-        // If we hit something within step height, we're on ground
-        // If we can fall the full probe distance, there's no ground
-        if (@abs(ground_check) < STEP_HEIGHT) {
-            // Found ground within step height - snap down to it if needed
-            if (@abs(ground_check) > EPSILON) {
-                current_y += ground_check;
-            }
-            self.on_ground = true;
-            self.velocity.y = 0;
-        } else if (self.on_ground) {
-            // Was on ground but now there's nothing below - start falling
-            self.on_ground = false;
         }
 
         // Update position
