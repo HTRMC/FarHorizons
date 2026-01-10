@@ -1,5 +1,10 @@
 const std = @import("std");
 const Entity = @import("../../Entity.zig").Entity;
+const LivingEntity = @import("../../LivingEntity.zig").LivingEntity;
+const Mob = @import("../../Mob.zig").Mob;
+const PathfinderMob = @import("../../PathfinderMob.zig").PathfinderMob;
+const AgeableMob = @import("../../AgeableMob.zig").AgeableMob;
+const Animal = @import("../Animal.zig").Animal;
 const AbstractCow = @import("AbstractCow.zig").AbstractCow;
 
 /// MushroomCow (Mooshroom) - Special cow variant that spawns in mushroom biomes
@@ -10,6 +15,8 @@ const AbstractCow = @import("AbstractCow.zig").AbstractCow;
 /// - Mushroom stew milking (bowl instead of bucket)
 /// - Suspicious stew effects when fed flowers (brown variant only)
 /// - Spawns only on mycelium in mushroom biomes
+///
+/// Inheritance: Entity -> LivingEntity -> Mob -> PathfinderMob -> AgeableMob -> Animal -> AbstractCow -> MushroomCow
 pub const MushroomCow = struct {
     const Self = @This();
 
@@ -237,16 +244,70 @@ pub const MushroomCow = struct {
     }
 
     // ======================
-    // Convenience accessors to base
+    // Hierarchy Accessors
     // ======================
+
+    /// Get the AbstractCow wrapper
+    pub fn getAbstractCow(self: *Self) *AbstractCow {
+        return &self.base;
+    }
+
+    /// Get the Animal wrapper
+    pub fn getAnimal(self: *Self) *Animal {
+        return self.base.getAnimal();
+    }
+
+    /// Get the AgeableMob wrapper
+    pub fn getAgeable(self: *Self) *AgeableMob {
+        return self.base.getAgeable();
+    }
+
+    /// Get the PathfinderMob wrapper
+    pub fn getPathfinder(self: *Self) *PathfinderMob {
+        return self.base.getPathfinder();
+    }
+
+    /// Get the Mob wrapper
+    pub fn getMob(self: *Self) *Mob {
+        return self.base.getMob();
+    }
+
+    /// Get the LivingEntity wrapper
+    pub fn getLiving(self: *Self) *LivingEntity {
+        return self.base.getLiving();
+    }
 
     /// Get the underlying entity
     pub fn getEntity(self: *Self) *Entity {
-        return self.base.entity;
+        return self.base.getEntity();
     }
+
+    // ======================
+    // Convenience accessors
+    // ======================
 
     /// Get the goal selector
     pub fn getGoalSelector(self: *Self) *@import("../../ai/ai.zig").GoalSelector {
         return &self.base.goal_selector;
+    }
+
+    /// Check if this is a baby
+    pub fn isBaby(self: *const Self) bool {
+        return self.base.isBaby();
+    }
+
+    /// Get scale for rendering
+    pub fn getScale(self: *const Self) f32 {
+        return self.base.getScale();
+    }
+
+    /// Attempt to jump
+    pub fn jump(self: *Self) void {
+        self.base.jump();
+    }
+
+    /// Try to jump over an obstacle
+    pub fn tryJumpOver(self: *Self, obstacle_height: f32) bool {
+        return self.base.tryJumpOver(obstacle_height);
     }
 };

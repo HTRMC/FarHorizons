@@ -222,17 +222,12 @@ pub const Entity = struct {
 
     /// Apply physics: gravity, movement, and terrain collision
     /// Uses Minecraft's axis-independent collision resolution for smooth wall sliding
+    /// Order matches MC: move first, then gravity, then drag
     fn applyPhysics(self: *Self, terrain: TerrainQuery) void {
         const half_width = self.width / 2.0;
 
-        // Apply gravity ALWAYS (like Minecraft)
-        // This ensures collision detection naturally handles ground detection
-        self.velocity.y -= GRAVITY;
-
-        // Apply drag to Y velocity
-        self.velocity.y *= DRAG;
-
-        // Get desired movement
+        // Get desired movement FIRST (before gravity/drag modify velocity)
+        // This matches MC's order: move, then gravity, then drag
         const move_x = self.velocity.x;
         const move_y = self.velocity.y;
         const move_z = self.velocity.z;
@@ -350,6 +345,11 @@ pub const Entity = struct {
         self.position.x = current_x;
         self.position.y = current_y;
         self.position.z = current_z;
+
+        // Apply gravity and drag AFTER movement (like MC)
+        // This is critical for correct jump height
+        self.velocity.y -= GRAVITY;
+        self.velocity.y *= DRAG;
 
         // Apply friction AFTER movement (like MC)
         if (self.on_ground) {

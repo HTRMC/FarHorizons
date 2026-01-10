@@ -1,5 +1,10 @@
 const std = @import("std");
 const Entity = @import("../../Entity.zig").Entity;
+const LivingEntity = @import("../../LivingEntity.zig").LivingEntity;
+const Mob = @import("../../Mob.zig").Mob;
+const PathfinderMob = @import("../../PathfinderMob.zig").PathfinderMob;
+const AgeableMob = @import("../../AgeableMob.zig").AgeableMob;
+const Animal = @import("../Animal.zig").Animal;
 const AbstractCow = @import("AbstractCow.zig").AbstractCow;
 const CowVariant = @import("CowVariant.zig").CowVariant;
 const CowVariants = @import("CowVariants.zig").CowVariants;
@@ -11,6 +16,8 @@ const CowVariants = @import("CowVariants.zig").CowVariants;
 /// - Save/load variant data
 /// - Breeding offspring with variant inheritance
 /// - Variant selection on spawn based on biome
+///
+/// Inheritance: Entity -> LivingEntity -> Mob -> PathfinderMob -> AgeableMob -> Animal -> AbstractCow -> Cow
 pub const Cow = struct {
     const Self = @This();
 
@@ -110,13 +117,47 @@ pub const Cow = struct {
     }
 
     // ======================
-    // Convenience accessors to base
+    // Hierarchy Accessors
     // ======================
+
+    /// Get the AbstractCow wrapper
+    pub fn getAbstractCow(self: *Self) *AbstractCow {
+        return &self.base;
+    }
+
+    /// Get the Animal wrapper
+    pub fn getAnimal(self: *Self) *Animal {
+        return self.base.getAnimal();
+    }
+
+    /// Get the AgeableMob wrapper
+    pub fn getAgeable(self: *Self) *AgeableMob {
+        return self.base.getAgeable();
+    }
+
+    /// Get the PathfinderMob wrapper
+    pub fn getPathfinder(self: *Self) *PathfinderMob {
+        return self.base.getPathfinder();
+    }
+
+    /// Get the Mob wrapper
+    pub fn getMob(self: *Self) *Mob {
+        return self.base.getMob();
+    }
+
+    /// Get the LivingEntity wrapper
+    pub fn getLiving(self: *Self) *LivingEntity {
+        return self.base.getLiving();
+    }
 
     /// Get the underlying entity
     pub fn getEntity(self: *Self) *Entity {
         return self.base.getEntity();
     }
+
+    // ======================
+    // Convenience accessors
+    // ======================
 
     /// Get the goal selector
     pub fn getGoalSelector(self: *Self) *@import("../../ai/ai.zig").GoalSelector {
@@ -136,5 +177,15 @@ pub const Cow = struct {
     /// Set baby state
     pub fn setBaby(self: *Self, baby: bool) void {
         self.base.setBaby(baby);
+    }
+
+    /// Attempt to jump
+    pub fn jump(self: *Self) void {
+        self.base.jump();
+    }
+
+    /// Try to jump over an obstacle
+    pub fn tryJumpOver(self: *Self, obstacle_height: f32) bool {
+        return self.base.tryJumpOver(obstacle_height);
     }
 };

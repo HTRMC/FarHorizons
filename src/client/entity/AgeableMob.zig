@@ -1,6 +1,8 @@
 const std = @import("std");
 const Entity = @import("Entity.zig").Entity;
 const LivingEntity = @import("LivingEntity.zig").LivingEntity;
+const Mob = @import("Mob.zig").Mob;
+const PathfinderMob = @import("PathfinderMob.zig").PathfinderMob;
 
 /// AgeableMob - Base for entities that can be babies and grow up
 ///
@@ -10,7 +12,7 @@ const LivingEntity = @import("LivingEntity.zig").LivingEntity;
 /// - Age progression over time
 /// - Forced aging (feeding to speed up growth)
 ///
-/// Inheritance: Entity -> LivingEntity -> AgeableMob -> Animal
+/// Inheritance: Entity -> LivingEntity -> Mob -> PathfinderMob -> AgeableMob -> Animal
 ///
 /// Age system:
 /// - BABY_START_AGE (-24000 ticks = -20 minutes) = newborn baby
@@ -32,8 +34,8 @@ pub const AgeableMob = struct {
     /// Reference to the base entity
     entity: *Entity,
 
-    /// Living entity wrapper (for health, jumping, etc.)
-    living: LivingEntity,
+    /// PathfinderMob wrapper (contains Mob -> LivingEntity)
+    pathfinder: PathfinderMob,
 
     /// Current age (negative = baby, 0+ = adult)
     /// Baby ages increment toward 0, adult breeding cooldown decrements toward 0
@@ -52,7 +54,7 @@ pub const AgeableMob = struct {
     pub fn init(entity: *Entity) Self {
         return .{
             .entity = entity,
-            .living = LivingEntity.init(entity),
+            .pathfinder = PathfinderMob.init(entity),
             .age = DEFAULT_AGE,
             .forced_age = 0,
             .forced_age_timer = 0,
@@ -64,7 +66,7 @@ pub const AgeableMob = struct {
         entity.is_baby = true;
         return .{
             .entity = entity,
-            .living = LivingEntity.init(entity),
+            .pathfinder = PathfinderMob.init(entity),
             .age = BABY_START_AGE,
             .forced_age = 0,
             .forced_age_timer = 0,
@@ -72,22 +74,32 @@ pub const AgeableMob = struct {
     }
 
     // ======================
-    // LivingEntity Accessors
+    // Hierarchy Accessors
     // ======================
 
-    /// Get the living entity wrapper
-    pub fn getLiving(self: *Self) *LivingEntity {
-        return &self.living;
+    /// Get the PathfinderMob wrapper
+    pub fn getPathfinder(self: *Self) *PathfinderMob {
+        return &self.pathfinder;
     }
 
-    /// Attempt to jump (delegates to LivingEntity)
+    /// Get the Mob wrapper
+    pub fn getMob(self: *Self) *Mob {
+        return self.pathfinder.getMob();
+    }
+
+    /// Get the LivingEntity wrapper
+    pub fn getLiving(self: *Self) *LivingEntity {
+        return self.pathfinder.getLiving();
+    }
+
+    /// Attempt to jump (delegates to PathfinderMob -> Mob -> LivingEntity)
     pub fn jump(self: *Self) void {
-        self.living.jumpFromGround();
+        self.pathfinder.jump();
     }
 
     /// Try to jump over an obstacle
     pub fn tryJumpOver(self: *Self, obstacle_height: f32) bool {
-        return self.living.tryJumpOverObstacle(obstacle_height);
+        return self.pathfinder.tryJumpOver(obstacle_height);
     }
 
     // ======================
@@ -150,8 +162,8 @@ pub const AgeableMob = struct {
     /// Tick the age system
     /// Call this every game tick
     pub fn tickAge(self: *Self) void {
-        // Tick the living entity (jump cooldowns, hurt timers, etc.)
-        self.living.tick();
+        // Tick the pathfinder mob (includes Mob -> LivingEntity)
+        self.pathfinder.tick();
 
         // Handle forced age particle timer
         if (self.forced_age_timer > 0) {

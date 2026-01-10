@@ -1,5 +1,9 @@
 const std = @import("std");
 const Entity = @import("../../Entity.zig").Entity;
+const LivingEntity = @import("../../LivingEntity.zig").LivingEntity;
+const Mob = @import("../../Mob.zig").Mob;
+const PathfinderMob = @import("../../PathfinderMob.zig").PathfinderMob;
+const AgeableMob = @import("../../AgeableMob.zig").AgeableMob;
 const Animal = @import("../Animal.zig").Animal;
 const ai = @import("../../ai/ai.zig");
 const GoalSelector = ai.GoalSelector;
@@ -16,7 +20,7 @@ const RandomLookAroundGoal = ai.RandomLookAroundGoal;
 /// - Milking interaction
 /// - Attribute definitions
 ///
-/// Inheritance chain: Entity -> AgeableMob -> Animal -> AbstractCow -> Cow/MushroomCow
+/// Inheritance: Entity -> LivingEntity -> Mob -> PathfinderMob -> AgeableMob -> Animal -> AbstractCow
 ///
 /// MC's AbstractCow.registerGoals() priorities:
 /// 0 - FloatGoal (swim)           - NOT IMPLEMENTED
@@ -126,13 +130,42 @@ pub const AbstractCow = struct {
     }
 
     // ======================
-    // Convenience accessors
+    // Hierarchy Accessors
     // ======================
+
+    /// Get the Animal wrapper
+    pub fn getAnimal(self: *Self) *Animal {
+        return &self.animal;
+    }
+
+    /// Get the AgeableMob wrapper
+    pub fn getAgeable(self: *Self) *AgeableMob {
+        return self.animal.getAgeable();
+    }
+
+    /// Get the PathfinderMob wrapper
+    pub fn getPathfinder(self: *Self) *PathfinderMob {
+        return self.animal.getPathfinder();
+    }
+
+    /// Get the Mob wrapper
+    pub fn getMob(self: *Self) *Mob {
+        return self.animal.getMob();
+    }
+
+    /// Get the LivingEntity wrapper
+    pub fn getLiving(self: *Self) *LivingEntity {
+        return self.animal.getLiving();
+    }
 
     /// Get the underlying entity
     pub fn getEntity(self: *Self) *Entity {
         return self.animal.getEntity();
     }
+
+    // ======================
+    // Convenience accessors
+    // ======================
 
     /// Check if this is a baby
     pub fn isBaby(self: *const Self) bool {
@@ -155,6 +188,16 @@ pub const AbstractCow = struct {
     /// Get scale for rendering
     pub fn getScale(self: *const Self) f32 {
         return self.animal.getScale();
+    }
+
+    /// Attempt to jump
+    pub fn jump(self: *Self) void {
+        self.animal.jump();
+    }
+
+    /// Try to jump over an obstacle
+    pub fn tryJumpOver(self: *Self, obstacle_height: f32) bool {
+        return self.animal.tryJumpOver(obstacle_height);
     }
 
     /// Tick the cow (age, love mode, etc.)

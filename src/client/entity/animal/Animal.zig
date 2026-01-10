@@ -1,5 +1,8 @@
 const std = @import("std");
 const Entity = @import("../Entity.zig").Entity;
+const LivingEntity = @import("../LivingEntity.zig").LivingEntity;
+const Mob = @import("../Mob.zig").Mob;
+const PathfinderMob = @import("../PathfinderMob.zig").PathfinderMob;
 const AgeableMob = @import("../AgeableMob.zig").AgeableMob;
 
 /// Animal - Base for breedable, tameable animals
@@ -10,7 +13,7 @@ const AgeableMob = @import("../AgeableMob.zig").AgeableMob;
 /// - Spawn rules (grass blocks, light level)
 /// - Experience drops
 ///
-/// Inheritance chain: Entity -> AgeableMob -> Animal -> AbstractCow -> Cow
+/// Inheritance: Entity -> LivingEntity -> Mob -> PathfinderMob -> AgeableMob -> Animal
 pub const Animal = struct {
     const Self = @This();
 
@@ -48,13 +51,37 @@ pub const Animal = struct {
     }
 
     // ======================
-    // Convenience accessors
+    // Hierarchy Accessors
     // ======================
+
+    /// Get the AgeableMob wrapper
+    pub fn getAgeable(self: *Self) *AgeableMob {
+        return &self.ageable;
+    }
+
+    /// Get the PathfinderMob wrapper
+    pub fn getPathfinder(self: *Self) *PathfinderMob {
+        return self.ageable.getPathfinder();
+    }
+
+    /// Get the Mob wrapper
+    pub fn getMob(self: *Self) *Mob {
+        return self.ageable.getMob();
+    }
+
+    /// Get the LivingEntity wrapper
+    pub fn getLiving(self: *Self) *LivingEntity {
+        return self.ageable.getLiving();
+    }
 
     /// Get the underlying entity
     pub fn getEntity(self: *Self) *Entity {
         return self.ageable.entity;
     }
+
+    // ======================
+    // Convenience accessors
+    // ======================
 
     /// Check if this is a baby
     pub fn isBaby(self: *const Self) bool {
@@ -84,6 +111,16 @@ pub const Animal = struct {
     /// Refresh dimensions after baby/adult change
     pub fn refreshDimensions(self: *Self) void {
         self.ageable.refreshDimensions();
+    }
+
+    /// Attempt to jump
+    pub fn jump(self: *Self) void {
+        self.ageable.jump();
+    }
+
+    /// Try to jump over an obstacle
+    pub fn tryJumpOver(self: *Self, obstacle_height: f32) bool {
+        return self.ageable.tryJumpOver(obstacle_height);
     }
 
     // ======================

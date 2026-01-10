@@ -4,7 +4,13 @@ const Vec3 = shared.Vec3;
 const Entity = @import("Entity.zig").Entity;
 
 /// LivingEntity - entities that are "alive" (have health, can jump, etc.)
-/// Like Minecraft's LivingEntity.java
+///
+/// Modeled after Minecraft's LivingEntity.java which extends Entity and adds:
+/// - Health and damage system
+/// - Jump mechanics with block-specific jump factors
+/// - Hurt animation state
+///
+/// Inheritance: Entity -> LivingEntity
 pub const LivingEntity = struct {
     const Self = @This();
 
