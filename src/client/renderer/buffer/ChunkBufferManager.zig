@@ -46,7 +46,7 @@ pub const ChunkBufferConfig = struct {
 /// Manages GPU buffer allocation for chunks
 pub const ChunkBufferManager = struct {
     const Self = @This();
-    const logger = Logger.init("ChunkBufferManager");
+    const logger = Logger.scoped(Self);
 
     /// Vertex buffer arena
     vertex_arena: BufferArena,

@@ -11,7 +11,8 @@ const Logger = shared.Logger;
 /// Shader compiler that handles preprocessing (#fh_import) and GLSL->SPIR-V compilation
 /// Includes disk-based caching to avoid recompiling unchanged shaders.
 pub const ShaderCompiler = struct {
-    const logger = Logger.init("ShaderCompiler");
+    const Self = @This();
+    const logger = Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
     io: Io,

@@ -16,7 +16,7 @@ const ChunkManager = world.ChunkManager;
 
 pub const BlockInteraction = struct {
     const Self = @This();
-    const logger = Logger.init("BlockInteraction");
+    const logger = Logger.scoped(Self);
 
     /// Maximum reach distance for block interaction (in blocks)
     pub const BLOCK_REACH: f32 = 5.0;

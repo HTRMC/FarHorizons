@@ -14,7 +14,7 @@ pub const MAX_ENTITY_TEXTURES: u32 = 256;
 /// Shaders index into this array using a texture_index vertex attribute
 pub const EntityTextureManager = struct {
     const Self = @This();
-    const logger = Logger.init("EntityTextureManager");
+    const logger = Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
     device: vk.VkDevice,

@@ -27,7 +27,7 @@ const CompletedMesh = RenderChunk.CompletedMesh;
 /// Mesh generation context for a single chunk
 pub const ChunkMesher = struct {
     const Self = @This();
-    const logger = Logger.init("ChunkMesher");
+    const logger = Logger.scoped(Self);
 
     /// Maximum faces per chunk (worst case: every block visible on all sides)
     const MAX_FACES_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 6;

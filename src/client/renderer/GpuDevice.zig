@@ -12,7 +12,7 @@ const GpuBuffer = @import("GpuBuffer.zig");
 /// GPU Device - handles resource creation and management
 pub const GpuDevice = struct {
     const Self = @This();
-    const logger = Logger.init("GpuDevice");
+    const logger = Logger.scoped(Self);
 
     // Core Vulkan handles
     device: vk.VkDevice,

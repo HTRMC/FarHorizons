@@ -5,7 +5,7 @@ const FarHorizonsServer = @import("FarHorizonsServer.zig").FarHorizonsServer;
 
 pub const Main = struct {
     const Self = @This();
-    const logger = Logger.init("Main");
+    const logger = Logger.scoped(Self);
 
     pub fn init() Self {
         return Self{};

@@ -28,7 +28,7 @@ pub const ChunkState = enum {
 /// GPU resources for a chunk mesh
 pub const ChunkMesh = struct {
     const Self = @This();
-    const logger = Logger.init("ChunkMesh");
+    const logger = Logger.scoped(Self);
 
     /// CPU-side vertex data (kept for potential remeshing)
     vertices: []Vertex,

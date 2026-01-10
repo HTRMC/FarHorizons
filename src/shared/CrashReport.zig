@@ -31,7 +31,7 @@ fn getTimestamp() i64 {
 /// A crash report that collects information about an error and system state.
 pub const CrashReport = struct {
     const Self = @This();
-    const logger = Logger.init("CrashReport");
+    const logger = Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
     io: Io,

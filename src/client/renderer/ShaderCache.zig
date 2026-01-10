@@ -7,13 +7,12 @@ const shared = @import("Shared");
 /// Disk-based shader cache that stores compiled SPIR-V indexed by source hash.
 /// This avoids recompiling shaders when the source hasn't changed.
 pub const ShaderCache = struct {
-    const logger = shared.Logger.init("ShaderCache");
+    const Self = @This();
+    const logger = shared.Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
     cache_dir: []const u8,
     io: Io,
-
-    const Self = @This();
     const default_cache_dir = "cache/shaders";
 
     pub fn init(allocator: std.mem.Allocator, io: Io, cache_dir: ?[]const u8) !Self {

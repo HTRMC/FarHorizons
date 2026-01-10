@@ -23,7 +23,7 @@ pub const BufferSlice = struct {
 /// Arena-based buffer allocator
 pub const BufferArena = struct {
     const Self = @This();
-    const logger = Logger.init("BufferArena");
+    const logger = Logger.scoped(Self);
 
     /// The backing Vulkan buffer
     buffer: vk.VkBuffer,

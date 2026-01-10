@@ -18,7 +18,7 @@ const TextureManager = @import("../TextureManager.zig").TextureManager;
 
 pub const BlockModelShaper = struct {
     const Self = @This();
-    const logger = Logger.init("BlockModelShaper");
+    const logger = Logger.scoped(Self);
 
     allocator: Allocator,
     model_loader: *ModelLoader,

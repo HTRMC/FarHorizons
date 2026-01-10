@@ -10,7 +10,7 @@ const Logger = shared.Logger;
 /// Loads and resolves block models with parent inheritance
 pub const ModelLoader = struct {
     const Self = @This();
-    const logger = Logger.init("ModelLoader");
+    const logger = Logger.scoped(Self);
 
     allocator: Allocator,
     io: Io,

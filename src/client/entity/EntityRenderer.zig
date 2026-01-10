@@ -17,7 +17,7 @@ const stb_image = @import("stb_image");
 
 pub const EntityRenderer = struct {
     const Self = @This();
-    const logger = Logger.init("EntityRenderer");
+    const logger = Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
     gpu_device: *GpuDevice,

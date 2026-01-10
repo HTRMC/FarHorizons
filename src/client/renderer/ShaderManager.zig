@@ -10,7 +10,8 @@ const Logger = shared.Logger;
 
 /// Manages runtime-compiled shaders loaded from assets
 pub const ShaderManager = struct {
-    const logger = Logger.init("ShaderManager");
+    const Self = @This();
+    const logger = Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
     io: Io,

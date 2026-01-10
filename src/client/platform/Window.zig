@@ -19,7 +19,7 @@ pub const MouseHandler = @import("MouseHandler.zig").MouseHandler;
 
 pub const Window = struct {
     const Self = @This();
-    const logger = Logger.init("Window");
+    const logger = Logger.scoped(Self);
 
     handle: ?*c.GLFWwindow = null,
     width: u32,

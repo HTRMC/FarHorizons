@@ -60,7 +60,7 @@ const VoxelDirection = shared.Direction;
 
 pub const FarHorizonsClient = struct {
     const Self = @This();
-    const logger = Logger.init("FarHorizonsClient");
+    const logger = Logger.scoped(Self);
 
     // Runs at 20 ticks per second (50ms per tick)
     const TICK_RATE: f64 = 20.0;

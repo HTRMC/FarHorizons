@@ -10,7 +10,7 @@ const InputConstants = @import("InputConstants.zig");
 
 pub const MouseHandler = struct {
     const Self = @This();
-    const logger = Logger.init("MouseHandler");
+    const logger = Logger.scoped(Self);
 
     window: *Window,
 

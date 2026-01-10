@@ -10,10 +10,10 @@ const RenderSystem = @import("RenderSystem.zig").RenderSystem;
 const LineVertex = RenderSystem.LineVertex;
 
 const Logger = shared.Logger;
-const logger = Logger.init("BlockOutlineRenderer");
 
 pub const BlockOutlineRenderer = struct {
     const Self = @This();
+    const logger = Logger.scoped(Self);
 
     /// Maximum number of edges we can render (12 edges for a simple box, more for complex shapes)
     const MAX_EDGES: usize = 64;

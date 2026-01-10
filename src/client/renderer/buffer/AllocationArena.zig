@@ -33,7 +33,7 @@ pub const Allocation = struct {
 /// Arena allocator for sub-allocating within a buffer
 pub const AllocationArena = struct {
     const Self = @This();
-    const logger = Logger.init("AllocationArena");
+    const logger = Logger.scoped(Self);
 
     /// Free regions sorted by offset
     free_list: std.ArrayListUnmanaged(Region),

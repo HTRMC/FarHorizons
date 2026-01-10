@@ -98,7 +98,7 @@ pub const TaskCallback = *const fn (ctx: *WorkerContext, task: Task) void;
 /// Thread pool for async chunk operations
 pub const ThreadPool = struct {
     const Self = @This();
-    const logger = Logger.init("ThreadPool");
+    const logger = Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
     workers: []std.Thread,

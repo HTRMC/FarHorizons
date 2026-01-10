@@ -11,7 +11,7 @@ const Logger = shared.Logger;
 
 pub const TextureManager = struct {
     const Self = @This();
-    const logger = Logger.init("TextureManager");
+    const logger = Logger.scoped(Self);
 
     // All block textures are 16x16
     pub const TEXTURE_SIZE: u32 = 16;

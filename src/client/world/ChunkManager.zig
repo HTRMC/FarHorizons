@@ -64,7 +64,7 @@ pub const ChunkConfig = struct {
 
 pub const ChunkManager = struct {
     const Self = @This();
-    const logger = Logger.init("ChunkManager");
+    const logger = Logger.scoped(Self);
 
     /// HashMap for loaded chunks
     const ChunkMap = std.HashMap(ChunkPos, *RenderChunk, ChunkPosContext, std.hash_map.default_max_load_percentage);

@@ -5,7 +5,8 @@ const shared = @import("Shared");
 
 /// Shader preprocessor that handles #fh_import directives
 pub const ShaderPreprocessor = struct {
-    const logger = shared.Logger.init("GlslPreprocessor");
+    const Self = @This();
+    const logger = shared.Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
     io: Io,

@@ -11,7 +11,7 @@ const ModelVariant = @import("Blockstate.zig").ModelVariant;
 
 pub const BlockstateLoader = struct {
     const Self = @This();
-    const logger = Logger.init("BlockstateLoader");
+    const logger = Logger.scoped(Self);
 
     allocator: Allocator,
     io: Io,

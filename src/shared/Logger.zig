@@ -46,6 +46,29 @@ pub const Logger = struct {
         };
     }
 
+    /// Create a logger scoped to a type, automatically using the type name
+    /// Usage: `const logger = Logger.scoped(@This());`
+    pub fn scoped(comptime T: type) Self {
+        return Self{
+            .name = typeName(T),
+        };
+    }
+
+    /// Extract just the struct name from a fully qualified type name
+    /// e.g., "client.BlockInteraction.BlockInteraction" -> "BlockInteraction"
+    fn typeName(comptime T: type) []const u8 {
+        const full_name = @typeName(T);
+        // Find the last '.' to get just the type name
+        var i: usize = full_name.len;
+        while (i > 0) {
+            i -= 1;
+            if (full_name[i] == '.') {
+                return full_name[i + 1 ..];
+            }
+        }
+        return full_name;
+    }
+
     pub fn debug(self: Self, comptime fmt: []const u8, args: anytype) void {
         self.log(.debug, fmt, args);
     }

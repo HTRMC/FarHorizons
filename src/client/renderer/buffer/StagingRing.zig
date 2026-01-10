@@ -30,7 +30,7 @@ const FrameAllocation = struct {
 /// Ring buffer for staging uploads with frame synchronization
 pub const StagingRing = struct {
     const Self = @This();
-    const logger = Logger.init("StagingRing");
+    const logger = Logger.scoped(Self);
 
     /// Default staging buffer size (64 MB)
     pub const DEFAULT_SIZE: u64 = 64 * 1024 * 1024;

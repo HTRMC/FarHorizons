@@ -74,7 +74,7 @@ pub const Vertex = extern struct {
 
 pub const RenderSystem = struct {
     const Self = @This();
-    const logger = Logger.init("RenderSystem");
+    const logger = Logger.scoped(Self);
 
     // Core Vulkan objects
     instance: vk.VkInstance = null,
