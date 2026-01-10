@@ -90,6 +90,10 @@ pub const Entity = struct {
     // Baby flag (affects model selection in renderer)
     is_baby: bool = false,
 
+    // Movement state flags (set by physics, read by AI)
+    /// True if horizontal movement was blocked this tick
+    horizontally_blocked: bool = false,
+
     /// Create a new entity
     pub fn init(id: u64, entity_type: EntityType, position: Vec3) Self {
         return Self{
@@ -211,7 +215,7 @@ pub const Entity = struct {
     }
 
     // Step height - entities can walk up this many blocks without jumping (like MC)
-    const STEP_HEIGHT: f32 = 0.6;
+    pub const STEP_HEIGHT: f32 = 0.6;
 
     // Small epsilon to prevent floating point issues at block boundaries
     const EPSILON: f32 = 1.0e-7;
@@ -292,6 +296,9 @@ pub const Entity = struct {
         const x_was_blocked = @abs(self.velocity.x) < EPSILON and @abs(move_x) > EPSILON;
         const z_was_blocked = @abs(self.velocity.z) < EPSILON and @abs(move_z) > EPSILON;
 
+        // Reset blocked flag - will be set if we're still blocked after step-up attempt
+        self.horizontally_blocked = false;
+
         if (self.on_ground and (x_was_blocked or z_was_blocked)) {
             // Try movement from a stepped-up position
             const step_y = self.position.y + STEP_HEIGHT;
@@ -320,6 +327,10 @@ pub const Entity = struct {
                 // Restore velocity if we made progress
                 if (@abs(step_move_x) > EPSILON) self.velocity.x = move_x;
                 if (@abs(step_move_z) > EPSILON) self.velocity.z = move_z;
+            } else {
+                // Step-up didn't help - we're blocked by something too tall
+                // Signal to AI that jumping might help
+                self.horizontally_blocked = true;
             }
         }
 

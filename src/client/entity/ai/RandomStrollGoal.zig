@@ -118,6 +118,9 @@ pub const RandomStrollGoal = struct {
         // Movement is handled in tick
     }
 
+    // Jump power constant (from Minecraft's LivingEntity)
+    const JUMP_POWER: f32 = 0.42;
+
     fn tick(goal: *Goal) void {
         const self: *Self = @fieldParentPtr("base", goal);
 
@@ -131,6 +134,13 @@ pub const RandomStrollGoal = struct {
         if (dist < 0.5) {
             self.has_target = false;
             return;
+        }
+
+        // Check if blocked and should jump
+        if (self.entity.horizontally_blocked and self.entity.on_ground) {
+            // Jump to try to get over the obstacle
+            self.entity.velocity.y = JUMP_POWER;
+            self.entity.on_ground = false;
         }
 
         // Calculate target yaw (cow model faces -Z, so use -dz)

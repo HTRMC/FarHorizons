@@ -1,5 +1,6 @@
 const std = @import("std");
 const Entity = @import("Entity.zig").Entity;
+const LivingEntity = @import("LivingEntity.zig").LivingEntity;
 
 /// AgeableMob - Base for entities that can be babies and grow up
 ///
@@ -8,6 +9,8 @@ const Entity = @import("Entity.zig").Entity;
 /// - Baby state with smaller dimensions
 /// - Age progression over time
 /// - Forced aging (feeding to speed up growth)
+///
+/// Inheritance: Entity -> LivingEntity -> AgeableMob -> Animal
 ///
 /// Age system:
 /// - BABY_START_AGE (-24000 ticks = -20 minutes) = newborn baby
@@ -29,6 +32,9 @@ pub const AgeableMob = struct {
     /// Reference to the base entity
     entity: *Entity,
 
+    /// Living entity wrapper (for health, jumping, etc.)
+    living: LivingEntity,
+
     /// Current age (negative = baby, 0+ = adult)
     /// Baby ages increment toward 0, adult breeding cooldown decrements toward 0
     age: i32 = DEFAULT_AGE,
@@ -46,6 +52,7 @@ pub const AgeableMob = struct {
     pub fn init(entity: *Entity) Self {
         return .{
             .entity = entity,
+            .living = LivingEntity.init(entity),
             .age = DEFAULT_AGE,
             .forced_age = 0,
             .forced_age_timer = 0,
@@ -57,10 +64,30 @@ pub const AgeableMob = struct {
         entity.is_baby = true;
         return .{
             .entity = entity,
+            .living = LivingEntity.init(entity),
             .age = BABY_START_AGE,
             .forced_age = 0,
             .forced_age_timer = 0,
         };
+    }
+
+    // ======================
+    // LivingEntity Accessors
+    // ======================
+
+    /// Get the living entity wrapper
+    pub fn getLiving(self: *Self) *LivingEntity {
+        return &self.living;
+    }
+
+    /// Attempt to jump (delegates to LivingEntity)
+    pub fn jump(self: *Self) void {
+        self.living.jumpFromGround();
+    }
+
+    /// Try to jump over an obstacle
+    pub fn tryJumpOver(self: *Self, obstacle_height: f32) bool {
+        return self.living.tryJumpOverObstacle(obstacle_height);
     }
 
     // ======================
@@ -123,6 +150,9 @@ pub const AgeableMob = struct {
     /// Tick the age system
     /// Call this every game tick
     pub fn tickAge(self: *Self) void {
+        // Tick the living entity (jump cooldowns, hurt timers, etc.)
+        self.living.tick();
+
         // Handle forced age particle timer
         if (self.forced_age_timer > 0) {
             self.forced_age_timer -= 1;
