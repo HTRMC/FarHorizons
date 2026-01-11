@@ -9,6 +9,8 @@ const world = @import("World");
 const client_player = @import("player/Player.zig");
 const block_interaction = @import("BlockInteraction.zig");
 const BlockInteraction = block_interaction.BlockInteraction;
+const entity_interaction = @import("EntityInteraction.zig");
+const EntityInteraction = entity_interaction.EntityInteraction;
 
 const GameConfig = shared.GameConfig;
 const Logger = shared.Logger;
@@ -82,6 +84,8 @@ pub const FarHorizonsClient = struct {
     use_async_chunks: bool,
     /// Block interaction handler
     block_interaction: ?BlockInteraction,
+    /// Entity interaction handler (targeting and attacking)
+    entity_interaction: ?EntityInteraction,
     /// Block outline renderer
     block_outline_renderer: BlockOutlineRenderer,
     entity_manager: ?EntityManager,
@@ -118,6 +122,7 @@ pub const FarHorizonsClient = struct {
             .io = io,
             .use_async_chunks = true, // Enable async chunk loading by default
             .block_interaction = null, // Initialized in run() after chunk_manager
+            .entity_interaction = null, // Initialized in run() after entity_manager
             .block_outline_renderer = BlockOutlineRenderer.init(),
             .entity_manager = null,
             .entity_renderer = null,
@@ -220,6 +225,11 @@ pub const FarHorizonsClient = struct {
 
         // Initialize entity system with bindless textures
         self.entity_manager = EntityManager.init(self.allocator);
+
+        // Initialize entity interaction (for attacking entities)
+        if (self.entity_manager) |*em| {
+            self.entity_interaction = EntityInteraction.init(em);
+        }
 
         // Initialize bindless entity texture manager
         self.entity_texture_manager = try EntityTextureManager.init(
@@ -349,19 +359,37 @@ pub const FarHorizonsClient = struct {
                 // Update block interaction
                 if (self.block_interaction) |*bi| {
                     bi.tick();
+                }
 
-                    // Handle block interaction input (only when mouse is grabbed)
-                    if (self.mouse_handler.isMouseGrabbed()) {
-                        // Left click = break block
-                        if (self.mouse_handler.isLeftPressed()) {
-                            _ = bi.handleLeftClick();
+                // Update entity interaction
+                if (self.entity_interaction) |*ei| {
+                    ei.tick();
+                }
+
+                // Handle interaction input (only when mouse is grabbed)
+                if (self.mouse_handler.isMouseGrabbed()) {
+                    // Left click = attack entity or break block
+                    if (self.mouse_handler.isLeftPressed()) {
+                        // Try entity attack first, fall back to block breaking
+                        var attacked_entity = false;
+                        if (self.entity_interaction) |*ei| {
+                            attacked_entity = ei.handleAttack(self.local_player.getPosition(0));
                         }
-                        // Right click = place block
-                        if (self.mouse_handler.isRightPressed()) {
+                        if (!attacked_entity) {
+                            if (self.block_interaction) |*bi| {
+                                _ = bi.handleLeftClick();
+                            }
+                        }
+                    }
+                    // Right click = place block (or interact with entity in future)
+                    if (self.mouse_handler.isRightPressed()) {
+                        if (self.block_interaction) |*bi| {
                             _ = bi.handleRightClick();
                         }
-                        // Middle click = pick block
-                        if (self.mouse_handler.isMiddlePressed()) {
+                    }
+                    // Middle click = pick block
+                    if (self.mouse_handler.isMiddlePressed()) {
+                        if (self.block_interaction) |*bi| {
                             bi.handleMiddleClick();
                         }
                     }
@@ -402,6 +430,11 @@ pub const FarHorizonsClient = struct {
             // Rotation is NOT interpolated - mouse look must be instant
             self.camera.position = self.local_player.getPosition(partial_tick);
             self.camera.setRotation(self.local_player.getYRot(), self.local_player.getXRot());
+
+            // Update entity targeting (every frame for responsive targeting)
+            if (self.entity_interaction) |*ei| {
+                ei.updateTarget(&self.camera);
+            }
 
             // Update block interaction raycast (every frame for responsive crosshair)
             if (self.block_interaction) |*bi| {

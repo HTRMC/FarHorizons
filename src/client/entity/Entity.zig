@@ -94,6 +94,20 @@ pub const Entity = struct {
     /// True if horizontal movement was blocked this tick
     horizontally_blocked: bool = false,
 
+    // Hurt state (for visual feedback - actual health is in LivingEntity)
+    /// Ticks remaining in hurt animation (red flash)
+    hurt_time: u32 = 0,
+
+    /// Last attacker position (for knockback direction and fleeing)
+    last_hurt_by_pos: ?Vec3 = null,
+
+    /// Tick when last hurt
+    last_hurt_timestamp: u64 = 0,
+
+    /// Callback to owner's hurt handler (set by Cow, etc.)
+    /// Parameters: damage amount, knockback direction, attacker position
+    hurt_callback: ?*const fn (*Entity, f32, f32, Vec3) void = null,
+
     /// Create a new entity
     pub fn init(id: u64, entity_type: EntityType, position: Vec3) Self {
         return Self{
@@ -168,6 +182,19 @@ pub const Entity = struct {
 
         // Body rotation following head (like MC's BodyRotationControl)
         self.updateBodyRotation();
+
+        // Decrement hurt time (for animation)
+        if (self.hurt_time > 0) {
+            self.hurt_time -= 1;
+        }
+
+        // Clear attacker position after panic duration (100 ticks = 5 seconds)
+        if (self.last_hurt_by_pos != null) {
+            const ticks_since_hurt = self.tick_count - self.last_hurt_timestamp;
+            if (ticks_since_hurt > 100) {
+                self.last_hurt_by_pos = null;
+            }
+        }
     }
 
     /// Update body rotation to follow head when stationary
@@ -582,6 +609,49 @@ pub const Entity = struct {
         self.position.x += delta.x;
         self.position.y += delta.y;
         self.position.z += delta.z;
+    }
+
+    // =====================
+    // Damage/Hurt System
+    // =====================
+
+    /// Duration of hurt animation in ticks
+    pub const HURT_DURATION: u32 = 10;
+
+    /// Called when this entity is attacked by the player
+    /// damage: Amount of damage
+    /// knockback_dir: Direction of knockback (radians)
+    /// attacker_pos: Position of the attacker
+    pub fn hurtByPlayer(self: *Self, damage: f32, knockback_dir: f32, attacker_pos: Vec3) void {
+        // Set hurt state for visual feedback
+        self.hurt_time = HURT_DURATION;
+        self.last_hurt_by_pos = attacker_pos;
+        self.last_hurt_timestamp = self.tick_count;
+
+        // Call the owner's hurt handler if set (e.g., Cow's LivingEntity)
+        if (self.hurt_callback) |callback| {
+            callback(self, damage, knockback_dir, attacker_pos);
+        }
+    }
+
+    /// Check if entity is currently showing hurt animation
+    pub fn isHurt(self: *const Self) bool {
+        return self.hurt_time > 0;
+    }
+
+    /// Check if entity was recently hurt (for AI fleeing)
+    pub fn wasRecentlyHurt(self: *const Self) bool {
+        return self.last_hurt_by_pos != null;
+    }
+
+    /// Get the position to flee from
+    pub fn getLastHurtByPos(self: *const Self) ?Vec3 {
+        return self.last_hurt_by_pos;
+    }
+
+    /// Clear the last hurt position (after panic duration)
+    pub fn clearLastHurtBy(self: *Self) void {
+        self.last_hurt_by_pos = null;
     }
 
     /// Get model matrix for rendering

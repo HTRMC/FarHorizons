@@ -32,6 +32,30 @@ pub const LivingEntity = struct {
     hurt_time: u32 = 0, // Ticks remaining in hurt animation
     hurt_dir: f32 = 0, // Direction of knockback
 
+    /// Invulnerability timer (can't be hurt again until this reaches 0)
+    invulnerable_time: u32 = 0,
+
+    /// Last attacker position (for PanicGoal to flee from)
+    last_hurt_by_pos: ?Vec3 = null,
+
+    /// Tick when last hurt (for panic duration tracking)
+    last_hurt_timestamp: u64 = 0,
+
+    // =====================
+    // Damage Constants (from Minecraft)
+    // =====================
+
+    /// Invulnerability duration after being hurt (in ticks)
+    /// MC uses 20 ticks (1 second) of invulnerability
+    pub const INVULNERABLE_DURATION: u32 = 20;
+
+    /// How long to remember attacker position (for panic fleeing)
+    /// MC's PanicGoal uses 100 ticks (5 seconds) as panic duration
+    pub const PANIC_DURATION: u64 = 100;
+
+    /// Base knockback strength
+    pub const BASE_KNOCKBACK: f32 = 0.4;
+
     // =====================
     // Jump Constants (from Minecraft)
     // =====================
@@ -150,24 +174,99 @@ pub const LivingEntity = struct {
         if (self.hurt_time > 0) {
             self.hurt_time -= 1;
         }
+
+        // Decrement invulnerability timer
+        if (self.invulnerable_time > 0) {
+            self.invulnerable_time -= 1;
+        }
+
+        // Clear attacker position after panic duration
+        if (self.last_hurt_by_pos != null) {
+            const ticks_since_hurt = self.entity.tick_count - self.last_hurt_timestamp;
+            if (ticks_since_hurt > PANIC_DURATION) {
+                self.last_hurt_by_pos = null;
+            }
+        }
     }
 
     // =====================
     // Health & Damage
     // =====================
 
-    /// Deal damage to this entity
+    /// Deal damage to this entity (simple version without attacker tracking)
     pub fn hurt(self: *Self, amount: f32, knockback_dir: f32) void {
+        self.hurtByEntity(amount, knockback_dir, null);
+    }
+
+    /// Deal damage from an attacker at a position
+    /// attacker_pos: Position of the attacker (for knockback direction and panic fleeing)
+    pub fn hurtByEntity(self: *Self, amount: f32, knockback_dir: f32, attacker_pos: ?Vec3) void {
         if (self.dead) return;
 
+        // Check invulnerability
+        if (self.invulnerable_time > 0) return;
+
+        // Apply damage
         self.health -= amount;
         self.hurt_time = 10; // Hurt animation duration
         self.hurt_dir = knockback_dir;
+
+        // Set invulnerability
+        self.invulnerable_time = INVULNERABLE_DURATION;
+
+        // Store attacker position for PanicGoal
+        if (attacker_pos) |pos| {
+            self.last_hurt_by_pos = pos;
+            self.last_hurt_timestamp = self.entity.tick_count;
+
+            // Apply knockback away from attacker
+            self.knockback(pos);
+        }
 
         if (self.health <= 0) {
             self.health = 0;
             self.die();
         }
+    }
+
+    /// Apply knockback away from a position
+    /// Like Minecraft's LivingEntity.knockback()
+    pub fn knockback(self: *Self, from_pos: Vec3) void {
+        // Calculate direction away from attacker
+        const dx = self.entity.position.x - from_pos.x;
+        const dz = self.entity.position.z - from_pos.z;
+        const dist = @sqrt(dx * dx + dz * dz);
+
+        if (dist < 0.01) return; // Too close, no knockback direction
+
+        // Normalize and apply knockback
+        const nx = dx / dist;
+        const nz = dz / dist;
+
+        // Apply knockback velocity (like MC)
+        self.entity.velocity.x = nx * BASE_KNOCKBACK;
+        self.entity.velocity.y = BASE_KNOCKBACK; // Slight upward boost
+        self.entity.velocity.z = nz * BASE_KNOCKBACK;
+    }
+
+    /// Check if this entity was recently hurt (for PanicGoal)
+    pub fn wasRecentlyHurt(self: *const Self) bool {
+        return self.last_hurt_by_pos != null;
+    }
+
+    /// Get the position to flee from (last attacker position)
+    pub fn getLastHurtByPos(self: *const Self) ?Vec3 {
+        return self.last_hurt_by_pos;
+    }
+
+    /// Check if currently invulnerable
+    pub fn isInvulnerable(self: *const Self) bool {
+        return self.invulnerable_time > 0;
+    }
+
+    /// Check if currently showing hurt animation
+    pub fn isHurt(self: *const Self) bool {
+        return self.hurt_time > 0;
     }
 
     /// Heal this entity
