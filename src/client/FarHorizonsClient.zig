@@ -404,6 +404,14 @@ pub const FarHorizonsClient = struct {
                     const terrain_fn: ?Entity.TerrainQuery = if (terrain_query_cm != null) &terrainQueryFn else null;
                     em.tickAll(self.local_player.getPosition(0), terrain_fn);
                 }
+
+                // Tick cow AI hierarchies (LivingEntity.tick() decrements invulnerable_time)
+                if (self.cow) |*c| {
+                    c.tick();
+                }
+                if (self.baby_cow) |*bc| {
+                    bc.tick();
+                }
             }
 
             // Process completed chunk meshes (main thread only)

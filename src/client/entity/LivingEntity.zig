@@ -203,13 +203,16 @@ pub const LivingEntity = struct {
     pub fn hurtByEntity(self: *Self, amount: f32, knockback_dir: f32, attacker_pos: ?Vec3) void {
         if (self.dead) return;
 
-        // Check invulnerability
+        // Check invulnerability - if invulnerable, no damage/knockback/visual
         if (self.invulnerable_time > 0) return;
 
         // Apply damage
         self.health -= amount;
-        self.hurt_time = 10; // Hurt animation duration
+        self.hurt_time = 10; // Hurt animation duration (LivingEntity)
         self.hurt_dir = knockback_dir;
+
+        // Set Entity's hurt_time for visual feedback (red flash in EntityRenderer)
+        self.entity.hurt_time = 10;
 
         // Set invulnerability
         self.invulnerable_time = INVULNERABLE_DURATION;
@@ -218,6 +221,10 @@ pub const LivingEntity = struct {
         if (attacker_pos) |pos| {
             self.last_hurt_by_pos = pos;
             self.last_hurt_timestamp = self.entity.tick_count;
+
+            // Also set on Entity for any Entity-level queries
+            self.entity.last_hurt_by_pos = pos;
+            self.entity.last_hurt_timestamp = self.entity.tick_count;
 
             // Apply knockback away from attacker
             self.knockback(pos);

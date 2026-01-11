@@ -188,4 +188,9 @@ pub const Cow = struct {
     pub fn tryJumpOver(self: *Self, obstacle_height: f32) bool {
         return self.base.tryJumpOver(obstacle_height);
     }
+
+    /// Tick the cow (age, love mode, invulnerability, etc.)
+    pub fn tick(self: *Self) void {
+        self.base.tick();
+    }
 };

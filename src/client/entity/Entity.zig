@@ -627,12 +627,9 @@ pub const Entity = struct {
     /// knockback_dir: Direction of knockback (radians)
     /// attacker_pos: Position of the attacker
     pub fn hurtByPlayer(self: *Self, damage: f32, knockback_dir: f32, attacker_pos: Vec3) void {
-        // Set hurt state for visual feedback
-        self.hurt_time = HURT_DURATION;
-        self.last_hurt_by_pos = attacker_pos;
-        self.last_hurt_timestamp = self.tick_count;
-
         // Call the owner's hurt handler if set (e.g., Cow's LivingEntity)
+        // The LivingEntity will set hurt_time, apply damage, and knockback
+        // only if the entity is not invulnerable
         if (self.hurt_callback) |callback| {
             callback(self, damage, knockback_dir, attacker_pos);
         }
