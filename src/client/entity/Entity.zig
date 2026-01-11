@@ -108,6 +108,10 @@ pub const Entity = struct {
     /// Parameters: damage amount, knockback direction, attacker position
     hurt_callback: ?*const fn (*Entity, f32, f32, Vec3) void = null,
 
+    /// User data pointer - points to the owner struct (e.g., Cow)
+    /// Used by callbacks to access the full entity hierarchy
+    user_data: ?*anyopaque = null,
+
     /// Create a new entity
     pub fn init(id: u64, entity_type: EntityType, position: Vec3) Self {
         return Self{

@@ -1,4 +1,6 @@
 const std = @import("std");
+const shared = @import("Shared");
+const Vec3 = shared.Vec3;
 const Entity = @import("../../Entity.zig").Entity;
 const LivingEntity = @import("../../LivingEntity.zig").LivingEntity;
 const Mob = @import("../../Mob.zig").Mob;
@@ -120,6 +122,20 @@ pub const AbstractCow = struct {
         // Link AI components to entity
         self.animal.ageable.entity.goal_selector = &self.goal_selector;
         self.animal.ageable.entity.look_control = &self.look_control;
+
+        // Set up hurt callback for damage/knockback system
+        self.animal.ageable.entity.user_data = self;
+        self.animal.ageable.entity.hurt_callback = &hurtCallback;
+    }
+
+    /// Hurt callback - called when entity takes damage
+    /// Bridges Entity damage to LivingEntity's hurt system
+    fn hurtCallback(entity: *Entity, damage: f32, knockback_dir: f32, attacker_pos: Vec3) void {
+        // Get the AbstractCow from entity's user_data
+        const self: *Self = @ptrCast(@alignCast(entity.user_data));
+
+        // Call LivingEntity's hurtByEntity for proper damage handling
+        self.getLiving().hurtByEntity(damage, knockback_dir, attacker_pos);
     }
 
     pub fn deinit(self: *Self) void {
