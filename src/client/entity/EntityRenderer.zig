@@ -719,6 +719,10 @@ pub const EntityRenderer = struct {
                 if (self.use_bindless) {
                     transformed.tex_index = self.cow_tex_index;
                 }
+                // Apply red hurt tint when entity is damaged (like Minecraft)
+                if (entity.hurt_time > 0) {
+                    transformed.color = .{ 1.0, 0.4, 0.4 };
+                }
                 try all_vertices.append(self.allocator, transformed);
             }
 
@@ -761,6 +765,10 @@ pub const EntityRenderer = struct {
                 // Set texture index for bindless rendering
                 if (self.use_bindless) {
                     transformed.tex_index = self.baby_cow_tex_index;
+                }
+                // Apply red hurt tint when entity is damaged (like Minecraft)
+                if (entity.hurt_time > 0) {
+                    transformed.color = .{ 1.0, 0.4, 0.4 };
                 }
                 try all_vertices.append(self.allocator, transformed);
             }
