@@ -550,11 +550,7 @@ pub const RenderSystem = struct {
 
     /// Draw parameters for unified command recording
     pub const DrawParams = struct {
-        /// External vertex buffer (null = use self.vertex_buffer)
-        vertex_buffer: ?vk.VkBuffer = null,
-        /// External index buffer (null = use self.index_buffer)
-        index_buffer: ?vk.VkBuffer = null,
-        /// Multi-chunk draw commands (null = single draw with self.index_count)
+        /// Multi-chunk draw commands
         draw_commands: ?[]const ChunkDrawCommand = null,
         /// Staging copies to execute before rendering
         staging_copies: []const StagingCopy = &.{},
@@ -570,6 +566,10 @@ pub const RenderSystem = struct {
         baby_index_start: u32 = 0,
         /// Baby cow index count (drawn with baby texture)
         baby_index_count: u32 = 0,
+        /// Array of vertex buffers for multi-arena rendering (index = arena)
+        vertex_buffers: ?[]const vk.VkBuffer = null,
+        /// Array of index buffers for multi-arena rendering (index = arena)
+        index_buffers: ?[]const vk.VkBuffer = null,
     };
 
     /// Unified command buffer recording
@@ -647,31 +647,37 @@ pub const RenderSystem = struct {
         const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
         vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
 
-        // Determine which buffers to use
-        const vertex_buf = params.vertex_buffer orelse self.vertex_buffer;
-        const index_buf = params.index_buffer orelse self.index_buffer;
-
-        // Bind vertex and index buffers
-        const vertex_buffers = [_]vk.VkBuffer{vertex_buf};
-        const offsets = [_]vk.VkDeviceSize{0};
-        vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers, &offsets);
-
-        // Use u32 indices for multi-chunk, u16 for legacy single mesh
-        const index_type: c_uint = if (params.draw_commands != null) vk.VK_INDEX_TYPE_UINT32 else vk.VK_INDEX_TYPE_UINT16;
-        vkCmdBindIndexBuffer(command_buffer, index_buf, 0, index_type);
-
-        // Draw geometry
+        // Draw geometry using multi-arena rendering
         if (params.draw_commands) |commands| {
-            // Multi-chunk drawing
-            for (commands) |cmd| {
-                if (cmd.index_count == 0) continue;
-                const first_index: u32 = @intCast(cmd.index_offset / 4);
-                const vertex_offset: i32 = @intCast(cmd.vertex_offset / @sizeOf(Vertex));
-                vkCmdDrawIndexed(command_buffer, cmd.index_count, 1, first_index, vertex_offset, 0);
+            if (params.vertex_buffers) |vb_array| {
+                if (params.index_buffers) |ib_array| {
+                    var current_vertex_arena: u16 = 0xFFFF;
+                    var current_index_arena: u16 = 0xFFFF;
+
+                    for (commands) |cmd| {
+                        if (cmd.index_count == 0) continue;
+
+                        // Rebind buffers if arena changed
+                        if (cmd.vertex_arena != current_vertex_arena or cmd.index_arena != current_index_arena) {
+                            current_vertex_arena = cmd.vertex_arena;
+                            current_index_arena = cmd.index_arena;
+
+                            if (current_vertex_arena < vb_array.len and current_index_arena < ib_array.len) {
+                                const arena_vb = [_]vk.VkBuffer{vb_array[current_vertex_arena]};
+                                const offsets = [_]vk.VkDeviceSize{0};
+                                vkCmdBindVertexBuffers(command_buffer, 0, 1, &arena_vb, &offsets);
+                                vkCmdBindIndexBuffer(command_buffer, ib_array[current_index_arena], 0, vk.VK_INDEX_TYPE_UINT32);
+                            } else {
+                                continue;
+                            }
+                        }
+
+                        const first_index: u32 = @intCast(cmd.index_offset / 4);
+                        const vertex_offset: i32 = @intCast(cmd.vertex_offset / @sizeOf(Vertex));
+                        vkCmdDrawIndexed(command_buffer, cmd.index_count, 1, first_index, vertex_offset, 0);
+                    }
+                }
             }
-        } else {
-            // Single mesh drawing
-            vkCmdDrawIndexed(command_buffer, self.index_count, 1, 0, 0, 0);
         }
 
         // Draw entities (mobs) using bindless textures
@@ -910,6 +916,10 @@ pub const RenderSystem = struct {
         index_count: u32,
         /// Base vertex offset (added to each index)
         vertex_base: i32 = 0,
+        /// Vertex buffer arena index (for multi-buffer rendering)
+        vertex_arena: u16 = 0,
+        /// Index buffer arena index (for multi-buffer rendering)
+        index_arena: u16 = 0,
     };
 
     /// Staging copy info for buffer uploads
@@ -938,11 +948,11 @@ pub const RenderSystem = struct {
         baby_index_count: u32,
     ) !void {
         _ = staging_buffer;
+        _ = vertex_buffer;
+        _ = index_buffer;
 
         const ctx = try self.beginFrame() orelse return;
         try self.recordRenderCommands(ctx.command_buffer, ctx.image_index, .{
-            .vertex_buffer = vertex_buffer,
-            .index_buffer = index_buffer,
             .draw_commands = draw_commands,
             .staging_copies = staging_copies,
             .entity_vertex_buffer = entity_vertex_buffer,
@@ -951,6 +961,36 @@ pub const RenderSystem = struct {
             .adult_index_count = adult_index_count,
             .baby_index_start = baby_index_start,
             .baby_index_count = baby_index_count,
+        });
+        try self.endFrame(ctx);
+    }
+
+    /// Draw frame with multiple chunks from multiple arena buffers
+    pub fn drawFrameMultiArena(
+        self: *Self,
+        vertex_buffers: []const vk.VkBuffer,
+        index_buffers: []const vk.VkBuffer,
+        draw_commands: []const ChunkDrawCommand,
+        staging_copies: []const StagingCopy,
+        entity_vertex_buffer: ?vk.VkBuffer,
+        entity_index_buffer: ?vk.VkBuffer,
+        entity_index_count: u32,
+        adult_index_count: u32,
+        baby_index_start: u32,
+        baby_index_count: u32,
+    ) !void {
+        const ctx = try self.beginFrame() orelse return;
+        try self.recordRenderCommands(ctx.command_buffer, ctx.image_index, .{
+            .draw_commands = draw_commands,
+            .staging_copies = staging_copies,
+            .entity_vertex_buffer = entity_vertex_buffer,
+            .entity_index_buffer = entity_index_buffer,
+            .entity_index_count = entity_index_count,
+            .adult_index_count = adult_index_count,
+            .baby_index_start = baby_index_start,
+            .baby_index_count = baby_index_count,
+            .vertex_buffers = vertex_buffers,
+            .index_buffers = index_buffers,
         });
         try self.endFrame(ctx);
     }
