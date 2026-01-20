@@ -9,6 +9,34 @@ const BlockEntry = chunk_mod.BlockEntry;
 const CHUNK_SIZE = chunk_mod.CHUNK_SIZE;
 const fastnoise2 = @import("fastnoise2.zig");
 
+/// FastNoise2 metadata IDs
+const NoiseType = enum(i32) {
+    constant = 0,
+    checkerboard = 2,
+    gradient = 4,
+    simplex = 6,
+    perlin = 8,
+    cellular_value = 10,
+    cellular_lookup = 12,
+    ping_pong = 14,
+    domain_warp_simplex = 16,
+    domain_warp_gradient = 18,
+    domain_warp_fractal_independent = 20,
+    subtract = 22,
+    divide = 24,
+    min = 26,
+    min_smooth = 28,
+    signed_square_root = 30,
+    pow_int = 32,
+    domain_offset = 34,
+    domain_axis_scale = 36,
+    convert_rgba8 = 38,
+    fade = 40,
+    terrace = 42,
+    remove_dimension = 44,
+    domain_rotate_plane = 46,
+};
+
 /// Block IDs for terrain generation
 const STONE_ID: u8 = 1;
 const DIRT_ID: u8 = 3;
@@ -16,8 +44,8 @@ const GRASS_ID: u8 = 4;
 
 /// Terrain generation parameters
 const BASE_HEIGHT: i32 = 64;
-const HEIGHT_VARIATION: f32 = 20.0;
-const NOISE_FREQUENCY: f32 = 0.02;
+const HEIGHT_VARIATION: f32 = 30.0;
+const NOISE_FREQUENCY: f32 = 0.02; // Controls terrain feature size
 
 pub const TerrainGenerator = struct {
     seed: i32,
@@ -28,40 +56,15 @@ pub const TerrainGenerator = struct {
     /// Initialize the terrain generator with a seed
     /// Returns null if FastNoise2 initialization fails
     pub fn init(seed: i32) ?Self {
-        // Try to create a simple noise node from metadata
-        // Common metadata IDs:
-        // 0 = OpenSimplex2
-        // 1 = OpenSimplex2S
-        // 2 = Perlin
-        // 3 = Value
-        // 4 = ValueCubic
-        // 5 = Cellular
+        // Use Perlin noise for terrain generation
+        const node = fastnoise2.Node.fromMetadata(@intFromEnum(NoiseType.perlin), .auto) orelse {
+            return null;
+        };
 
-        // Try OpenSimplex2 first (ID 0), then Perlin (ID 2), then others
-        const preferred_ids = [_]i32{ 0, 2, 1, 3, 4 };
-
-        for (preferred_ids) |id| {
-            if (fastnoise2.Node.fromMetadata(id, .auto)) |node| {
-                return Self{
-                    .seed = seed,
-                    .height_noise = node,
-                };
-            }
-        }
-
-        // Last resort: try all available metadata types
-        const count = fastnoise2.getMetadataCount();
-        var i: i32 = 0;
-        while (i < count) : (i += 1) {
-            if (fastnoise2.Node.fromMetadata(i, .auto)) |node| {
-                return Self{
-                    .seed = seed,
-                    .height_noise = node,
-                };
-            }
-        }
-
-        return null;
+        return Self{
+            .seed = seed,
+            .height_noise = node,
+        };
     }
 
     /// Free resources
@@ -91,8 +94,8 @@ pub const TerrainGenerator = struct {
         // - xStepSize/yStepSize: distance between samples in noise space (frequency)
         _ = self.height_noise.genUniformGrid2D(
             &height_noise,
-            world_x_base * NOISE_FREQUENCY, // x offset in noise space
-            world_z_base * NOISE_FREQUENCY, // z mapped to y in 2D noise
+            world_x_base * NOISE_FREQUENCY,
+            world_z_base * NOISE_FREQUENCY,
             CHUNK_SIZE, // x count
             CHUNK_SIZE, // y count (z in world)
             NOISE_FREQUENCY, // step size applies frequency scaling
