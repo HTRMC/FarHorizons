@@ -119,6 +119,12 @@ pub const ChunkManager = struct {
     /// Reusable staging copies list
     staging_copies: std.ArrayListUnmanaged(StagingCopy) = .{},
 
+    /// Cached vertex buffer list for multi-arena rendering
+    vertex_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
+
+    /// Cached index buffer list for multi-arena rendering
+    index_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
+
     /// Initialize the chunk manager
     pub fn init(
         allocator: std.mem.Allocator,
@@ -165,7 +171,10 @@ pub const ChunkManager = struct {
             self.allocator,
             self.render_system.getDevice(),
             self.render_system.getPhysicalDevice(),
-            ChunkBufferConfig{}, // Use defaults
+            ChunkBufferConfig{
+                .view_distance = self.config.view_distance,
+                .vertical_view_distance = self.config.vertical_view_distance,
+            },
         );
         self.buffer_manager = buffer_mgr;
 
@@ -265,9 +274,11 @@ pub const ChunkManager = struct {
         }
         self.completed_queue.deinit();
 
-        // Free draw commands and staging copies
+        // Free draw commands, staging copies, and buffer caches
         self.draw_commands.deinit(self.allocator);
         self.staging_copies.deinit(self.allocator);
+        self.vertex_buffer_cache.deinit(self.allocator);
+        self.index_buffer_cache.deinit(self.allocator);
 
         // Free buffer manager
         if (self.buffer_manager) |buf_mgr| {
@@ -448,22 +459,74 @@ pub const ChunkManager = struct {
                 .vertex_offset = vertex_offset,
                 .index_offset = index_offset,
                 .index_count = m.index_count,
+                .vertex_arena = m.buffer_allocation.vertex_slice.arena_index,
+                .index_arena = m.buffer_allocation.index_slice.arena_index,
             }) catch continue;
         }
 
         return self.draw_commands.items;
     }
 
-    /// Get the vertex buffer for rendering
+    /// Get the primary vertex buffer for rendering (arena 0)
+    /// For multi-buffer rendering, use getVertexBufferForArena()
     pub fn getVertexBuffer(self: *const Self) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
-        return buf_mgr.getVertexBuffer();
+        return buf_mgr.getPrimaryVertexBuffer();
     }
 
-    /// Get the index buffer for rendering
+    /// Get the primary index buffer for rendering (arena 0)
+    /// For multi-buffer rendering, use getIndexBufferForArena()
     pub fn getIndexBuffer(self: *const Self) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
-        return buf_mgr.getIndexBuffer();
+        return buf_mgr.getPrimaryIndexBuffer();
+    }
+
+    /// Get a vertex buffer for a specific arena index
+    pub fn getVertexBufferForArena(self: *const Self, arena_index: u16) ?vk.VkBuffer {
+        const buf_mgr = self.buffer_manager orelse return null;
+        return buf_mgr.getVertexBuffer(arena_index);
+    }
+
+    /// Get an index buffer for a specific arena index
+    pub fn getIndexBufferForArena(self: *const Self, arena_index: u16) ?vk.VkBuffer {
+        const buf_mgr = self.buffer_manager orelse return null;
+        return buf_mgr.getIndexBuffer(arena_index);
+    }
+
+    /// Get the number of vertex buffer arenas
+    pub fn getVertexArenaCount(self: *const Self) usize {
+        const buf_mgr = self.buffer_manager orelse return 0;
+        return buf_mgr.getVertexArenaCount();
+    }
+
+    /// Get all vertex buffers for multi-arena rendering
+    /// Returns a slice of VkBuffers, one per arena
+    pub fn getAllVertexBuffers(self: *Self) []const vk.VkBuffer {
+        const buf_mgr = self.buffer_manager orelse return &.{};
+        const count = buf_mgr.getVertexArenaCount();
+
+        self.vertex_buffer_cache.clearRetainingCapacity();
+        for (0..count) |i| {
+            if (buf_mgr.getVertexBuffer(@intCast(i))) |buf| {
+                self.vertex_buffer_cache.append(self.allocator, buf) catch continue;
+            }
+        }
+        return self.vertex_buffer_cache.items;
+    }
+
+    /// Get all index buffers for multi-arena rendering
+    /// Returns a slice of VkBuffers, one per arena
+    pub fn getAllIndexBuffers(self: *Self) []const vk.VkBuffer {
+        const buf_mgr = self.buffer_manager orelse return &.{};
+        const count = buf_mgr.getIndexArenaCount();
+
+        self.index_buffer_cache.clearRetainingCapacity();
+        for (0..count) |i| {
+            if (buf_mgr.getIndexBuffer(@intCast(i))) |buf| {
+                self.index_buffer_cache.append(self.allocator, buf) catch continue;
+            }
+        }
+        return self.index_buffer_cache.items;
     }
 
     /// Get pending staging copies for GPU upload
