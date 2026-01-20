@@ -7,6 +7,10 @@ pub const Region = @import("AllocationArena.zig").Region;
 pub const BufferArena = @import("BufferArena.zig").BufferArena;
 pub const BufferSlice = @import("BufferArena.zig").BufferSlice;
 
+pub const GrowableBufferArena = @import("GrowableBufferArena.zig").GrowableBufferArena;
+pub const ExtendedBufferSlice = @import("GrowableBufferArena.zig").ExtendedBufferSlice;
+pub const GrowableBufferConfig = @import("GrowableBufferArena.zig").GrowableBufferConfig;
+
 pub const StagingRing = @import("StagingRing.zig").StagingRing;
 pub const PendingCopy = @import("StagingRing.zig").PendingCopy;
 
