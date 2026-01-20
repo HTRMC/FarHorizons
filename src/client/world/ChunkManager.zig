@@ -857,38 +857,32 @@ pub const ChunkManager = struct {
 
             // Defer freeing the RenderChunk itself via RCU
             // Workers might still be accessing this chunk's data as a neighbor
-            if (self.rcu) |rcu_instance| {
-                // Create closure data for deferred free
-                const DeferredChunkFree = struct {
-                    chunk: *RenderChunk,
-                    allocator: std.mem.Allocator,
+            const rcu_instance = self.rcu orelse {
+                @panic("RCU must be initialized before unloading chunks - this indicates a bug in initialization order");
+            };
 
-                    fn free(self_ptr: *anyopaque) void {
-                        const data: *@This() = @ptrCast(@alignCast(self_ptr));
-                        data.chunk.deinit();
-                        data.allocator.destroy(data.chunk);
-                        data.allocator.destroy(data);
-                    }
-                };
+            // Create closure data for deferred free
+            const DeferredChunkFree = struct {
+                chunk: *RenderChunk,
+                allocator: std.mem.Allocator,
 
-                const deferred = self.allocator.create(DeferredChunkFree) catch {
-                    // If allocation fails, fall back to immediate free (unsafe but better than leak)
-                    logger.warn("Failed to allocate RCU deferred free, using immediate free", .{});
-                    render_chunk_ptr.deinit();
-                    self.allocator.destroy(render_chunk_ptr);
-                    return;
-                };
-                deferred.* = .{
-                    .chunk = render_chunk_ptr,
-                    .allocator = self.allocator,
-                };
+                fn free(self_ptr: *anyopaque) void {
+                    const data: *@This() = @ptrCast(@alignCast(self_ptr));
+                    data.chunk.deinit();
+                    data.allocator.destroy(data.chunk);
+                    data.allocator.destroy(data);
+                }
+            };
 
-                rcu_instance.retire(@ptrCast(deferred), DeferredChunkFree.free);
-            } else {
-                // No RCU available, immediate free (unsafe during concurrent access)
-                render_chunk_ptr.deinit();
-                self.allocator.destroy(render_chunk_ptr);
-            }
+            const deferred = self.allocator.create(DeferredChunkFree) catch {
+                @panic("Failed to allocate RCU deferred free - out of memory");
+            };
+            deferred.* = .{
+                .chunk = render_chunk_ptr,
+                .allocator = self.allocator,
+            };
+
+            rcu_instance.retire(@ptrCast(deferred), DeferredChunkFree.free);
         }
         _ = self.pending_loads.remove(pos);
     }
