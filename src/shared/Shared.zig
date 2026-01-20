@@ -77,3 +77,8 @@ pub const BlockState = block_mod.BlockState;
 pub const raycast = @import("Raycast.zig");
 pub const BlockHitResult = raycast.BlockHitResult;
 pub const Raycast = raycast;
+
+// Terrain generation
+pub const terrain_generator = @import("TerrainGenerator.zig");
+pub const TerrainGenerator = terrain_generator.TerrainGenerator;
+pub const fastnoise2 = @import("fastnoise2.zig");

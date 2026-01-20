@@ -13,6 +13,7 @@ const Chunk = shared.Chunk;
 const ChunkPos = shared.ChunkPos;
 const ChunkPosContext = shared.ChunkPosContext;
 const CHUNK_SIZE = shared.CHUNK_SIZE;
+const TerrainGenerator = shared.TerrainGenerator;
 
 const RenderSystem = renderer.RenderSystem;
 const TextureManager = renderer.TextureManager;
@@ -109,6 +110,9 @@ pub const ChunkManager = struct {
     /// Buffer manager for GPU buffer arena allocation
     buffer_manager: ?*ChunkBufferManager = null,
 
+    /// Terrain generator for procedural chunk generation
+    terrain_generator: ?*TerrainGenerator = null,
+
     /// Reusable draw commands list
     draw_commands: std.ArrayListUnmanaged(ChunkDrawCommand) = .{},
 
@@ -188,6 +192,16 @@ pub const ChunkManager = struct {
             self.worker_model_shapers[i] = shaper;
         }
 
+        // Initialize terrain generator
+        const terrain_gen = try self.allocator.create(TerrainGenerator);
+        terrain_gen.* = TerrainGenerator.init(12345) orelse {
+            logger.err("Failed to initialize terrain generator", .{});
+            self.allocator.destroy(terrain_gen);
+            return error.TerrainGeneratorInitFailed;
+        };
+        self.terrain_generator = terrain_gen;
+        logger.info("Terrain generator initialized with seed 12345", .{});
+
         // Start pool first (this initializes contexts)
         try self.pool.start();
 
@@ -259,6 +273,12 @@ pub const ChunkManager = struct {
         if (self.buffer_manager) |buf_mgr| {
             buf_mgr.deinit();
             self.allocator.destroy(buf_mgr);
+        }
+
+        // Free terrain generator
+        if (self.terrain_generator) |terrain_gen| {
+            terrain_gen.deinit();
+            self.allocator.destroy(terrain_gen);
         }
 
         logger.info("ChunkManager shutdown complete", .{});
@@ -542,8 +562,13 @@ pub const ChunkManager = struct {
             return;
         };
 
-        // Generate chunk data (using test pattern for now)
-        render_chunk_ptr.chunk = Chunk.generateTestChunk();
+        // Generate chunk data using terrain generator
+        if (self.terrain_generator) |terrain_gen| {
+            render_chunk_ptr.chunk = terrain_gen.generateChunk(pos.x, pos.section_y, pos.z);
+        } else {
+            // Fallback to test chunk if terrain generator unavailable
+            render_chunk_ptr.chunk = Chunk.generateTestChunk();
+        }
         render_chunk_ptr.state = .meshing;
 
         // Create task data

@@ -35,8 +35,9 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.root_module.addObjectFile(lib_dep.path(libName(b, "volk")));
     exe.root_module.addObjectFile(lib_dep.path(libName(b, "stb_image")));
     exe.root_module.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
+    exe.root_module.addObjectFile(lib_dep.path(libName(b, "FastNoise")));
 
-    // shaderc requires C++ standard library
+    // shaderc and FastNoise2 require C++ standard library
     exe.root_module.link_libcpp = true;
 
     // Link system libraries
@@ -57,7 +58,13 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/shared/Shared.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
+
+    // Add include path for FastNoise2 headers
+    if (b.lazyDependency("farhorizons_deps_headers", .{})) |d| {
+        shared_module.addIncludePath(d.path(""));
+    }
 
     // Get headers dependency for include path
     const headers_dep = b.lazyDependency("farhorizons_deps_headers", .{});
