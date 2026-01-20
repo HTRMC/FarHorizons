@@ -479,10 +479,10 @@ pub const FarHorizonsClient = struct {
 
             // Render frame
             if (self.use_async_chunks) {
-                // Multi-chunk rendering with arena buffers
+                // Multi-chunk rendering with multiple arena buffers
                 if (self.chunk_manager) |*cm| {
-                    const vertex_buffer = cm.getVertexBuffer();
-                    const index_buffer = cm.getIndexBuffer();
+                    const vertex_buffers = cm.getAllVertexBuffers();
+                    const index_buffers = cm.getAllIndexBuffers();
                     const draw_commands = cm.getDrawCommands();
                     const staging_copies = cm.getStagingCopies();
 
@@ -494,12 +494,11 @@ pub const FarHorizonsClient = struct {
                     const baby_is = if (self.entity_renderer) |*er| er.getBabyIndexStart() else 0;
                     const baby_ic = if (self.entity_renderer) |*er| er.getBabyIndexCount() else 0;
 
-                    if (vertex_buffer != null and index_buffer != null and draw_commands.len > 0) {
-                        self.render_system.drawFrameMultiChunk(
-                            vertex_buffer.?,
-                            index_buffer.?,
+                    if (vertex_buffers.len > 0 and index_buffers.len > 0 and draw_commands.len > 0) {
+                        self.render_system.drawFrameMultiArena(
+                            vertex_buffers,
+                            index_buffers,
                             draw_commands,
-                            null, // staging buffer (not needed, included in copies)
                             staging_copies,
                             entity_vb,
                             entity_ib,
@@ -508,17 +507,16 @@ pub const FarHorizonsClient = struct {
                             baby_is,
                             baby_ic,
                         ) catch |err| {
-                            logger.err("Failed to draw multi-chunk frame: {}", .{err});
+                            logger.err("Failed to draw multi-arena frame: {}", .{err});
                         };
                         // Clear staging copies after they've been submitted
                         cm.clearStagingCopies();
-                    } else if (staging_copies.len > 0) {
+                    } else if (staging_copies.len > 0 and vertex_buffers.len > 0 and index_buffers.len > 0) {
                         // Have staging data but no ready chunks yet - still need to upload
-                        self.render_system.drawFrameMultiChunk(
-                            vertex_buffer orelse return,
-                            index_buffer orelse return,
+                        self.render_system.drawFrameMultiArena(
+                            vertex_buffers,
+                            index_buffers,
                             &.{},
-                            null,
                             staging_copies,
                             entity_vb,
                             entity_ib,
