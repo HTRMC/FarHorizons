@@ -186,11 +186,11 @@ pub const FarHorizonsClient = struct {
                 &self.texture_manager.?,
                 self.config.location.asset_directory,
                 ChunkConfig{
-                    .view_distance = 2, // Start small for testing
-                    .vertical_view_distance = 2,
-                    .unload_distance = 4,
-                    .worker_count = 2,
-                    .max_uploads_per_tick = 2,
+                    .view_distance = 8,
+                    .vertical_view_distance = 4,
+                    .unload_distance = 10,
+                    .worker_count = 4,
+                    .max_uploads_per_tick = 4,
                 },
             );
             try self.chunk_manager.?.start();
