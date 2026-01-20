@@ -14,6 +14,7 @@ const ChunkPos = shared.ChunkPos;
 const ChunkPosContext = shared.ChunkPosContext;
 const CHUNK_SIZE = shared.CHUNK_SIZE;
 const TerrainGenerator = shared.TerrainGenerator;
+const Rcu = shared.Rcu;
 
 const RenderSystem = renderer.RenderSystem;
 const TextureManager = renderer.TextureManager;
@@ -125,6 +126,10 @@ pub const ChunkManager = struct {
     /// Cached index buffer list for multi-arena rendering
     index_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
 
+    /// RCU for safe concurrent chunk access
+    /// Protects neighbor chunk pointers during meshing
+    rcu: ?*Rcu = null,
+
     /// Initialize the chunk manager
     pub fn init(
         allocator: std.mem.Allocator,
@@ -201,6 +206,12 @@ pub const ChunkManager = struct {
             self.worker_model_shapers[i] = shaper;
         }
 
+        // Initialize RCU for safe concurrent chunk access
+        const rcu_instance = try self.allocator.create(Rcu);
+        rcu_instance.* = Rcu.init(self.allocator, self.config.worker_count);
+        self.rcu = rcu_instance;
+        logger.info("RCU initialized for {} worker threads", .{self.config.worker_count});
+
         // Initialize terrain generator
         const terrain_gen = try self.allocator.create(TerrainGenerator);
         terrain_gen.* = TerrainGenerator.init(12345) orelse {
@@ -229,6 +240,16 @@ pub const ChunkManager = struct {
         // Shutdown thread pool
         self.pool.shutdown();
         self.pool.deinit();
+
+        // Synchronize RCU and free deferred items
+        // This must happen after pool shutdown to ensure all workers have exited
+        if (self.rcu) |rcu_instance| {
+            logger.info("Synchronizing RCU before cleanup...", .{});
+            rcu_instance.synchronize();
+            rcu_instance.deinit();
+            self.allocator.destroy(rcu_instance);
+            self.rcu = null;
+        }
 
         // Free per-worker resources
         for (0..self.config.worker_count) |i| {
@@ -413,6 +434,13 @@ pub const ChunkManager = struct {
 
             // Free the completed mesh data (ChunkMesh made a copy)
             mesh.deinit();
+        }
+
+        // Advance RCU epoch to free deferred chunk deletions
+        // This allows chunks that were unloaded in previous frames to be freed
+        // once all workers have exited their critical sections
+        if (self.rcu) |rcu_instance| {
+            _ = rcu_instance.tryAdvance();
         }
     }
 
@@ -815,17 +843,52 @@ pub const ChunkManager = struct {
     }
 
     /// Unload a single chunk
+    /// Uses RCU to defer freeing until all workers have exited their critical sections
     fn unloadChunk(self: *Self, pos: ChunkPos) void {
         if (self.loaded_chunks.fetchRemove(pos)) |kv| {
-            const chunk = kv.value;
-            // Free buffer allocation if present
+            const render_chunk_ptr = kv.value;
+
+            // Free buffer allocation immediately - workers don't access GPU buffers
             if (self.buffer_manager) |buf_mgr| {
-                if (chunk.getBufferAllocation()) |alloc| {
+                if (render_chunk_ptr.getBufferAllocation()) |alloc| {
                     buf_mgr.free(alloc);
                 }
             }
-            chunk.deinit();
-            self.allocator.destroy(chunk);
+
+            // Defer freeing the RenderChunk itself via RCU
+            // Workers might still be accessing this chunk's data as a neighbor
+            if (self.rcu) |rcu_instance| {
+                // Create closure data for deferred free
+                const DeferredChunkFree = struct {
+                    chunk: *RenderChunk,
+                    allocator: std.mem.Allocator,
+
+                    fn free(self_ptr: *anyopaque) void {
+                        const data: *@This() = @ptrCast(@alignCast(self_ptr));
+                        data.chunk.deinit();
+                        data.allocator.destroy(data.chunk);
+                        data.allocator.destroy(data);
+                    }
+                };
+
+                const deferred = self.allocator.create(DeferredChunkFree) catch {
+                    // If allocation fails, fall back to immediate free (unsafe but better than leak)
+                    logger.warn("Failed to allocate RCU deferred free, using immediate free", .{});
+                    render_chunk_ptr.deinit();
+                    self.allocator.destroy(render_chunk_ptr);
+                    return;
+                };
+                deferred.* = .{
+                    .chunk = render_chunk_ptr,
+                    .allocator = self.allocator,
+                };
+
+                rcu_instance.retire(@ptrCast(deferred), DeferredChunkFree.free);
+            } else {
+                // No RCU available, immediate free (unsafe during concurrent access)
+                render_chunk_ptr.deinit();
+                self.allocator.destroy(render_chunk_ptr);
+            }
         }
         _ = self.pending_loads.remove(pos);
     }
@@ -845,10 +908,19 @@ pub const ChunkManager = struct {
 
         const shaper = self.worker_model_shapers[ctx.id] orelse return;
 
+        // Enter RCU read-side critical section
+        // This protects neighbor chunk pointers from being freed while we're using them
+        const rcu_instance = self.rcu orelse {
+            logger.warn("RCU not initialized, skipping mesh generation", .{});
+            return;
+        };
+        _ = rcu_instance.readLock(@intCast(ctx.id));
+        defer rcu_instance.readUnlock(@intCast(ctx.id));
+
         // Create mesher
         var mesher = ChunkMesher.init(self.allocator);
 
-        // Generate mesh
+        // Generate mesh (neighbor access is now protected by RCU)
         const mesh = mesher.generateMesh(
             &task_data.chunk,
             task_data.pos,
