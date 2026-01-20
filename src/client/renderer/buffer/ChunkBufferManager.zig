@@ -1,5 +1,5 @@
 /// ChunkBufferManager - Coordinates vertex/index arenas for chunk rendering
-/// Manages large GPU buffers with sub-allocation for individual chunks
+/// Uses growable buffer arenas for AAA-quality smooth frame times
 const std = @import("std");
 const volk = @import("volk");
 const vk = volk.c;
@@ -7,33 +7,40 @@ const shared = @import("Shared");
 const Logger = shared.Logger;
 const ChunkPos = shared.ChunkPos;
 
-const BufferArena = @import("BufferArena.zig").BufferArena;
-const BufferSlice = @import("BufferArena.zig").BufferSlice;
+const GrowableBufferArena = @import("GrowableBufferArena.zig").GrowableBufferArena;
+const ExtendedBufferSlice = @import("GrowableBufferArena.zig").ExtendedBufferSlice;
 const staging_ring_module = @import("StagingRing.zig");
 const StagingRing = staging_ring_module.StagingRing;
 const PendingCopy = staging_ring_module.PendingCopy;
 
 /// Allocation handle for a chunk's GPU buffers
 pub const ChunkBufferAllocation = struct {
-    /// Slice in the vertex buffer arena
-    vertex_slice: BufferSlice,
-    /// Slice in the index buffer arena
-    index_slice: BufferSlice,
+    /// Slice in the vertex buffer arena (includes arena index)
+    vertex_slice: ExtendedBufferSlice,
+    /// Slice in the index buffer arena (includes arena index)
+    index_slice: ExtendedBufferSlice,
     /// Whether this allocation is valid
     valid: bool = true,
 
     pub const INVALID = ChunkBufferAllocation{
-        .vertex_slice = .{ .offset = 0, .size = 0, .count = 0 },
-        .index_slice = .{ .offset = 0, .size = 0, .count = 0 },
+        .vertex_slice = ExtendedBufferSlice.INVALID,
+        .index_slice = ExtendedBufferSlice.INVALID,
         .valid = false,
     };
+
+    /// Check if this allocation uses the same buffers as another
+    /// Used for batching draw calls by buffer
+    pub fn sameBuffers(self: ChunkBufferAllocation, other: ChunkBufferAllocation) bool {
+        return self.vertex_slice.arena_index == other.vertex_slice.arena_index and
+            self.index_slice.arena_index == other.index_slice.arena_index;
+    }
 };
 
 /// Configuration for the chunk buffer manager
 pub const ChunkBufferConfig = struct {
-    /// Size of the vertex buffer arena (default 256 MB)
+    /// Size of each vertex buffer arena (default 256 MB)
     vertex_arena_size: u64 = 256 * 1024 * 1024,
-    /// Size of the index buffer arena (default 128 MB)
+    /// Size of each index buffer arena (default 128 MB)
     index_arena_size: u64 = 128 * 1024 * 1024,
     /// Size of the staging ring buffer (default 64 MB)
     staging_size: u64 = 64 * 1024 * 1024,
@@ -41,17 +48,26 @@ pub const ChunkBufferConfig = struct {
     vertex_size: u64 = 36,
     /// Index size in bytes
     index_size: u64 = 4, // u32 indices
+    /// View distance for pre-allocation (0 = use fixed arena count)
+    view_distance: u8 = 0,
+    /// Vertical view distance for pre-allocation
+    vertical_view_distance: u8 = 0,
+    /// Average chunk mesh size estimate (for pre-allocation)
+    avg_chunk_vertex_size: u64 = 64 * 1024, // 64 KB average
+    avg_chunk_index_size: u64 = 32 * 1024, // 32 KB average
+    /// Expansion threshold percentage (0-100)
+    expansion_threshold: u8 = 75,
 };
 
-/// Manages GPU buffer allocation for chunks
+/// Manages GPU buffer allocation for chunks with dynamic growth
 pub const ChunkBufferManager = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
 
-    /// Vertex buffer arena
-    vertex_arena: BufferArena,
-    /// Index buffer arena
-    index_arena: BufferArena,
+    /// Growable vertex buffer arena
+    vertex_arena: GrowableBufferArena,
+    /// Growable index buffer arena
+    index_arena: GrowableBufferArena,
     /// Staging ring for uploads
     staging: StagingRing,
 
@@ -74,33 +90,71 @@ pub const ChunkBufferManager = struct {
     ) !Self {
         logger.info("Initializing ChunkBufferManager...", .{});
 
-        // Create vertex buffer arena (device local, vertex buffer usage)
-        const vertex_arena = try BufferArena.init(
-            allocator,
-            device,
-            physical_device,
-            config.vertex_arena_size,
-            vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            config.vertex_size, // Align to vertex size
-        );
-        errdefer {
-            var va = vertex_arena;
-            va.deinit();
-        }
+        // Determine if we should use view distance-based pre-allocation
+        const use_view_distance = config.view_distance > 0;
 
-        // Create index buffer arena (device local, index buffer usage)
-        const index_arena = try BufferArena.init(
-            allocator,
-            device,
-            physical_device,
-            config.index_arena_size,
-            vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            config.index_size, // Align to index size
-        );
-        errdefer {
-            var ia = index_arena;
-            ia.deinit();
+        var vertex_arena: GrowableBufferArena = undefined;
+        var index_arena: GrowableBufferArena = undefined;
+
+        if (use_view_distance) {
+            // Pre-allocate based on view distance for smooth gameplay
+            logger.info("Using view distance-based pre-allocation: {}x{}", .{
+                config.view_distance,
+                config.vertical_view_distance,
+            });
+
+            vertex_arena = try GrowableBufferArena.initForViewDistance(
+                allocator,
+                device,
+                physical_device,
+                config.view_distance,
+                config.vertical_view_distance,
+                vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                config.vertex_size,
+                config.avg_chunk_vertex_size,
+            );
+            errdefer vertex_arena.deinit();
+
+            index_arena = try GrowableBufferArena.initForViewDistance(
+                allocator,
+                device,
+                physical_device,
+                config.view_distance,
+                config.vertical_view_distance,
+                vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                config.index_size,
+                config.avg_chunk_index_size,
+            );
+        } else {
+            // Use fixed arena sizes
+            vertex_arena = try GrowableBufferArena.init(
+                allocator,
+                device,
+                physical_device,
+                .{
+                    .arena_size = config.vertex_arena_size,
+                    .initial_arena_count = 1,
+                    .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                    .alignment = config.vertex_size,
+                    .expansion_threshold_percent = config.expansion_threshold,
+                },
+            );
+            errdefer vertex_arena.deinit();
+
+            index_arena = try GrowableBufferArena.init(
+                allocator,
+                device,
+                physical_device,
+                .{
+                    .arena_size = config.index_arena_size,
+                    .initial_arena_count = 1,
+                    .usage = vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                    .alignment = config.index_size,
+                    .expansion_threshold_percent = config.expansion_threshold,
+                },
+            );
         }
+        errdefer index_arena.deinit();
 
         // Create staging ring
         const staging = try StagingRing.init(
@@ -110,9 +164,13 @@ pub const ChunkBufferManager = struct {
             config.staging_size,
         );
 
-        logger.info("ChunkBufferManager initialized: vertex={} MB, index={} MB, staging={} MB", .{
-            config.vertex_arena_size / (1024 * 1024),
-            config.index_arena_size / (1024 * 1024),
+        const vertex_stats = vertex_arena.getStats();
+        const index_stats = index_arena.getStats();
+        logger.info("ChunkBufferManager initialized: vertex={} MB ({} arenas), index={} MB ({} arenas), staging={} MB", .{
+            vertex_stats.total_capacity / (1024 * 1024),
+            vertex_stats.arena_count,
+            index_stats.total_capacity / (1024 * 1024),
+            index_stats.arena_count,
             config.staging_size / (1024 * 1024),
         });
 
@@ -138,7 +196,7 @@ pub const ChunkBufferManager = struct {
     }
 
     /// Allocate buffer space for a chunk's mesh
-    /// Returns null if arenas don't have enough space
+    /// Returns null if arenas don't have enough space (caller should retry next frame)
     pub fn allocate(
         self: *Self,
         vertex_count: u32,
@@ -149,7 +207,7 @@ pub const ChunkBufferManager = struct {
 
         // Try to allocate vertex space
         const vertex_slice = self.vertex_arena.alloc(vertex_size, vertex_count) orelse {
-            logger.warn("Failed to allocate vertex buffer space: {} vertices ({} bytes)", .{ vertex_count, vertex_size });
+            logger.warn("Failed to allocate vertex buffer space: {} vertices ({} bytes) - will retry", .{ vertex_count, vertex_size });
             return null;
         };
 
@@ -157,7 +215,7 @@ pub const ChunkBufferManager = struct {
         const index_slice = self.index_arena.alloc(index_size, index_count) orelse {
             // Rollback vertex allocation
             self.vertex_arena.free(vertex_slice);
-            logger.warn("Failed to allocate index buffer space: {} indices ({} bytes)", .{ index_count, index_size });
+            logger.warn("Failed to allocate index buffer space: {} indices ({} bytes) - will retry", .{ index_count, index_size });
             return null;
         };
 
@@ -184,9 +242,13 @@ pub const ChunkBufferManager = struct {
     ) !void {
         if (!allocation.valid) return error.InvalidAllocation;
 
+        const buffer = self.vertex_arena.getBuffer(allocation.vertex_slice.arena_index) orelse {
+            return error.InvalidArenaIndex;
+        };
+
         _ = try self.staging.stage(
             vertex_data,
-            self.vertex_arena.getBuffer(),
+            buffer,
             allocation.vertex_slice.offset,
         );
     }
@@ -199,9 +261,13 @@ pub const ChunkBufferManager = struct {
     ) !void {
         if (!allocation.valid) return error.InvalidAllocation;
 
+        const buffer = self.index_arena.getBuffer(allocation.index_slice.arena_index) orelse {
+            return error.InvalidArenaIndex;
+        };
+
         _ = try self.staging.stage(
             index_data,
-            self.index_arena.getBuffer(),
+            buffer,
             allocation.index_slice.offset,
         );
     }
@@ -221,14 +287,34 @@ pub const ChunkBufferManager = struct {
         return self.staging.hasPending();
     }
 
-    /// Get the vertex buffer for binding
-    pub fn getVertexBuffer(self: *const Self) vk.VkBuffer {
-        return self.vertex_arena.getBuffer();
+    /// Get the vertex buffer for a specific arena
+    pub fn getVertexBuffer(self: *const Self, arena_index: u16) ?vk.VkBuffer {
+        return self.vertex_arena.getBuffer(arena_index);
     }
 
-    /// Get the index buffer for binding
-    pub fn getIndexBuffer(self: *const Self) vk.VkBuffer {
-        return self.index_arena.getBuffer();
+    /// Get the index buffer for a specific arena
+    pub fn getIndexBuffer(self: *const Self, arena_index: u16) ?vk.VkBuffer {
+        return self.index_arena.getBuffer(arena_index);
+    }
+
+    /// Get the primary vertex buffer (arena 0) for backwards compatibility
+    pub fn getPrimaryVertexBuffer(self: *const Self) vk.VkBuffer {
+        return self.vertex_arena.getBuffer(0) orelse unreachable;
+    }
+
+    /// Get the primary index buffer (arena 0) for backwards compatibility
+    pub fn getPrimaryIndexBuffer(self: *const Self) vk.VkBuffer {
+        return self.index_arena.getBuffer(0) orelse unreachable;
+    }
+
+    /// Get the number of vertex arenas
+    pub fn getVertexArenaCount(self: *const Self) usize {
+        return self.vertex_arena.getArenaCount();
+    }
+
+    /// Get the number of index arenas
+    pub fn getIndexArenaCount(self: *const Self) usize {
+        return self.index_arena.getArenaCount();
     }
 
     /// Get the staging buffer for copy commands
@@ -251,23 +337,27 @@ pub const ChunkBufferManager = struct {
         vertex_used: u64,
         vertex_free: u64,
         vertex_capacity: u64,
-        vertex_fragments: usize,
+        vertex_arena_count: usize,
+        vertex_expansion_pending: bool,
         index_used: u64,
         index_free: u64,
         index_capacity: u64,
-        index_fragments: usize,
+        index_arena_count: usize,
+        index_expansion_pending: bool,
     } {
         const vertex_stats = self.vertex_arena.getStats();
         const index_stats = self.index_arena.getStats();
         return .{
-            .vertex_used = vertex_stats.used,
-            .vertex_free = vertex_stats.free,
-            .vertex_capacity = vertex_stats.capacity,
-            .vertex_fragments = vertex_stats.fragments,
-            .index_used = index_stats.used,
-            .index_free = index_stats.free,
-            .index_capacity = index_stats.capacity,
-            .index_fragments = index_stats.fragments,
+            .vertex_used = vertex_stats.total_used,
+            .vertex_free = vertex_stats.total_free,
+            .vertex_capacity = vertex_stats.total_capacity,
+            .vertex_arena_count = vertex_stats.arena_count,
+            .vertex_expansion_pending = vertex_stats.expansion_pending,
+            .index_used = index_stats.total_used,
+            .index_free = index_stats.total_free,
+            .index_capacity = index_stats.total_capacity,
+            .index_arena_count = index_stats.arena_count,
+            .index_expansion_pending = index_stats.expansion_pending,
         };
     }
 };
