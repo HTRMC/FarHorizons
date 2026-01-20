@@ -82,3 +82,8 @@ pub const Raycast = raycast;
 pub const terrain_generator = @import("TerrainGenerator.zig");
 pub const TerrainGenerator = terrain_generator.TerrainGenerator;
 pub const fastnoise2 = @import("fastnoise2.zig");
+
+// Concurrency primitives
+pub const rcu = @import("Rcu.zig");
+pub const Rcu = rcu.Rcu;
+pub const RcuReadGuard = rcu.RcuReadGuard;
