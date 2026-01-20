@@ -177,7 +177,13 @@ pub const BufferArena = struct {
 
     /// Get usage statistics
     pub fn getStats(self: *const Self) struct { used: u64, free: u64, capacity: u64, fragments: usize } {
-        return self.arena.getStats();
+        const inner_stats = self.arena.getStats();
+        return .{
+            .used = inner_stats.used,
+            .free = inner_stats.free,
+            .capacity = inner_stats.capacity,
+            .fragments = inner_stats.fragments,
+        };
     }
 
     fn findMemoryType(
