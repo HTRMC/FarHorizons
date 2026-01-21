@@ -1396,19 +1396,18 @@ pub const SystemReport = struct {
             }
         } else if (builtin.os.tag == .linux) {
             // Linux: Read /proc/meminfo
-            const file = Dir.cwd().openFile(self.io, "/proc/meminfo", .{}) catch {
+            const meminfo = Dir.cwd().readFileAlloc(self.io, "/proc/meminfo", self.allocator, .limited(4096)) catch {
                 self.setDetail("Memory", "Failed to read /proc/meminfo");
                 return;
             };
-            defer file.close();
-
-            var buf: [4096]u8 = undefined;
-            const bytes_read = file.read(&buf) catch {
+            // Track allocation so it gets freed in deinit
+            self.allocated_values.append(self.allocator, meminfo) catch {
+                self.allocator.free(meminfo);
                 self.setDetail("Memory", "Failed to read /proc/meminfo");
                 return;
             };
 
-            self.setDetail("Memory", buf[0..bytes_read]);
+            self.setDetail("Memory", meminfo);
         } else {
             self.setDetail("Memory", "Not available on this platform");
         }
