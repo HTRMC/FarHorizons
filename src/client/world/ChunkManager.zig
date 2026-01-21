@@ -80,6 +80,15 @@ pub const ChunkConfig = struct {
     max_uploads_per_tick: u8 = 4,
 };
 
+/// Per-worker data containing both manager reference and thread-local mesh context
+/// This eliminates per-chunk allocations by reusing pre-allocated buffers
+pub const WorkerData = struct {
+    /// Reference to the ChunkManager (for shared resources)
+    manager: *ChunkManager,
+    /// Thread-local mesh context with pre-allocated buffers
+    mesh_context: *WorkerMeshContext,
+};
+
 pub const ChunkManager = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
@@ -145,6 +154,10 @@ pub const ChunkManager = struct {
     /// RCU for safe concurrent chunk access
     /// Protects neighbor chunk pointers during meshing
     rcu: ?*Rcu = null,
+
+    /// Per-worker data with thread-local mesh contexts (C2ME-style optimization)
+    /// Eliminates ~2.4MB of allocations per chunk by reusing buffers
+    worker_data: ?[]WorkerData = null,
 
     /// Initialize the chunk manager
     pub fn init(
@@ -232,12 +245,27 @@ pub const ChunkManager = struct {
         // Start pool first (this initializes contexts)
         try self.pool.start();
 
-        // Set user data AFTER start() since it re-initializes contexts
-        for (0..self.config.worker_count) |i| {
-            self.pool.setWorkerData(i, @ptrCast(self));
+        // Initialize per-worker thread-local mesh contexts (C2ME-style optimization)
+        // Each worker gets ~3.6MB of pre-allocated buffers that are reused across all chunks
+        const worker_count = self.config.worker_count;
+        self.worker_data = try self.allocator.alloc(WorkerData, worker_count);
+
+        for (0..worker_count) |i| {
+            // Create the mesh context with pre-allocated buffers
+            const mesh_ctx = try self.allocator.create(WorkerMeshContext);
+            mesh_ctx.* = try WorkerMeshContext.init(self.allocator);
+
+            self.worker_data.?[i] = WorkerData{
+                .manager = self,
+                .mesh_context = mesh_ctx,
+            };
+
+            // Set user data to point to our WorkerData struct
+            self.pool.setWorkerData(i, @ptrCast(&self.worker_data.?[i]));
         }
 
-        logger.info("ChunkManager started with {} workers", .{self.config.worker_count});
+        const total_buffer_mb = @as(f32, @floatFromInt(worker_count)) * 3.6;
+        logger.info("ChunkManager started with {} workers (~{d:.1}MB thread-local buffers)", .{ worker_count, total_buffer_mb });
     }
 
     /// Shutdown and cleanup
@@ -247,6 +275,16 @@ pub const ChunkManager = struct {
         // Shutdown thread pool
         self.pool.shutdown();
         self.pool.deinit();
+
+        // Free per-worker thread-local mesh contexts
+        if (self.worker_data) |workers| {
+            for (workers) |*wd| {
+                wd.mesh_context.deinit();
+                self.allocator.destroy(wd.mesh_context);
+            }
+            self.allocator.free(workers);
+            self.worker_data = null;
+        }
 
         // Synchronize RCU and free deferred items
         // This must happen after pool shutdown to ensure all workers have exited
@@ -1038,8 +1076,10 @@ pub const ChunkManager = struct {
         const task_data_ptr = task.data orelse return;
         const task_data: *ChunkTask = @ptrCast(@alignCast(task_data_ptr));
 
-        // Get per-worker resources
-        const self: *Self = @ptrCast(@alignCast(ctx.user_data orelse return));
+        // Get per-worker data (contains both manager ref and thread-local mesh context)
+        const worker_data: *WorkerData = @ptrCast(@alignCast(ctx.user_data orelse return));
+        const self = worker_data.manager;
+        const mesh_ctx = worker_data.mesh_context;
 
         // Defer cleanup of task data
         defer self.allocator.destroy(task_data);
@@ -1080,11 +1120,9 @@ pub const ChunkManager = struct {
             },
         }
 
-        // Create mesher
-        var mesher = ChunkMesher.init(self.allocator);
-
-        // Generate mesh (neighbor access is now protected by RCU)
-        var mesh = mesher.generateMesh(
+        // Generate mesh using thread-local pre-allocated buffers (C2ME-style)
+        // This eliminates ~2.4MB of allocations per chunk!
+        var mesh = mesh_ctx.generateMesh(
             &chunk_to_mesh,
             task_data.pos,
             task_data.neighbors,
