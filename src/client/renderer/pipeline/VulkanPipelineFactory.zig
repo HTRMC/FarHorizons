@@ -128,7 +128,9 @@ pub const VulkanPipelineFactory = struct {
         };
 
         // Vertex input state based on format
-        const vertex_input_info = self.getVertexInputState(params.vertex_format);
+        var vertex_input_info = self.getVertexInputState(params.vertex_format);
+        // Build the create info AFTER the struct is in its final location (not a return copy)
+        const vertex_input_state = vertex_input_info.toCreateInfo();
 
         // Use config conversion methods
         const input_assembly = params.config.toInputAssemblyState();
@@ -203,7 +205,7 @@ pub const VulkanPipelineFactory = struct {
             .flags = 0,
             .stageCount = shader_stages.len,
             .pStages = &shader_stages,
-            .pVertexInputState = &vertex_input_info.state,
+            .pVertexInputState = &vertex_input_state,
             .pInputAssemblyState = &input_assembly,
             .pTessellationState = null,
             .pViewportState = &viewport_state,
@@ -232,7 +234,20 @@ pub const VulkanPipelineFactory = struct {
         // Maximum 4 attributes
         attributes: [4]vk.VkVertexInputAttributeDescription,
         attribute_count: u32,
-        state: vk.VkPipelineVertexInputStateCreateInfo,
+
+        /// Build the VkPipelineVertexInputStateCreateInfo pointing to this struct's fields.
+        /// MUST be called on the final location of the struct (not a temporary).
+        fn toCreateInfo(self: *const VertexInputStateWithDescriptions) vk.VkPipelineVertexInputStateCreateInfo {
+            return .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .vertexBindingDescriptionCount = 1,
+                .pVertexBindingDescriptions = &self.binding,
+                .vertexAttributeDescriptionCount = self.attribute_count,
+                .pVertexAttributeDescriptions = &self.attributes,
+            };
+        }
     };
 
     fn getVertexInputState(self: *Self, format: VertexFormat) VertexInputStateWithDescriptions {
@@ -287,16 +302,6 @@ pub const VulkanPipelineFactory = struct {
                 result.attribute_count = 2;
             },
         }
-
-        result.state = .{
-            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .vertexBindingDescriptionCount = 1,
-            .pVertexBindingDescriptions = &result.binding,
-            .vertexAttributeDescriptionCount = result.attribute_count,
-            .pVertexAttributeDescriptions = &result.attributes,
-        };
 
         return result;
     }
