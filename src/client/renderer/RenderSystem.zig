@@ -109,6 +109,11 @@ pub const RenderSystem = struct {
     pipeline_layout: vk.VkPipelineLayout = null,
     graphics_pipeline: vk.VkPipeline = null,
 
+    // Layer-specific pipelines (for render layer optimization)
+    solid_pipeline: vk.VkPipeline = null,
+    cutout_pipeline: vk.VkPipeline = null,
+    translucent_pipeline: vk.VkPipeline = null,
+
     // UI Pipeline (for crosshair, HUD elements)
     ui_pipeline_layout: vk.VkPipelineLayout = null,
     ui_pipeline: vk.VkPipeline = null,
@@ -326,10 +331,23 @@ pub const RenderSystem = struct {
         // Wait for GPU to finish
         _ = vkDeviceWaitIdle(self.device);
 
-        // Destroy old pipeline
+        // Destroy old pipelines
         if (self.graphics_pipeline) |pipeline| {
             vkDestroyPipeline(self.device, pipeline, null);
             self.graphics_pipeline = null;
+        }
+        // Destroy layer-specific pipelines
+        if (self.solid_pipeline) |pipeline| {
+            vkDestroyPipeline(self.device, pipeline, null);
+            self.solid_pipeline = null;
+        }
+        if (self.cutout_pipeline) |pipeline| {
+            vkDestroyPipeline(self.device, pipeline, null);
+            self.cutout_pipeline = null;
+        }
+        if (self.translucent_pipeline) |pipeline| {
+            vkDestroyPipeline(self.device, pipeline, null);
+            self.translucent_pipeline = null;
         }
         if (self.pipeline_layout) |layout| {
             vkDestroyPipelineLayout(self.device, layout, null);
@@ -624,7 +642,6 @@ pub const RenderSystem = struct {
         };
 
         vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
 
         // Set viewport and scissor
         const viewport = vk.VkViewport{
@@ -647,15 +664,28 @@ pub const RenderSystem = struct {
         const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
         vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
 
-        // Draw geometry using multi-arena rendering
+        // Draw geometry using multi-arena rendering with layer-specific pipelines
         if (params.draw_commands) |commands| {
             if (params.vertex_buffers) |vb_array| {
                 if (params.index_buffers) |ib_array| {
                     var current_vertex_arena: u16 = 0xFFFF;
                     var current_index_arena: u16 = 0xFFFF;
+                    var current_layer: u8 = 0xFF; // Invalid layer to force initial bind
 
                     for (commands) |cmd| {
                         if (cmd.index_count == 0) continue;
+
+                        // Bind layer-specific pipeline if layer changed
+                        if (cmd.render_layer != current_layer) {
+                            current_layer = cmd.render_layer;
+                            const pipeline = switch (current_layer) {
+                                0 => self.solid_pipeline orelse self.graphics_pipeline, // solid
+                                1 => self.cutout_pipeline orelse self.graphics_pipeline, // cutout
+                                2 => self.translucent_pipeline orelse self.graphics_pipeline, // translucent
+                                else => self.graphics_pipeline,
+                            };
+                            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                        }
 
                         // Rebind buffers if arena changed
                         if (cmd.vertex_arena != current_vertex_arena or cmd.index_arena != current_index_arena) {
@@ -1818,6 +1848,333 @@ pub const RenderSystem = struct {
         }
 
         logger.info("Graphics pipeline created", .{});
+
+        // Create layer-specific pipelines
+        try self.createLayerPipelines(vkCreateShaderModule, vkDestroyShaderModule, vkCreateGraphicsPipelines);
+    }
+
+    /// Create layer-specific pipelines for optimized rendering
+    fn createLayerPipelines(
+        self: *Self,
+        vkCreateShaderModule: @TypeOf(vk.vkCreateShaderModule.?),
+        vkDestroyShaderModule: @TypeOf(vk.vkDestroyShaderModule.?),
+        vkCreateGraphicsPipelines: @TypeOf(vk.vkCreateGraphicsPipelines.?),
+    ) !void {
+        const sm = &(self.shader_manager orelse return error.ShaderManagerNotInitialized);
+
+        // Get vertex shader (shared across all layer pipelines)
+        const vert_shader_code = sm.getDefaultVertexShader() orelse return error.ShaderNotAvailable;
+        const vert_module = try self.createShaderModule(vkCreateShaderModule, vert_shader_code);
+        defer vkDestroyShaderModule(self.device, vert_module, null);
+
+        // Common pipeline state
+        const dynamic_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR };
+        const dynamic_state = vk.VkPipelineDynamicStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .dynamicStateCount = dynamic_states.len,
+            .pDynamicStates = &dynamic_states,
+        };
+
+        const binding_description = Vertex.getBindingDescription();
+        const attribute_descriptions = Vertex.getAttributeDescriptions();
+
+        const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &binding_description,
+            .vertexAttributeDescriptionCount = attribute_descriptions.len,
+            .pVertexAttributeDescriptions = &attribute_descriptions,
+        };
+
+        const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .topology = vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = vk.VK_FALSE,
+        };
+
+        const viewport_state = vk.VkPipelineViewportStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = null,
+            .scissorCount = 1,
+            .pScissors = null,
+        };
+
+        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthClampEnable = vk.VK_FALSE,
+            .rasterizerDiscardEnable = vk.VK_FALSE,
+            .polygonMode = vk.VK_POLYGON_MODE_FILL,
+            .cullMode = vk.VK_CULL_MODE_BACK_BIT,
+            .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = vk.VK_FALSE,
+            .depthBiasConstantFactor = 0.0,
+            .depthBiasClamp = 0.0,
+            .depthBiasSlopeFactor = 0.0,
+            .lineWidth = 1.0,
+        };
+
+        const multisampling = vk.VkPipelineMultisampleStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = vk.VK_FALSE,
+            .minSampleShading = 1.0,
+            .pSampleMask = null,
+            .alphaToCoverageEnable = vk.VK_FALSE,
+            .alphaToOneEnable = vk.VK_FALSE,
+        };
+
+        // Depth stencil for solid/cutout (depth write ON)
+        const depth_stencil_write = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_TRUE,
+            .depthWriteEnable = vk.VK_TRUE,
+            .depthCompareOp = vk.VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
+        };
+
+        // Depth stencil for translucent (depth write OFF)
+        const depth_stencil_no_write = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_TRUE,
+            .depthWriteEnable = vk.VK_FALSE, // Don't write depth for translucent
+            .depthCompareOp = vk.VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
+        };
+
+        // Color blend for solid/cutout (no blending)
+        const color_blend_attachment_opaque = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_FALSE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        // Color blend for translucent (alpha blending)
+        const color_blend_attachment_blend = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        const color_blending_opaque = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = vk.VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment_opaque,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        const color_blending_blend = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = vk.VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment_blend,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        // === SOLID PIPELINE ===
+        if (sm.getSolidFragmentShader()) |solid_frag_code| {
+            const solid_frag_module = try self.createShaderModule(vkCreateShaderModule, solid_frag_code);
+            defer vkDestroyShaderModule(self.device, solid_frag_module, null);
+
+            const solid_stages = [_]vk.VkPipelineShaderStageCreateInfo{
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = vert_module,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .module = solid_frag_module,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+            };
+
+            const solid_pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stageCount = solid_stages.len,
+                .pStages = &solid_stages,
+                .pVertexInputState = &vertex_input_info,
+                .pInputAssemblyState = &input_assembly,
+                .pTessellationState = null,
+                .pViewportState = &viewport_state,
+                .pRasterizationState = &rasterizer,
+                .pMultisampleState = &multisampling,
+                .pDepthStencilState = &depth_stencil_write,
+                .pColorBlendState = &color_blending_opaque,
+                .pDynamicState = &dynamic_state,
+                .layout = self.pipeline_layout,
+                .renderPass = self.render_pass,
+                .subpass = 0,
+                .basePipelineHandle = null,
+                .basePipelineIndex = -1,
+            };
+
+            if (vkCreateGraphicsPipelines(self.device, null, 1, &solid_pipeline_info, null, &self.solid_pipeline) != vk.VK_SUCCESS) {
+                return error.PipelineCreationFailed;
+            }
+            logger.info("Solid pipeline created", .{});
+        }
+
+        // === CUTOUT PIPELINE ===
+        if (sm.getCutoutFragmentShader()) |cutout_frag_code| {
+            const cutout_frag_module = try self.createShaderModule(vkCreateShaderModule, cutout_frag_code);
+            defer vkDestroyShaderModule(self.device, cutout_frag_module, null);
+
+            const cutout_stages = [_]vk.VkPipelineShaderStageCreateInfo{
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = vert_module,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .module = cutout_frag_module,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+            };
+
+            const cutout_pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stageCount = cutout_stages.len,
+                .pStages = &cutout_stages,
+                .pVertexInputState = &vertex_input_info,
+                .pInputAssemblyState = &input_assembly,
+                .pTessellationState = null,
+                .pViewportState = &viewport_state,
+                .pRasterizationState = &rasterizer,
+                .pMultisampleState = &multisampling,
+                .pDepthStencilState = &depth_stencil_write,
+                .pColorBlendState = &color_blending_opaque,
+                .pDynamicState = &dynamic_state,
+                .layout = self.pipeline_layout,
+                .renderPass = self.render_pass,
+                .subpass = 0,
+                .basePipelineHandle = null,
+                .basePipelineIndex = -1,
+            };
+
+            if (vkCreateGraphicsPipelines(self.device, null, 1, &cutout_pipeline_info, null, &self.cutout_pipeline) != vk.VK_SUCCESS) {
+                return error.PipelineCreationFailed;
+            }
+            logger.info("Cutout pipeline created", .{});
+        }
+
+        // === TRANSLUCENT PIPELINE ===
+        if (sm.getTranslucentFragmentShader()) |translucent_frag_code| {
+            const translucent_frag_module = try self.createShaderModule(vkCreateShaderModule, translucent_frag_code);
+            defer vkDestroyShaderModule(self.device, translucent_frag_module, null);
+
+            const translucent_stages = [_]vk.VkPipelineShaderStageCreateInfo{
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                    .module = vert_module,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                    .pNext = null,
+                    .flags = 0,
+                    .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .module = translucent_frag_module,
+                    .pName = "main",
+                    .pSpecializationInfo = null,
+                },
+            };
+
+            const translucent_pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stageCount = translucent_stages.len,
+                .pStages = &translucent_stages,
+                .pVertexInputState = &vertex_input_info,
+                .pInputAssemblyState = &input_assembly,
+                .pTessellationState = null,
+                .pViewportState = &viewport_state,
+                .pRasterizationState = &rasterizer,
+                .pMultisampleState = &multisampling,
+                .pDepthStencilState = &depth_stencil_no_write,
+                .pColorBlendState = &color_blending_blend,
+                .pDynamicState = &dynamic_state,
+                .layout = self.pipeline_layout,
+                .renderPass = self.render_pass,
+                .subpass = 0,
+                .basePipelineHandle = null,
+                .basePipelineIndex = -1,
+            };
+
+            if (vkCreateGraphicsPipelines(self.device, null, 1, &translucent_pipeline_info, null, &self.translucent_pipeline) != vk.VK_SUCCESS) {
+                return error.PipelineCreationFailed;
+            }
+            logger.info("Translucent pipeline created", .{});
+        }
     }
 
     fn createUIDescriptorSetLayout(self: *Self) !void {
@@ -3425,6 +3782,19 @@ pub const RenderSystem = struct {
         if (self.graphics_pipeline) |p| {
             if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
             self.graphics_pipeline = null;
+        }
+        // Destroy layer-specific pipelines
+        if (self.solid_pipeline) |p| {
+            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+            self.solid_pipeline = null;
+        }
+        if (self.cutout_pipeline) |p| {
+            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+            self.cutout_pipeline = null;
+        }
+        if (self.translucent_pipeline) |p| {
+            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+            self.translucent_pipeline = null;
         }
         if (self.pipeline_layout) |l| {
             if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
