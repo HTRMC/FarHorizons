@@ -52,7 +52,7 @@ pub const CrashReport = struct {
             .error_msg = if (err) |e| @errorName(e) else null,
             .stack_trace = @errorReturnTrace(),
             .categories = .{},
-            .system_report = SystemReport.init(allocator),
+            .system_report = SystemReport.init(allocator, io),
             .timestamp = getTimestamp(),
         };
     }
@@ -306,12 +306,14 @@ pub const SystemReport = struct {
     };
 
     allocator: std.mem.Allocator,
+    io: Io,
     entries: std.ArrayListUnmanaged(Entry),
     allocated_values: std.ArrayListUnmanaged([]const u8),
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator, io: Io) Self {
         var self = Self{
             .allocator = allocator,
+            .io = io,
             .entries = .{},
             .allocated_values = .{},
         };
@@ -1394,7 +1396,7 @@ pub const SystemReport = struct {
             }
         } else if (builtin.os.tag == .linux) {
             // Linux: Read /proc/meminfo
-            const file = std.fs.cwd().openFile("/proc/meminfo", .{}) catch {
+            const file = Dir.cwd().openFile(self.io, "/proc/meminfo", .{}) catch {
                 self.setDetail("Memory", "Failed to read /proc/meminfo");
                 return;
             };
