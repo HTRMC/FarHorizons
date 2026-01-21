@@ -304,16 +304,272 @@ pub const ChunkMesher = struct {
     }
 };
 
-/// Per-worker meshing context (holds thread-local resources)
+/// Per-worker meshing context with pre-allocated buffers
+/// Eliminates per-chunk allocations by reusing large working buffers
+/// Inspired by C2ME's thread-local caching strategy
 pub const WorkerMeshContext = struct {
-    mesher: ChunkMesher,
-    /// Per-worker allocator (could be thread-local arena)
+    const Self = @This();
+
+    /// Pre-allocated working buffers for each render layer
+    /// These are sized for worst-case and reused across all chunks
+    layer_vertices: [RENDER_LAYER_COUNT][]Vertex,
+    layer_indices: [RENDER_LAYER_COUNT][]u32,
+
+    /// Allocator used for these buffers (and for final result allocation)
     allocator: std.mem.Allocator,
 
-    pub fn init(allocator: std.mem.Allocator) WorkerMeshContext {
-        return .{
-            .mesher = ChunkMesher.init(allocator),
+    /// Buffer capacity (vertices per layer)
+    /// Worst case: every block visible on all 6 sides = CHUNK_SIZE^3 * 6 faces * 4 verts
+    /// But realistically, only surface blocks are visible, so we use a generous but not max estimate
+    pub const VERTEX_CAPACITY_PER_LAYER = 32768; // ~1MB per layer for vertices
+    pub const INDEX_CAPACITY_PER_LAYER = 49152; // ~192KB per layer for indices
+
+    /// Total pre-allocated memory per worker: ~3.6MB (3 layers)
+    /// Much better than allocating 2.4MB+ per chunk!
+
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        var self: Self = .{
+            .layer_vertices = undefined,
+            .layer_indices = undefined,
             .allocator = allocator,
         };
+
+        // Pre-allocate all buffers upfront (happens once per worker thread)
+        for (0..RENDER_LAYER_COUNT) |i| {
+            self.layer_vertices[i] = try allocator.alloc(Vertex, VERTEX_CAPACITY_PER_LAYER);
+            errdefer {
+                for (0..i) |j| {
+                    allocator.free(self.layer_vertices[j]);
+                    allocator.free(self.layer_indices[j]);
+                }
+            }
+            self.layer_indices[i] = try allocator.alloc(u32, INDEX_CAPACITY_PER_LAYER);
+        }
+
+        return self;
+    }
+
+    pub fn deinit(self: *Self) void {
+        for (0..RENDER_LAYER_COUNT) |i| {
+            self.allocator.free(self.layer_vertices[i]);
+            self.allocator.free(self.layer_indices[i]);
+        }
+    }
+
+    /// Generate mesh using pre-allocated buffers (zero per-chunk allocations for working buffers!)
+    /// Only allocates for the final right-sized result
+    pub fn generateMesh(
+        self: *Self,
+        chunk: *const Chunk,
+        pos: ChunkPos,
+        neighbors: [6]?*const Chunk,
+        block_model_shaper: *BlockModelShaper,
+        texture_manager: *const TextureManager,
+    ) !CompletedMesh {
+        // Create chunk access for cross-chunk face culling
+        var chunk_access = ChunkAccess.init(chunk);
+        if (neighbors[0]) |n| chunk_access.setNeighbor(.down, n);
+        if (neighbors[1]) |n| chunk_access.setNeighbor(.up, n);
+        if (neighbors[2]) |n| chunk_access.setNeighbor(.north, n);
+        if (neighbors[3]) |n| chunk_access.setNeighbor(.south, n);
+        if (neighbors[4]) |n| chunk_access.setNeighbor(.west, n);
+        if (neighbors[5]) |n| chunk_access.setNeighbor(.east, n);
+
+        // Track how much of each buffer we use
+        var layer_vertex_idx: [RENDER_LAYER_COUNT]usize = .{ 0, 0, 0 };
+        var layer_index_idx: [RENDER_LAYER_COUNT]usize = .{ 0, 0, 0 };
+
+        // Get world offset for this chunk
+        const block_pos = pos.getBlockPos();
+        const offset_x: f32 = @floatFromInt(block_pos.x);
+        const offset_y: f32 = @floatFromInt(block_pos.y);
+        const offset_z: f32 = @floatFromInt(block_pos.z);
+
+        // Iterate through chunk and bake visible faces into PRE-ALLOCATED buffers
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                for (0..CHUNK_SIZE) |x| {
+                    const entry = chunk.getBlockEntry(@intCast(x), @intCast(y), @intCast(z));
+                    if (entry.isAir()) continue;
+
+                    // Get render layer for this block
+                    const block_def = entry.getBlock();
+                    const layer = block_def.getRenderLayer(entry.state);
+                    const layer_idx = @intFromEnum(layer);
+
+                    // Get the model for this block via blockstate system
+                    const model = block_model_shaper.getModel(entry) catch continue;
+                    const variant = block_model_shaper.getVariant(entry) catch continue;
+
+                    // Bake this block's faces into the appropriate layer's PRE-ALLOCATED buffer
+                    self.bakeBlock(
+                        model,
+                        chunk,
+                        &chunk_access,
+                        @intCast(x),
+                        @intCast(y),
+                        @intCast(z),
+                        offset_x,
+                        offset_y,
+                        offset_z,
+                        texture_manager,
+                        variant.x,
+                        variant.y,
+                        variant.uvlock,
+                        self.layer_vertices[layer_idx],
+                        self.layer_indices[layer_idx],
+                        &layer_vertex_idx[layer_idx],
+                        &layer_index_idx[layer_idx],
+                    );
+                }
+            }
+        }
+
+        // NOW allocate right-sized result buffers and copy (only allocation per chunk!)
+        var result_layers: [RENDER_LAYER_COUNT]CompletedLayerData = undefined;
+        for (0..RENDER_LAYER_COUNT) |i| {
+            const vertex_count = layer_vertex_idx[i];
+            const index_count = layer_index_idx[i];
+
+            if (vertex_count == 0) {
+                result_layers[i] = .{
+                    .vertices = &[_]Vertex{},
+                    .indices = &[_]u32{},
+                };
+            } else {
+                // Allocate exact-sized buffers for result
+                const result_vertices = try self.allocator.alloc(Vertex, vertex_count);
+                errdefer self.allocator.free(result_vertices);
+                const result_indices = try self.allocator.alloc(u32, index_count);
+
+                // Copy from working buffers to result
+                @memcpy(result_vertices, self.layer_vertices[i][0..vertex_count]);
+                @memcpy(result_indices, self.layer_indices[i][0..index_count]);
+
+                result_layers[i] = .{
+                    .vertices = result_vertices,
+                    .indices = result_indices,
+                };
+            }
+        }
+
+        return CompletedMesh{
+            .pos = pos,
+            .layers = result_layers,
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Bake a single block's faces into the mesh buffers
+    fn bakeBlock(
+        self: *Self,
+        model: *const BlockModel,
+        chunk: *const Chunk,
+        chunk_access: *const ChunkAccess,
+        x: i32,
+        y: i32,
+        z: i32,
+        offset_x: f32,
+        offset_y: f32,
+        offset_z: f32,
+        texture_manager: *const TextureManager,
+        model_rotation_x: i16,
+        model_rotation_y: i16,
+        uvlock: bool,
+        vertices: []Vertex,
+        indices: []u32,
+        vertex_idx: *usize,
+        index_idx: *usize,
+    ) void {
+        _ = self;
+
+        const elements = model.elements orelse return;
+        const directions = [_]Direction{ .down, .up, .north, .south, .west, .east };
+
+        for (elements) |*elem| {
+            for (directions) |dir| {
+                if (elem.faces.get(dir)) |face| {
+                    // Only cull faces that have cullface specified
+                    if (face.cullface) |cullface_dir| {
+                        const rotated_cullface = FaceBakery.rotateFaceDirection(cullface_dir, model_rotation_x, model_rotation_y);
+                        const rotated_voxel_dir: VoxelDirection = @enumFromInt(@intFromEnum(rotated_cullface));
+                        const rotated_bounds = FaceBakery.rotateElementBounds(
+                            elem.from,
+                            elem.to,
+                            model_rotation_x,
+                            model_rotation_y,
+                        );
+
+                        if (!chunk.shouldRenderElementFace(
+                            x, y, z,
+                            rotated_voxel_dir,
+                            rotated_bounds.from,
+                            rotated_bounds.to,
+                            chunk_access,
+                        )) {
+                            continue;
+                        }
+                    }
+
+                    // Check buffer capacity
+                    if (vertex_idx.* + 4 > vertices.len or index_idx.* + 6 > indices.len) {
+                        return; // Buffer full, skip remaining faces
+                    }
+
+                    const texture_index = texture_manager.getTextureIndex(face.texture);
+
+                    var quad = FaceBakery.bakeQuad(
+                        elem.from,
+                        elem.to,
+                        face,
+                        dir,
+                        elem.rotation,
+                        elem.shade,
+                        elem.light_emission,
+                        texture_index,
+                    );
+
+                    FaceBakery.rotateQuad(&quad, model_rotation_x, model_rotation_y, uvlock);
+
+                    const ao_direction: VoxelDirection = @enumFromInt(@intFromEnum(quad.direction));
+                    const ao_values = if (quad.shade)
+                        AmbientOcclusion.calculateFaceAo(chunk_access, x, y, z, ao_direction)
+                    else
+                        [4]f32{ 1.0, 1.0, 1.0, 1.0 };
+
+                    const local_x: f32 = @floatFromInt(x);
+                    const local_y: f32 = @floatFromInt(y);
+                    const local_z: f32 = @floatFromInt(z);
+
+                    const base_vertex: u32 = @intCast(vertex_idx.*);
+                    for (0..4) |i| {
+                        const vpos = quad.position(@intCast(i));
+                        const packed_uv = quad.packedUV(@intCast(i));
+                        const u: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
+                        const v: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
+                        const ao = ao_values[i];
+                        vertices[vertex_idx.*] = .{
+                            .pos = .{
+                                vpos[0] + local_x + offset_x,
+                                vpos[1] + local_y + offset_y,
+                                vpos[2] + local_z + offset_z,
+                            },
+                            .color = .{ ao, ao, ao },
+                            .uv = .{ u, v },
+                            .tex_index = quad.texture_index,
+                        };
+                        vertex_idx.* += 1;
+                    }
+
+                    indices[index_idx.*] = base_vertex;
+                    indices[index_idx.* + 1] = base_vertex + 1;
+                    indices[index_idx.* + 2] = base_vertex + 2;
+                    indices[index_idx.* + 3] = base_vertex + 2;
+                    indices[index_idx.* + 4] = base_vertex + 3;
+                    indices[index_idx.* + 5] = base_vertex;
+                    index_idx.* += 6;
+                }
+            }
+        }
     }
 };
