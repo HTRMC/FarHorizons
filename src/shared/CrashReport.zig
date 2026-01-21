@@ -1394,7 +1394,7 @@ pub const SystemReport = struct {
             }
         } else if (builtin.os.tag == .linux) {
             // Linux: Read /proc/meminfo
-            const file = std.fs.openFileAbsolute("/proc/meminfo", .{}) catch {
+            const file = std.fs.cwd().openFile("/proc/meminfo", .{}) catch {
                 self.setDetail("Memory", "Failed to read /proc/meminfo");
                 return;
             };
