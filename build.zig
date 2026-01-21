@@ -150,6 +150,16 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // Create ECS module (Entity Component System)
+    const ecs_module = b.createModule(.{
+        .root_source_file = b.path("src/ecs/ecs.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "Shared", .module = shared_module },
+        },
+    });
+
     const exe = b.addExecutable(.{
         .name = "FarHorizons",
         .root_module = b.createModule(.{
@@ -164,6 +174,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "Renderer", .module = renderer_module },
                 .{ .name = "World", .module = world_module },
                 .{ .name = "stb_image", .module = stb_image_module },
+                .{ .name = "ecs", .module = ecs_module },
             },
         }),
     });
