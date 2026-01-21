@@ -8,6 +8,22 @@ const VoxelShape = voxel_shape.VoxelShape;
 const shapes = @import("../Shapes.zig");
 const Shapes = shapes.Shapes;
 
+/// Render layer determines how a block is rendered
+/// Blocks are rendered in order: SOLID -> CUTOUT -> TRANSLUCENT
+pub const RenderLayer = enum(u8) {
+    /// Opaque blocks - no transparency (stone, dirt, wood)
+    /// Rendered first, depth write enabled, no blending
+    solid = 0,
+
+    /// Cutout blocks - binary transparency via alpha test (leaves, flowers, grass)
+    /// Rendered second, depth write enabled, alpha discard in shader
+    cutout = 1,
+
+    /// Translucent blocks - partial transparency via blending (water, ice, stained glass)
+    /// Rendered last, depth write disabled, alpha blending enabled
+    translucent = 2,
+};
+
 /// Block state properties that affect shape
 /// Packed into a u8 for efficient storage
 ///
@@ -137,6 +153,8 @@ pub const BlockVTable = struct {
     isOpaque: *const fn (state: BlockState) bool,
     /// Check if block has collision
     isSolid: *const fn (state: BlockState) bool,
+    /// Get the render layer for this block
+    getRenderLayer: *const fn (state: BlockState) RenderLayer,
 };
 
 /// Block definition
@@ -162,6 +180,11 @@ pub const Block = struct {
     pub fn isSolid(self: *const Block, state: BlockState) bool {
         return self.vtable.isSolid(state);
     }
+
+    /// Get render layer
+    pub fn getRenderLayer(self: *const Block, state: BlockState) RenderLayer {
+        return self.vtable.getRenderLayer(state);
+    }
 };
 
 // ======================
@@ -173,6 +196,7 @@ pub const FULL_BLOCK_VTABLE = BlockVTable{
     .getShape = fullBlockGetShape,
     .isOpaque = fullBlockIsOpaque,
     .isSolid = fullBlockIsSolid,
+    .getRenderLayer = solidRenderLayer,
 };
 
 fn fullBlockGetShape(_: BlockState) *const VoxelShape {
@@ -187,11 +211,16 @@ fn fullBlockIsSolid(_: BlockState) bool {
     return true;
 }
 
+fn solidRenderLayer(_: BlockState) RenderLayer {
+    return .solid;
+}
+
 /// Air block
 pub const AIR_BLOCK_VTABLE = BlockVTable{
     .getShape = airBlockGetShape,
     .isOpaque = airBlockIsOpaque,
     .isSolid = airBlockIsSolid,
+    .getRenderLayer = solidRenderLayer, // Air doesn't render, but default to solid
 };
 
 fn airBlockGetShape(_: BlockState) *const VoxelShape {
@@ -206,15 +235,24 @@ fn airBlockIsSolid(_: BlockState) bool {
     return false;
 }
 
-/// Leaves block (full shape, not opaque, solid)
+/// Leaves block (full shape, not opaque, solid) - uses CUTOUT rendering
 pub const LEAVES_BLOCK_VTABLE = BlockVTable{
     .getShape = fullBlockGetShape,
     .isOpaque = leavesBlockIsOpaque,
     .isSolid = fullBlockIsSolid,
+    .getRenderLayer = cutoutRenderLayer,
 };
 
 fn leavesBlockIsOpaque(_: BlockState) bool {
     return false;
+}
+
+fn cutoutRenderLayer(_: BlockState) RenderLayer {
+    return .cutout;
+}
+
+fn translucentRenderLayer(_: BlockState) RenderLayer {
+    return .translucent;
 }
 
 // ======================
