@@ -275,24 +275,6 @@ pub const ShaderManager = struct {
         return self.entity_frag_spv;
     }
 
-    /// Get default vertex shader as u32 words for Vulkan
-    pub fn getDefaultVertexShaderWords(self: *ShaderManager) ?[]const u32 {
-        if (self.default_vert_spv) |spv| {
-            const ptr: [*]const u32 = @ptrCast(@alignCast(spv.ptr));
-            return ptr[0 .. spv.len / 4];
-        }
-        return null;
-    }
-
-    /// Get default fragment shader as u32 words for Vulkan
-    pub fn getDefaultFragmentShaderWords(self: *ShaderManager) ?[]const u32 {
-        if (self.default_frag_spv) |spv| {
-            const ptr: [*]const u32 = @ptrCast(@alignCast(spv.ptr));
-            return ptr[0 .. spv.len / 4];
-        }
-        return null;
-    }
-
     /// Load a shader pack from a directory
     /// Shader pack structure:
     ///   pack_path/
