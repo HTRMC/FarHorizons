@@ -11,6 +11,7 @@ const block_mod = @import("Block.zig");
 const Block = block_mod.Block;
 const BlockState = block_mod.BlockState;
 const BlockVTable = block_mod.BlockVTable;
+const RenderLayer = block_mod.RenderLayer;
 const voxel_shape = @import("../VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const Direction = voxel_shape.Direction;
@@ -23,6 +24,7 @@ pub const ROTATED_PILLAR_BLOCK_VTABLE = BlockVTable{
     .getShape = pillarGetShape,
     .isOpaque = pillarIsOpaque,
     .isSolid = pillarIsSolid,
+    .getRenderLayer = pillarGetRenderLayer,
 };
 
 /// Pillar blocks are always full cubes
@@ -38,6 +40,11 @@ fn pillarIsOpaque(_: BlockState) bool {
 /// Pillar blocks are always solid
 fn pillarIsSolid(_: BlockState) bool {
     return true;
+}
+
+/// Pillar blocks use solid render layer
+fn pillarGetRenderLayer(_: BlockState) RenderLayer {
+    return .solid;
 }
 
 /// Get the axis from a clicked face direction
