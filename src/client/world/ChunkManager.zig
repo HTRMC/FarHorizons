@@ -686,10 +686,14 @@ pub const ChunkManager = struct {
             .render_chunk = render_chunk_ptr,
         };
 
+        // Calculate priority based on distance to player (lower = higher priority)
+        const priority = self.calculateChunkPriority(pos);
+
         // Submit to thread pool for terrain generation + meshing
         self.pool.submit(Task{
             .task_type = .generate_and_mesh,
             .data = @ptrCast(task_data),
+            .priority = priority,
         }) catch {
             self.allocator.destroy(task_data);
             return;
@@ -724,6 +728,23 @@ pub const ChunkManager = struct {
         }
 
         return neighbors;
+    }
+
+    /// Calculate task priority based on distance to player
+    /// Lower values = higher priority (processed first)
+    /// Uses squared distance to avoid sqrt, with vertical distance weighted less
+    fn calculateChunkPriority(self: *Self, pos: ChunkPos) i32 {
+        const dx = pos.x - self.player_chunk.x;
+        const dz = pos.z - self.player_chunk.z;
+        const dy = pos.section_y - self.player_chunk.section_y;
+
+        // Horizontal distance matters more than vertical
+        // Squared distance: closer chunks get lower (better) priority
+        const horizontal_dist_sq = dx * dx + dz * dz;
+        const vertical_dist_sq = dy * dy;
+
+        // Weight horizontal distance more heavily (vertical chunks less important)
+        return horizontal_dist_sq + @divFloor(vertical_dist_sq, 2);
     }
 
     // ========== Block Access Methods ==========
@@ -834,10 +855,15 @@ pub const ChunkManager = struct {
             .render_chunk = render_chunk_ptr,
         };
 
+        // Remesh tasks get high priority (player just modified this chunk)
+        // Use negative priority to ensure remesh happens before new chunk generation
+        const priority = self.calculateChunkPriority(pos) - 1000;
+
         // Submit to thread pool for meshing only
         self.pool.submit(Task{
             .task_type = .generate_and_mesh,
             .data = @ptrCast(task_data),
+            .priority = priority,
         }) catch {
             self.allocator.destroy(task_data);
             return;
