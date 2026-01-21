@@ -3,6 +3,7 @@ const shared = @import("Shared");
 const renderer = @import("Renderer");
 const volk = @import("volk");
 const vk = volk.c;
+const ecs = @import("ecs");
 
 const Entity = @import("Entity.zig").Entity;
 const EntityType = @import("Entity.zig").EntityType;
@@ -804,6 +805,188 @@ pub const EntityRenderer = struct {
         self.vertex_buffer_memory = vertex_result.memory;
 
         // Create index buffer
+        const index_result = try self.gpu_device.createBufferWithDataRaw(
+            u32,
+            all_indices.items,
+            vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        );
+        self.index_buffer = index_result.handle;
+        self.index_buffer_memory = index_result.memory;
+
+        self.vertex_count = @intCast(all_vertices.items.len);
+        self.index_count = @intCast(all_indices.items.len);
+    }
+
+    /// Update entity meshes from ECS World and upload to GPU
+    /// ECS version - uses Transform, Animation, HeadRotation, RenderData, Health components
+    pub fn updateFromECS(self: *Self, world: *ecs.World, partial_tick: f32) !void {
+        var all_vertices: std.ArrayList(Vertex) = .empty;
+        defer all_vertices.deinit(self.allocator);
+        var all_indices: std.ArrayList(u32) = .empty;
+        defer all_indices.deinit(self.allocator);
+
+        // First pass: adult cows
+        var entity_iter = world.entities.iterator();
+        while (entity_iter.next()) |id| {
+            const render_data = world.getComponent(ecs.RenderData, id) orelse continue;
+            if (render_data.entity_type != .cow and render_data.entity_type != .mooshroom) continue;
+            if (render_data.is_baby) continue;
+
+            const transform = world.getComponent(ecs.Transform, id) orelse continue;
+
+            // Get animation data
+            var walk_anim: f32 = 0;
+            var walk_speed: f32 = 0;
+            if (world.getComponent(ecs.Animation, id)) |anim| {
+                walk_anim = anim.getInterpolatedWalkAnimation(partial_tick);
+                walk_speed = anim.getInterpolatedWalkSpeed(partial_tick);
+            }
+
+            // Get head rotation
+            var head_pitch: f32 = 0;
+            var head_yaw: f32 = 0;
+            if (world.getComponent(ecs.HeadRotation, id)) |head| {
+                head_pitch = head.getInterpolatedPitch(partial_tick);
+                head_yaw = head.getInterpolatedYaw(partial_tick);
+            }
+
+            // Get hurt state
+            var is_hurt = false;
+            if (world.getComponent(ecs.Health, id)) |health| {
+                is_hurt = health.isHurt();
+            }
+
+            // Build model matrix
+            const pos = transform.getInterpolatedPosition(partial_tick);
+            const yaw = transform.getInterpolatedYaw(partial_tick);
+            const yaw_rad = yaw * std.math.pi / 180.0;
+            const rotation = Mat4.rotationY(yaw_rad);
+            const translation = Mat4.translation(pos);
+            const m = Mat4.multiply(translation, rotation);
+
+            const base_vertex: u32 = @intCast(all_vertices.items.len);
+
+            const mesh = try self.cow_model.generateMesh(walk_anim, walk_speed, head_pitch, head_yaw);
+            defer self.allocator.free(mesh.vertices);
+            defer self.allocator.free(mesh.indices);
+
+            for (mesh.vertices) |vert| {
+                var transformed = vert;
+                const x = vert.pos[0];
+                const y = vert.pos[1];
+                const z = vert.pos[2];
+                transformed.pos = .{
+                    m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
+                    m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
+                    m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
+                };
+                if (self.use_bindless) {
+                    transformed.tex_index = self.cow_tex_index;
+                }
+                if (is_hurt) {
+                    transformed.color = .{ 1.0, 0.4, 0.4 };
+                }
+                try all_vertices.append(self.allocator, transformed);
+            }
+
+            for (mesh.indices) |idx| {
+                try all_indices.append(self.allocator, base_vertex + idx);
+            }
+        }
+
+        // Record where adult indices end
+        self.adult_index_count = @intCast(all_indices.items.len);
+        self.baby_index_start = self.adult_index_count;
+
+        // Second pass: baby cows
+        entity_iter = world.entities.iterator();
+        while (entity_iter.next()) |id| {
+            const render_data = world.getComponent(ecs.RenderData, id) orelse continue;
+            if (render_data.entity_type != .cow and render_data.entity_type != .mooshroom) continue;
+            if (!render_data.is_baby) continue;
+
+            const transform = world.getComponent(ecs.Transform, id) orelse continue;
+
+            var walk_anim: f32 = 0;
+            var walk_speed: f32 = 0;
+            if (world.getComponent(ecs.Animation, id)) |anim| {
+                walk_anim = anim.getInterpolatedWalkAnimation(partial_tick);
+                walk_speed = anim.getInterpolatedWalkSpeed(partial_tick);
+            }
+
+            var head_pitch: f32 = 0;
+            var head_yaw: f32 = 0;
+            if (world.getComponent(ecs.HeadRotation, id)) |head| {
+                head_pitch = head.getInterpolatedPitch(partial_tick);
+                head_yaw = head.getInterpolatedYaw(partial_tick);
+            }
+
+            var is_hurt = false;
+            if (world.getComponent(ecs.Health, id)) |health| {
+                is_hurt = health.isHurt();
+            }
+
+            const pos = transform.getInterpolatedPosition(partial_tick);
+            const yaw = transform.getInterpolatedYaw(partial_tick);
+            const yaw_rad = yaw * std.math.pi / 180.0;
+            const rotation = Mat4.rotationY(yaw_rad);
+            const translation = Mat4.translation(pos);
+            const m = Mat4.multiply(translation, rotation);
+
+            const base_vertex: u32 = @intCast(all_vertices.items.len);
+
+            const mesh = try self.baby_cow_model.generateMesh(walk_anim, walk_speed, head_pitch, head_yaw);
+            defer self.allocator.free(mesh.vertices);
+            defer self.allocator.free(mesh.indices);
+
+            for (mesh.vertices) |vert| {
+                var transformed = vert;
+                const x = vert.pos[0];
+                const y = vert.pos[1];
+                const z = vert.pos[2];
+                transformed.pos = .{
+                    m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
+                    m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
+                    m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
+                };
+                if (self.use_bindless) {
+                    transformed.tex_index = self.baby_cow_tex_index;
+                }
+                if (is_hurt) {
+                    transformed.color = .{ 1.0, 0.4, 0.4 };
+                }
+                try all_vertices.append(self.allocator, transformed);
+            }
+
+            for (mesh.indices) |idx| {
+                try all_indices.append(self.allocator, base_vertex + idx);
+            }
+        }
+
+        // Calculate baby index count
+        const total_indices: u32 = @intCast(all_indices.items.len);
+        self.baby_index_count = total_indices - self.baby_index_start;
+
+        if (all_vertices.items.len == 0) {
+            self.vertex_count = 0;
+            self.index_count = 0;
+            self.adult_index_count = 0;
+            self.baby_index_start = 0;
+            self.baby_index_count = 0;
+            return;
+        }
+
+        // Recreate buffers if size changed
+        self.destroyBuffers();
+
+        const vertex_result = try self.gpu_device.createBufferWithDataRaw(
+            Vertex,
+            all_vertices.items,
+            vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        );
+        self.vertex_buffer = vertex_result.handle;
+        self.vertex_buffer_memory = vertex_result.memory;
+
         const index_result = try self.gpu_device.createBufferWithDataRaw(
             u32,
             all_indices.items,
