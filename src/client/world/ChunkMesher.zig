@@ -200,8 +200,8 @@ pub const ChunkMesher = struct {
                         }
                     }
 
-                    // Get texture index
-                    const texture_index = texture_manager.getTextureIndex(face.texture) orelse 0;
+                    // Get texture index (returns 0/missing texture if not found)
+                    const texture_index = texture_manager.getTextureIndex(face.texture);
 
                     // Bake the face into a quad
                     var quad = FaceBakery.bakeQuad(
