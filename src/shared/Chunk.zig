@@ -49,7 +49,7 @@ pub const BlockEntry = packed struct {
     }
 
     /// Get the block definition
-    pub fn getBlock(self: BlockEntry) *const blocks.block_mod.Block {
+    pub fn getBlock(self: BlockEntry) *const block_mod.Block {
         return blocks.getBlock(self.id);
     }
 
