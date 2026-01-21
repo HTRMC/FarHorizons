@@ -3,6 +3,10 @@ const World = @import("../world.zig").World;
 const AIState = @import("../components/ai.zig").AIState;
 const GoalType = @import("../components/ai.zig").GoalType;
 const GoalEntry = @import("../components/ai.zig").GoalEntry;
+const RandomStrollData = @import("../components/ai.zig").RandomStrollData;
+const LookAtPlayerData = @import("../components/ai.zig").LookAtPlayerData;
+const RandomLookAroundData = @import("../components/ai.zig").RandomLookAroundData;
+const PanicData = @import("../components/ai.zig").PanicData;
 const Transform = @import("../components/transform.zig").Transform;
 const Velocity = @import("../components/velocity.zig").Velocity;
 const Health = @import("../components/health.zig").Health;
@@ -17,37 +21,37 @@ const EntityId = @import("../entity.zig").EntityId;
 pub fn run(world: *World) void {
     var entity_iter = world.entities.iterator();
     while (entity_iter.next()) |id| {
-        const ai = world.getComponentMut(AIState, id) orelse continue;
+        const ai_state = world.getComponentMut(AIState, id) orelse continue;
 
         // Update player target position
-        ai.player_target_pos = world.player_position;
+        ai_state.player_target_pos = world.player_position;
 
         // Phase 1: Stop goals that can't continue
-        for (ai.getGoals(), 0..) |*goal, idx| {
+        for (ai_state.getGoals(), 0..) |*goal, idx| {
             if (goal.is_running) {
-                if (!canContinueToUse(world, id, goal, ai)) {
-                    stopGoal(world, id, goal, ai);
+                if (!canContinueToUse(world, id, goal, ai_state)) {
+                    stopGoal(world, id, goal, ai_state);
                     goal.is_running = false;
-                    ai.unlockFlags(idx);
+                    ai_state.unlockFlags(idx);
                 }
             }
         }
 
         // Phase 2: Try to start new goals
-        for (ai.getGoals(), 0..) |*goal, idx| {
+        for (ai_state.getGoals(), 0..) |*goal, idx| {
             if (!goal.is_running) {
-                if (ai.canAcquireFlags(idx) and canUse(world, id, goal, ai)) {
-                    ai.acquireFlags(idx);
-                    startGoal(world, id, goal, ai);
+                if (ai_state.canAcquireFlags(idx) and canUse(world, id, goal, ai_state)) {
+                    ai_state.acquireFlags(idx);
+                    startGoal(world, id, goal, ai_state);
                     goal.is_running = true;
                 }
             }
         }
 
         // Phase 3: Tick running goals
-        for (ai.getGoals()) |*goal| {
+        for (ai_state.getGoals()) |*goal| {
             if (goal.is_running) {
-                tickGoal(world, id, goal, ai);
+                tickGoal(world, id, goal, ai_state);
             }
         }
 
@@ -63,30 +67,30 @@ pub fn run(world: *World) void {
 // Goal behavior functions (enum dispatch)
 // =====================
 
-fn canUse(world: *World, id: EntityId, goal: *GoalEntry, ai: *AIState) bool {
+fn canUse(world: *World, id: EntityId, goal: *GoalEntry, ai_state: *AIState) bool {
     return switch (goal.goal_type) {
-        .random_stroll => canUseRandomStroll(&goal.data.random_stroll, ai),
-        .look_at_player => canUseLookAtPlayer(world, id, &goal.data.look_at_player, ai),
-        .random_look_around => canUseRandomLookAround(&goal.data.random_look_around, ai),
+        .random_stroll => canUseRandomStroll(&goal.data.random_stroll, ai_state),
+        .look_at_player => canUseLookAtPlayer(world, id, &goal.data.look_at_player, ai_state),
+        .random_look_around => canUseRandomLookAround(&goal.data.random_look_around, ai_state),
         .panic => canUsePanic(world, id, &goal.data.panic),
     };
 }
 
-fn canContinueToUse(world: *World, id: EntityId, goal: *GoalEntry, ai: *AIState) bool {
+fn canContinueToUse(world: *World, id: EntityId, goal: *GoalEntry, ai_state: *AIState) bool {
     return switch (goal.goal_type) {
         .random_stroll => canContinueRandomStroll(world, id, &goal.data.random_stroll),
-        .look_at_player => canContinueLookAtPlayer(world, id, &goal.data.look_at_player, ai),
+        .look_at_player => canContinueLookAtPlayer(world, id, &goal.data.look_at_player, ai_state),
         .random_look_around => canContinueRandomLookAround(&goal.data.random_look_around),
         .panic => canContinuePanic(world, id, &goal.data.panic),
     };
 }
 
-fn startGoal(world: *World, id: EntityId, goal: *GoalEntry, ai: *AIState) void {
+fn startGoal(world: *World, id: EntityId, goal: *GoalEntry, ai_state: *AIState) void {
     switch (goal.goal_type) {
         .random_stroll => {},
-        .look_at_player => startLookAtPlayer(&goal.data.look_at_player, ai),
-        .random_look_around => startRandomLookAround(&goal.data.random_look_around, ai),
-        .panic => startPanic(world, id, &goal.data.panic, ai),
+        .look_at_player => startLookAtPlayer(&goal.data.look_at_player, ai_state),
+        .random_look_around => startRandomLookAround(&goal.data.random_look_around, ai_state),
+        .panic => startPanic(world, id, &goal.data.panic, ai_state),
     }
 }
 
@@ -99,8 +103,8 @@ fn tickGoal(world: *World, id: EntityId, goal: *GoalEntry, _: *AIState) void {
     }
 }
 
-fn stopGoal(world: *World, id: EntityId, goal: *GoalEntry, ai: *AIState) void {
-    _ = ai;
+fn stopGoal(world: *World, id: EntityId, goal: *GoalEntry, ai_state: *AIState) void {
+    _ = ai_state;
     switch (goal.goal_type) {
         .random_stroll => stopRandomStroll(world, id, &goal.data.random_stroll),
         .look_at_player => stopLookAtPlayer(&goal.data.look_at_player),
@@ -113,20 +117,20 @@ fn stopGoal(world: *World, id: EntityId, goal: *GoalEntry, ai: *AIState) void {
 // RandomStroll implementation
 // =====================
 
-fn canUseRandomStroll(data: *@import("../components/ai.zig").RandomStrollData, ai: *AIState) bool {
+fn canUseRandomStroll(data: *RandomStrollData, ai_state: *AIState) bool {
     if (data.cooldown > 0) {
         data.cooldown -= 1;
         return false;
     }
 
-    if (ai.nextRandom() % data.interval != 0) {
+    if (ai_state.nextRandom() % data.interval != 0) {
         return false;
     }
 
     // Pick random target
     const range: f32 = 10.0;
-    const angle = ai.randomFloat() * std.math.pi * 2.0;
-    const distance = ai.randomFloat() * range + 2.0;
+    const angle = ai_state.randomFloat() * std.math.pi * 2.0;
+    const distance = ai_state.randomFloat() * range + 2.0;
 
     // Target will be relative to current position (set in tick)
     data.target_x = @cos(angle) * distance;
@@ -136,7 +140,7 @@ fn canUseRandomStroll(data: *@import("../components/ai.zig").RandomStrollData, a
     return true;
 }
 
-fn canContinueRandomStroll(world: *World, id: EntityId, data: *@import("../components/ai.zig").RandomStrollData) bool {
+fn canContinueRandomStroll(world: *World, id: EntityId, data: *RandomStrollData) bool {
     if (!data.has_target) return false;
 
     const transform = world.getComponent(Transform, id) orelse return false;
@@ -147,7 +151,7 @@ fn canContinueRandomStroll(world: *World, id: EntityId, data: *@import("../compo
     return dist_sq >= 1.0;
 }
 
-fn tickRandomStroll(world: *World, id: EntityId, data: *@import("../components/ai.zig").RandomStrollData) void {
+fn tickRandomStroll(world: *World, id: EntityId, data: *RandomStrollData) void {
     if (!data.has_target) return;
 
     const transform = world.getComponentMut(Transform, id) orelse return;
@@ -209,7 +213,7 @@ fn tickRandomStroll(world: *World, id: EntityId, data: *@import("../components/a
     }
 }
 
-fn stopRandomStroll(world: *World, id: EntityId, data: *@import("../components/ai.zig").RandomStrollData) void {
+fn stopRandomStroll(world: *World, id: EntityId, data: *RandomStrollData) void {
     _ = world;
     _ = id;
     data.has_target = false;
@@ -220,10 +224,10 @@ fn stopRandomStroll(world: *World, id: EntityId, data: *@import("../components/a
 // LookAtPlayer implementation
 // =====================
 
-fn canUseLookAtPlayer(world: *World, id: EntityId, data: *@import("../components/ai.zig").LookAtPlayerData, ai: *AIState) bool {
-    if (ai.randomFloat() >= data.probability) return false;
+fn canUseLookAtPlayer(world: *World, id: EntityId, data: *LookAtPlayerData, ai_state: *AIState) bool {
+    if (ai_state.randomFloat() >= data.probability) return false;
 
-    if (ai.player_target_pos) |player_pos| {
+    if (ai_state.player_target_pos) |player_pos| {
         const transform = world.getComponent(Transform, id) orelse return false;
         const dx = player_pos.x - transform.position.x;
         const dy = player_pos.y - transform.position.y;
@@ -239,11 +243,11 @@ fn canUseLookAtPlayer(world: *World, id: EntityId, data: *@import("../components
     return false;
 }
 
-fn canContinueLookAtPlayer(world: *World, id: EntityId, data: *@import("../components/ai.zig").LookAtPlayerData, ai: *AIState) bool {
+fn canContinueLookAtPlayer(world: *World, id: EntityId, data: *LookAtPlayerData, ai_state: *AIState) bool {
     if (data.target_pos == null) return false;
     if (data.look_time <= 0) return false;
 
-    if (ai.player_target_pos) |player_pos| {
+    if (ai_state.player_target_pos) |player_pos| {
         const transform = world.getComponent(Transform, id) orelse return false;
         const dx = player_pos.x - transform.position.x;
         const dy = player_pos.y - transform.position.y;
@@ -261,11 +265,11 @@ fn canContinueLookAtPlayer(world: *World, id: EntityId, data: *@import("../compo
     return false;
 }
 
-fn startLookAtPlayer(data: *@import("../components/ai.zig").LookAtPlayerData, ai: *AIState) void {
-    data.look_time = @intCast(40 + ai.nextRandom() % 40);
+fn startLookAtPlayer(data: *LookAtPlayerData, ai_state: *AIState) void {
+    data.look_time = @intCast(40 + ai_state.nextRandom() % 40);
 }
 
-fn tickLookAtPlayer(world: *World, id: EntityId, data: *@import("../components/ai.zig").LookAtPlayerData) void {
+fn tickLookAtPlayer(world: *World, id: EntityId, data: *LookAtPlayerData) void {
     if (data.target_pos) |pos| {
         if (world.getComponentMut(LookControlState, id)) |look| {
             look.setLookAt(pos.x, pos.y, pos.z);
@@ -274,7 +278,7 @@ fn tickLookAtPlayer(world: *World, id: EntityId, data: *@import("../components/a
     }
 }
 
-fn stopLookAtPlayer(data: *@import("../components/ai.zig").LookAtPlayerData) void {
+fn stopLookAtPlayer(data: *LookAtPlayerData) void {
     data.target_pos = null;
 }
 
@@ -282,23 +286,23 @@ fn stopLookAtPlayer(data: *@import("../components/ai.zig").LookAtPlayerData) voi
 // RandomLookAround implementation
 // =====================
 
-fn canUseRandomLookAround(data: *@import("../components/ai.zig").RandomLookAroundData, ai: *AIState) bool {
+fn canUseRandomLookAround(data: *RandomLookAroundData, ai_state: *AIState) bool {
     _ = data;
-    return ai.randomFloat() < 0.02;
+    return ai_state.randomFloat() < 0.02;
 }
 
-fn canContinueRandomLookAround(data: *@import("../components/ai.zig").RandomLookAroundData) bool {
+fn canContinueRandomLookAround(data: *RandomLookAroundData) bool {
     return data.look_time >= 0;
 }
 
-fn startRandomLookAround(data: *@import("../components/ai.zig").RandomLookAroundData, ai: *AIState) void {
-    const angle = ai.randomFloat() * std.math.pi * 2.0;
+fn startRandomLookAround(data: *RandomLookAroundData, ai_state: *AIState) void {
+    const angle = ai_state.randomFloat() * std.math.pi * 2.0;
     data.rel_x = @cos(angle);
     data.rel_z = @sin(angle);
-    data.look_time = @intCast(20 + ai.nextRandom() % 20);
+    data.look_time = @intCast(20 + ai_state.nextRandom() % 20);
 }
 
-fn tickRandomLookAround(world: *World, id: EntityId, data: *@import("../components/ai.zig").RandomLookAroundData) void {
+fn tickRandomLookAround(world: *World, id: EntityId, data: *RandomLookAroundData) void {
     data.look_time -= 1;
 
     const transform = world.getComponent(Transform, id) orelse return;
@@ -315,7 +319,7 @@ fn tickRandomLookAround(world: *World, id: EntityId, data: *@import("../componen
 // Panic implementation
 // =====================
 
-fn canUsePanic(world: *World, id: EntityId, data: *@import("../components/ai.zig").PanicData) bool {
+fn canUsePanic(world: *World, id: EntityId, data: *PanicData) bool {
     _ = data;
     if (world.getComponent(Health, id)) |health| {
         return health.wasRecentlyHurt();
@@ -323,7 +327,7 @@ fn canUsePanic(world: *World, id: EntityId, data: *@import("../components/ai.zig
     return false;
 }
 
-fn canContinuePanic(world: *World, id: EntityId, data: *@import("../components/ai.zig").PanicData) bool {
+fn canContinuePanic(world: *World, id: EntityId, data: *PanicData) bool {
     if (!data.is_fleeing) return false;
     if (world.getComponent(Health, id)) |health| {
         return health.wasRecentlyHurt();
@@ -331,7 +335,7 @@ fn canContinuePanic(world: *World, id: EntityId, data: *@import("../components/a
     return false;
 }
 
-fn startPanic(world: *World, id: EntityId, data: *@import("../components/ai.zig").PanicData, ai: *AIState) void {
+fn startPanic(world: *World, id: EntityId, data: *PanicData, ai_state: *AIState) void {
     const transform = world.getComponent(Transform, id) orelse return;
     const health = world.getComponent(Health, id) orelse return;
 
@@ -346,7 +350,7 @@ fn startPanic(world: *World, id: EntityId, data: *@import("../components/ai.zig"
             data.target_z = transform.position.z + (dz / dist) * 10.0;
         } else {
             // Random direction if too close
-            const angle = ai.randomFloat() * std.math.pi * 2.0;
+            const angle = ai_state.randomFloat() * std.math.pi * 2.0;
             data.target_x = transform.position.x + @cos(angle) * 10.0;
             data.target_z = transform.position.z + @sin(angle) * 10.0;
         }
@@ -355,7 +359,7 @@ fn startPanic(world: *World, id: EntityId, data: *@import("../components/ai.zig"
     data.is_fleeing = true;
 }
 
-fn tickPanic(world: *World, id: EntityId, data: *@import("../components/ai.zig").PanicData) void {
+fn tickPanic(world: *World, id: EntityId, data: *PanicData) void {
     const transform = world.getComponentMut(Transform, id) orelse return;
     const velocity = world.getComponentMut(Velocity, id) orelse return;
 
@@ -381,7 +385,7 @@ fn tickPanic(world: *World, id: EntityId, data: *@import("../components/ai.zig")
     velocity.linear.z = -@cos(facing_rad) * data.speed;
 }
 
-fn stopPanic(data: *@import("../components/ai.zig").PanicData) void {
+fn stopPanic(data: *PanicData) void {
     data.is_fleeing = false;
 }
 
