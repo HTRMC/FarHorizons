@@ -100,9 +100,8 @@ pub const FarHorizonsClient = struct {
         };
 
         // Initialize camera for rendering
-        var camera = Camera.init();
-        camera.position = .{ .x = 8, .y = 10, .z = 20 }; // Above and behind chunk center
-        camera.setRotation(180, 0); // Face towards -Z (towards the chunk)
+        // Position/rotation will be set from LocalPlayer each frame
+        const camera = Camera.init();
 
         return Self{
             .config = config,
@@ -147,7 +146,7 @@ pub const FarHorizonsClient = struct {
 
         // Initialize local player with keyboard input
         self.local_player = LocalPlayer.init(&self.keyboard_input);
-        self.local_player.setPosition(Vec3{ .x = 8, .y = 10, .z = 20 }); // Above and behind chunk center
+        self.local_player.setPosition(Vec3{ .x = 8, .y = 100, .z = 20 }); // Above terrain (base height 64 + variation)
         self.local_player.setYRot(180); // Face towards -Z (towards the chunk)
 
         // Initialize render system (Vulkan) with window for surface
@@ -276,13 +275,13 @@ pub const FarHorizonsClient = struct {
         );
 
         // Spawn a test cow with AI using ECS
-        // Cow spawns at x=9, z=9 so it lands on stone at y=1 and must step UP onto slabs
+        // Cows spawn above terrain and will fall down due to gravity
         if (self.ecs_world) |*ecs_world| {
-            self.cow_id = try ecs.spawn.spawnCow(ecs_world, Vec3{ .x = 9, .y = 5, .z = 9 });
+            self.cow_id = try ecs.spawn.spawnCow(ecs_world, Vec3{ .x = 9, .y = 100, .z = 9 });
             logger.info("Spawned adult cow with ECS entity ID", .{});
 
             // Spawn a baby cow next to the adult
-            self.baby_cow_id = try ecs.spawn.spawnBabyCow(ecs_world, Vec3{ .x = 12, .y = 5, .z = 10 });
+            self.baby_cow_id = try ecs.spawn.spawnBabyCow(ecs_world, Vec3{ .x = 12, .y = 100, .z = 10 });
             logger.info("Spawned baby cow with ECS entity ID", .{});
         }
 
