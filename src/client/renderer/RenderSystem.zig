@@ -114,6 +114,12 @@ pub const RenderSystem = struct {
     cutout_pipeline: vk.VkPipeline = null,
     translucent_pipeline: vk.VkPipeline = null,
 
+    // Indirect drawing buffers (for batched draw calls)
+    indirect_buffer: vk.VkBuffer = null,
+    indirect_buffer_memory: vk.VkDeviceMemory = null,
+    indirect_buffer_mapped: ?*anyopaque = null,
+    indirect_buffer_capacity: u32 = 0,
+
     // UI Pipeline (for crosshair, HUD elements)
     ui_pipeline_layout: vk.VkPipelineLayout = null,
     ui_pipeline: vk.VkPipeline = null,
@@ -258,6 +264,7 @@ pub const RenderSystem = struct {
         try self.createCrosshairBuffer();
         // Note: Vertex/Index buffers are created by uploadMesh() with actual geometry
         try self.createUniformBuffers();
+        try self.createIndirectBuffer();
         // Note: Texture resources and descriptor sets are created after TextureManager is initialized
         // See initializeTextures() which must be called after setting texture resources
         try self.createCommandBuffers();
@@ -285,6 +292,7 @@ pub const RenderSystem = struct {
         self.destroyDescriptorPool();
         // Note: texture_image_view and texture_sampler are owned by TextureManager
         self.destroyUniformBuffers();
+        self.destroyIndirectBuffer();
         self.destroyBuffers();
         self.destroyFramebuffers();
         self.destroyPipeline();
@@ -665,46 +673,105 @@ pub const RenderSystem = struct {
         vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
 
         // Draw geometry using multi-arena rendering with layer-specific pipelines
+        // Uses indirect drawing when available for batched draw calls
         if (params.draw_commands) |commands| {
             if (params.vertex_buffers) |vb_array| {
                 if (params.index_buffers) |ib_array| {
-                    var current_vertex_arena: u16 = 0xFFFF;
-                    var current_index_arena: u16 = 0xFFFF;
-                    var current_layer: u8 = 0xFF; // Invalid layer to force initial bind
+                    // Check if indirect drawing is available
+                    const use_indirect = self.indirect_buffer != null and
+                        self.indirect_buffer_mapped != null and
+                        commands.len <= self.indirect_buffer_capacity;
 
-                    for (commands) |cmd| {
-                        if (cmd.index_count == 0) continue;
+                    if (use_indirect) {
+                        // Indirect drawing path - batch draws with same pipeline/buffers
+                        const vkCmdDrawIndexedIndirect = vk.vkCmdDrawIndexedIndirect orelse {
+                            // Fallback to direct draws if function not available
+                            self.drawChunksDirect(command_buffer, commands, vb_array, ib_array, vkCmdBindPipeline, vkCmdBindVertexBuffers, vkCmdBindIndexBuffer, vkCmdDrawIndexed);
+                            return;
+                        };
 
-                        // Bind layer-specific pipeline if layer changed
-                        if (cmd.render_layer != current_layer) {
-                            current_layer = cmd.render_layer;
-                            const pipeline = switch (current_layer) {
-                                0 => self.solid_pipeline orelse self.graphics_pipeline, // solid
-                                1 => self.cutout_pipeline orelse self.graphics_pipeline, // cutout
-                                2 => self.translucent_pipeline orelse self.graphics_pipeline, // translucent
-                                else => self.graphics_pipeline,
+                        // Write all commands to indirect buffer
+                        const indirect_cmds: [*]IndirectDrawCommand = @ptrCast(@alignCast(self.indirect_buffer_mapped.?));
+                        for (commands, 0..) |cmd, i| {
+                            indirect_cmds[i] = IndirectDrawCommand{
+                                .index_count = cmd.index_count,
+                                .instance_count = 1,
+                                .first_index = @intCast(cmd.index_offset / 4),
+                                .vertex_offset = @intCast(cmd.vertex_offset / @sizeOf(Vertex)),
+                                .first_instance = 0,
                             };
-                            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
                         }
 
-                        // Rebind buffers if arena changed
-                        if (cmd.vertex_arena != current_vertex_arena or cmd.index_arena != current_index_arena) {
-                            current_vertex_arena = cmd.vertex_arena;
-                            current_index_arena = cmd.index_arena;
+                        // Issue batched indirect draws
+                        var batch_start: u32 = 0;
+                        var current_vertex_arena: u16 = 0xFFFF;
+                        var current_index_arena: u16 = 0xFFFF;
+                        var current_layer: u8 = 0xFF;
 
-                            if (current_vertex_arena < vb_array.len and current_index_arena < ib_array.len) {
-                                const arena_vb = [_]vk.VkBuffer{vb_array[current_vertex_arena]};
-                                const offsets = [_]vk.VkDeviceSize{0};
-                                vkCmdBindVertexBuffers(command_buffer, 0, 1, &arena_vb, &offsets);
-                                vkCmdBindIndexBuffer(command_buffer, ib_array[current_index_arena], 0, vk.VK_INDEX_TYPE_UINT32);
-                            } else {
-                                continue;
+                        for (commands, 0..) |cmd, i| {
+                            const need_state_change = cmd.render_layer != current_layer or
+                                cmd.vertex_arena != current_vertex_arena or
+                                cmd.index_arena != current_index_arena;
+
+                            if (need_state_change) {
+                                // Flush previous batch if any
+                                const batch_count = @as(u32, @intCast(i)) - batch_start;
+                                if (batch_count > 0 and current_layer != 0xFF) {
+                                    const indirect_offset = @as(u64, batch_start) * @sizeOf(IndirectDrawCommand);
+                                    vkCmdDrawIndexedIndirect(
+                                        command_buffer,
+                                        self.indirect_buffer,
+                                        indirect_offset,
+                                        batch_count,
+                                        @sizeOf(IndirectDrawCommand),
+                                    );
+                                }
+
+                                // Update state for new batch
+                                batch_start = @intCast(i);
+
+                                // Bind pipeline if layer changed
+                                if (cmd.render_layer != current_layer) {
+                                    current_layer = cmd.render_layer;
+                                    const pipeline = switch (current_layer) {
+                                        0 => self.solid_pipeline orelse self.graphics_pipeline,
+                                        1 => self.cutout_pipeline orelse self.graphics_pipeline,
+                                        2 => self.translucent_pipeline orelse self.graphics_pipeline,
+                                        else => self.graphics_pipeline,
+                                    };
+                                    vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                                }
+
+                                // Bind buffers if arena changed
+                                if (cmd.vertex_arena != current_vertex_arena or cmd.index_arena != current_index_arena) {
+                                    current_vertex_arena = cmd.vertex_arena;
+                                    current_index_arena = cmd.index_arena;
+
+                                    if (current_vertex_arena < vb_array.len and current_index_arena < ib_array.len) {
+                                        const arena_vb = [_]vk.VkBuffer{vb_array[current_vertex_arena]};
+                                        const offsets = [_]vk.VkDeviceSize{0};
+                                        vkCmdBindVertexBuffers(command_buffer, 0, 1, &arena_vb, &offsets);
+                                        vkCmdBindIndexBuffer(command_buffer, ib_array[current_index_arena], 0, vk.VK_INDEX_TYPE_UINT32);
+                                    }
+                                }
                             }
                         }
 
-                        const first_index: u32 = @intCast(cmd.index_offset / 4);
-                        const vertex_offset: i32 = @intCast(cmd.vertex_offset / @sizeOf(Vertex));
-                        vkCmdDrawIndexed(command_buffer, cmd.index_count, 1, first_index, vertex_offset, 0);
+                        // Flush final batch
+                        const final_batch_count = @as(u32, @intCast(commands.len)) - batch_start;
+                        if (final_batch_count > 0 and current_layer != 0xFF) {
+                            const indirect_offset = @as(u64, batch_start) * @sizeOf(IndirectDrawCommand);
+                            vkCmdDrawIndexedIndirect(
+                                command_buffer,
+                                self.indirect_buffer,
+                                indirect_offset,
+                                final_batch_count,
+                                @sizeOf(IndirectDrawCommand),
+                            );
+                        }
+                    } else {
+                        // Direct drawing fallback
+                        self.drawChunksDirect(command_buffer, commands, vb_array, ib_array, vkCmdBindPipeline, vkCmdBindVertexBuffers, vkCmdBindIndexBuffer, vkCmdDrawIndexed);
                     }
                 }
             }
@@ -762,6 +829,58 @@ pub const RenderSystem = struct {
 
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
             return error.CommandBufferEndFailed;
+        }
+    }
+
+    /// Direct drawing fallback (used when indirect buffer unavailable or too many commands)
+    fn drawChunksDirect(
+        self: *Self,
+        command_buffer: vk.VkCommandBuffer,
+        commands: []const ChunkDrawCommand,
+        vb_array: []const vk.VkBuffer,
+        ib_array: []const vk.VkBuffer,
+        vkCmdBindPipeline: @TypeOf(vk.vkCmdBindPipeline.?),
+        vkCmdBindVertexBuffers: @TypeOf(vk.vkCmdBindVertexBuffers.?),
+        vkCmdBindIndexBuffer: @TypeOf(vk.vkCmdBindIndexBuffer.?),
+        vkCmdDrawIndexed: @TypeOf(vk.vkCmdDrawIndexed.?),
+    ) void {
+        var current_vertex_arena: u16 = 0xFFFF;
+        var current_index_arena: u16 = 0xFFFF;
+        var current_layer: u8 = 0xFF;
+
+        for (commands) |cmd| {
+            if (cmd.index_count == 0) continue;
+
+            // Bind layer-specific pipeline if layer changed
+            if (cmd.render_layer != current_layer) {
+                current_layer = cmd.render_layer;
+                const pipeline = switch (current_layer) {
+                    0 => self.solid_pipeline orelse self.graphics_pipeline,
+                    1 => self.cutout_pipeline orelse self.graphics_pipeline,
+                    2 => self.translucent_pipeline orelse self.graphics_pipeline,
+                    else => self.graphics_pipeline,
+                };
+                vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            }
+
+            // Rebind buffers if arena changed
+            if (cmd.vertex_arena != current_vertex_arena or cmd.index_arena != current_index_arena) {
+                current_vertex_arena = cmd.vertex_arena;
+                current_index_arena = cmd.index_arena;
+
+                if (current_vertex_arena < vb_array.len and current_index_arena < ib_array.len) {
+                    const arena_vb = [_]vk.VkBuffer{vb_array[current_vertex_arena]};
+                    const offsets = [_]vk.VkDeviceSize{0};
+                    vkCmdBindVertexBuffers(command_buffer, 0, 1, &arena_vb, &offsets);
+                    vkCmdBindIndexBuffer(command_buffer, ib_array[current_index_arena], 0, vk.VK_INDEX_TYPE_UINT32);
+                } else {
+                    continue;
+                }
+            }
+
+            const first_index: u32 = @intCast(cmd.index_offset / 4);
+            const vertex_offset: i32 = @intCast(cmd.vertex_offset / @sizeOf(Vertex));
+            vkCmdDrawIndexed(command_buffer, cmd.index_count, 1, first_index, vertex_offset, 0);
         }
     }
 
@@ -961,6 +1080,29 @@ pub const RenderSystem = struct {
         dst_buffer: vk.VkBuffer,
         dst_offset: u64,
         size: u64,
+    };
+
+    /// Indirect draw command matching VkDrawIndexedIndirectCommand layout
+    pub const IndirectDrawCommand = extern struct {
+        index_count: u32,
+        instance_count: u32,
+        first_index: u32,
+        vertex_offset: i32,
+        first_instance: u32,
+    };
+
+    /// Batch of indirect draw commands sharing the same pipeline and buffers
+    pub const IndirectDrawBatch = struct {
+        /// Index into indirect buffer where this batch starts
+        offset: u32,
+        /// Number of draw commands in this batch
+        count: u32,
+        /// Render layer (determines pipeline)
+        render_layer: u8,
+        /// Vertex buffer arena for this batch
+        vertex_arena: u16,
+        /// Index buffer arena for this batch
+        index_arena: u16,
     };
 
     /// Draw frame with multiple chunks from arena buffers
@@ -3373,6 +3515,40 @@ pub const RenderSystem = struct {
         }
 
         logger.info("Uniform buffers created", .{});
+    }
+
+    /// Create indirect draw buffer for batched draw commands
+    fn createIndirectBuffer(self: *Self) !void {
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+
+        // Initial capacity for 4096 draw commands (should be plenty)
+        const initial_capacity: u32 = 4096;
+        const buffer_size: u64 = @as(u64, initial_capacity) * @sizeOf(IndirectDrawCommand);
+
+        const result = try gpu.createMappedBufferRaw(buffer_size, vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+        self.indirect_buffer = result.handle;
+        self.indirect_buffer_memory = result.memory;
+        self.indirect_buffer_mapped = result.mapped;
+        self.indirect_buffer_capacity = initial_capacity;
+
+        logger.info("Indirect draw buffer created with capacity for {} commands", .{initial_capacity});
+    }
+
+    /// Destroy indirect draw buffer
+    fn destroyIndirectBuffer(self: *Self) void {
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
+        const vkFreeMemory = vk.vkFreeMemory orelse return;
+
+        if (self.indirect_buffer) |buf| {
+            vkDestroyBuffer(self.device, buf, null);
+            self.indirect_buffer = null;
+        }
+        if (self.indirect_buffer_memory) |mem| {
+            vkFreeMemory(self.device, mem, null);
+            self.indirect_buffer_memory = null;
+        }
+        self.indirect_buffer_mapped = null;
+        self.indirect_buffer_capacity = 0;
     }
 
     // Note: Texture creation/destruction is now handled by TextureManager
