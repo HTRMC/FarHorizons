@@ -72,6 +72,7 @@ pub const ChunkPosContext = chunk_pos.ChunkPosContext;
 pub const block = @import("block/Blocks.zig");
 pub const block_mod = @import("block/Block.zig");
 pub const BlockState = block_mod.BlockState;
+pub const RenderLayer = block_mod.RenderLayer;
 
 // Raycasting
 pub const raycast = @import("Raycast.zig");
