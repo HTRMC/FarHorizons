@@ -24,6 +24,7 @@ const ModelLoader = renderer.block.ModelLoader;
 const BlockstateLoader = renderer.block.BlockstateLoader;
 const ChunkBufferManager = renderer.buffer.ChunkBufferManager;
 const ChunkBufferConfig = renderer.buffer.ChunkBufferConfig;
+const ChunkBufferAllocation = renderer.buffer.ChunkBufferAllocation;
 const ChunkDrawCommand = RenderSystem.ChunkDrawCommand;
 const StagingCopy = RenderSystem.StagingCopy;
 
@@ -32,6 +33,7 @@ const RenderChunk = render_chunk.RenderChunk;
 const ChunkMesh = render_chunk.ChunkMesh;
 const ChunkState = render_chunk.ChunkState;
 const CompletedMesh = render_chunk.CompletedMesh;
+const RENDER_LAYER_COUNT = render_chunk.RENDER_LAYER_COUNT;
 
 const thread_pool = @import("ThreadPool.zig");
 const ThreadPool = thread_pool.ThreadPool;
@@ -372,7 +374,9 @@ pub const ChunkManager = struct {
                 }
 
                 // Handle empty meshes (e.g., all-air chunks)
-                if (mesh.vertices.len == 0 or mesh.indices.len == 0) {
+                const total_vertices = mesh.getTotalVertexCount();
+                const total_indices = mesh.getTotalIndexCount();
+                if (total_vertices == 0 or total_indices == 0) {
                     // Still mark as ready - chunk data is valid, just no visible geometry
                     render_chunk_ptr.state = .ready;
                     mesh.deinit();
@@ -380,68 +384,137 @@ pub const ChunkManager = struct {
                     continue;
                 }
 
-                // Validate indices are within vertex bounds
-                var max_index: u32 = 0;
-                for (mesh.indices) |idx| {
-                    if (idx > max_index) max_index = idx;
+                // Validate indices are within vertex bounds for each layer
+                var valid = true;
+                for (0..RENDER_LAYER_COUNT) |i| {
+                    const layer = &mesh.layers[i];
+                    if (layer.vertices.len == 0) continue;
+
+                    var max_index: u32 = 0;
+                    for (layer.indices) |idx| {
+                        if (idx > max_index) max_index = idx;
+                    }
+                    if (max_index >= layer.vertices.len) {
+                        logger.err("Chunk ({},{},{}) layer {} has invalid index {} >= vertex count {}", .{
+                            mesh.pos.x,
+                            mesh.pos.z,
+                            mesh.pos.section_y,
+                            i,
+                            max_index,
+                            layer.vertices.len,
+                        });
+                        valid = false;
+                        break;
+                    }
                 }
-                if (max_index >= mesh.vertices.len) {
-                    logger.err("Chunk ({},{},{}) has invalid index {} >= vertex count {}", .{
-                        mesh.pos.x,
-                        mesh.pos.z,
-                        mesh.pos.section_y,
-                        max_index,
-                        mesh.vertices.len,
-                    });
+                if (!valid) {
                     mesh.deinit();
                     _ = self.pending_loads.remove(mesh.pos);
                     continue;
                 }
 
-                // Allocate buffer space from arena
-                const allocation = buf_mgr.allocate(
-                    @intCast(mesh.vertices.len),
-                    @intCast(mesh.indices.len),
-                ) orelse {
-                    logger.warn("Failed to allocate buffer space for chunk", .{});
+                // Allocate buffer space for each non-empty layer
+                var layer_allocations: [RENDER_LAYER_COUNT]?ChunkBufferAllocation = .{ null, null, null };
+                var allocation_failed = false;
+
+                for (0..RENDER_LAYER_COUNT) |i| {
+                    const layer = &mesh.layers[i];
+                    if (layer.vertices.len == 0) continue;
+
+                    layer_allocations[i] = buf_mgr.allocate(
+                        @intCast(layer.vertices.len),
+                        @intCast(layer.indices.len),
+                    );
+                    if (layer_allocations[i] == null) {
+                        logger.warn("Failed to allocate buffer space for chunk layer {}", .{i});
+                        allocation_failed = true;
+                        break;
+                    }
+                }
+
+                if (allocation_failed) {
+                    // Free any allocations we did make
+                    for (layer_allocations) |alloc_opt| {
+                        if (alloc_opt) |alloc| {
+                            buf_mgr.free(alloc);
+                        }
+                    }
                     mesh.deinit();
                     continue;
-                };
+                }
 
-                // Stage vertex data
-                const vertex_bytes = std.mem.sliceAsBytes(mesh.vertices);
-                buf_mgr.stageVertices(allocation, vertex_bytes) catch |err| {
-                    logger.warn("Failed to stage vertex data: {}", .{err});
-                    buf_mgr.free(allocation);
+                // Stage vertex and index data for each layer
+                var staging_failed = false;
+                for (0..RENDER_LAYER_COUNT) |i| {
+                    const layer = &mesh.layers[i];
+                    const alloc_opt = layer_allocations[i];
+                    if (alloc_opt == null) continue;
+                    const allocation = alloc_opt.?;
+
+                    // Stage vertex data
+                    const vertex_bytes = std.mem.sliceAsBytes(layer.vertices);
+                    buf_mgr.stageVertices(allocation, vertex_bytes) catch |err| {
+                        logger.warn("Failed to stage vertex data for layer {}: {}", .{ i, err });
+                        staging_failed = true;
+                        break;
+                    };
+
+                    // Stage index data
+                    const index_bytes = std.mem.sliceAsBytes(layer.indices);
+                    buf_mgr.stageIndices(allocation, index_bytes) catch |err| {
+                        logger.warn("Failed to stage index data for layer {}: {}", .{ i, err });
+                        staging_failed = true;
+                        break;
+                    };
+                }
+
+                if (staging_failed) {
+                    for (layer_allocations) |alloc_opt| {
+                        if (alloc_opt) |alloc| {
+                            buf_mgr.free(alloc);
+                        }
+                    }
                     mesh.deinit();
                     continue;
-                };
+                }
 
-                // Stage index data
-                const index_bytes = std.mem.sliceAsBytes(mesh.indices);
-                buf_mgr.stageIndices(allocation, index_bytes) catch |err| {
-                    logger.warn("Failed to stage index data: {}", .{err});
-                    buf_mgr.free(allocation);
-                    mesh.deinit();
-                    continue;
-                };
+                // Prepare per-layer vertex/index slices for ChunkMesh.init
+                var layer_vertices: [RENDER_LAYER_COUNT][]const Vertex = undefined;
+                var layer_indices: [RENDER_LAYER_COUNT][]const u32 = undefined;
+                for (0..RENDER_LAYER_COUNT) |i| {
+                    layer_vertices[i] = mesh.layers[i].vertices;
+                    layer_indices[i] = mesh.layers[i].indices;
+                }
 
-                // Create ChunkMesh with the allocation
+                // Create ChunkMesh with per-layer allocations
                 var chunk_mesh = ChunkMesh.init(
                     self.allocator,
-                    mesh.vertices,
-                    mesh.indices,
+                    layer_vertices,
+                    layer_indices,
                 ) catch {
                     logger.warn("Failed to create chunk mesh", .{});
-                    buf_mgr.free(allocation);
+                    for (layer_allocations) |alloc_opt| {
+                        if (alloc_opt) |alloc| {
+                            buf_mgr.free(alloc);
+                        }
+                    }
                     mesh.deinit();
                     continue;
                 };
-                chunk_mesh.setBufferAllocation(allocation);
 
-                // Free OLD buffer allocation BEFORE swapping (atomic swap pattern)
-                if (render_chunk_ptr.getBufferAllocation()) |old_alloc| {
-                    buf_mgr.free(old_alloc);
+                // Set buffer allocations for each layer
+                for (0..RENDER_LAYER_COUNT) |i| {
+                    if (layer_allocations[i]) |alloc| {
+                        chunk_mesh.setLayerBufferAllocation(i, alloc);
+                    }
+                }
+
+                // Free OLD buffer allocations BEFORE swapping (atomic swap pattern)
+                const old_allocations = render_chunk_ptr.getBufferAllocations();
+                for (old_allocations) |old_alloc_opt| {
+                    if (old_alloc_opt) |old_alloc| {
+                        buf_mgr.free(old_alloc);
+                    }
                 }
 
                 // Store mesh in render chunk (this frees old mesh CPU data)
@@ -475,42 +548,64 @@ pub const ChunkManager = struct {
     }
 
     /// Get draw commands for all ready chunks
+    /// Commands are sorted by render layer: solid (0), cutout (1), translucent (2)
     pub fn getDrawCommands(self: *Self) []const ChunkDrawCommand {
         self.draw_commands.clearRetainingCapacity();
 
-        var iter = self.loaded_chunks.iterator();
-        while (iter.next()) |entry| {
-            const chunk = entry.value_ptr.*;
-            
-            // Render chunks that are ready OR dirty (dirty = rebuilding, till has old mesh)
-            if (chunk.state != .ready and chunk.state != .dirty) continue;
+        // Sanity checks - offsets should be aligned
+        const vertex_size: u64 = 36; // sizeof(Vertex)
+        const index_size: u64 = 4; // sizeof(u32)
 
-            const m = chunk.mesh orelse continue;
-            if (!m.hasValidAllocation()) continue;
+        // Generate draw commands for each layer in order
+        // This ensures proper rendering order: solid -> cutout -> translucent
+        for (0..RENDER_LAYER_COUNT) |layer_idx| {
+            var iter = self.loaded_chunks.iterator();
+            while (iter.next()) |entry| {
+                const chunk = entry.value_ptr.*;
 
-            const vertex_offset = m.getVertexOffset();
-            const index_offset = m.getIndexOffset();
+                // Render chunks that are ready OR dirty (dirty = rebuilding, still has old mesh)
+                if (chunk.state != .ready and chunk.state != .dirty) continue;
 
-            // Sanity checks - offsets should be aligned
-            const vertex_size: u64 = 36; // sizeof(Vertex)
-            const index_size: u64 = 4; // sizeof(u32)
+                const m = chunk.mesh orelse continue;
 
-            if (vertex_offset % vertex_size != 0) {
-                logger.warn("Chunk ({},{},{}) has unaligned vertex offset: {}", .{ chunk.pos.x, chunk.pos.z, chunk.pos.section_y, vertex_offset });
-                continue;
+                // Get layer-specific data
+                const layer = &m.layers[layer_idx];
+                if (layer.index_count == 0) continue;
+                if (!layer.buffer_allocation.valid or !layer.uploaded) continue;
+
+                const vertex_offset = layer.buffer_allocation.vertex_slice.offset;
+                const index_offset = layer.buffer_allocation.index_slice.offset;
+
+                if (vertex_offset % vertex_size != 0) {
+                    logger.warn("Chunk ({},{},{}) layer {} has unaligned vertex offset: {}", .{
+                        chunk.pos.x,
+                        chunk.pos.z,
+                        chunk.pos.section_y,
+                        layer_idx,
+                        vertex_offset,
+                    });
+                    continue;
+                }
+                if (index_offset % index_size != 0) {
+                    logger.warn("Chunk ({},{},{}) layer {} has unaligned index offset: {}", .{
+                        chunk.pos.x,
+                        chunk.pos.z,
+                        chunk.pos.section_y,
+                        layer_idx,
+                        index_offset,
+                    });
+                    continue;
+                }
+
+                self.draw_commands.append(self.allocator, ChunkDrawCommand{
+                    .vertex_offset = vertex_offset,
+                    .index_offset = index_offset,
+                    .index_count = layer.index_count,
+                    .vertex_arena = layer.buffer_allocation.vertex_slice.arena_index,
+                    .index_arena = layer.buffer_allocation.index_slice.arena_index,
+                    .render_layer = @intCast(layer_idx),
+                }) catch continue;
             }
-            if (index_offset % index_size != 0) {
-                logger.warn("Chunk ({},{},{}) has unaligned index offset: {}", .{ chunk.pos.x, chunk.pos.z, chunk.pos.section_y, index_offset });
-                continue;
-            }
-
-            self.draw_commands.append(self.allocator, ChunkDrawCommand{
-                .vertex_offset = vertex_offset,
-                .index_offset = index_offset,
-                .index_count = m.index_count,
-                .vertex_arena = m.buffer_allocation.vertex_slice.arena_index,
-                .index_arena = m.buffer_allocation.index_slice.arena_index,
-            }) catch continue;
         }
 
         return self.draw_commands.items;
