@@ -9,6 +9,7 @@ const block_mod = @import("Block.zig");
 const Block = block_mod.Block;
 const BlockState = block_mod.BlockState;
 const BlockVTable = block_mod.BlockVTable;
+const RenderLayer = block_mod.RenderLayer;
 const voxel_shape = @import("../VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const shapes = @import("../Shapes.zig");
@@ -19,6 +20,7 @@ pub const SLAB_BLOCK_VTABLE = BlockVTable{
     .getShape = slabGetShape,
     .isOpaque = slabIsOpaque,
     .isSolid = slabIsSolid,
+    .getRenderLayer = slabGetRenderLayer,
 };
 
 /// Get the shape based on slab type
@@ -39,6 +41,11 @@ fn slabIsOpaque(state: BlockState) bool {
 /// Slabs are always solid (have collision)
 fn slabIsSolid(_: BlockState) bool {
     return true;
+}
+
+/// Slabs use solid render layer
+fn slabGetRenderLayer(_: BlockState) RenderLayer {
+    return .solid;
 }
 
 /// Create a slab block definition
