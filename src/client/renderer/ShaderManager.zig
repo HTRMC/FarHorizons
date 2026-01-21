@@ -23,6 +23,10 @@ pub const ShaderManager = struct {
     /// Cached default shaders (compiled at startup)
     default_vert_spv: ?[]u8,
     default_frag_spv: ?[]u8,
+    /// Layer-specific fragment shaders
+    solid_frag_spv: ?[]u8,
+    cutout_frag_spv: ?[]u8,
+    translucent_frag_spv: ?[]u8,
     /// Cached UI shaders
     ui_vert_spv: ?[]u8,
     ui_frag_spv: ?[]u8,
@@ -48,6 +52,9 @@ pub const ShaderManager = struct {
         var compiler: ?ShaderCompiler = null;
         var default_vert: ?[]u8 = null;
         var default_frag: ?[]u8 = null;
+        var solid_frag: ?[]u8 = null;
+        var cutout_frag: ?[]u8 = null;
+        var translucent_frag: ?[]u8 = null;
         var ui_vert: ?[]u8 = null;
         var ui_frag: ?[]u8 = null;
         var line_vert: ?[]u8 = null;
@@ -79,6 +86,25 @@ pub const ShaderManager = struct {
             default_frag = try allocator.dupe(u8, frag_compiled.spv_data);
             frag_compiled.deinit();
             logger.info("Fragment shader compiled in {d}us ({d} bytes SPIR-V)", .{ frag_time_us, default_frag.?.len });
+
+            // Compile layer-specific fragment shaders
+            logger.info("Compiling layer-specific fragment shaders...", .{});
+            var solid_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle_solid.frag");
+            solid_frag = try allocator.dupe(u8, solid_compiled.spv_data);
+            solid_compiled.deinit();
+
+            var cutout_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle_cutout.frag");
+            cutout_frag = try allocator.dupe(u8, cutout_compiled.spv_data);
+            cutout_compiled.deinit();
+
+            var translucent_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle_translucent.frag");
+            translucent_frag = try allocator.dupe(u8, translucent_compiled.spv_data);
+            translucent_compiled.deinit();
+            logger.info("Layer shaders compiled (solid: {d}, cutout: {d}, translucent: {d} bytes)", .{
+                solid_frag.?.len,
+                cutout_frag.?.len,
+                translucent_frag.?.len,
+            });
 
             // Compile UI shaders
             logger.info("Compiling UI shaders...", .{});
@@ -130,6 +156,9 @@ pub const ShaderManager = struct {
             .active_pack = null,
             .default_vert_spv = default_vert,
             .default_frag_spv = default_frag,
+            .solid_frag_spv = solid_frag,
+            .cutout_frag_spv = cutout_frag,
+            .translucent_frag_spv = translucent_frag,
             .ui_vert_spv = ui_vert,
             .ui_frag_spv = ui_frag,
             .line_vert_spv = line_vert,
@@ -157,6 +186,16 @@ pub const ShaderManager = struct {
             self.allocator.free(spv);
         }
         if (self.default_frag_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        // Free layer-specific fragment shaders
+        if (self.solid_frag_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.cutout_frag_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.translucent_frag_spv) |spv| {
             self.allocator.free(spv);
         }
         if (self.ui_vert_spv) |spv| {
@@ -191,6 +230,21 @@ pub const ShaderManager = struct {
     /// Get the default fragment shader (compiled at runtime)
     pub fn getDefaultFragmentShader(self: *ShaderManager) ?[]const u8 {
         return self.default_frag_spv;
+    }
+
+    /// Get the solid layer fragment shader (no discard, max early-z performance)
+    pub fn getSolidFragmentShader(self: *ShaderManager) ?[]const u8 {
+        return self.solid_frag_spv;
+    }
+
+    /// Get the cutout layer fragment shader (alpha discard for leaves, etc.)
+    pub fn getCutoutFragmentShader(self: *ShaderManager) ?[]const u8 {
+        return self.cutout_frag_spv;
+    }
+
+    /// Get the translucent layer fragment shader (alpha blending)
+    pub fn getTranslucentFragmentShader(self: *ShaderManager) ?[]const u8 {
+        return self.translucent_frag_spv;
     }
 
     /// Get the UI vertex shader (compiled at runtime)
