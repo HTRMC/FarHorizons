@@ -6,11 +6,25 @@ pub const LineVertex = @import("RenderSystem.zig").LineVertex;
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
 pub const BlockOutlineRenderer = @import("BlockOutlineRenderer.zig").BlockOutlineRenderer;
 pub const GpuDevice = @import("GpuDevice.zig").GpuDevice;
-pub const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
 pub const block = @import("block/Model.zig");
+
+// Resource management
+pub const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
+pub const ImageViewHelper = @import("resource/ImageViewHelper.zig").ImageViewHelper;
 
 // Buffer management
 pub const buffer = @import("buffer/Buffer.zig");
+pub const GpuBuffer = @import("GpuBuffer.zig").GpuBuffer;
+pub const ManagedBuffer = @import("GpuBuffer.zig").ManagedBuffer;
+
+// Descriptor management
+pub const DescriptorPoolBuilder = @import("descriptor/DescriptorPoolBuilder.zig").DescriptorPoolBuilder;
+pub const DescriptorSetManager = @import("descriptor/DescriptorSetManager.zig").DescriptorSetManager;
+
+// Pipeline management
+pub const RenderPipelines = @import("RenderPipelines.zig");
+pub const DescriptorSetLayoutBuilder = @import("pipeline/DescriptorSetLayoutBuilder.zig").DescriptorSetLayoutBuilder;
+pub const VulkanPipelineFactory = @import("pipeline/VulkanPipelineFactory.zig").VulkanPipelineFactory;
 
 // Shader system
 pub const ShaderPreprocessor = @import("GlslPreprocessor.zig").ShaderPreprocessor;
