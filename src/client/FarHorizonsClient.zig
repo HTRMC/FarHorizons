@@ -700,8 +700,8 @@ pub const FarHorizonsClient = struct {
                     }
                     // No cullface = internal face, always render
 
-                    // Get texture index from texture name
-                    const texture_index = texture_manager.getTextureIndex(face.texture) orelse 0;
+                    // Get texture index from texture name (returns 0/missing texture if not found)
+                    const texture_index = texture_manager.getTextureIndex(face.texture);
 
                     // Bake the face into a quad
                     var quad = FaceBakery.bakeQuad(
