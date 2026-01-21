@@ -3091,8 +3091,9 @@ pub const RenderSystem = struct {
     fn createIndirectBuffer(self: *Self) !void {
         var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
-        // Initial capacity for 4096 draw commands (should be plenty)
-        const initial_capacity: u32 = 4096;
+        // Initial capacity for draw commands (need enough for large view distances)
+        // With view_distance=16, vertical=8: ~18,500 chunks, potentially multiple commands each
+        const initial_capacity: u32 = 65536;
         const buffer_size: u64 = @as(u64, initial_capacity) * @sizeOf(IndirectDrawCommand);
 
         const result = try gpu.createMappedBufferRaw(buffer_size, vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
