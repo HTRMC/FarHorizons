@@ -202,6 +202,9 @@ pub const CompletedMesh = struct {
     vertices: []Vertex,
     indices: []u32,
     allocator: std.mem.Allocator,
+    /// Generated chunk data (for generation tasks, null for remesh tasks)
+    /// Main thread will copy this to RenderChunk.chunk
+    generated_chunk: ?Chunk = null,
 
     pub fn deinit(self: *CompletedMesh) void {
         self.allocator.free(self.vertices);
