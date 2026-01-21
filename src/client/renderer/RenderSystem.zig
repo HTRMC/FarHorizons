@@ -15,6 +15,9 @@ const GpuBuffer = @import("GpuBuffer.zig");
 const GpuDevice = @import("GpuDevice.zig").GpuDevice;
 const RenderPass = @import("RenderPass.zig");
 const RenderPipelines = @import("RenderPipelines.zig");
+const DescriptorPoolBuilder = @import("descriptor/DescriptorPoolBuilder.zig").DescriptorPoolBuilder;
+const DescriptorSetManager = @import("descriptor/DescriptorSetManager.zig").DescriptorSetManager;
+const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -109,10 +112,8 @@ pub const RenderSystem = struct {
     pipeline_layout: vk.VkPipelineLayout = null,
     graphics_pipeline: vk.VkPipeline = null,
 
-    // Layer-specific pipelines (for render layer optimization)
-    solid_pipeline: vk.VkPipeline = null,
-    cutout_pipeline: vk.VkPipeline = null,
-    translucent_pipeline: vk.VkPipeline = null,
+    // Layer-specific pipelines: [solid, cutout, translucent]
+    layer_pipelines: [3]vk.VkPipeline = .{ null, null, null },
 
     // Indirect drawing buffers (for batched draw calls)
     indirect_buffer: vk.VkBuffer = null,
@@ -345,17 +346,11 @@ pub const RenderSystem = struct {
             self.graphics_pipeline = null;
         }
         // Destroy layer-specific pipelines
-        if (self.solid_pipeline) |pipeline| {
-            vkDestroyPipeline(self.device, pipeline, null);
-            self.solid_pipeline = null;
-        }
-        if (self.cutout_pipeline) |pipeline| {
-            vkDestroyPipeline(self.device, pipeline, null);
-            self.cutout_pipeline = null;
-        }
-        if (self.translucent_pipeline) |pipeline| {
-            vkDestroyPipeline(self.device, pipeline, null);
-            self.translucent_pipeline = null;
+        for (&self.layer_pipelines) |*pipeline| {
+            if (pipeline.*) |p| {
+                vkDestroyPipeline(self.device, p, null);
+                pipeline.* = null;
+            }
         }
         if (self.pipeline_layout) |layout| {
             vkDestroyPipelineLayout(self.device, layout, null);
@@ -2132,7 +2127,7 @@ pub const RenderSystem = struct {
                 .basePipelineIndex = -1,
             };
 
-            if (vkCreateGraphicsPipelines(self.device, null, 1, &solid_pipeline_info, null, &self.solid_pipeline) != vk.VK_SUCCESS) {
+            if (vkCreateGraphicsPipelines(self.device, null, 1, &solid_pipeline_info, null, &self.layer_pipelines[0]) != vk.VK_SUCCESS) {
                 return error.PipelineCreationFailed;
             }
             logger.info("Solid pipeline created", .{});
@@ -2186,7 +2181,7 @@ pub const RenderSystem = struct {
                 .basePipelineIndex = -1,
             };
 
-            if (vkCreateGraphicsPipelines(self.device, null, 1, &cutout_pipeline_info, null, &self.cutout_pipeline) != vk.VK_SUCCESS) {
+            if (vkCreateGraphicsPipelines(self.device, null, 1, &cutout_pipeline_info, null, &self.layer_pipelines[1]) != vk.VK_SUCCESS) {
                 return error.PipelineCreationFailed;
             }
             logger.info("Cutout pipeline created", .{});
@@ -2240,7 +2235,7 @@ pub const RenderSystem = struct {
                 .basePipelineIndex = -1,
             };
 
-            if (vkCreateGraphicsPipelines(self.device, null, 1, &translucent_pipeline_info, null, &self.translucent_pipeline) != vk.VK_SUCCESS) {
+            if (vkCreateGraphicsPipelines(self.device, null, 1, &translucent_pipeline_info, null, &self.layer_pipelines[2]) != vk.VK_SUCCESS) {
                 return error.PipelineCreationFailed;
             }
             logger.info("Translucent pipeline created", .{});
@@ -2930,406 +2925,53 @@ pub const RenderSystem = struct {
     }
 
     fn loadCrosshairTexture(self: *Self) !void {
-        const vkCreateImage = vk.vkCreateImage orelse return error.VulkanFunctionNotLoaded;
-        const vkGetImageMemoryRequirements = vk.vkGetImageMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
-        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkBindImageMemory = vk.vkBindImageMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkCreateImageView = vk.vkCreateImageView orelse return error.VulkanFunctionNotLoaded;
-        const vkCreateSampler = vk.vkCreateSampler orelse return error.VulkanFunctionNotLoaded;
-        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+        const gpu = if (self.gpu_device) |*g| g else return error.GpuDeviceNotInitialized;
 
-        // Load crosshair PNG using stb_image
-        const crosshair_path = "assets/farhorizons/textures/gui/crosshair.png";
-        stb_image.setFlipVerticallyOnLoad(false);
-        const image = stb_image.load(crosshair_path, 4) catch {
-            logger.err("Failed to load crosshair texture: {s}", .{crosshair_path});
-            return error.TextureLoadFailed;
-        };
-        defer image.free();
-
-        const width: u32 = @intCast(image.width);
-        const height: u32 = @intCast(image.height);
-        logger.info("Loaded crosshair texture: {}x{}", .{ width, height });
-
-        // Create staging buffer and copy pixel data
-        const image_size: u64 = @as(u64, width) * @as(u64, height) * 4;
-        const staging = try gpu.createMappedBufferRaw(image_size, vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-        defer gpu.destroyMappedBufferRaw(staging);
-
-        @memcpy(@as([*]u8, @ptrCast(staging.mapped.?))[0..@intCast(image_size)], image.data[0..@intCast(image_size)]);
-
-        // Create image
-        const image_info = vk.VkImageCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .imageType = vk.VK_IMAGE_TYPE_2D,
-            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
-            .extent = .{ .width = width, .height = height, .depth = 1 },
-            .mipLevels = 1,
-            .arrayLayers = 1,
-            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
-            .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
-            .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
-        };
-
-        if (vkCreateImage(self.device, &image_info, null, &self.crosshair_texture) != vk.VK_SUCCESS) {
-            return error.ImageCreationFailed;
-        }
-
-        var img_mem_req: vk.VkMemoryRequirements = undefined;
-        vkGetImageMemoryRequirements(self.device, self.crosshair_texture, &img_mem_req);
-
-        const img_alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = img_mem_req.size,
-            .memoryTypeIndex = try self.findMemoryType(img_mem_req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
-        };
-
-        if (vkAllocateMemory(self.device, &img_alloc_info, null, &self.crosshair_texture_memory) != vk.VK_SUCCESS) {
-            return error.MemoryAllocationFailed;
-        }
-
-        if (vkBindImageMemory(self.device, self.crosshair_texture, self.crosshair_texture_memory, 0) != vk.VK_SUCCESS) {
-            return error.ImageBindFailed;
-        }
-
-        // Transition image and copy from staging buffer
-        try self.transitionImageLayout(self.crosshair_texture, vk.VK_IMAGE_LAYOUT_UNDEFINED, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        try self.copyBufferToImage(staging.handle, self.crosshair_texture, width, height);
-        try self.transitionImageLayout(self.crosshair_texture, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-        // Create image view
-        const view_info = vk.VkImageViewCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .image = self.crosshair_texture,
-            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
-            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
-            .components = .{
-                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+        const texture = try TextureLoader.load(
+            gpu,
+            "assets/farhorizons/textures/gui/crosshair.png",
+            .{
+                .filter = .nearest,
+                .address_mode = .clamp_to_edge,
+                .format = .rgba8_unorm,
             },
-            .subresourceRange = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-        };
-
-        if (vkCreateImageView(self.device, &view_info, null, &self.crosshair_texture_view) != vk.VK_SUCCESS) {
-            return error.ImageViewCreationFailed;
-        }
-
-        // Create sampler (nearest neighbor for pixel-perfect rendering)
-        const sampler_info = vk.VkSamplerCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .magFilter = vk.VK_FILTER_NEAREST,
-            .minFilter = vk.VK_FILTER_NEAREST,
-            .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
-            .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .mipLodBias = 0.0,
-            .anisotropyEnable = vk.VK_FALSE,
-            .maxAnisotropy = 1.0,
-            .compareEnable = vk.VK_FALSE,
-            .compareOp = vk.VK_COMPARE_OP_ALWAYS,
-            .minLod = 0.0,
-            .maxLod = 0.0,
-            .borderColor = vk.VK_BORDER_COLOR_INT_TRANSPARENT_BLACK,
-            .unnormalizedCoordinates = vk.VK_FALSE,
-        };
-
-        if (vkCreateSampler(self.device, &sampler_info, null, &self.crosshair_sampler) != vk.VK_SUCCESS) {
-            return error.SamplerCreationFailed;
-        }
-
-        logger.info("Crosshair texture loaded ({}x{})", .{ width, height });
-    }
-
-    fn transitionImageLayout(
-        self: *Self,
-        image: vk.VkImage,
-        old_layout: vk.VkImageLayout,
-        new_layout: vk.VkImageLayout,
-    ) !void {
-        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-
-        const alloc_info = vk.VkCommandBufferAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = null,
-            .commandPool = self.command_pool,
-            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-
-        var command_buffer: vk.VkCommandBuffer = undefined;
-        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferAllocationFailed;
-        }
-
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = null,
-        };
-
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            return error.CommandBufferBeginFailed;
-        }
-
-        var src_stage: vk.VkPipelineStageFlags = undefined;
-        var dst_stage: vk.VkPipelineStageFlags = undefined;
-        var src_access: vk.VkAccessFlags = 0;
-        var dst_access: vk.VkAccessFlags = 0;
-
-        if (old_layout == vk.VK_IMAGE_LAYOUT_UNDEFINED and new_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-            src_access = 0;
-            dst_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            src_stage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            dst_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-        } else if (old_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and new_layout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            src_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            dst_access = vk.VK_ACCESS_SHADER_READ_BIT;
-            src_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-            dst_stage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        } else {
-            return error.UnsupportedLayoutTransition;
-        }
-
-        const barrier = vk.VkImageMemoryBarrier{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = null,
-            .srcAccessMask = src_access,
-            .dstAccessMask = dst_access,
-            .oldLayout = old_layout,
-            .newLayout = new_layout,
-            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresourceRange = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-        };
-
-        vkCmdPipelineBarrier(
-            command_buffer,
-            src_stage,
-            dst_stage,
-            0,
-            0,
-            null,
-            0,
-            null,
-            1,
-            &barrier,
         );
 
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferEndFailed;
-        }
+        self.crosshair_texture = texture.image;
+        self.crosshair_texture_memory = texture.memory;
+        self.crosshair_texture_view = texture.view;
+        self.crosshair_sampler = texture.sampler;
 
-        const submit_info = vk.VkSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = null,
-        };
-
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
-            return error.QueueSubmitFailed;
-        }
-
-        _ = vkQueueWaitIdle(self.graphics_queue);
-        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
-    }
-
-    fn copyBufferToImage(
-        self: *Self,
-        buffer: vk.VkBuffer,
-        image: vk.VkImage,
-        width: u32,
-        height: u32,
-    ) !void {
-        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdCopyBufferToImage = vk.vkCmdCopyBufferToImage orelse return error.VulkanFunctionNotLoaded;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-
-        const alloc_info = vk.VkCommandBufferAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = null,
-            .commandPool = self.command_pool,
-            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-
-        var command_buffer: vk.VkCommandBuffer = undefined;
-        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferAllocationFailed;
-        }
-
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = null,
-        };
-
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            return error.CommandBufferBeginFailed;
-        }
-
-        const region = vk.VkBufferImageCopy{
-            .bufferOffset = 0,
-            .bufferRowLength = 0,
-            .bufferImageHeight = 0,
-            .imageSubresource = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-            .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
-            .imageExtent = .{
-                .width = width,
-                .height = height,
-                .depth = 1,
-            },
-        };
-
-        vkCmdCopyBufferToImage(
-            command_buffer,
-            buffer,
-            image,
-            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &region,
-        );
-
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferEndFailed;
-        }
-
-        const submit_info = vk.VkSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = null,
-        };
-
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
-            return error.QueueSubmitFailed;
-        }
-
-        _ = vkQueueWaitIdle(self.graphics_queue);
-        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
+        logger.info("Crosshair texture loaded ({}x{})", .{ texture.width, texture.height });
     }
 
     fn createUIDescriptorPool(self: *Self) !void {
-        const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
-
-        const pool_size = vk.VkDescriptorPoolSize{
-            .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = MAX_FRAMES_IN_FLIGHT,
-        };
-
-        const pool_info = vk.VkDescriptorPoolCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .maxSets = MAX_FRAMES_IN_FLIGHT,
-            .poolSizeCount = 1,
-            .pPoolSizes = &pool_size,
-        };
-
-        if (vkCreateDescriptorPool(self.device, &pool_info, null, &self.ui_descriptor_pool) != vk.VK_SUCCESS) {
-            return error.DescriptorPoolCreationFailed;
-        }
+        self.ui_descriptor_pool = try DescriptorPoolBuilder.init()
+            .withSamplers(MAX_FRAMES_IN_FLIGHT)
+            .withMaxSets(MAX_FRAMES_IN_FLIGHT)
+            .build(self.device);
 
         logger.info("UI descriptor pool created", .{});
     }
 
     fn createUIDescriptorSets(self: *Self) !void {
-        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-
-        var layouts: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSetLayout = undefined;
-        for (&layouts) |*l| {
-            l.* = self.ui_descriptor_set_layout;
-        }
-
-        const alloc_info = vk.VkDescriptorSetAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .pNext = null,
-            .descriptorPool = self.ui_descriptor_pool,
-            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
-            .pSetLayouts = &layouts,
-        };
-
-        if (vkAllocateDescriptorSets(self.device, &alloc_info, &self.ui_descriptor_sets) != vk.VK_SUCCESS) {
-            return error.DescriptorSetAllocationFailed;
-        }
+        try DescriptorSetManager.allocateSets(
+            self.device,
+            self.ui_descriptor_pool,
+            self.ui_descriptor_set_layout,
+            MAX_FRAMES_IN_FLIGHT,
+            &self.ui_descriptor_sets,
+        );
 
         // Update descriptor sets to point to crosshair texture
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-            const image_info = vk.VkDescriptorImageInfo{
-                .sampler = self.crosshair_sampler,
-                .imageView = self.crosshair_texture_view,
-                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
-
-            const descriptor_write = vk.VkWriteDescriptorSet{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = self.ui_descriptor_sets[i],
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &image_info,
-                .pBufferInfo = null,
-                .pTexelBufferView = null,
-            };
-
-            vkUpdateDescriptorSets(self.device, 1, &descriptor_write, 0, null);
+            DescriptorSetManager.updateSampler(
+                self.device,
+                self.ui_descriptor_sets[i],
+                0,
+                self.crosshair_texture_view,
+                self.crosshair_sampler,
+            );
         }
 
         logger.info("UI descriptor sets created", .{});
@@ -3482,256 +3124,99 @@ pub const RenderSystem = struct {
     // Note: Texture creation/destruction is now handled by TextureManager
 
     fn createDescriptorPool(self: *Self) !void {
-        const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
-
-        const pool_sizes = [_]vk.VkDescriptorPoolSize{
-            .{
-                .type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
-            },
-            .{
-                .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
-            },
-        };
-
-        const pool_info = vk.VkDescriptorPoolCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .maxSets = MAX_FRAMES_IN_FLIGHT,
-            .poolSizeCount = pool_sizes.len,
-            .pPoolSizes = &pool_sizes,
-        };
-
-        if (vkCreateDescriptorPool(self.device, &pool_info, null, &self.descriptor_pool) != vk.VK_SUCCESS) {
-            return error.DescriptorPoolCreationFailed;
-        }
+        self.descriptor_pool = try DescriptorPoolBuilder.init()
+            .withUniformBuffers(MAX_FRAMES_IN_FLIGHT)
+            .withSamplers(MAX_FRAMES_IN_FLIGHT)
+            .withMaxSets(MAX_FRAMES_IN_FLIGHT)
+            .build(self.device);
 
         logger.info("Descriptor pool created", .{});
     }
 
     fn createDescriptorSets(self: *Self) !void {
-        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-
-        const layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout} ** MAX_FRAMES_IN_FLIGHT;
-
-        const alloc_info = vk.VkDescriptorSetAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .pNext = null,
-            .descriptorPool = self.descriptor_pool,
-            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
-            .pSetLayouts = &layouts,
-        };
-
-        if (vkAllocateDescriptorSets(self.device, &alloc_info, &self.descriptor_sets) != vk.VK_SUCCESS) {
-            return error.DescriptorSetAllocationFailed;
-        }
+        try DescriptorSetManager.allocateSets(
+            self.device,
+            self.descriptor_pool,
+            self.descriptor_set_layout,
+            MAX_FRAMES_IN_FLIGHT,
+            &self.descriptor_sets,
+        );
 
         // Configure each descriptor set to point to its uniform buffer and texture
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-            const buffer_info = vk.VkDescriptorBufferInfo{
-                .buffer = self.uniform_buffers[i],
-                .offset = 0,
-                .range = @sizeOf(UniformBufferObject),
-            };
-
-            const image_info = vk.VkDescriptorImageInfo{
-                .sampler = self.texture_sampler,
-                .imageView = self.texture_image_view,
-                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
-
-            const descriptor_writes = [_]vk.VkWriteDescriptorSet{
-                .{
-                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .pNext = null,
-                    .dstSet = self.descriptor_sets[i],
-                    .dstBinding = 0,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pImageInfo = null,
-                    .pBufferInfo = &buffer_info,
-                    .pTexelBufferView = null,
-                },
-                .{
-                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .pNext = null,
-                    .dstSet = self.descriptor_sets[i],
-                    .dstBinding = 1,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &image_info,
-                    .pBufferInfo = null,
-                    .pTexelBufferView = null,
-                },
-            };
-
-            vkUpdateDescriptorSets(self.device, descriptor_writes.len, &descriptor_writes, 0, null);
+            DescriptorSetManager.updateUniformBufferAndSampler(
+                self.device,
+                self.descriptor_sets[i],
+                0, // buffer binding
+                self.uniform_buffers[i],
+                @sizeOf(UniformBufferObject),
+                1, // sampler binding
+                self.texture_image_view,
+                self.texture_sampler,
+            );
         }
 
         logger.info("Descriptor sets created", .{});
     }
 
     fn createEntityDescriptorPool(self: *Self) !void {
-        const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
-
         // Allocate enough for both adult and baby entity descriptor sets
-        const pool_sizes = [_]vk.VkDescriptorPoolSize{
-            .{
-                .type = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount = MAX_FRAMES_IN_FLIGHT * 2, // Adult + Baby
-            },
-            .{
-                .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = MAX_FRAMES_IN_FLIGHT * 2, // Adult + Baby
-            },
-        };
-
-        const pool_info = vk.VkDescriptorPoolCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .maxSets = MAX_FRAMES_IN_FLIGHT * 2, // Adult + Baby
-            .poolSizeCount = pool_sizes.len,
-            .pPoolSizes = &pool_sizes,
-        };
-
-        if (vkCreateDescriptorPool(self.device, &pool_info, null, &self.entity_descriptor_pool) != vk.VK_SUCCESS) {
-            return error.DescriptorPoolCreationFailed;
-        }
+        self.entity_descriptor_pool = try DescriptorPoolBuilder.init()
+            .withUniformBuffers(MAX_FRAMES_IN_FLIGHT * 2) // Adult + Baby
+            .withSamplers(MAX_FRAMES_IN_FLIGHT * 2) // Adult + Baby
+            .withMaxSets(MAX_FRAMES_IN_FLIGHT * 2) // Adult + Baby
+            .build(self.device);
 
         logger.info("Entity descriptor pool created", .{});
     }
 
     fn createEntityDescriptorSets(self: *Self, texture_view: vk.VkImageView, texture_sampler: vk.VkSampler) !void {
-        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-
-        const layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout} ** MAX_FRAMES_IN_FLIGHT;
-
-        const alloc_info = vk.VkDescriptorSetAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .pNext = null,
-            .descriptorPool = self.entity_descriptor_pool,
-            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
-            .pSetLayouts = &layouts,
-        };
-
-        if (vkAllocateDescriptorSets(self.device, &alloc_info, &self.entity_descriptor_sets) != vk.VK_SUCCESS) {
-            return error.DescriptorSetAllocationFailed;
-        }
+        try DescriptorSetManager.allocateSets(
+            self.device,
+            self.entity_descriptor_pool,
+            self.descriptor_set_layout,
+            MAX_FRAMES_IN_FLIGHT,
+            &self.entity_descriptor_sets,
+        );
 
         // Configure each descriptor set to point to its uniform buffer and entity texture
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-            const buffer_info = vk.VkDescriptorBufferInfo{
-                .buffer = self.uniform_buffers[i],
-                .offset = 0,
-                .range = @sizeOf(UniformBufferObject),
-            };
-
-            const image_info = vk.VkDescriptorImageInfo{
-                .sampler = texture_sampler,
-                .imageView = texture_view,
-                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
-
-            const descriptor_writes = [_]vk.VkWriteDescriptorSet{
-                .{
-                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .pNext = null,
-                    .dstSet = self.entity_descriptor_sets[i],
-                    .dstBinding = 0,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pImageInfo = null,
-                    .pBufferInfo = &buffer_info,
-                    .pTexelBufferView = null,
-                },
-                .{
-                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .pNext = null,
-                    .dstSet = self.entity_descriptor_sets[i],
-                    .dstBinding = 1,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &image_info,
-                    .pBufferInfo = null,
-                    .pTexelBufferView = null,
-                },
-            };
-
-            vkUpdateDescriptorSets(self.device, descriptor_writes.len, &descriptor_writes, 0, null);
+            DescriptorSetManager.updateUniformBufferAndSampler(
+                self.device,
+                self.entity_descriptor_sets[i],
+                0, // buffer binding
+                self.uniform_buffers[i],
+                @sizeOf(UniformBufferObject),
+                1, // sampler binding
+                texture_view,
+                texture_sampler,
+            );
         }
 
         logger.info("Entity descriptor sets created", .{});
     }
 
     fn createBabyEntityDescriptorSets(self: *Self, texture_view: vk.VkImageView, texture_sampler: vk.VkSampler) !void {
-        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
-
-        const layouts = [_]vk.VkDescriptorSetLayout{self.descriptor_set_layout} ** MAX_FRAMES_IN_FLIGHT;
-
-        const alloc_info = vk.VkDescriptorSetAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .pNext = null,
-            .descriptorPool = self.entity_descriptor_pool,
-            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
-            .pSetLayouts = &layouts,
-        };
-
-        if (vkAllocateDescriptorSets(self.device, &alloc_info, &self.baby_entity_descriptor_sets) != vk.VK_SUCCESS) {
-            return error.DescriptorSetAllocationFailed;
-        }
+        try DescriptorSetManager.allocateSets(
+            self.device,
+            self.entity_descriptor_pool,
+            self.descriptor_set_layout,
+            MAX_FRAMES_IN_FLIGHT,
+            &self.baby_entity_descriptor_sets,
+        );
 
         // Configure each descriptor set to point to its uniform buffer and baby entity texture
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-            const buffer_info = vk.VkDescriptorBufferInfo{
-                .buffer = self.uniform_buffers[i],
-                .offset = 0,
-                .range = @sizeOf(UniformBufferObject),
-            };
-
-            const image_info = vk.VkDescriptorImageInfo{
-                .sampler = texture_sampler,
-                .imageView = texture_view,
-                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            };
-
-            const descriptor_writes = [_]vk.VkWriteDescriptorSet{
-                .{
-                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .pNext = null,
-                    .dstSet = self.baby_entity_descriptor_sets[i],
-                    .dstBinding = 0,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                    .pImageInfo = null,
-                    .pBufferInfo = &buffer_info,
-                    .pTexelBufferView = null,
-                },
-                .{
-                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .pNext = null,
-                    .dstSet = self.baby_entity_descriptor_sets[i],
-                    .dstBinding = 1,
-                    .dstArrayElement = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = &image_info,
-                    .pBufferInfo = null,
-                    .pTexelBufferView = null,
-                },
-            };
-
-            vkUpdateDescriptorSets(self.device, descriptor_writes.len, &descriptor_writes, 0, null);
+            DescriptorSetManager.updateUniformBufferAndSampler(
+                self.device,
+                self.baby_entity_descriptor_sets[i],
+                0, // buffer binding
+                self.uniform_buffers[i],
+                @sizeOf(UniformBufferObject),
+                1, // sampler binding
+                texture_view,
+                texture_sampler,
+            );
         }
 
         logger.info("Baby entity descriptor sets created", .{});
@@ -3888,17 +3373,11 @@ pub const RenderSystem = struct {
             self.graphics_pipeline = null;
         }
         // Destroy layer-specific pipelines
-        if (self.solid_pipeline) |p| {
-            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
-            self.solid_pipeline = null;
-        }
-        if (self.cutout_pipeline) |p| {
-            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
-            self.cutout_pipeline = null;
-        }
-        if (self.translucent_pipeline) |p| {
-            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
-            self.translucent_pipeline = null;
+        for (&self.layer_pipelines) |*pipeline| {
+            if (pipeline.*) |p| {
+                if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+                pipeline.* = null;
+            }
         }
         if (self.pipeline_layout) |l| {
             if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
