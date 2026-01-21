@@ -15,6 +15,7 @@ const ChunkPosContext = shared.ChunkPosContext;
 const CHUNK_SIZE = shared.CHUNK_SIZE;
 const TerrainGenerator = shared.TerrainGenerator;
 const Rcu = shared.Rcu;
+const BlockEntry = shared.BlockEntry;
 
 const RenderSystem = renderer.RenderSystem;
 const TextureManager = renderer.TextureManager;
@@ -118,10 +119,10 @@ pub const ChunkManager = struct {
     /// Asset directory for model loading
     asset_directory: []const u8,
 
-    /// Per-worker block model shapers (one per worker for thread safety)
-    worker_model_shapers: []?*BlockModelShaper,
-    worker_model_loaders: []?*ModelLoader,
-    worker_blockstate_loaders: []?*BlockstateLoader,
+    /// Shared block model shaper (pre-warmed, read-only after init)
+    shared_model_shaper: ?*BlockModelShaper = null,
+    shared_model_loader: ?*ModelLoader = null,
+    shared_blockstate_loader: ?*BlockstateLoader = null,
 
     /// Buffer manager for GPU buffer arena allocation
     buffer_manager: ?*ChunkBufferManager = null,
@@ -156,7 +157,7 @@ pub const ChunkManager = struct {
     ) !Self {
         logger.info("Initializing ChunkManager with view distance {}", .{config.view_distance});
 
-        var self = Self{
+        const self = Self{
             .allocator = allocator,
             .io = io,
             .loaded_chunks = ChunkMap.init(allocator),
@@ -168,17 +169,7 @@ pub const ChunkManager = struct {
             .render_system = render_system,
             .texture_manager = texture_manager,
             .asset_directory = asset_directory,
-            .worker_model_shapers = try allocator.alloc(?*BlockModelShaper, config.worker_count),
-            .worker_model_loaders = try allocator.alloc(?*ModelLoader, config.worker_count),
-            .worker_blockstate_loaders = try allocator.alloc(?*BlockstateLoader, config.worker_count),
         };
-
-        // Initialize per-worker model loading systems
-        for (0..config.worker_count) |i| {
-            self.worker_model_loaders[i] = null;
-            self.worker_blockstate_loaders[i] = null;
-            self.worker_model_shapers[i] = null;
-        }
 
         return self;
     }
@@ -198,28 +189,29 @@ pub const ChunkManager = struct {
         );
         self.buffer_manager = buffer_mgr;
 
-        // Initialize per-worker resources
-        for (0..self.config.worker_count) |i| {
-            // Create model loader for this worker
-            const model_loader = try self.allocator.create(ModelLoader);
-            model_loader.* = ModelLoader.init(self.allocator, self.io, self.asset_directory);
-            self.worker_model_loaders[i] = model_loader;
+        // Initialize shared model loading resources (pre-warmed, read-only for workers)
+        const model_loader = try self.allocator.create(ModelLoader);
+        model_loader.* = ModelLoader.init(self.allocator, self.io, self.asset_directory);
+        self.shared_model_loader = model_loader;
 
-            // Create blockstate loader for this worker
-            const blockstate_loader = try self.allocator.create(BlockstateLoader);
-            blockstate_loader.* = BlockstateLoader.init(self.allocator, self.io, self.asset_directory);
-            self.worker_blockstate_loaders[i] = blockstate_loader;
+        const blockstate_loader = try self.allocator.create(BlockstateLoader);
+        blockstate_loader.* = BlockstateLoader.init(self.allocator, self.io, self.asset_directory);
+        self.shared_blockstate_loader = blockstate_loader;
 
-            // Create block model shaper for this worker
-            const shaper = try self.allocator.create(BlockModelShaper);
-            shaper.* = BlockModelShaper.init(
-                self.allocator,
-                model_loader,
-                blockstate_loader,
-                self.texture_manager,
-            );
-            self.worker_model_shapers[i] = shaper;
+        const shaper = try self.allocator.create(BlockModelShaper);
+        shaper.* = BlockModelShaper.init(
+            self.allocator,
+            model_loader,
+            blockstate_loader,
+            self.texture_manager,
+        );
+        self.shared_model_shaper = shaper;
+
+        // Pre-warm model cache with all blocks
+        for (1..256) |id| {
+            _ = shaper.getModel(BlockEntry.simple(@intCast(id))) catch {};
         }
+        logger.info("Model cache pre-warmed", .{});
 
         // Initialize RCU for safe concurrent chunk access
         const rcu_instance = try self.allocator.create(Rcu);
@@ -266,24 +258,19 @@ pub const ChunkManager = struct {
             self.rcu = null;
         }
 
-        // Free per-worker resources
-        for (0..self.config.worker_count) |i| {
-            if (self.worker_model_shapers[i]) |shaper| {
-                shaper.deinit();
-                self.allocator.destroy(shaper);
-            }
-            if (self.worker_blockstate_loaders[i]) |loader| {
-                loader.deinit();
-                self.allocator.destroy(loader);
-            }
-            if (self.worker_model_loaders[i]) |loader| {
-                loader.deinit();
-                self.allocator.destroy(loader);
-            }
+        // Free shared model resources
+        if (self.shared_model_shaper) |shaper| {
+            shaper.deinit();
+            self.allocator.destroy(shaper);
         }
-        self.allocator.free(self.worker_model_shapers);
-        self.allocator.free(self.worker_model_loaders);
-        self.allocator.free(self.worker_blockstate_loaders);
+        if (self.shared_blockstate_loader) |loader| {
+            loader.deinit();
+            self.allocator.destroy(loader);
+        }
+        if (self.shared_model_loader) |loader| {
+            loader.deinit();
+            self.allocator.destroy(loader);
+        }
 
         // Free loaded chunks (and their buffer allocations)
         var iter = self.loaded_chunks.iterator();
@@ -439,6 +426,8 @@ pub const ChunkManager = struct {
                             buf_mgr.free(alloc);
                         }
                     }
+                    // Remove from pending so chunk can be re-queued on next update
+                    _ = self.pending_loads.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 }
@@ -474,6 +463,8 @@ pub const ChunkManager = struct {
                             buf_mgr.free(alloc);
                         }
                     }
+                    // Remove from pending so chunk can be re-queued on next update
+                    _ = self.pending_loads.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 }
@@ -498,6 +489,8 @@ pub const ChunkManager = struct {
                             buf_mgr.free(alloc);
                         }
                     }
+                    // Remove from pending so chunk can be re-queued on next update
+                    _ = self.pending_loads.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 };
@@ -1051,7 +1044,7 @@ pub const ChunkManager = struct {
         // Defer cleanup of task data
         defer self.allocator.destroy(task_data);
 
-        const shaper = self.worker_model_shapers[ctx.id] orelse return;
+        const shaper = self.shared_model_shaper orelse return;
 
         // Enter RCU read-side critical section
         // This protects neighbor chunk pointers from being freed while we're using them
