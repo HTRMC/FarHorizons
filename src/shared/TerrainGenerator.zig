@@ -65,27 +65,30 @@ const STONE_ID: u8 = 1;
 const DIRT_ID: u8 = 3;
 const GRASS_ID: u8 = 4;
 
-/// Terrain generation parameters
-const BASE_HEIGHT: i32 = 64;
-const HEIGHT_VARIATION: f32 = 30.0;
-const NOISE_FREQUENCY: f32 = 0.02; // Controls terrain feature size
+/// Terrain configuration parameters
+pub const TerrainConfig = struct {
+    seed: i32 = 12345,
+    base_height: i32 = 64,
+    height_variation: f32 = 32.0,
+    frequency: f32 = 1.0,
+};
 
 pub const TerrainGenerator = struct {
-    seed: i32,
+    config: TerrainConfig,
     height_noise: fastnoise2.Node,
 
     const Self = @This();
 
-    /// Initialize the terrain generator with a seed
+    /// Initialize the terrain generator with a config
     /// Returns null if FastNoise2 initialization fails
-    pub fn init(seed: i32) ?Self {
+    pub fn init(config: TerrainConfig) ?Self {
         // Use Perlin noise for terrain generation
         const node = fastnoise2.Node.fromMetadata(@intFromEnum(NoiseType.perlin), .auto) orelse {
             return null;
         };
 
         return Self{
-            .seed = seed,
+            .config = config,
             .height_noise = node,
         };
     }
@@ -100,6 +103,8 @@ pub const TerrainGenerator = struct {
     /// section_y: vertical section index (each section is 16 blocks tall)
     pub fn generateChunk(self: *const Self, chunk_x: i32, section_y: i32, chunk_z: i32) Chunk {
         var chunk = Chunk.init();
+
+        const freq = self.config.frequency;
 
         // World Y range for this section
         const section_base_y = section_y * @as(i32, CHUNK_SIZE);
@@ -117,12 +122,12 @@ pub const TerrainGenerator = struct {
         // - xStepSize/yStepSize: distance between samples in noise space (frequency)
         _ = self.height_noise.genUniformGrid2D(
             &height_noise,
-            world_x_base * NOISE_FREQUENCY,
-            world_z_base * NOISE_FREQUENCY,
+            world_x_base * freq,
+            world_z_base * freq,
             CHUNK_SIZE, // x count
             CHUNK_SIZE, // y count (z in world)
-            NOISE_FREQUENCY, // step size applies frequency scaling
-            self.seed,
+            freq, // step size applies frequency scaling
+            self.config.seed,
         );
 
         // Generate blocks for each column
@@ -136,7 +141,7 @@ pub const TerrainGenerator = struct {
                 const noise_val = height_noise[noise_idx];
 
                 // Convert noise (-1 to 1) to terrain height
-                const terrain_height = BASE_HEIGHT + @as(i32, @intFromFloat(noise_val * HEIGHT_VARIATION));
+                const terrain_height = self.config.base_height + @as(i32, @intFromFloat(noise_val * self.config.height_variation));
 
                 // Fill column based on height
                 var local_y: u32 = 0;

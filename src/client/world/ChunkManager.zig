@@ -229,13 +229,13 @@ pub const ChunkManager = struct {
 
         // Initialize terrain generator
         const terrain_gen = try self.allocator.create(TerrainGenerator);
-        terrain_gen.* = TerrainGenerator.init(12345) orelse {
+        terrain_gen.* = TerrainGenerator.init(.{ .seed = 12345 }) orelse {
             logger.err("Failed to initialize terrain generator", .{});
             self.allocator.destroy(terrain_gen);
             return error.TerrainGeneratorInitFailed;
         };
         self.terrain_generator = terrain_gen;
-        logger.info("Terrain generator initialized with seed 12345", .{});
+        logger.info("Terrain generator initialized with ridged terrain", .{});
 
         // Start pool first (this initializes contexts)
         try self.pool.start();
