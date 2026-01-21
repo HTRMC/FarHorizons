@@ -3,6 +3,7 @@ const std = @import("std");
 const block_mod = @import("Block.zig");
 const BlockState = block_mod.BlockState;
 const BlockVTable = block_mod.BlockVTable;
+const RenderLayer = block_mod.RenderLayer;
 const voxel_shape = @import("../VoxelShape.zig");
 const VoxelShape = voxel_shape.VoxelShape;
 const shapes = @import("../Shapes.zig");
@@ -13,6 +14,7 @@ pub const STAIR_BLOCK_VTABLE = BlockVTable{
     .getShape = stairGetShape,
     .isOpaque = stairIsOpaque,
     .isSolid = stairIsSolid,
+    .getRenderLayer = stairGetRenderLayer,
 };
 
 /// Get the shape based on stair state
@@ -113,6 +115,11 @@ fn stairIsOpaque(_: BlockState) bool {
 /// Stairs are always solid (have collision)
 fn stairIsSolid(_: BlockState) bool {
     return true;
+}
+
+/// Stairs use solid render layer
+fn stairGetRenderLayer(_: BlockState) RenderLayer {
+    return .solid;
 }
 
 // ======================
