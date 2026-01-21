@@ -227,7 +227,7 @@ pub const FarHorizonsClient = struct {
 
         // Initialize entity interaction with ECS
         if (self.ecs_world) |*ecs_world| {
-            self.entity_interaction = EntityInteraction.initWithECS(ecs_world);
+            self.entity_interaction = EntityInteraction.init(ecs_world);
         }
 
         // Initialize bindless entity texture manager
@@ -363,7 +363,7 @@ pub const FarHorizonsClient = struct {
                         // Try entity attack first (ECS), fall back to block breaking
                         var attacked_entity = false;
                         if (self.entity_interaction) |*ei| {
-                            attacked_entity = ei.handleAttackECS(self.local_player.getPosition(0));
+                            attacked_entity = ei.handleAttack(self.local_player.getPosition(0));
                         }
                         if (!attacked_entity) {
                             if (self.block_interaction) |*bi| {
@@ -426,9 +426,9 @@ pub const FarHorizonsClient = struct {
             self.camera.position = self.local_player.getPosition(partial_tick);
             self.camera.setRotation(self.local_player.getYRot(), self.local_player.getXRot());
 
-            // Update entity targeting (every frame for responsive targeting) - ECS version
+            // Update entity targeting (every frame for responsive targeting)
             if (self.entity_interaction) |*ei| {
-                ei.updateTargetECS(&self.camera);
+                ei.updateTarget(&self.camera);
             }
 
             // Update block interaction raycast (every frame for responsive crosshair)
