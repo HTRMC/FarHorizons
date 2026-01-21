@@ -17,6 +17,13 @@ pub const TextureManager = struct {
     pub const TEXTURE_SIZE: u32 = 16;
     pub const MAX_TEXTURES: u32 = 256; // Max textures in array
 
+    /// Missing texture index - always 0, pink/black checkerboard
+    pub const MISSING_TEXTURE_INDEX: u32 = 0;
+
+    // Minecraft missing texture colors (RGBA format)
+    const MISSING_COLOR_PINK: u32 = 0xFFF800F8; // Magenta/pink
+    const MISSING_COLOR_BLACK: u32 = 0xFF000000; // Black
+
     allocator: std.mem.Allocator,
     io: Io,
     assets_path: []const u8,
@@ -91,6 +98,7 @@ pub const TextureManager = struct {
     }
 
     /// Load all block textures from assets directory
+    /// Layer 0 is always the missing texture (pink/black checkerboard)
     pub fn loadBlockTextures(self: *Self) !void {
         const texture_dir = try std.fmt.allocPrint(
             self.allocator,
@@ -120,18 +128,22 @@ pub const TextureManager = struct {
             return error.NoTexturesFound;
         }
 
-        logger.info("Found {d} block textures", .{count});
+        logger.info("Found {d} block textures (+ 1 missing texture)", .{count});
 
-        // Create the texture array image
-        try self.createTextureArray(count);
+        // Create the texture array image with +1 for missing texture at index 0
+        try self.createTextureArray(count + 1);
 
-        // Second pass: load each texture
+        // Load procedural missing texture to layer 0
+        try self.loadMissingTextureToLayer(MISSING_TEXTURE_INDEX);
+        logger.info("Loaded missing texture (pink/black checkerboard) to layer 0", .{});
+
+        // Second pass: load each texture (starting at layer 1)
         dir = Dir.cwd().openDir(self.io, texture_dir, .{ .iterate = true }) catch {
             return error.TextureDirectoryNotFound;
         };
         iter = dir.iterate();
 
-        var layer_index: u32 = 0;
+        var layer_index: u32 = 1; // Start at 1, layer 0 is missing texture
         while (try iter.next(self.io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".png")) {
                 // Build null-terminated path using stack buffer
@@ -164,7 +176,8 @@ pub const TextureManager = struct {
     }
 
     /// Get texture array layer index by name (e.g., "stone", "oak_planks")
-    pub fn getTextureIndex(self: *const Self, name: []const u8) ?u32 {
+    /// Returns MISSING_TEXTURE_INDEX (0) if texture is not found
+    pub fn getTextureIndex(self: *const Self, name: []const u8) u32 {
         // Handle full path like "block/stone" or "farhorizons:block/stone"
         var texture_name = name;
 
@@ -178,7 +191,8 @@ pub const TextureManager = struct {
             texture_name = texture_name[6..];
         }
 
-        return self.texture_indices.get(texture_name);
+        // Return the texture index, or missing texture (0) if not found
+        return self.texture_indices.get(texture_name) orelse MISSING_TEXTURE_INDEX;
     }
 
     fn createTextureArray(self: *Self, layer_count: u32) !void {
@@ -317,6 +331,115 @@ pub const TextureManager = struct {
         }
         const dest: [*]u8 = @ptrCast(data);
         @memcpy(dest[0..@intCast(image_size)], image.data[0..@intCast(image_size)]);
+        vkUnmapMemory(self.device, staging_buffer_memory);
+
+        // Transition image layout and copy buffer to image layer
+        try self.transitionImageLayoutForLayer(
+            self.texture_array,
+            layer_index,
+            vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        );
+
+        try self.copyBufferToImageLayer(staging_buffer, self.texture_array, layer_index);
+
+        try self.transitionImageLayoutForLayer(
+            self.texture_array,
+            layer_index,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        );
+    }
+
+    /// Generate and load the Minecraft-style missing texture (pink/black checkerboard)
+    /// This is a procedural texture, not loaded from disk
+    fn loadMissingTextureToLayer(self: *Self, layer_index: u32) !void {
+        const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkBindBufferMemory = vk.vkBindBufferMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
+
+        const image_size: vk.VkDeviceSize = TEXTURE_SIZE * TEXTURE_SIZE * 4;
+
+        // Create staging buffer
+        var staging_buffer: vk.VkBuffer = null;
+        var staging_buffer_memory: vk.VkDeviceMemory = null;
+
+        const staging_buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = image_size,
+            .usage = vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        if (vkCreateBuffer(self.device, &staging_buffer_info, null, &staging_buffer) != vk.VK_SUCCESS) {
+            return error.BufferCreationFailed;
+        }
+        defer vkDestroyBuffer(self.device, staging_buffer, null);
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vkGetBufferMemoryRequirements(self.device, staging_buffer, &mem_requirements);
+
+        const staging_alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = try self.findMemoryType(
+                mem_requirements.memoryTypeBits,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            ),
+        };
+
+        if (vkAllocateMemory(self.device, &staging_alloc_info, null, &staging_buffer_memory) != vk.VK_SUCCESS) {
+            return error.MemoryAllocationFailed;
+        }
+        defer vkFreeMemory(self.device, staging_buffer_memory, null);
+
+        if (vkBindBufferMemory(self.device, staging_buffer, staging_buffer_memory, 0) != vk.VK_SUCCESS) {
+            return error.BufferMemoryBindFailed;
+        }
+
+        // Generate the missing texture procedurally (pink/black checkerboard)
+        var data: ?*anyopaque = null;
+        if (vkMapMemory(self.device, staging_buffer_memory, 0, image_size, 0, &data) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+
+        const pixels: [*]u32 = @ptrCast(@alignCast(data));
+        const half_size = TEXTURE_SIZE / 2;
+
+        // Generate Minecraft-style missing texture: 2x2 checkerboard of pink and black
+        for (0..TEXTURE_SIZE) |y| {
+            for (0..TEXTURE_SIZE) |x| {
+                const in_top_half = y < half_size;
+                const in_left_half = x < half_size;
+
+                // XOR pattern: top-left and bottom-right are one color, others are another
+                const is_pink = (in_top_half and in_left_half) or (!in_top_half and !in_left_half);
+
+                // RGBA format (Vulkan expects RGBA, not ARGB like Java)
+                // Pink: R=248, G=0, B=248, A=255 -> 0xF800F8FF in ABGR -> need RGBA
+                // Actually VK_FORMAT_R8G8B8A8_SRGB means R is in lowest byte
+                // So we need: R | (G << 8) | (B << 16) | (A << 24)
+                const color: u32 = if (is_pink)
+                    // Pink: R=248, G=0, B=248, A=255
+                    (248) | (0 << 8) | (248 << 16) | (255 << 24)
+                else
+                    // Black: R=0, G=0, B=0, A=255
+                    (0) | (0 << 8) | (0 << 16) | (255 << 24);
+
+                pixels[y * TEXTURE_SIZE + x] = color;
+            }
+        }
+
         vkUnmapMemory(self.device, staging_buffer_memory);
 
         // Transition image layout and copy buffer to image layer
