@@ -2,6 +2,7 @@
 /// Port of Minecraft's entity interaction logic from MultiPlayerGameMode
 const std = @import("std");
 const shared = @import("Shared");
+const ecs = @import("ecs");
 
 const Logger = shared.Logger;
 const Vec3 = shared.Vec3;
@@ -27,8 +28,11 @@ pub const EntityInteraction = struct {
     /// Attack cooldown in ticks
     pub const ATTACK_COOLDOWN: u32 = 10;
 
-    /// Current targeted entity ID (if any)
+    /// Current targeted entity ID (if any) - legacy
     target_entity_id: ?u64 = null,
+
+    /// Current targeted ECS entity ID
+    target_ecs_id: ?ecs.EntityId = null,
 
     /// Hit location on the entity
     hit_location: ?Vec3 = null,
@@ -39,12 +43,23 @@ pub const EntityInteraction = struct {
     /// Attack cooldown counter
     cooldown: u32 = 0,
 
-    /// Reference to entity manager
-    entity_manager: *EntityManager,
+    /// Reference to entity manager (legacy)
+    entity_manager: ?*EntityManager = null,
 
+    /// Reference to ECS world
+    ecs_world: ?*ecs.World = null,
+
+    /// Initialize with legacy EntityManager
     pub fn init(entity_manager: *EntityManager) Self {
         return .{
             .entity_manager = entity_manager,
+        };
+    }
+
+    /// Initialize with ECS World
+    pub fn initWithECS(ecs_world: *ecs.World) Self {
+        return .{
+            .ecs_world = ecs_world,
         };
     }
 
@@ -164,5 +179,124 @@ pub const EntityInteraction = struct {
     /// Get distance to target
     pub fn getTargetDistance(self: *const Self) f32 {
         return self.hit_distance;
+    }
+
+    // =====================
+    // ECS World methods
+    // =====================
+
+    /// Update the targeted entity based on camera (ECS version)
+    pub fn updateTargetECS(self: *Self, camera: *const Camera) void {
+        const world = self.ecs_world orelse return;
+
+        const eye_pos = camera.position;
+        const forward = camera.forward;
+
+        const to = Vec3{
+            .x = eye_pos.x + forward.x * ENTITY_REACH,
+            .y = eye_pos.y + forward.y * ENTITY_REACH,
+            .z = eye_pos.z + forward.z * ENTITY_REACH,
+        };
+
+        self.target_ecs_id = null;
+        self.hit_location = null;
+        self.hit_distance = ENTITY_REACH + 1.0;
+
+        var entity_iter = world.entities.iterator();
+        while (entity_iter.next()) |id| {
+            const transform = world.getComponent(ecs.Transform, id) orelse continue;
+            const physics = world.getComponent(ecs.PhysicsBody, id) orelse continue;
+
+            // Skip players
+            if (world.getComponent(ecs.Tags, id)) |tags| {
+                if (tags.is_player) continue;
+            }
+
+            const half_width = physics.halfWidth();
+            const aabb = AABB.init(
+                transform.position.x - half_width,
+                transform.position.y,
+                transform.position.z - half_width,
+                transform.position.x + half_width,
+                transform.position.y + physics.height,
+                transform.position.z + half_width,
+            );
+
+            if (aabb.clip(eye_pos, to)) |hit_point| {
+                const dx = hit_point.x - eye_pos.x;
+                const dy = hit_point.y - eye_pos.y;
+                const dz = hit_point.z - eye_pos.z;
+                const dist = @sqrt(dx * dx + dy * dy + dz * dz);
+
+                if (dist < self.hit_distance) {
+                    self.target_ecs_id = id;
+                    self.hit_location = hit_point;
+                    self.hit_distance = @floatCast(dist);
+                }
+            }
+        }
+    }
+
+    /// Handle attack (ECS version)
+    pub fn handleAttackECS(self: *Self, attacker_pos: Vec3) bool {
+        if (self.cooldown > 0) return false;
+
+        const world = self.ecs_world orelse return false;
+        const target_id = self.target_ecs_id orelse return false;
+
+        if (!world.entityExists(target_id)) return false;
+
+        // Get target components
+        const transform = world.getComponent(ecs.Transform, target_id) orelse return false;
+        const health = world.getComponentMut(ecs.Health, target_id) orelse return false;
+        const velocity = world.getComponentMut(ecs.Velocity, target_id) orelse return false;
+
+        // Check invulnerability
+        if (health.isInvulnerable() or health.dead) return false;
+
+        // Apply damage
+        health.current -= BASE_DAMAGE;
+        health.hurt_time = ecs.Health.HURT_DURATION;
+        health.invulnerable_time = ecs.Health.INVULNERABLE_DURATION;
+        health.last_hurt_by_pos = attacker_pos;
+        health.last_hurt_timestamp = world.tick_count;
+
+        // Apply knockback
+        const dx = transform.position.x - attacker_pos.x;
+        const dz = transform.position.z - attacker_pos.z;
+        const dist = @sqrt(dx * dx + dz * dz);
+
+        if (dist > 0.01) {
+            const nx = dx / dist;
+            const nz = dz / dist;
+            velocity.linear.x = nx * ecs.Health.BASE_KNOCKBACK;
+            velocity.linear.y = ecs.Health.BASE_KNOCKBACK;
+            velocity.linear.z = nz * ecs.Health.BASE_KNOCKBACK;
+        }
+
+        // Check for death
+        if (health.current <= 0) {
+            health.die();
+        }
+
+        self.cooldown = ATTACK_COOLDOWN;
+
+        logger.info("Attacked ECS entity at ({d:.1}, {d:.1}, {d:.1})", .{
+            transform.position.x,
+            transform.position.y,
+            transform.position.z,
+        });
+
+        return true;
+    }
+
+    /// Check if currently targeting an ECS entity
+    pub fn isTargetingECSEntity(self: *const Self) bool {
+        return self.target_ecs_id != null;
+    }
+
+    /// Get targeted ECS entity ID
+    pub fn getTargetECSEntity(self: *const Self) ?ecs.EntityId {
+        return self.target_ecs_id;
     }
 };
