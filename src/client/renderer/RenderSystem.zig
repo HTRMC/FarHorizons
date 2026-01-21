@@ -920,6 +920,8 @@ pub const RenderSystem = struct {
         vertex_arena: u16 = 0,
         /// Index buffer arena index (for multi-buffer rendering)
         index_arena: u16 = 0,
+        /// Render layer (0=solid, 1=cutout, 2=translucent)
+        render_layer: u8 = 0,
     };
 
     /// Staging copy info for buffer uploads
