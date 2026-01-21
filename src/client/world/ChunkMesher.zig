@@ -11,6 +11,8 @@ const CHUNK_SIZE = shared.CHUNK_SIZE;
 const VoxelDirection = shared.Direction;
 const ChunkAccess = shared.ChunkAccess;
 const Logger = shared.Logger;
+const RenderLayer = shared.RenderLayer;
+const block_registry = shared.block;
 
 const Vertex = renderer.Vertex;
 const BlockModel = renderer.block.BlockModel;
@@ -23,6 +25,8 @@ const AmbientOcclusion = @import("AmbientOcclusion.zig");
 
 const RenderChunk = @import("RenderChunk.zig");
 const CompletedMesh = RenderChunk.CompletedMesh;
+const CompletedLayerData = RenderChunk.CompletedLayerData;
+const RENDER_LAYER_COUNT = RenderChunk.RENDER_LAYER_COUNT;
 
 /// Mesh generation context for a single chunk
 pub const ChunkMesher = struct {
@@ -60,30 +64,43 @@ pub const ChunkMesher = struct {
         if (neighbors[4]) |n| chunk_access.setNeighbor(.west, n);
         if (neighbors[5]) |n| chunk_access.setNeighbor(.east, n);
 
-        // Count non-air blocks to estimate buffer size
-        var block_count: usize = 0;
+        // Count blocks per render layer to estimate buffer sizes
+        var layer_block_counts: [RENDER_LAYER_COUNT]usize = .{ 0, 0, 0 };
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
                 for (0..CHUNK_SIZE) |x| {
                     const entry = chunk.getBlockEntry(@intCast(x), @intCast(y), @intCast(z));
-                    if (!entry.isAir()) block_count += 1;
+                    if (entry.isAir()) continue;
+                    const block_def = entry.getBlock();
+                    const layer = block_def.getRenderLayer(entry.state);
+                    layer_block_counts[@intFromEnum(layer)] += 1;
                 }
             }
         }
 
-        // Estimate buffer size (worst case: 6 faces per block, 4 vertices per face)
-        const max_faces = block_count * 6;
-        const max_vertices = max_faces * 4;
-        const max_indices = max_faces * 6;
+        // Allocate per-layer working buffers
+        var layer_vertices: [RENDER_LAYER_COUNT][]Vertex = undefined;
+        var layer_indices: [RENDER_LAYER_COUNT][]u32 = undefined;
+        var layer_vertex_idx: [RENDER_LAYER_COUNT]usize = .{ 0, 0, 0 };
+        var layer_index_idx: [RENDER_LAYER_COUNT]usize = .{ 0, 0, 0 };
 
-        // Allocate working buffers
-        const vertices = try self.allocator.alloc(Vertex, max_vertices);
-        errdefer self.allocator.free(vertices);
-        const indices = try self.allocator.alloc(u32, max_indices);
-        errdefer self.allocator.free(indices);
+        for (0..RENDER_LAYER_COUNT) |i| {
+            const block_count = layer_block_counts[i];
+            if (block_count == 0) {
+                layer_vertices[i] = &[_]Vertex{};
+                layer_indices[i] = &[_]u32{};
+                continue;
+            }
+            // Estimate buffer size (worst case: 6 faces per block, 4 vertices per face)
+            const max_faces = block_count * 6;
+            const max_vertices = max_faces * 4;
+            const max_indices = max_faces * 6;
 
-        var vertex_idx: usize = 0;
-        var index_idx: usize = 0;
+            layer_vertices[i] = try self.allocator.alloc(Vertex, max_vertices);
+            errdefer self.allocator.free(layer_vertices[i]);
+            layer_indices[i] = try self.allocator.alloc(u32, max_indices);
+            errdefer self.allocator.free(layer_indices[i]);
+        }
 
         // Get world offset for this chunk
         const block_pos = pos.getBlockPos();
@@ -98,13 +115,18 @@ pub const ChunkMesher = struct {
                     const entry = chunk.getBlockEntry(@intCast(x), @intCast(y), @intCast(z));
                     if (entry.isAir()) continue;
 
+                    // Get render layer for this block
+                    const block_def = entry.getBlock();
+                    const layer = block_def.getRenderLayer(entry.state);
+                    const layer_idx = @intFromEnum(layer);
+
                     // Get the model for this block via blockstate system
                     const model = block_model_shaper.getModel(entry) catch continue;
 
                     // Get variant for rotation info
                     const variant = block_model_shaper.getVariant(entry) catch continue;
 
-                    // Bake this block's faces
+                    // Bake this block's faces into the appropriate layer
                     try self.bakeBlock(
                         model,
                         chunk,
@@ -119,23 +141,39 @@ pub const ChunkMesher = struct {
                         variant.x,
                         variant.y,
                         variant.uvlock,
-                        vertices,
-                        indices,
-                        &vertex_idx,
-                        &index_idx,
+                        layer_vertices[layer_idx],
+                        layer_indices[layer_idx],
+                        &layer_vertex_idx[layer_idx],
+                        &layer_index_idx[layer_idx],
                     );
                 }
             }
         }
 
-        // Shrink buffers to actual size
-        const final_vertices = try self.allocator.realloc(vertices, vertex_idx);
-        const final_indices = try self.allocator.realloc(indices, index_idx);
+        // Shrink buffers to actual size and build result
+        var result_layers: [RENDER_LAYER_COUNT]CompletedLayerData = undefined;
+        for (0..RENDER_LAYER_COUNT) |i| {
+            if (layer_block_counts[i] == 0 or layer_vertex_idx[i] == 0) {
+                result_layers[i] = .{
+                    .vertices = &[_]Vertex{},
+                    .indices = &[_]u32{},
+                };
+                // Free unused buffers
+                if (layer_block_counts[i] > 0) {
+                    self.allocator.free(layer_vertices[i]);
+                    self.allocator.free(layer_indices[i]);
+                }
+            } else {
+                result_layers[i] = .{
+                    .vertices = try self.allocator.realloc(layer_vertices[i], layer_vertex_idx[i]),
+                    .indices = try self.allocator.realloc(layer_indices[i], layer_index_idx[i]),
+                };
+            }
+        }
 
         return CompletedMesh{
             .pos = pos,
-            .vertices = final_vertices,
-            .indices = final_indices,
+            .layers = result_layers,
             .allocator = self.allocator,
         };
     }
