@@ -14,9 +14,12 @@ pub const Task = struct {
     task_type: TaskType,
     /// Opaque pointer to task-specific data
     data: ?*anyopaque = null,
+    /// Priority (lower = higher priority, 0 = highest)
+    /// Shutdown tasks always have priority 0
+    priority: i32 = 0,
 };
 
-/// Thread-safe task queue
+/// Thread-safe task queue (FIFO, used for completed results)
 pub fn ThreadSafeQueue(comptime T: type) type {
     return struct {
         const Self = @This();
@@ -84,6 +87,83 @@ pub fn ThreadSafeQueue(comptime T: type) type {
     };
 }
 
+/// Thread-safe priority queue for tasks
+/// Lower priority values are processed first (min-heap behavior)
+pub const ThreadSafePriorityQueue = struct {
+    const Self = @This();
+
+    mutex: std.Thread.Mutex = .{},
+    condition: std.Thread.Condition = .{},
+    /// Min-heap: lowest priority value at top
+    heap: std.PriorityQueue(Task, void, compareTaskPriority),
+    allocator: std.mem.Allocator,
+
+    fn compareTaskPriority(_: void, a: Task, b: Task) std.math.Order {
+        // Shutdown tasks always have highest priority (processed first)
+        if (a.task_type == .shutdown and b.task_type != .shutdown) return .lt;
+        if (b.task_type == .shutdown and a.task_type != .shutdown) return .gt;
+        // Lower priority value = higher priority (min-heap)
+        return std.math.order(a.priority, b.priority);
+    }
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{
+            .heap = std.PriorityQueue(Task, void, compareTaskPriority).init(allocator, {}),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.heap.deinit();
+    }
+
+    /// Add a task to the priority queue
+    pub fn push(self: *Self, task: Task) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        try self.heap.add(task);
+        self.condition.signal();
+    }
+
+    /// Remove and return the highest priority task, blocking if empty
+    pub fn pop(self: *Self) ?Task {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        while (self.heap.count() == 0) {
+            self.condition.wait(&self.mutex);
+        }
+
+        return self.heap.removeOrNull();
+    }
+
+    /// Try to pop without blocking
+    pub fn tryPop(self: *Self) ?Task {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.heap.removeOrNull();
+    }
+
+    /// Check if queue is empty
+    pub fn isEmpty(self: *Self) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.heap.count() == 0;
+    }
+
+    /// Get current length
+    pub fn len(self: *Self) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.heap.count();
+    }
+
+    /// Wake all waiting threads
+    pub fn broadcast(self: *Self) void {
+        self.condition.broadcast();
+    }
+};
+
 /// Worker thread context
 pub const WorkerContext = struct {
     id: usize,
@@ -103,7 +183,7 @@ pub const ThreadPool = struct {
     allocator: std.mem.Allocator,
     workers: []std.Thread,
     contexts: []WorkerContext,
-    task_queue: ThreadSafeQueue(Task),
+    task_queue: ThreadSafePriorityQueue,
     running: std.atomic.Value(bool),
     callback: TaskCallback,
 
@@ -122,13 +202,13 @@ pub const ThreadPool = struct {
             break :blk @max(1, cpu_count - 1);
         } else num_workers;
 
-        logger.info("Initializing thread pool with {} workers", .{worker_count});
+        logger.info("Initializing thread pool with {} workers (priority scheduling enabled)", .{worker_count});
 
         return Self{
             .allocator = allocator,
             .workers = try allocator.alloc(std.Thread, worker_count),
             .contexts = try allocator.alloc(WorkerContext, worker_count),
-            .task_queue = ThreadSafeQueue(Task).init(allocator),
+            .task_queue = ThreadSafePriorityQueue.init(allocator),
             .running = std.atomic.Value(bool).init(true),
             .callback = callback,
             .active_count = std.atomic.Value(usize).init(0),
