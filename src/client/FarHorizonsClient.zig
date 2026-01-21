@@ -6,6 +6,7 @@ const shared = @import("Shared");
 const platform = @import("Platform");
 const renderer = @import("Renderer");
 const world = @import("World");
+const ecs = @import("ecs");
 const client_player = @import("player/Player.zig");
 const block_interaction = @import("BlockInteraction.zig");
 const BlockInteraction = block_interaction.BlockInteraction;
@@ -39,13 +40,8 @@ const BlockModelShaper = renderer.block.BlockModelShaper;
 const LocalPlayer = client_player.LocalPlayer;
 const ChunkManager = world.ChunkManager;
 const ChunkConfig = world.chunk_manager.ChunkConfig;
-const entity = @import("entity/Entity.zig");
-const EntityManager = entity.EntityManager;
-const EntityType = entity.EntityType;
-const Entity = entity.Entity;
 const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
 const EntityTextureManager = @import("entity/EntityTextureManager.zig").EntityTextureManager;
-const Cow = @import("entity/animal/cow/Cow.zig").Cow;
 
 // Terrain query for entity physics - returns VoxelShape for accurate collision
 var terrain_query_cm: ?*ChunkManager = null;
@@ -88,13 +84,13 @@ pub const FarHorizonsClient = struct {
     entity_interaction: ?EntityInteraction,
     /// Block outline renderer
     block_outline_renderer: BlockOutlineRenderer,
-    entity_manager: ?EntityManager,
+    /// ECS World (replaces EntityManager)
+    ecs_world: ?ecs.World,
     entity_renderer: ?EntityRenderer,
     entity_texture_manager: ?EntityTextureManager,
-
-    // Cow AI (like MC's AbstractCow with registerGoals)
-    cow: ?Cow,
-    baby_cow: ?Cow,
+    /// Stored entity IDs for reference
+    cow_id: ?ecs.EntityId,
+    baby_cow_id: ?ecs.EntityId,
 
     pub fn init(allocator: std.mem.Allocator, config: GameConfig, io: Io) Self {
         const display_data = DisplayData{
@@ -122,13 +118,13 @@ pub const FarHorizonsClient = struct {
             .io = io,
             .use_async_chunks = true, // Enable async chunk loading by default
             .block_interaction = null, // Initialized in run() after chunk_manager
-            .entity_interaction = null, // Initialized in run() after entity_manager
+            .entity_interaction = null, // Initialized in run() after ecs_world
             .block_outline_renderer = BlockOutlineRenderer.init(),
-            .entity_manager = null,
+            .ecs_world = null,
             .entity_renderer = null,
             .entity_texture_manager = null,
-            .cow = null,
-            .baby_cow = null,
+            .cow_id = null,
+            .baby_cow_id = null,
         };
     }
 
@@ -223,12 +219,16 @@ pub const FarHorizonsClient = struct {
         };
         var tick_accumulator: f64 = 0;
 
-        // Initialize entity system with bindless textures
-        self.entity_manager = EntityManager.init(self.allocator);
+        // Initialize ECS World
+        self.ecs_world = ecs.World.init(self.allocator);
+        if (self.ecs_world) |*ecs_world| {
+            // Register all ECS systems
+            try ecs.initSystems(ecs_world);
+        }
 
-        // Initialize entity interaction (for attacking entities)
-        if (self.entity_manager) |*em| {
-            self.entity_interaction = EntityInteraction.init(em);
+        // Initialize entity interaction with ECS
+        if (self.ecs_world) |*ecs_world| {
+            self.entity_interaction = EntityInteraction.initWithECS(ecs_world);
         }
 
         // Initialize bindless entity texture manager
@@ -275,24 +275,15 @@ pub const FarHorizonsClient = struct {
             baby_cow_tex_index,
         );
 
-        // Spawn a test cow with AI - position outside slab grid to test step-up
-        // Slab grid is at x=10-13, z=10-13, y=1 (bottom slabs)
+        // Spawn a test cow with AI using ECS
         // Cow spawns at x=9, z=9 so it lands on stone at y=1 and must step UP onto slabs
-        const cow_id = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 9, .y = 5, .z = 9 });
+        if (self.ecs_world) |*ecs_world| {
+            self.cow_id = try ecs.spawn.spawnCow(ecs_world, Vec3{ .x = 9, .y = 5, .z = 9 });
+            logger.info("Spawned adult cow with ECS entity ID", .{});
 
-        // Set up AI for the cow (like MC's AbstractCow.registerGoals)
-        if (self.entity_manager.?.get(cow_id)) |cow_entity| {
-            self.cow = Cow.init(cow_entity, self.allocator);
-            self.cow.?.registerGoals();
-        }
-
-        // Spawn a baby cow next to the adult
-        const baby_cow_id = try self.entity_manager.?.spawn(.cow, Vec3{ .x = 12, .y = 5, .z = 10 });
-
-        // Set up AI for the baby cow
-        if (self.entity_manager.?.get(baby_cow_id)) |baby_entity| {
-            self.baby_cow = Cow.initBaby(baby_entity, self.allocator);
-            self.baby_cow.?.registerGoals();
+            // Spawn a baby cow next to the adult
+            self.baby_cow_id = try ecs.spawn.spawnBabyCow(ecs_world, Vec3{ .x = 12, .y = 5, .z = 10 });
+            logger.info("Spawned baby cow with ECS entity ID", .{});
         }
 
         // Main loop
@@ -370,10 +361,10 @@ pub const FarHorizonsClient = struct {
                 if (self.mouse_handler.isMouseGrabbed()) {
                     // Left click = attack entity or break block
                     if (self.mouse_handler.isLeftPressed()) {
-                        // Try entity attack first, fall back to block breaking
+                        // Try entity attack first (ECS), fall back to block breaking
                         var attacked_entity = false;
                         if (self.entity_interaction) |*ei| {
-                            attacked_entity = ei.handleAttack(self.local_player.getPosition(0));
+                            attacked_entity = ei.handleAttackECS(self.local_player.getPosition(0));
                         }
                         if (!attacked_entity) {
                             if (self.block_interaction) |*bi| {
@@ -395,22 +386,19 @@ pub const FarHorizonsClient = struct {
                     }
                 }
 
-                if (self.entity_manager) |*em| {
+                // Tick ECS World - this runs all systems (physics, AI, animation, etc.)
+                if (self.ecs_world) |*ecs_world| {
                     // Set up terrain query for entity physics
                     terrain_query_cm = if (self.chunk_manager) |*cm| cm else null;
+                    if (terrain_query_cm != null) {
+                        ecs_world.setTerrainQuery(&terrainQueryFn);
+                    }
 
-                    // Entity.tick() now handles goal selector and look control
-                    // Pass player position and terrain query for entity behavior
-                    const terrain_fn: ?Entity.TerrainQuery = if (terrain_query_cm != null) &terrainQueryFn else null;
-                    em.tickAll(self.local_player.getPosition(0), terrain_fn);
-                }
+                    // Set player position for AI targeting
+                    ecs_world.setPlayerPosition(self.local_player.getPosition(0));
 
-                // Tick cow AI hierarchies (LivingEntity.tick() decrements invulnerable_time)
-                if (self.cow) |*c| {
-                    c.tick();
-                }
-                if (self.baby_cow) |*bc| {
-                    bc.tick();
+                    // Run all ECS systems for this tick
+                    ecs_world.tick();
                 }
             }
 
@@ -424,10 +412,10 @@ pub const FarHorizonsClient = struct {
             // Calculate partial tick for interpolation (0.0 to 1.0)
             const partial_tick: f32 = @floatCast(tick_accumulator / MS_PER_TICK);
 
-            // Update entity meshes for rendering
+            // Update entity meshes for rendering (using ECS)
             if (self.entity_renderer) |*er| {
-                if (self.entity_manager) |*em| {
-                    er.update(em, partial_tick) catch |err| {
+                if (self.ecs_world) |*ecs_world| {
+                    er.updateFromECS(ecs_world, partial_tick) catch |err| {
                         logger.err("Failed to update entity meshes: {}", .{err});
                     };
                 }
@@ -439,9 +427,9 @@ pub const FarHorizonsClient = struct {
             self.camera.position = self.local_player.getPosition(partial_tick);
             self.camera.setRotation(self.local_player.getYRot(), self.local_player.getXRot());
 
-            // Update entity targeting (every frame for responsive targeting)
+            // Update entity targeting (every frame for responsive targeting) - ECS version
             if (self.entity_interaction) |*ei| {
-                ei.updateTarget(&self.camera);
+                ei.updateTargetECS(&self.camera);
             }
 
             // Update block interaction raycast (every frame for responsive crosshair)
@@ -548,17 +536,11 @@ pub const FarHorizonsClient = struct {
         }
 
         // Cleanup entity system
-        if (self.cow) |*c| {
-            c.deinit();
-        }
-        if (self.baby_cow) |*bc| {
-            bc.deinit();
-        }
         if (self.entity_renderer) |*er| {
             er.deinit();
         }
-        if (self.entity_manager) |*em| {
-            em.deinit();
+        if (self.ecs_world) |*ecs_world| {
+            ecs_world.deinit();
         }
         if (self.entity_texture_manager) |*etm| {
             etm.deinit();
