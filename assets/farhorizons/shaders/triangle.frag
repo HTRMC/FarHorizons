@@ -8,9 +8,17 @@ layout(location = 2) flat in uint fragTexIndex;
 
 layout(location = 0) out vec4 outColor;
 
+// Alpha cutoff threshold for transparency
+const float ALPHA_CUTOFF = 0.5;
+
 void main() {
     // Sample from texture array using layer index
     vec4 texColor = texture(texSampler, vec3(fragTexCoord, float(fragTexIndex)));
+
+    // Discard transparent pixels (cutout rendering for leaves, grass, etc.)
+    if (texColor.a < ALPHA_CUTOFF) {
+        discard;
+    }
 
     // Apply vertex color (contains ambient occlusion) to texture
     outColor = vec4(texColor.rgb * fragColor, texColor.a);
