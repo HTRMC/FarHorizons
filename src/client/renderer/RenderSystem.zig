@@ -17,6 +17,8 @@ const RenderPass = @import("RenderPass.zig");
 const RenderPipelines = @import("RenderPipelines.zig");
 const DescriptorPoolBuilder = @import("descriptor/DescriptorPoolBuilder.zig").DescriptorPoolBuilder;
 const DescriptorSetManager = @import("descriptor/DescriptorSetManager.zig").DescriptorSetManager;
+const DescriptorSetLayoutBuilder = @import("pipeline/DescriptorSetLayoutBuilder.zig").DescriptorSetLayoutBuilder;
+const ImageViewHelper = @import("resource/ImageViewHelper.zig").ImageViewHelper;
 const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
 
 const MAX_FRAMES_IN_FLIGHT = 2;
@@ -1461,36 +1463,14 @@ pub const RenderSystem = struct {
     }
 
     fn createImageViews(self: *Self) !void {
-        const vkCreateImageView = vk.vkCreateImageView orelse return error.VulkanFunctionNotLoaded;
-
         self.swapchain_image_views = try self.allocator.alloc(vk.VkImageView, self.swapchain_images.len);
 
         for (self.swapchain_images, 0..) |image, i| {
-            const create_info = vk.VkImageViewCreateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                .pNext = null,
-                .flags = 0,
-                .image = image,
-                .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
-                .format = self.swapchain_format,
-                .components = .{
-                    .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                    .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                },
-                .subresourceRange = .{
-                    .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                    .baseMipLevel = 0,
-                    .levelCount = 1,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-            };
-
-            if (vkCreateImageView(self.device, &create_info, null, &self.swapchain_image_views[i]) != vk.VK_SUCCESS) {
-                return error.ImageViewCreationFailed;
-            }
+            self.swapchain_image_views[i] = try ImageViewHelper.createColor2D(
+                self.device,
+                image,
+                self.swapchain_format,
+            );
         }
 
         logger.info("Image views created", .{});
@@ -1501,7 +1481,6 @@ pub const RenderSystem = struct {
         const vkGetImageMemoryRequirements = vk.vkGetImageMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
         const vkAllocateMemory = vk.vkAllocateMemory orelse return error.VulkanFunctionNotLoaded;
         const vkBindImageMemory = vk.vkBindImageMemory orelse return error.VulkanFunctionNotLoaded;
-        const vkCreateImageView = vk.vkCreateImageView orelse return error.VulkanFunctionNotLoaded;
 
         self.depth_format = try self.findDepthFormat();
 
@@ -1554,31 +1533,12 @@ pub const RenderSystem = struct {
             return error.DepthImageMemoryBindFailed;
         }
 
-        const view_info = vk.VkImageViewCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .image = self.depth_image,
-            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
-            .format = self.depth_format,
-            .components = .{
-                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
-            },
-            .subresourceRange = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-        };
-
-        if (vkCreateImageView(self.device, &view_info, null, &self.depth_image_view) != vk.VK_SUCCESS) {
-            return error.DepthImageViewCreationFailed;
-        }
+        // Create depth image view using helper
+        self.depth_image_view = try ImageViewHelper.createDepth2D(
+            self.device,
+            self.depth_image,
+            self.depth_format,
+        );
 
         logger.info("Depth resources created", .{});
     }
@@ -1686,38 +1646,12 @@ pub const RenderSystem = struct {
     }
 
     fn createDescriptorSetLayout(self: *Self) !void {
-        const vkCreateDescriptorSetLayout = vk.vkCreateDescriptorSetLayout orelse return error.VulkanFunctionNotLoaded;
-
-        const bindings = [_]vk.VkDescriptorSetLayoutBinding{
-            // Binding 0: Uniform buffer (MVP matrices)
-            .{
-                .binding = 0,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                .descriptorCount = 1,
-                .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
-                .pImmutableSamplers = null,
-            },
-            // Binding 1: Combined image sampler (texture)
-            .{
-                .binding = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
-                .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
-                .pImmutableSamplers = null,
-            },
-        };
-
-        const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .bindingCount = bindings.len,
-            .pBindings = &bindings,
-        };
-
-        if (vkCreateDescriptorSetLayout(self.device, &layout_info, null, &self.descriptor_set_layout) != vk.VK_SUCCESS) {
-            return error.DescriptorSetLayoutCreationFailed;
-        }
+        // Binding 0: Uniform buffer (MVP matrices)
+        // Binding 1: Combined image sampler (texture)
+        self.descriptor_set_layout = try DescriptorSetLayoutBuilder.init()
+            .withUniformBuffer(0, vk.VK_SHADER_STAGE_VERTEX_BIT)
+            .withSampler(1, vk.VK_SHADER_STAGE_FRAGMENT_BIT)
+            .build(self.device);
 
         logger.info("Descriptor set layout created", .{});
     }
@@ -2243,28 +2177,10 @@ pub const RenderSystem = struct {
     }
 
     fn createUIDescriptorSetLayout(self: *Self) !void {
-        const vkCreateDescriptorSetLayout = vk.vkCreateDescriptorSetLayout orelse return error.VulkanFunctionNotLoaded;
-
         // Single combined image sampler for UI texture
-        const sampler_binding = vk.VkDescriptorSetLayoutBinding{
-            .binding = 0,
-            .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .descriptorCount = 1,
-            .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
-            .pImmutableSamplers = null,
-        };
-
-        const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .bindingCount = 1,
-            .pBindings = &sampler_binding,
-        };
-
-        if (vkCreateDescriptorSetLayout(self.device, &layout_info, null, &self.ui_descriptor_set_layout) != vk.VK_SUCCESS) {
-            return error.DescriptorSetLayoutCreationFailed;
-        }
+        self.ui_descriptor_set_layout = try DescriptorSetLayoutBuilder.init()
+            .withSampler(0, vk.VK_SHADER_STAGE_FRAGMENT_BIT)
+            .build(self.device);
 
         logger.info("UI descriptor set layout created", .{});
     }
