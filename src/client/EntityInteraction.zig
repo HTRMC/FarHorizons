@@ -10,10 +10,6 @@ const Camera = shared.Camera;
 const raycast = shared.Raycast;
 const AABB = raycast.AABB;
 
-const entity_mod = @import("entity/Entity.zig");
-const Entity = entity_mod.Entity;
-const EntityManager = entity_mod.EntityManager;
-
 pub const EntityInteraction = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
@@ -28,9 +24,6 @@ pub const EntityInteraction = struct {
     /// Attack cooldown in ticks
     pub const ATTACK_COOLDOWN: u32 = 10;
 
-    /// Current targeted entity ID (if any) - legacy
-    target_entity_id: ?u64 = null,
-
     /// Current targeted ECS entity ID
     target_ecs_id: ?ecs.EntityId = null,
 
@@ -43,73 +36,14 @@ pub const EntityInteraction = struct {
     /// Attack cooldown counter
     cooldown: u32 = 0,
 
-    /// Reference to entity manager (legacy)
-    entity_manager: ?*EntityManager = null,
-
     /// Reference to ECS world
     ecs_world: ?*ecs.World = null,
 
-    /// Initialize with legacy EntityManager
-    pub fn init(entity_manager: *EntityManager) Self {
-        return .{
-            .entity_manager = entity_manager,
-        };
-    }
-
     /// Initialize with ECS World
-    pub fn initWithECS(ecs_world: *ecs.World) Self {
+    pub fn init(ecs_world: *ecs.World) Self {
         return .{
             .ecs_world = ecs_world,
         };
-    }
-
-    /// Update the targeted entity based on camera position and direction
-    /// Call this every frame for responsive targeting
-    pub fn updateTarget(self: *Self, camera: *const Camera) void {
-        const eye_pos = camera.position;
-        const forward = camera.forward;
-
-        // Calculate ray end point
-        const to = Vec3{
-            .x = eye_pos.x + forward.x * ENTITY_REACH,
-            .y = eye_pos.y + forward.y * ENTITY_REACH,
-            .z = eye_pos.z + forward.z * ENTITY_REACH,
-        };
-
-        // Find closest entity hit
-        self.target_entity_id = null;
-        self.hit_location = null;
-        self.hit_distance = ENTITY_REACH + 1.0; // Start with max distance
-
-        var iter = self.entity_manager.entities.valueIterator();
-        while (iter.next()) |entity| {
-            // Create AABB for entity
-            const half_width = entity.width / 2.0;
-            const aabb = AABB.init(
-                entity.position.x - half_width,
-                entity.position.y,
-                entity.position.z - half_width,
-                entity.position.x + half_width,
-                entity.position.y + entity.height,
-                entity.position.z + half_width,
-            );
-
-            // Check ray intersection
-            if (aabb.clip(eye_pos, to)) |hit_point| {
-                // Calculate distance to hit
-                const dx = hit_point.x - eye_pos.x;
-                const dy = hit_point.y - eye_pos.y;
-                const dz = hit_point.z - eye_pos.z;
-                const dist = @sqrt(dx * dx + dy * dy + dz * dz);
-
-                // Check if this is closer than previous hit
-                if (dist < self.hit_distance) {
-                    self.target_entity_id = entity.id;
-                    self.hit_location = hit_point;
-                    self.hit_distance = @floatCast(dist);
-                }
-            }
-        }
     }
 
     /// Tick - update cooldown
@@ -117,58 +51,6 @@ pub const EntityInteraction = struct {
         if (self.cooldown > 0) {
             self.cooldown -= 1;
         }
-    }
-
-    /// Handle attack (left click on entity)
-    /// attacker_pos: Position of the player attacking
-    /// Returns true if an entity was attacked
-    pub fn handleAttack(self: *Self, attacker_pos: Vec3) bool {
-        if (self.cooldown > 0) return false;
-
-        const target_id = self.target_entity_id orelse return false;
-        const target = self.entity_manager.get(target_id) orelse return false;
-
-        // Apply damage with knockback
-        // We need to access the LivingEntity through the entity hierarchy
-        // For now, we'll add a hurt method to Entity that can be overridden
-        self.attackEntity(target, attacker_pos);
-
-        // Set cooldown
-        self.cooldown = ATTACK_COOLDOWN;
-
-        logger.info("Attacked entity {} at ({d:.1}, {d:.1}, {d:.1})", .{
-            target_id,
-            target.position.x,
-            target.position.y,
-            target.position.z,
-        });
-
-        return true;
-    }
-
-    /// Attack an entity
-    fn attackEntity(self: *Self, target: *Entity, attacker_pos: Vec3) void {
-        _ = self;
-
-        // Calculate knockback direction (from attacker to target)
-        const dx = target.position.x - attacker_pos.x;
-        const dz = target.position.z - attacker_pos.z;
-        const knockback_dir = std.math.atan2(dz, dx);
-
-        // Apply damage through the entity's hurt callback
-        // This will be handled by the entity's LivingEntity component
-        target.hurtByPlayer(BASE_DAMAGE, knockback_dir, attacker_pos);
-    }
-
-    /// Check if currently targeting an entity
-    pub fn isTargetingEntity(self: *const Self) bool {
-        return self.target_entity_id != null;
-    }
-
-    /// Get the targeted entity (if any)
-    pub fn getTargetEntity(self: *const Self) ?*Entity {
-        const id = self.target_entity_id orelse return null;
-        return self.entity_manager.get(id);
     }
 
     /// Get hit location (for rendering effects)
@@ -181,12 +63,9 @@ pub const EntityInteraction = struct {
         return self.hit_distance;
     }
 
-    // =====================
-    // ECS World methods
-    // =====================
-
-    /// Update the targeted entity based on camera (ECS version)
-    pub fn updateTargetECS(self: *Self, camera: *const Camera) void {
+    /// Update the targeted entity based on camera position and direction
+    /// Call this every frame for responsive targeting
+    pub fn updateTarget(self: *Self, camera: *const Camera) void {
         const world = self.ecs_world orelse return;
 
         const eye_pos = camera.position;
@@ -237,8 +116,10 @@ pub const EntityInteraction = struct {
         }
     }
 
-    /// Handle attack (ECS version)
-    pub fn handleAttackECS(self: *Self, attacker_pos: Vec3) bool {
+    /// Handle attack (left click on entity)
+    /// attacker_pos: Position of the player attacking
+    /// Returns true if an entity was attacked
+    pub fn handleAttack(self: *Self, attacker_pos: Vec3) bool {
         if (self.cooldown > 0) return false;
 
         const world = self.ecs_world orelse return false;
@@ -281,7 +162,7 @@ pub const EntityInteraction = struct {
 
         self.cooldown = ATTACK_COOLDOWN;
 
-        logger.info("Attacked ECS entity at ({d:.1}, {d:.1}, {d:.1})", .{
+        logger.info("Attacked entity at ({d:.1}, {d:.1}, {d:.1})", .{
             transform.position.x,
             transform.position.y,
             transform.position.z,
@@ -290,13 +171,13 @@ pub const EntityInteraction = struct {
         return true;
     }
 
-    /// Check if currently targeting an ECS entity
-    pub fn isTargetingECSEntity(self: *const Self) bool {
+    /// Check if currently targeting an entity
+    pub fn isTargetingEntity(self: *const Self) bool {
         return self.target_ecs_id != null;
     }
 
-    /// Get targeted ECS entity ID
-    pub fn getTargetECSEntity(self: *const Self) ?ecs.EntityId {
+    /// Get targeted entity ID
+    pub fn getTargetEntity(self: *const Self) ?ecs.EntityId {
         return self.target_ecs_id;
     }
 };
