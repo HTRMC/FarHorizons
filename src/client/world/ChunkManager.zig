@@ -556,19 +556,18 @@ pub const ChunkManager = struct {
         const vertex_size: u64 = 36; // sizeof(Vertex)
         const index_size: u64 = 4; // sizeof(u32)
 
-        // Generate draw commands for each layer in order
-        // This ensures proper rendering order: solid -> cutout -> translucent
-        for (0..RENDER_LAYER_COUNT) |layer_idx| {
-            var iter = self.loaded_chunks.iterator();
-            while (iter.next()) |entry| {
-                const chunk = entry.value_ptr.*;
+        // Single pass: collect all draw commands from all chunks and all layers
+        var iter = self.loaded_chunks.iterator();
+        while (iter.next()) |entry| {
+            const chunk = entry.value_ptr.*;
 
-                // Render chunks that are ready OR dirty (dirty = rebuilding, still has old mesh)
-                if (chunk.state != .ready and chunk.state != .dirty) continue;
+            // Render chunks that are ready OR dirty (dirty = rebuilding, still has old mesh)
+            if (chunk.state != .ready and chunk.state != .dirty) continue;
 
-                const m = chunk.mesh orelse continue;
+            const m = chunk.mesh orelse continue;
 
-                // Get layer-specific data
+            // Generate commands for all non-empty layers in this chunk
+            for (0..RENDER_LAYER_COUNT) |layer_idx| {
                 const layer = &m.layers[layer_idx];
                 if (layer.index_count == 0) continue;
                 if (!layer.buffer_allocation.valid or !layer.uploaded) continue;
@@ -607,6 +606,17 @@ pub const ChunkManager = struct {
                 }) catch continue;
             }
         }
+
+        // Sort draw commands by (render_layer, vertex_arena, index_arena) for:
+        // 1. Proper rendering order: solid (0) -> cutout (1) -> translucent (2)
+        // 2. Batching commands with same pipeline and buffer bindings for indirect drawing
+        std.mem.sort(ChunkDrawCommand, self.draw_commands.items, {}, struct {
+            fn lessThan(_: void, a: ChunkDrawCommand, b: ChunkDrawCommand) bool {
+                if (a.render_layer != b.render_layer) return a.render_layer < b.render_layer;
+                if (a.vertex_arena != b.vertex_arena) return a.vertex_arena < b.vertex_arena;
+                return a.index_arena < b.index_arena;
+            }
+        }.lessThan);
 
         return self.draw_commands.items;
     }
