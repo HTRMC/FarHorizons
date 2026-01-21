@@ -196,6 +196,58 @@ pub const GpuBuffer = struct {
     }
 };
 
+/// Simple value-type wrapper for paired VkBuffer + VkDeviceMemory fields
+/// Use this to consolidate the many buffer/memory field pairs in RenderSystem
+pub const ManagedBuffer = struct {
+    handle: vk.VkBuffer = null,
+    memory: vk.VkDeviceMemory = null,
+    mapped: ?*anyopaque = null,
+
+    pub fn isValid(self: ManagedBuffer) bool {
+        return self.handle != null;
+    }
+
+    /// Destroy buffer and memory resources
+    pub fn destroy(self: *ManagedBuffer, device: vk.VkDevice) void {
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
+        const vkFreeMemory = vk.vkFreeMemory orelse return;
+        const vkUnmapMemory = vk.vkUnmapMemory orelse return;
+
+        // Unmap if mapped
+        if (self.mapped != null) {
+            vkUnmapMemory(device, self.memory);
+            self.mapped = null;
+        }
+
+        if (self.handle != null) {
+            vkDestroyBuffer(device, self.handle, null);
+            self.handle = null;
+        }
+        if (self.memory != null) {
+            vkFreeMemory(device, self.memory, null);
+            self.memory = null;
+        }
+    }
+
+    /// Create from raw Vulkan handles
+    pub fn fromRaw(handle: vk.VkBuffer, memory: vk.VkDeviceMemory) ManagedBuffer {
+        return .{
+            .handle = handle,
+            .memory = memory,
+            .mapped = null,
+        };
+    }
+
+    /// Create from raw Vulkan handles with mapped pointer
+    pub fn fromMapped(handle: vk.VkBuffer, memory: vk.VkDeviceMemory, mapped: *anyopaque) ManagedBuffer {
+        return .{
+            .handle = handle,
+            .memory = memory,
+            .mapped = mapped,
+        };
+    }
+};
+
 /// Index type for index buffers
 pub const IndexType = enum {
     u16,
