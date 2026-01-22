@@ -3,6 +3,7 @@ const std = @import("std");
 const shared = @import("Shared");
 const Logger = shared.Logger;
 const ChunkPos = shared.ChunkPos;
+const profiler = shared.profiler;
 
 /// Task types that workers can process
 pub const TaskType = enum {
@@ -185,6 +186,9 @@ pub const DynamicPriorityQueue = struct {
 
     /// Find and remove the closest task to camera (must hold mutex)
     fn pollClosest(self: *Self) ?Task {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         if (self.tasks.items.len == 0) return null;
 
         // Check for shutdown tasks first - they have absolute priority
@@ -404,6 +408,19 @@ pub const ThreadPool = struct {
 
     fn workerLoop(ctx: *WorkerContext) void {
         const pool = ctx.pool;
+
+        // Set Tracy thread name for profiler visibility
+        switch (ctx.id) {
+            0 => profiler.setThreadName("ChunkWorker0"),
+            1 => profiler.setThreadName("ChunkWorker1"),
+            2 => profiler.setThreadName("ChunkWorker2"),
+            3 => profiler.setThreadName("ChunkWorker3"),
+            4 => profiler.setThreadName("ChunkWorker4"),
+            5 => profiler.setThreadName("ChunkWorker5"),
+            6 => profiler.setThreadName("ChunkWorker6"),
+            7 => profiler.setThreadName("ChunkWorker7"),
+            else => profiler.setThreadName("ChunkWorkerN"),
+        }
 
         logger.debug("Worker {} started", .{ctx.id});
 
