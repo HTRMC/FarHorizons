@@ -367,6 +367,11 @@ pub const ChunkManager = struct {
         if (new_chunk.eql(self.player_chunk)) return;
 
         self.player_chunk = new_chunk;
+
+        // Update thread pool's camera position for dynamic priority calculation
+        // This ensures closest chunks are always processed first, even as player moves
+        self.pool.updateCameraPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
+
         self.updateLoadQueue();
     }
 
@@ -873,14 +878,13 @@ pub const ChunkManager = struct {
             .render_chunk = render_chunk_ptr,
         };
 
-        // Calculate priority based on distance to player (lower = higher priority)
-        const priority = self.calculateChunkPriority(pos);
-
         // Submit to thread pool for terrain generation + meshing
+        // Priority is now calculated at poll time based on distance to camera
         self.pool.submit(Task{
             .task_type = .generate_and_mesh,
             .data = @ptrCast(task_data),
-            .priority = priority,
+            .chunk_pos = pos,
+            .chunk_task_kind = .generate,
         }) catch {
             // LEAK FIX: Clean up everything if submission fails
             self.allocator.destroy(task_data);
@@ -954,23 +958,6 @@ pub const ChunkManager = struct {
         }
 
         return neighbors;
-    }
-
-    /// Calculate task priority based on distance to player
-    /// Lower values = higher priority (processed first)
-    /// Uses squared distance to avoid sqrt, with vertical distance weighted less
-    fn calculateChunkPriority(self: *Self, pos: ChunkPos) i32 {
-        const dx = pos.x - self.player_chunk.x;
-        const dz = pos.z - self.player_chunk.z;
-        const dy = pos.section_y - self.player_chunk.section_y;
-
-        // Horizontal distance matters more than vertical
-        // Squared distance: closer chunks get lower (better) priority
-        const horizontal_dist_sq = dx * dx + dz * dz;
-        const vertical_dist_sq = dy * dy;
-
-        // Weight horizontal distance more heavily (vertical chunks less important)
-        return horizontal_dist_sq + @divFloor(vertical_dist_sq, 2);
     }
 
     // ========== Block Access Methods ==========
@@ -1081,15 +1068,13 @@ pub const ChunkManager = struct {
             .render_chunk = render_chunk_ptr,
         };
 
-        // Remesh tasks get high priority (player just modified this chunk)
-        // Use negative priority to ensure remesh happens before new chunk generation
-        const priority = self.calculateChunkPriority(pos) - 1000;
-
         // Submit to thread pool for meshing only
+        // Priority is calculated at poll time - remesh tasks have a quota limit
         self.pool.submit(Task{
             .task_type = .generate_and_mesh,
             .data = @ptrCast(task_data),
-            .priority = priority,
+            .chunk_pos = pos,
+            .chunk_task_kind = .remesh,
         }) catch {
             self.allocator.destroy(task_data);
             return;

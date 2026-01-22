@@ -2,6 +2,7 @@
 const std = @import("std");
 const shared = @import("Shared");
 const Logger = shared.Logger;
+const ChunkPos = shared.ChunkPos;
 
 /// Task types that workers can process
 pub const TaskType = enum {
@@ -9,13 +10,24 @@ pub const TaskType = enum {
     shutdown,
 };
 
+/// Whether this is a new chunk generation or a remesh of existing chunk
+pub const ChunkTaskKind = enum {
+    generate,
+    remesh,
+};
+
 /// A task for the worker threads
 pub const Task = struct {
     task_type: TaskType,
     /// Opaque pointer to task-specific data
     data: ?*anyopaque = null,
+    /// Chunk position for distance calculation (used at poll time)
+    chunk_pos: ChunkPos = .{ .x = 0, .z = 0, .section_y = 0 },
+    /// Whether this is a generate or remesh task
+    chunk_task_kind: ChunkTaskKind = .generate,
     /// Priority (lower = higher priority, 0 = highest)
     /// Shutdown tasks always have priority 0
+    /// NOTE: This is now only used for shutdown tasks
     priority: i32 = 0,
 };
 
@@ -87,75 +99,169 @@ pub fn ThreadSafeQueue(comptime T: type) type {
     };
 }
 
-/// Thread-safe priority queue for tasks
-/// Lower priority values are processed first (min-heap behavior)
-pub const ThreadSafePriorityQueue = struct {
+/// Dynamic priority queue for tasks - Minecraft's CompileTaskDynamicQueue pattern
+/// Key difference from heap: priority is calculated at POLL time, not insert time
+/// This ensures chunks closest to player are always processed first, even as player moves
+pub const DynamicPriorityQueue = struct {
     const Self = @This();
+
+    /// Maximum remesh tasks to process per poll cycle
+    /// Prevents remesh spam from starving new chunk generation
+    const MAX_REMESH_PER_CYCLE: u32 = 2;
 
     mutex: std.Thread.Mutex = .{},
     condition: std.Thread.Condition = .{},
-    /// Min-heap: lowest priority value at top
-    heap: std.PriorityQueue(Task, void, compareTaskPriority),
+    /// Simple list of tasks - we iterate to find closest at poll time
+    tasks: std.ArrayListUnmanaged(Task) = .{},
     allocator: std.mem.Allocator,
 
-    fn compareTaskPriority(_: void, a: Task, b: Task) std.math.Order {
-        // Shutdown tasks always have highest priority (processed first)
-        if (a.task_type == .shutdown and b.task_type != .shutdown) return .lt;
-        if (b.task_type == .shutdown and a.task_type != .shutdown) return .gt;
-        // Lower priority value = higher priority (min-heap)
-        return std.math.order(a.priority, b.priority);
-    }
+    /// Current camera/player chunk position (updated atomically by main thread)
+    camera_x: std.atomic.Value(i32) = std.atomic.Value(i32).init(0),
+    camera_z: std.atomic.Value(i32) = std.atomic.Value(i32).init(0),
+    camera_y: std.atomic.Value(i32) = std.atomic.Value(i32).init(0),
+
+    /// Remesh tasks processed in current cycle
+    remesh_count: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return .{
-            .heap = std.PriorityQueue(Task, void, compareTaskPriority).init(allocator, {}),
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.heap.deinit();
+        self.tasks.deinit(self.allocator);
     }
 
-    /// Add a task to the priority queue
+    /// Update camera position (called from main thread when player moves)
+    pub fn updateCameraPos(self: *Self, x: i32, z: i32, y: i32) void {
+        self.camera_x.store(x, .release);
+        self.camera_z.store(z, .release);
+        self.camera_y.store(y, .release);
+    }
+
+    /// Calculate squared distance from camera to chunk position
+    fn distanceSquared(self: *Self, pos: ChunkPos) i64 {
+        const cam_x = self.camera_x.load(.acquire);
+        const cam_z = self.camera_z.load(.acquire);
+        const cam_y = self.camera_y.load(.acquire);
+
+        const dx: i64 = @as(i64, pos.x) - @as(i64, cam_x);
+        const dz: i64 = @as(i64, pos.z) - @as(i64, cam_z);
+        const dy: i64 = @as(i64, pos.section_y) - @as(i64, cam_y);
+
+        // Horizontal distance matters more than vertical
+        return dx * dx + dz * dz + @divFloor(dy * dy, 2);
+    }
+
+    /// Add a task to the queue
     pub fn push(self: *Self, task: Task) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        try self.heap.add(task);
+        try self.tasks.append(self.allocator, task);
         self.condition.signal();
     }
 
-    /// Remove and return the highest priority task, blocking if empty
+    /// Remove and return the closest task to camera, blocking if empty
+    /// This is the key Minecraft optimization - priority is calculated at poll time
     pub fn pop(self: *Self) ?Task {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        while (self.heap.count() == 0) {
+        while (self.tasks.items.len == 0) {
             self.condition.wait(&self.mutex);
         }
 
-        return self.heap.removeOrNull();
+        return self.pollClosest();
     }
 
     /// Try to pop without blocking
     pub fn tryPop(self: *Self) ?Task {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.heap.removeOrNull();
+        if (self.tasks.items.len == 0) return null;
+        return self.pollClosest();
+    }
+
+    /// Find and remove the closest task to camera (must hold mutex)
+    fn pollClosest(self: *Self) ?Task {
+        if (self.tasks.items.len == 0) return null;
+
+        // Check for shutdown tasks first - they have absolute priority
+        for (self.tasks.items, 0..) |task, i| {
+            if (task.task_type == .shutdown) {
+                return self.tasks.swapRemove(i);
+            }
+        }
+
+        // Find closest chunk to camera
+        var best_distance: i64 = std.math.maxInt(i64);
+        var best_index: ?usize = null;
+        var best_remesh_distance: i64 = std.math.maxInt(i64);
+        var best_remesh_index: ?usize = null;
+
+        for (self.tasks.items, 0..) |task, i| {
+            const dist = self.distanceSquared(task.chunk_pos);
+
+            if (task.chunk_task_kind == .remesh) {
+                // Track best remesh separately for quota
+                if (dist < best_remesh_distance) {
+                    best_remesh_distance = dist;
+                    best_remesh_index = i;
+                }
+            } else {
+                // New chunk generation
+                if (dist < best_distance) {
+                    best_distance = dist;
+                    best_index = i;
+                }
+            }
+        }
+
+        // Apply remesh quota: prefer generate tasks unless we have quota
+        // and the remesh is closer
+        if (self.remesh_count < MAX_REMESH_PER_CYCLE) {
+            if (best_remesh_index) |ri| {
+                // If remesh is closer or no generate tasks, use remesh
+                if (best_index == null or best_remesh_distance < best_distance) {
+                    self.remesh_count += 1;
+                    return self.tasks.swapRemove(ri);
+                }
+            }
+        }
+
+        // Reset remesh counter periodically (every full cycle through generates)
+        if (best_index == null and best_remesh_index != null) {
+            // Only remesh tasks left, reset counter and process them
+            self.remesh_count = 0;
+            if (best_remesh_index) |ri| {
+                self.remesh_count += 1;
+                return self.tasks.swapRemove(ri);
+            }
+        }
+
+        // Return closest generate task
+        if (best_index) |bi| {
+            // Reset remesh counter when we process a generate
+            self.remesh_count = 0;
+            return self.tasks.swapRemove(bi);
+        }
+
+        return null;
     }
 
     /// Check if queue is empty
     pub fn isEmpty(self: *Self) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.heap.count() == 0;
+        return self.tasks.items.len == 0;
     }
 
     /// Get current length
     pub fn len(self: *Self) usize {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.heap.count();
+        return self.tasks.items.len;
     }
 
     /// Wake all waiting threads
@@ -183,7 +289,7 @@ pub const ThreadPool = struct {
     allocator: std.mem.Allocator,
     workers: []std.Thread,
     contexts: []WorkerContext,
-    task_queue: ThreadSafePriorityQueue,
+    task_queue: DynamicPriorityQueue,
     running: std.atomic.Value(bool),
     callback: TaskCallback,
 
@@ -202,13 +308,13 @@ pub const ThreadPool = struct {
             break :blk @max(1, cpu_count - 1);
         } else num_workers;
 
-        logger.info("Initializing thread pool with {} workers (priority scheduling enabled)", .{worker_count});
+        logger.info("Initializing thread pool with {} workers (dynamic distance-based scheduling)", .{worker_count});
 
         return Self{
             .allocator = allocator,
             .workers = try allocator.alloc(std.Thread, worker_count),
             .contexts = try allocator.alloc(WorkerContext, worker_count),
-            .task_queue = ThreadSafePriorityQueue.init(allocator),
+            .task_queue = DynamicPriorityQueue.init(allocator),
             .running = std.atomic.Value(bool).init(true),
             .callback = callback,
             .active_count = std.atomic.Value(usize).init(0),
@@ -243,6 +349,12 @@ pub const ThreadPool = struct {
     /// Submit a task to the queue
     pub fn submit(self: *Self, task: Task) !void {
         try self.task_queue.push(task);
+    }
+
+    /// Update camera position for dynamic priority calculation
+    /// Call this when player moves to ensure closest chunks are processed first
+    pub fn updateCameraPos(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
+        self.task_queue.updateCameraPos(chunk_x, chunk_z, section_y);
     }
 
     /// Shutdown the thread pool and wait for all workers to finish
