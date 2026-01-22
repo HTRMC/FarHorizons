@@ -66,7 +66,7 @@ pub const ChunkPos = struct {
     }
 
     /// Check if this chunk is within horizontal view distance of another
-    pub fn isWithinDistance(self: Self, center: Self, distance: u8) bool {
+    pub fn isWithinDistance(self: Self, center: Self, distance: u32) bool {
         const dist_sq = self.horizontalDistanceSq(center);
         const max_dist: i64 = @intCast(distance);
         return dist_sq <= max_dist * max_dist;
