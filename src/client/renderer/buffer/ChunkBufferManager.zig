@@ -49,9 +49,9 @@ pub const ChunkBufferConfig = struct {
     /// Index size in bytes
     index_size: u64 = 4, // u32 indices
     /// View distance for pre-allocation (0 = use fixed arena count)
-    view_distance: u8 = 0,
+    view_distance: u32 = 0,
     /// Vertical view distance for pre-allocation
-    vertical_view_distance: u8 = 0,
+    vertical_view_distance: u32 = 0,
     /// Average chunk mesh size estimate (for pre-allocation)
     avg_chunk_vertex_size: u64 = 64 * 1024, // 64 KB average
     avg_chunk_index_size: u64 = 32 * 1024, // 32 KB average
