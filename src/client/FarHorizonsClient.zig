@@ -189,7 +189,7 @@ pub const FarHorizonsClient = struct {
                     .vertical_view_distance = 4,
                     .unload_distance = 18,
                     .worker_count = 4,
-                    .max_uploads_per_tick = 4,
+                    .max_uploads_per_tick = 64,
                 },
             );
             try self.chunk_manager.?.start();

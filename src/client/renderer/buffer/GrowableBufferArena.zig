@@ -152,17 +152,23 @@ pub const GrowableBufferArena = struct {
         if (arena_count == 0) arena_count = 1;
         if (arena_count > 16) arena_count = 16; // Cap at 4 GB
 
-        logger.info("View distance {} x {} -> {} chunks, estimated {} MB, {} arenas", .{
+        // Only pre-allocate a small number of arenas to avoid memory exhaustion
+        // Remaining arenas will be allocated on-demand as chunks are loaded
+        // This is critical for large view distances (e.g., 64 chunks = 32 GB estimated)
+        const initial_arenas = @min(arena_count, 2);
+
+        logger.info("View distance {} x {} -> {} chunks, estimated {} MB, {} arenas (pre-allocating {})", .{
             view_distance,
             vertical_view_distance,
             total_chunks,
             estimated_memory / (1024 * 1024),
             arena_count,
+            initial_arenas,
         });
 
         return init(allocator, device, physical_device, .{
             .arena_size = arena_size,
-            .initial_arena_count = @intCast(arena_count),
+            .initial_arena_count = @intCast(initial_arenas),
             .usage = usage,
             .alignment = alignment,
         });
