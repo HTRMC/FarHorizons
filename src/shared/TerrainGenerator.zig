@@ -8,6 +8,7 @@ const Chunk = chunk_mod.Chunk;
 const BlockEntry = chunk_mod.BlockEntry;
 const CHUNK_SIZE = chunk_mod.CHUNK_SIZE;
 const fastnoise2 = @import("fastnoise2.zig");
+const profiler = @import("profiler.zig");
 
 /// FastNoise2 metadata IDs (sequential based on registration order in FastSIMD_Build.inl)
 const NoiseType = enum(i32) {
@@ -102,6 +103,9 @@ pub const TerrainGenerator = struct {
     /// chunk_x, chunk_z: horizontal chunk position
     /// section_y: vertical section index (each section is 16 blocks tall)
     pub fn generateChunk(self: *const Self, chunk_x: i32, section_y: i32, chunk_z: i32) Chunk {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         var chunk = Chunk.init();
 
         const freq = self.config.frequency;
