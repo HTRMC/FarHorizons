@@ -12,6 +12,7 @@ const block_interaction = @import("BlockInteraction.zig");
 const BlockInteraction = block_interaction.BlockInteraction;
 const entity_interaction = @import("EntityInteraction.zig");
 const EntityInteraction = entity_interaction.EntityInteraction;
+const profiler = shared.profiler;
 
 const GameConfig = shared.GameConfig;
 const Logger = shared.Logger;
@@ -128,6 +129,9 @@ pub const FarHorizonsClient = struct {
     }
 
     pub fn run(self: *Self) !void {
+        // Set Tracy thread name for main thread
+        profiler.setThreadName("MainThread");
+
         logger.info("FarHorizons Client starting...", .{});
         logger.info("Game directory: {s}", .{self.config.location.game_directory});
 
@@ -288,6 +292,9 @@ pub const FarHorizonsClient = struct {
         // Main loop
         logger.info("Entering main loop", .{});
         while (!self.window.shouldClose()) {
+            const frame_zone = profiler.traceNamed("Frame");
+            defer frame_zone.end();
+
             // Calculate delta time for tick accumulator
             const delta_ns = timer.lap();
             const delta_ms: f64 = @as(f64, @floatFromInt(delta_ns)) / 1_000_000.0;
@@ -330,6 +337,9 @@ pub const FarHorizonsClient = struct {
 
             // Run game ticks at fixed rate (20 ticks/second)
             while (tick_accumulator >= MS_PER_TICK) {
+                const tick_zone = profiler.traceNamed("GameTick");
+                defer tick_zone.end();
+
                 tick_accumulator -= MS_PER_TICK;
 
                 // Save old position before tick (for interpolation)
@@ -405,6 +415,8 @@ pub const FarHorizonsClient = struct {
             if (self.chunk_manager) |*cm| {
                 // Begin frame for staging buffer synchronization
                 cm.beginFrame(self.render_system.getCurrentFrameFence());
+                // C2ME-style consolidation: flush load queue once per frame (not per tick)
+                cm.flushLoadQueue();
                 cm.tick();
             }
 
@@ -465,73 +477,81 @@ pub const FarHorizonsClient = struct {
             self.render_system.updateMVP(model.data, view.data, proj.data);
 
             // Render frame
-            if (self.use_async_chunks) {
-                // Multi-chunk rendering with multiple arena buffers
-                if (self.chunk_manager) |*cm| {
-                    const vertex_buffers = cm.getAllVertexBuffers();
-                    const index_buffers = cm.getAllIndexBuffers();
-                    const draw_commands = cm.getDrawCommands();
-                    const staging_copies = cm.getStagingCopies();
+            {
+                const render_zone = profiler.traceNamed("RenderFrame");
+                defer render_zone.end();
 
-                    // Get entity rendering info
-                    const entity_vb = if (self.entity_renderer) |*er| er.getVertexBuffer() else null;
-                    const entity_ib = if (self.entity_renderer) |*er| er.getIndexBuffer() else null;
-                    const entity_ic = if (self.entity_renderer) |*er| er.getIndexCount() else 0;
-                    const adult_ic = if (self.entity_renderer) |*er| er.getAdultIndexCount() else 0;
-                    const baby_is = if (self.entity_renderer) |*er| er.getBabyIndexStart() else 0;
-                    const baby_ic = if (self.entity_renderer) |*er| er.getBabyIndexCount() else 0;
+                if (self.use_async_chunks) {
+                    // Multi-chunk rendering with multiple arena buffers
+                    if (self.chunk_manager) |*cm| {
+                        const vertex_buffers = cm.getAllVertexBuffers();
+                        const index_buffers = cm.getAllIndexBuffers();
+                        const draw_commands = cm.getDrawCommands();
+                        const staging_copies = cm.getStagingCopies();
 
-                    if (vertex_buffers.len > 0 and index_buffers.len > 0 and draw_commands.len > 0) {
-                        self.render_system.drawFrameMultiArena(
-                            vertex_buffers,
-                            index_buffers,
-                            draw_commands,
-                            staging_copies,
-                            entity_vb,
-                            entity_ib,
-                            entity_ic,
-                            adult_ic,
-                            baby_is,
-                            baby_ic,
-                        ) catch |err| {
-                            logger.err("Failed to draw multi-arena frame: {}", .{err});
-                        };
-                        // Clear staging copies after they've been submitted
-                        cm.clearStagingCopies();
-                    } else if (staging_copies.len > 0 and vertex_buffers.len > 0 and index_buffers.len > 0) {
-                        // Have staging data but no ready chunks yet - still need to upload
-                        self.render_system.drawFrameMultiArena(
-                            vertex_buffers,
-                            index_buffers,
-                            &.{},
-                            staging_copies,
-                            entity_vb,
-                            entity_ib,
-                            entity_ic,
-                            adult_ic,
-                            baby_is,
-                            baby_ic,
-                        ) catch |err| {
-                            logger.err("Failed to draw frame with staging: {}", .{err});
-                        };
-                        cm.clearStagingCopies();
+                        // Get entity rendering info
+                        const entity_vb = if (self.entity_renderer) |*er| er.getVertexBuffer() else null;
+                        const entity_ib = if (self.entity_renderer) |*er| er.getIndexBuffer() else null;
+                        const entity_ic = if (self.entity_renderer) |*er| er.getIndexCount() else 0;
+                        const adult_ic = if (self.entity_renderer) |*er| er.getAdultIndexCount() else 0;
+                        const baby_is = if (self.entity_renderer) |*er| er.getBabyIndexStart() else 0;
+                        const baby_ic = if (self.entity_renderer) |*er| er.getBabyIndexCount() else 0;
+
+                        if (vertex_buffers.len > 0 and index_buffers.len > 0 and draw_commands.len > 0) {
+                            self.render_system.drawFrameMultiArena(
+                                vertex_buffers,
+                                index_buffers,
+                                draw_commands,
+                                staging_copies,
+                                entity_vb,
+                                entity_ib,
+                                entity_ic,
+                                adult_ic,
+                                baby_is,
+                                baby_ic,
+                            ) catch |err| {
+                                logger.err("Failed to draw multi-arena frame: {}", .{err});
+                            };
+                            // Clear staging copies after they've been submitted
+                            cm.clearStagingCopies();
+                        } else if (staging_copies.len > 0 and vertex_buffers.len > 0 and index_buffers.len > 0) {
+                            // Have staging data but no ready chunks yet - still need to upload
+                            self.render_system.drawFrameMultiArena(
+                                vertex_buffers,
+                                index_buffers,
+                                &.{},
+                                staging_copies,
+                                entity_vb,
+                                entity_ib,
+                                entity_ic,
+                                adult_ic,
+                                baby_is,
+                                baby_ic,
+                            ) catch |err| {
+                                logger.err("Failed to draw frame with staging: {}", .{err});
+                            };
+                            cm.clearStagingCopies();
+                        } else {
+                            // No chunks ready yet, draw empty frame
+                            self.render_system.drawFrame() catch |err| {
+                                logger.err("Failed to draw frame: {}", .{err});
+                            };
+                        }
                     } else {
-                        // No chunks ready yet, draw empty frame
                         self.render_system.drawFrame() catch |err| {
                             logger.err("Failed to draw frame: {}", .{err});
                         };
                     }
                 } else {
+                    // Legacy single-chunk rendering
                     self.render_system.drawFrame() catch |err| {
                         logger.err("Failed to draw frame: {}", .{err});
                     };
                 }
-            } else {
-                // Legacy single-chunk rendering
-                self.render_system.drawFrame() catch |err| {
-                    logger.err("Failed to draw frame: {}", .{err});
-                };
             }
+
+            // Signal end of frame to Tracy
+            profiler.frameMark();
         }
 
         // Cleanup entity system
