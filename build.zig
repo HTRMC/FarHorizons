@@ -7,7 +7,27 @@ fn libName(b: *std.Build, name: []const u8) []const u8 {
     return b.fmt("lib{s}.a", .{name});
 }
 
-fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
+/// Configure Tracy profiling for a module
+fn configureTracy(
+    module: *std.Build.Module,
+    tracy_enabled: bool,
+    build_options: *std.Build.Module,
+    headers_dep: ?*std.Build.Dependency,
+) void {
+    // Always add the build options module
+    module.addImport("build_options", build_options);
+
+    if (tracy_enabled) {
+        // Add Tracy include path for @cImport
+        if (headers_dep) |d| {
+            module.addIncludePath(d.path(""));
+        }
+        // Define TRACY_ENABLE for C interop
+        module.addCMacro("TRACY_ENABLE", "1");
+    }
+}
+
+fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile, tracy_enabled: bool) void {
     const target = exe.root_module.resolved_target.?;
     const t = target.result;
 
@@ -37,7 +57,17 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.root_module.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
     exe.root_module.addObjectFile(lib_dep.path(libName(b, "FastNoise")));
 
-    // shaderc and FastNoise2 require C++ standard library
+    // Link Tracy when enabled
+    if (tracy_enabled) {
+        exe.root_module.addObjectFile(lib_dep.path(libName(b, "tracy")));
+        // Tracy also needs ws2_32 and dbghelp on Windows
+        if (t.os.tag == .windows) {
+            exe.root_module.linkSystemLibrary("ws2_32", .{});
+            exe.root_module.linkSystemLibrary("dbghelp", .{});
+        }
+    }
+
+    // shaderc, FastNoise2, and Tracy require C++ standard library
     exe.root_module.link_libcpp = true;
 
     // Link system libraries
@@ -53,6 +83,17 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Tracy profiler option
+    const tracy_enabled = b.option(bool, "tracy", "Enable Tracy profiler") orelse false;
+
+    // Create build options module for compile-time configuration
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "tracy_enabled", tracy_enabled);
+    const build_options_module = build_options.createModule();
+
+    // Get headers dependency for include path (used by multiple modules)
+    const headers_dep = b.lazyDependency("farhorizons_deps_headers", .{});
+
     // Shared module used by both client and server
     const shared_module = b.createModule(.{
         .root_source_file = b.path("src/shared/Shared.zig"),
@@ -60,14 +101,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    configureTracy(shared_module, tracy_enabled, build_options_module, headers_dep);
 
     // Add include path for FastNoise2 headers
-    if (b.lazyDependency("farhorizons_deps_headers", .{})) |d| {
+    if (headers_dep) |d| {
         shared_module.addIncludePath(d.path(""));
     }
-
-    // Get headers dependency for include path
-    const headers_dep = b.lazyDependency("farhorizons_deps_headers", .{});
 
     // Create GLFW Zig bindings module
     const glfw_module = b.createModule(.{
@@ -137,6 +176,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "shaderc", .module = shaderc_module },
         },
     });
+    configureTracy(renderer_module, tracy_enabled, build_options_module, headers_dep);
 
     // Create World module (chunk management)
     const world_module = b.createModule(.{
@@ -149,6 +189,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "volk", .module = volk_module },
         },
     });
+    configureTracy(world_module, tracy_enabled, build_options_module, headers_dep);
 
     // Create ECS module (Entity Component System)
     const ecs_module = b.createModule(.{
@@ -178,8 +219,9 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    configureTracy(exe.root_module, tracy_enabled, build_options_module, headers_dep);
 
-    linkDependencies(b, exe);
+    linkDependencies(b, exe, tracy_enabled);
     b.installArtifact(exe);
 
     // Server executable (no GLFW needed)
