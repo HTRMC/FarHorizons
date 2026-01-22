@@ -6,26 +6,26 @@
     .dependencies = .{
         // Headers (shared across all platforms)
         .farhorizons_deps_headers = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.21/farhorizons_deps_headers.tar.gz",
-            .hash = "N-V-__8AAHrTOQGGCPJnyYq4U3qar8O-ifNBDE3GqqwPsMcM",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_headers.tar.gz",
+            .hash = "N-V-__8AAJB4UwFG0_wjFSNmLfUo2cVNJj91d8TyHUWQCW8m",
             .lazy = true,
         },
         // Windows x86_64
         .@"farhorizons_deps_x86_64-windows-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.21/farhorizons_deps_x86_64-windows-gnu.tar.gz",
-            .hash = "N-V-__8AADq_ygFoL6_B7A-Ykh9fMeyB9nTNF8OKzH2wLH01",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_x86_64-windows-gnu.tar.gz",
+            .hash = "N-V-__8AAOxA5AFLG0urXy71WqFbnvdIC9jgpHK5IrDTmBlx",
             .lazy = true,
         },
         // Linux x86_64
         .@"farhorizons_deps_x86_64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.21/farhorizons_deps_x86_64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AAJClDwLqXfELsgCP0HQCgibv57ibIDZd6BbPKlUn",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_x86_64-linux-gnu.tar.gz",
+            .hash = "v0.0.22-linux-x86_64-placeholder",
             .lazy = true,
         },
         // Linux aarch64
         .@"farhorizons_deps_aarch64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.21/farhorizons_deps_aarch64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AABry0wE2YNb0cIH4hyfoyQqUiSCL1p7l6_R7Rdow",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_aarch64-linux-gnu.tar.gz",
+            .hash = "v0.0.22-linux-aarch64-placeholder",
             .lazy = true,
         },
     },
