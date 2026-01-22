@@ -15,18 +15,20 @@ const RenderLayer = shared.RenderLayer;
 /// Number of render layers (derived from enum at comptime)
 pub const RENDER_LAYER_COUNT = @typeInfo(RenderLayer).@"enum".fields.len;
 
-/// State of a chunk in the rendering pipeline
+/// State of a chunk in the rendering pipeline (C2ME-style two-phase loading)
 pub const ChunkState = enum(u8) {
-    /// Chunk is queued for generation/loading
+    /// Chunk is queued for terrain generation (no dependencies)
     loading = 0,
-    /// Chunk data exists, mesh is being baked
-    meshing = 1,
+    /// Terrain generated, waiting for mesh dependencies (neighbors must be generated/ready)
+    generated = 1,
+    /// Mesh task submitted, waiting for completion
+    meshing = 2,
     /// Chunk is ready to render
-    ready = 2,
+    ready = 3,
     /// Chunk has been modified and needs remeshing
-    dirty = 3,
+    dirty = 4,
     /// Chunk is being unloaded
-    unloading = 4,
+    unloading = 5,
 };
 
 /// Callback type for chunk state transitions
