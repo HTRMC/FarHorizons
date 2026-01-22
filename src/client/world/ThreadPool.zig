@@ -100,11 +100,21 @@ pub fn ThreadSafeQueue(comptime T: type) type {
     };
 }
 
-/// Dynamic priority queue for tasks - Minecraft's CompileTaskDynamicQueue pattern
-/// Key difference from heap: priority is calculated at POLL time, not insert time
-/// This ensures chunks closest to player are always processed first, even as player moves
+/// Dynamic priority queue for tasks - C2ME's DynamicPriorityQueue pattern
+/// Uses fixed-size priority buckets instead of linear scan for O(p) dequeue
+/// Priority is based on Chebyshev distance within bounded window (8-chunk radius)
 pub const DynamicPriorityQueue = struct {
     const Self = @This();
+
+    /// Number of priority buckets (C2ME uses 64, configurable up to 256)
+    const PRIORITY_BUCKETS: usize = 64;
+
+    /// Distance window for dynamic prioritization (8-chunk radius like C2ME)
+    /// Beyond this, all chunks get MAX_PRIORITY (lowest urgency)
+    const PRIORITY_WINDOW_RADIUS: i32 = 8;
+
+    /// Maximum priority value (lowest urgency)
+    const MAX_PRIORITY: u8 = PRIORITY_BUCKETS - 1;
 
     /// Maximum remesh tasks to process per poll cycle
     /// Prevents remesh spam from starving new chunk generation
@@ -112,8 +122,16 @@ pub const DynamicPriorityQueue = struct {
 
     mutex: std.Thread.Mutex = .{},
     condition: std.Thread.Condition = .{},
-    /// Simple list of tasks - we iterate to find closest at poll time
-    tasks: std.ArrayListUnmanaged(Task) = .{},
+
+    /// Fixed-size array of priority buckets (C2ME pattern)
+    /// Each bucket is a FIFO queue for tasks at that priority level
+    /// Priority 0 = highest urgency (closest chunks), 63 = lowest
+    buckets: [PRIORITY_BUCKETS]std.ArrayListUnmanaged(Task),
+
+    /// Task count per bucket for quick skip-ahead optimization
+    /// Allows dequeue to skip empty buckets without scanning
+    bucket_counts: [PRIORITY_BUCKETS]std.atomic.Value(u32),
+
     allocator: std.mem.Allocator,
 
     /// Current camera/player chunk position (updated atomically by main thread)
@@ -125,13 +143,25 @@ pub const DynamicPriorityQueue = struct {
     remesh_count: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) Self {
-        return .{
+        var self = Self{
             .allocator = allocator,
+            .buckets = undefined,
+            .bucket_counts = undefined,
         };
+
+        // Initialize all buckets as empty
+        for (0..PRIORITY_BUCKETS) |i| {
+            self.buckets[i] = .{};
+            self.bucket_counts[i] = std.atomic.Value(u32).init(0);
+        }
+
+        return self;
     }
 
     pub fn deinit(self: *Self) void {
-        self.tasks.deinit(self.allocator);
+        for (0..PRIORITY_BUCKETS) |i| {
+            self.buckets[i].deinit(self.allocator);
+        }
     }
 
     /// Update camera position (called from main thread when player moves)
@@ -141,131 +171,142 @@ pub const DynamicPriorityQueue = struct {
         self.camera_y.store(y, .release);
     }
 
-    /// Calculate squared distance from camera to chunk position
-    fn distanceSquared(self: *Self, pos: ChunkPos) i64 {
+    /// Calculate priority based on Chebyshev distance (C2ME pattern)
+    /// Priority 0 = closest (1 chunk away), MAX_PRIORITY = farthest or outside window
+    /// Only chunks within PRIORITY_WINDOW_RADIUS get distance-based priority
+    fn calculatePriority(self: *Self, pos: ChunkPos) u8 {
         const cam_x = self.camera_x.load(.acquire);
         const cam_z = self.camera_z.load(.acquire);
         const cam_y = self.camera_y.load(.acquire);
 
-        const dx: i64 = @as(i64, pos.x) - @as(i64, cam_x);
-        const dz: i64 = @as(i64, pos.z) - @as(i64, cam_z);
-        const dy: i64 = @as(i64, pos.section_y) - @as(i64, cam_y);
+        // Calculate Chebyshev distance (max of absolute differences)
+        const dx = @abs(@as(i64, pos.x) - @as(i64, cam_x));
+        const dz = @abs(@as(i64, pos.z) - @as(i64, cam_z));
+        const dy = @abs(@as(i64, pos.section_y) - @as(i64, cam_y));
 
-        // Horizontal distance matters more than vertical
-        return dx * dx + dz * dz + @divFloor(dy * dy, 2);
+        const horizontal_dist = @max(dx, dz);
+
+        // C2ME pattern: Only prioritize chunks within 8-chunk window
+        // This prevents large coordinates from affecting performance
+        if (horizontal_dist > PRIORITY_WINDOW_RADIUS) {
+            return MAX_PRIORITY;
+        }
+
+        // Vertical distance matters less (divide by 2)
+        const chebyshev_dist = @max(horizontal_dist, @divFloor(dy, 2));
+
+        // Clamp to valid priority range
+        if (chebyshev_dist >= MAX_PRIORITY) {
+            return MAX_PRIORITY;
+        }
+
+        return @intCast(chebyshev_dist);
     }
 
-    /// Add a task to the queue
+    /// Add a task to the queue (C2ME bucket-based approach)
+    /// Priority is calculated at insertion time and task goes into appropriate bucket
     pub fn push(self: *Self, task: Task) !void {
+        // Shutdown tasks always go to highest priority bucket (0)
+        const priority: u8 = if (task.task_type == .shutdown)
+            0
+        else
+            self.calculatePriority(task.chunk_pos);
+
         self.mutex.lock();
         defer self.mutex.unlock();
-        try self.tasks.append(self.allocator, task);
+
+        try self.buckets[priority].append(self.allocator, task);
+        _ = self.bucket_counts[priority].fetchAdd(1, .release);
         self.condition.signal();
     }
 
-    /// Remove and return the closest task to camera, blocking if empty
-    /// This is the key Minecraft optimization - priority is calculated at poll time
+    /// Remove and return the highest priority task, blocking if empty
+    /// C2ME pattern: O(p) scan where p = number of priority buckets (64)
+    /// Uses bucket counts for quick skip-ahead optimization
     pub fn pop(self: *Self) ?Task {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        while (self.tasks.items.len == 0) {
+        while (self.isEmptyUnlocked()) {
             self.condition.wait(&self.mutex);
         }
 
-        return self.pollClosest();
+        return self.dequeueFromBuckets();
     }
 
     /// Try to pop without blocking
     pub fn tryPop(self: *Self) ?Task {
         self.mutex.lock();
         defer self.mutex.unlock();
-        if (self.tasks.items.len == 0) return null;
-        return self.pollClosest();
+        if (self.isEmptyUnlocked()) return null;
+        return self.dequeueFromBuckets();
     }
 
-    /// Find and remove the closest task to camera (must hold mutex)
-    fn pollClosest(self: *Self) ?Task {
+    /// Dequeue task from highest priority non-empty bucket (must hold mutex)
+    /// C2ME pattern: Scan buckets from 0 (highest priority) to MAX_PRIORITY
+    /// Skip empty buckets using atomic counts for optimization
+    fn dequeueFromBuckets(self: *Self) ?Task {
         const zone = profiler.trace(@src());
         defer zone.end();
 
-        if (self.tasks.items.len == 0) return null;
-
-        // Check for shutdown tasks first - they have absolute priority
-        for (self.tasks.items, 0..) |task, i| {
-            if (task.task_type == .shutdown) {
-                return self.tasks.swapRemove(i);
+        // Scan from highest priority (0) to lowest (MAX_PRIORITY)
+        for (0..PRIORITY_BUCKETS) |priority| {
+            // Quick check: skip empty buckets without locking
+            if (self.bucket_counts[priority].load(.acquire) == 0) {
+                continue;
             }
-        }
 
-        // Find closest chunk to camera
-        var best_distance: i64 = std.math.maxInt(i64);
-        var best_index: ?usize = null;
-        var best_remesh_distance: i64 = std.math.maxInt(i64);
-        var best_remesh_index: ?usize = null;
+            // Try to pop from this bucket
+            if (self.buckets[priority].items.len > 0) {
+                // FIFO within bucket: pop from front for fairness
+                const task = self.buckets[priority].orderedRemove(0);
+                _ = self.bucket_counts[priority].fetchSub(1, .release);
 
-        for (self.tasks.items, 0..) |task, i| {
-            const dist = self.distanceSquared(task.chunk_pos);
-
-            if (task.chunk_task_kind == .remesh) {
-                // Track best remesh separately for quota
-                if (dist < best_remesh_distance) {
-                    best_remesh_distance = dist;
-                    best_remesh_index = i;
-                }
-            } else {
-                // New chunk generation
-                if (dist < best_distance) {
-                    best_distance = dist;
-                    best_index = i;
-                }
-            }
-        }
-
-        // Apply remesh quota: prefer generate tasks unless we have quota
-        // and the remesh is closer
-        if (self.remesh_count < MAX_REMESH_PER_CYCLE) {
-            if (best_remesh_index) |ri| {
-                // If remesh is closer or no generate tasks, use remesh
-                if (best_index == null or best_remesh_distance < best_distance) {
+                // Handle remesh quota
+                if (task.chunk_task_kind == .remesh) {
                     self.remesh_count += 1;
-                    return self.tasks.swapRemove(ri);
+                    // If we hit remesh quota, consider resetting on next generate
+                } else {
+                    // Reset remesh counter when processing generate tasks
+                    if (self.remesh_count >= MAX_REMESH_PER_CYCLE) {
+                        self.remesh_count = 0;
+                    }
                 }
-            }
-        }
 
-        // Reset remesh counter periodically (every full cycle through generates)
-        if (best_index == null and best_remesh_index != null) {
-            // Only remesh tasks left, reset counter and process them
-            self.remesh_count = 0;
-            if (best_remesh_index) |ri| {
-                self.remesh_count += 1;
-                return self.tasks.swapRemove(ri);
+                return task;
             }
-        }
-
-        // Return closest generate task
-        if (best_index) |bi| {
-            // Reset remesh counter when we process a generate
-            self.remesh_count = 0;
-            return self.tasks.swapRemove(bi);
         }
 
         return null;
+    }
+
+    /// Check if queue is empty (unlocked version for internal use)
+    fn isEmptyUnlocked(self: *Self) bool {
+        // Quick check: sum all bucket counts
+        var total: u32 = 0;
+        for (0..PRIORITY_BUCKETS) |i| {
+            total += self.bucket_counts[i].load(.acquire);
+        }
+        return total == 0;
     }
 
     /// Check if queue is empty
     pub fn isEmpty(self: *Self) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.tasks.items.len == 0;
+        return self.isEmptyUnlocked();
     }
 
-    /// Get current length
+    /// Get current length (sum of all bucket counts)
     pub fn len(self: *Self) usize {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.tasks.items.len;
+
+        var total: usize = 0;
+        for (0..PRIORITY_BUCKETS) |i| {
+            total += self.bucket_counts[i].load(.acquire);
+        }
+        return total;
     }
 
     /// Wake all waiting threads
