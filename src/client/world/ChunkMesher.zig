@@ -13,6 +13,7 @@ const ChunkAccess = shared.ChunkAccess;
 const Logger = shared.Logger;
 const RenderLayer = shared.RenderLayer;
 const block_registry = shared.block;
+const profiler = shared.profiler;
 
 const Vertex = renderer.Vertex;
 const BlockModel = renderer.block.BlockModel;
@@ -55,6 +56,9 @@ pub const ChunkMesher = struct {
         block_model_shaper: *BlockModelShaper,
         texture_manager: *const TextureManager,
     ) !CompletedMesh {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         // Create chunk access for cross-chunk face culling
         var chunk_access = ChunkAccess.init(chunk);
         if (neighbors[0]) |n| chunk_access.setNeighbor(.down, n);
@@ -366,6 +370,9 @@ pub const WorkerMeshContext = struct {
         block_model_shaper: *BlockModelShaper,
         texture_manager: *const TextureManager,
     ) !CompletedMesh {
+        const zone = profiler.traceNamed("WorkerMeshContext.generateMesh");
+        defer zone.end();
+
         // Create chunk access for cross-chunk face culling
         var chunk_access = ChunkAccess.init(chunk);
         if (neighbors[0]) |n| chunk_access.setNeighbor(.down, n);
