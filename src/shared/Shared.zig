@@ -88,3 +88,6 @@ pub const fastnoise2 = @import("fastnoise2.zig");
 pub const rcu = @import("Rcu.zig");
 pub const Rcu = rcu.Rcu;
 pub const RcuReadGuard = rcu.RcuReadGuard;
+
+// Profiling (Tracy integration)
+pub const profiler = @import("profiler.zig");
