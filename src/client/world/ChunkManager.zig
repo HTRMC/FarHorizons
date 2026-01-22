@@ -439,7 +439,7 @@ pub const ChunkManager = struct {
                 const total_indices = mesh.getTotalIndexCount();
                 if (total_vertices == 0 or total_indices == 0) {
                     // Still mark as ready - chunk data is valid, just no visible geometry
-                    render_chunk_ptr.state = .ready;
+                    render_chunk_ptr.setState(.ready);
                     mesh.deinit();
                     _ = self.pending_loads.remove(mesh.pos);
                     continue;
@@ -629,7 +629,8 @@ pub const ChunkManager = struct {
             const chunk = entry.value_ptr.*;
 
             // Render chunks that are ready OR dirty (dirty = rebuilding, still has old mesh)
-            if (chunk.state != .ready and chunk.state != .dirty) continue;
+            const state = chunk.getState();
+            if (state != .ready and state != .dirty) continue;
 
             const m = chunk.mesh orelse continue;
 
@@ -917,7 +918,7 @@ pub const ChunkManager = struct {
             };
 
             if (self.chunk_storage.get(neighbor_pos)) |neighbor| {
-                if (neighbor.state == .ready) {
+                if (neighbor.getState() == .ready) {
                     neighbors[i] = &neighbor.chunk;
                 }
             }
@@ -951,7 +952,7 @@ pub const ChunkManager = struct {
             if (self.chunk_storage.get(neighbor_pos)) |neighbor| {
                 // Only use neighbors that have valid block data (not still loading)
                 // .meshing, .ready, and .dirty all have valid chunk data
-                if (neighbor.state != .loading) {
+                if (neighbor.getState() != .loading) {
                     neighbors[i] = &neighbor.chunk;
                 }
             }
@@ -968,7 +969,7 @@ pub const ChunkManager = struct {
         const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
 
         const rchunk = self.chunk_storage.get(chunk_pos) orelse return null;
-        if (rchunk.state != .ready) return null;
+        if (rchunk.getState() != .ready) return null;
 
         // Convert to local coordinates (0-15)
         const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
@@ -987,7 +988,7 @@ pub const ChunkManager = struct {
         const rchunk = self.chunk_storage.get(chunk_pos) orelse return null;
         // Skip chunks still being generated - their block data isn't ready yet
         // Chunks in meshing/ready/dirty states have valid block data
-        if (rchunk.state == .loading) return null;
+        if (rchunk.getState() == .loading) return null;
 
         // Convert to local coordinates (0-15)
         const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
@@ -1046,7 +1047,7 @@ pub const ChunkManager = struct {
     fn remeshNeighborIfLoaded(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
         const neighbor_pos = ChunkPos{ .x = chunk_x, .z = chunk_z, .section_y = section_y };
         if (self.chunk_storage.get(neighbor_pos)) |neighbor_chunk| {
-            if (neighbor_chunk.state == .ready) {
+            if (neighbor_chunk.getState() == .ready) {
                 self.queueChunkRemesh(neighbor_pos, neighbor_chunk);
             }
         }
@@ -1055,8 +1056,8 @@ pub const ChunkManager = struct {
     /// Queue a chunk for re-meshing
     fn queueChunkRemesh(self: *Self, pos: ChunkPos, render_chunk_ptr: *RenderChunk) void {
         // Don't clear mesh - keep rendering old mesh until new one arrives
-        // Mark as dirty as we know a rebuild is pending
-        render_chunk_ptr.state = .dirty;
+        // Mark as dirty as we know a rebuild is pending (fires on_dirty callback)
+        render_chunk_ptr.setState(.dirty);
 
         // Create task data - remesh uses existing chunk data
         const task_data = self.allocator.create(ChunkTask) catch return;

@@ -16,17 +16,148 @@ const RenderLayer = shared.RenderLayer;
 pub const RENDER_LAYER_COUNT = @typeInfo(RenderLayer).@"enum".fields.len;
 
 /// State of a chunk in the rendering pipeline
-pub const ChunkState = enum {
+pub const ChunkState = enum(u8) {
     /// Chunk is queued for generation/loading
-    loading,
+    loading = 0,
     /// Chunk data exists, mesh is being baked
-    meshing,
+    meshing = 1,
     /// Chunk is ready to render
-    ready,
+    ready = 2,
     /// Chunk has been modified and needs remeshing
-    dirty,
+    dirty = 3,
     /// Chunk is being unloaded
-    unloading,
+    unloading = 4,
+};
+
+/// Callback type for chunk state transitions
+pub const ChunkCallback = *const fn (chunk: *RenderChunk) void;
+
+/// ChunkFuture - C2ME-style async status tracking with completion callbacks
+/// Enables non-blocking state transitions and event-driven chunk management
+pub const ChunkFuture = struct {
+    const Self = @This();
+
+    /// Atomic status for thread-safe access
+    status: std.atomic.Value(u8),
+
+    /// Callback when chunk becomes ready (mesh uploaded to GPU)
+    on_ready: ?ChunkCallback = null,
+
+    /// Callback when chunk is marked dirty (needs remesh)
+    on_dirty: ?ChunkCallback = null,
+
+    /// Callback when chunk is being unloaded
+    on_unload: ?ChunkCallback = null,
+
+    /// Back-reference to the owning RenderChunk
+    owner: ?*RenderChunk = null,
+
+    /// Create a new ChunkFuture in loading state
+    pub fn init() Self {
+        return .{
+            .status = std.atomic.Value(u8).init(@intFromEnum(ChunkState.loading)),
+        };
+    }
+
+    /// Get current status (thread-safe)
+    pub fn getStatus(self: *const Self) ChunkState {
+        return @enumFromInt(self.status.load(.acquire));
+    }
+
+    /// Set status and fire callbacks if applicable (call from main thread)
+    pub fn setStatus(self: *Self, new_status: ChunkState) void {
+        const old_status = self.status.swap(@intFromEnum(new_status), .acq_rel);
+
+        // Fire callbacks based on transition
+        if (self.owner) |chunk| {
+            const old: ChunkState = @enumFromInt(old_status);
+
+            // Transitioning TO ready state
+            if (new_status == .ready and old != .ready) {
+                if (self.on_ready) |callback| {
+                    callback(chunk);
+                }
+            }
+
+            // Transitioning TO dirty state
+            if (new_status == .dirty and old != .dirty) {
+                if (self.on_dirty) |callback| {
+                    callback(chunk);
+                }
+            }
+
+            // Transitioning TO unloading state
+            if (new_status == .unloading and old != .unloading) {
+                if (self.on_unload) |callback| {
+                    callback(chunk);
+                }
+            }
+        }
+    }
+
+    /// Atomically try to transition from expected state to new state
+    /// Returns true if successful, false if current state didn't match expected
+    pub fn tryTransition(self: *Self, expected: ChunkState, new_status: ChunkState) bool {
+        const result = self.status.cmpxchgStrong(
+            @intFromEnum(expected),
+            @intFromEnum(new_status),
+            .acq_rel,
+            .acquire,
+        );
+
+        if (result == null) {
+            // Transition succeeded, fire callbacks
+            if (self.owner) |chunk| {
+                if (new_status == .ready) {
+                    if (self.on_ready) |callback| {
+                        callback(chunk);
+                    }
+                } else if (new_status == .dirty) {
+                    if (self.on_dirty) |callback| {
+                        callback(chunk);
+                    }
+                } else if (new_status == .unloading) {
+                    if (self.on_unload) |callback| {
+                        callback(chunk);
+                    }
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /// Register callback for when chunk becomes ready
+    pub fn onReady(self: *Self, callback: ChunkCallback) void {
+        self.on_ready = callback;
+    }
+
+    /// Register callback for when chunk needs remeshing
+    pub fn onDirty(self: *Self, callback: ChunkCallback) void {
+        self.on_dirty = callback;
+    }
+
+    /// Register callback for when chunk is unloaded
+    pub fn onUnload(self: *Self, callback: ChunkCallback) void {
+        self.on_unload = callback;
+    }
+
+    /// Check if chunk is in ready state (thread-safe)
+    pub fn isReady(self: *const Self) bool {
+        return self.getStatus() == .ready;
+    }
+
+    /// Check if chunk needs remeshing (thread-safe)
+    pub fn isDirty(self: *const Self) bool {
+        const status = self.getStatus();
+        return status == .dirty;
+    }
+
+    /// Check if chunk is still loading (thread-safe)
+    pub fn isLoading(self: *const Self) bool {
+        const status = self.getStatus();
+        return status == .loading or status == .meshing;
+    }
 };
 
 /// Per-layer mesh data
@@ -189,29 +320,46 @@ pub const RenderChunk = struct {
     /// Baked mesh for rendering (null if not yet meshed)
     mesh: ?ChunkMesh = null,
 
-    /// Current state in the rendering pipeline
-    state: ChunkState = .loading,
+    /// Async status tracking with completion callbacks (C2ME pattern)
+    future: ChunkFuture,
 
     /// Allocator for mesh data
     allocator: std.mem.Allocator,
 
+    /// Backwards-compatible state getter (reads from future)
+    pub fn getState(self: *const Self) ChunkState {
+        return self.future.getStatus();
+    }
+
+    /// Backwards-compatible state setter (writes to future with callbacks)
+    pub fn setState(self: *Self, new_state: ChunkState) void {
+        self.future.setStatus(new_state);
+    }
+
     /// Create a new RenderChunk at the given position
     pub fn init(allocator: std.mem.Allocator, pos: ChunkPos) Self {
-        return Self{
+        var self = Self{
             .pos = pos,
             .chunk = Chunk.init(),
+            .future = ChunkFuture.init(),
             .allocator = allocator,
         };
+        // Set back-reference for callbacks
+        self.future.owner = &self;
+        return self;
     }
 
     /// Create a RenderChunk with existing chunk data
-    pub fn initWithChunk(allocator: std.mem.Allocator, pos: ChunkPos, chunk: Chunk) Self {
-        return Self{
+    pub fn initWithChunk(allocator: std.mem.Allocator, pos: ChunkPos, chunk_data: Chunk) Self {
+        var self = Self{
             .pos = pos,
-            .chunk = chunk,
-            .state = .dirty, // Needs meshing
+            .chunk = chunk_data,
+            .future = ChunkFuture.init(),
             .allocator = allocator,
         };
+        self.future.owner = &self;
+        self.future.setStatus(.dirty); // Needs meshing
+        return self;
     }
 
     /// Free all resources
@@ -249,22 +397,22 @@ pub const RenderChunk = struct {
 
     /// Check if this chunk needs remeshing
     pub fn needsRemesh(self: *const Self) bool {
-        return self.state == .dirty;
+        return self.future.isDirty();
     }
 
     /// Check if this chunk is ready to render
     pub fn isReady(self: *const Self) bool {
-        return self.state == .ready and self.mesh != null;
+        return self.future.isReady() and self.mesh != null;
     }
 
     /// Mark chunk as dirty (needs remeshing)
+    /// Uses atomic CAS to only transition from ready -> dirty
     pub fn markDirty(self: *Self) void {
-        if (self.state == .ready) {
-            self.state = .dirty;
-        }
+        _ = self.future.tryTransition(.ready, .dirty);
     }
 
     /// Set the mesh data (called from main thread after worker completes)
+    /// This triggers the on_ready callback if registered
     pub fn setMesh(self: *Self, mesh: ChunkMesh) void {
         // Free old mesh if present
         // Note: GPU resources should be freed before calling this
@@ -272,7 +420,7 @@ pub const RenderChunk = struct {
             old_mesh.deinit();
         }
         self.mesh = mesh;
-        self.state = .ready;
+        self.future.setStatus(.ready);
     }
 
     /// Get world offset for rendering
