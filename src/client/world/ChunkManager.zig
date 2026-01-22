@@ -8,6 +8,7 @@ const volk = @import("volk");
 const vk = volk.c;
 
 const Logger = shared.Logger;
+const profiler = shared.profiler;
 const Vec3 = shared.Vec3;
 const Chunk = shared.Chunk;
 const ChunkPos = shared.ChunkPos;
@@ -72,15 +73,18 @@ pub const ChunkTask = struct {
 /// Configuration for chunk loading
 pub const ChunkConfig = struct {
     /// Horizontal view distance in chunks
-    view_distance: u8 = 4,
+    view_distance: u32 = 4,
     /// Vertical view distance in chunk sections
-    vertical_view_distance: u8 = 4,
+    vertical_view_distance: u32 = 4,
     /// Distance at which to unload chunks (hysteresis)
-    unload_distance: u8 = 6,
+    unload_distance: u32 = 6,
     /// Number of worker threads
     worker_count: u8 = 4,
     /// Maximum chunk uploads per frame
     max_uploads_per_tick: u8 = 4,
+    /// Maximum chunks to queue per update (C2ME-style rate limiting)
+    /// Prevents frame spikes when entering new areas by spreading chunk loading across frames
+    max_chunks_per_update: u16 = 32,
 };
 
 /// Per-worker data containing both manager reference and thread-local mesh context
@@ -145,6 +149,10 @@ pub const ChunkManager = struct {
 
     /// Reusable staging copies list
     staging_copies: std.ArrayListUnmanaged(StagingCopy) = .{},
+
+    /// C2ME-style consolidation: defer updateLoadQueue to once per frame
+    /// This prevents cascading slowdowns when multiple ticks run in one frame
+    load_queue_dirty: bool = false,
 
     /// Cached vertex buffer list for multi-arena rendering
     vertex_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
@@ -361,6 +369,9 @@ pub const ChunkManager = struct {
 
     /// Update player position and queue chunks for loading/unloading
     pub fn updatePlayerPosition(self: *Self, position: Vec3) void {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         const new_chunk = ChunkPos.fromWorldPos(position.x, position.y, position.z);
 
         // Only update if player moved to a new chunk
@@ -372,6 +383,17 @@ pub const ChunkManager = struct {
         // This ensures closest chunks are always processed first, even as player moves
         self.pool.updateCameraPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
 
+        // C2ME-style consolidation: Mark dirty instead of immediate update
+        // The actual updateLoadQueue will be called once per frame in flushLoadQueue()
+        // This prevents cascading slowdowns when multiple ticks run in one frame
+        self.load_queue_dirty = true;
+    }
+
+    /// C2ME-style: Flush consolidated load queue updates once per frame
+    /// Call this ONCE per frame, after all ticks have run, not per tick
+    pub fn flushLoadQueue(self: *Self) void {
+        if (!self.load_queue_dirty) return;
+        self.load_queue_dirty = false;
         self.updateLoadQueue();
     }
 
@@ -388,6 +410,15 @@ pub const ChunkManager = struct {
     /// Process completed meshes and update chunks
     /// Call this once per frame from the main thread (after beginFrame)
     pub fn tick(self: *Self) void {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
+        // Tracy plots for monitoring chunk system health
+        profiler.plotInt("LoadedChunks", @intCast(self.chunk_storage.count));
+        profiler.plotInt("PendingLoads", @intCast(self.pending_loads.count()));
+        profiler.plotInt("TaskQueueLen", @intCast(self.pool.pendingTasks()));
+        profiler.plotInt("CompletedQueue", @intCast(self.completed_queue.len()));
+
         const buf_mgr = self.buffer_manager orelse return;
 
         // Process completed meshes (limit per frame to avoid stalls)
@@ -617,6 +648,9 @@ pub const ChunkManager = struct {
     /// Get draw commands for all ready chunks
     /// Commands are sorted by render layer: solid (0), cutout (1), translucent (2)
     pub fn getDrawCommands(self: *Self) []const ChunkDrawCommand {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         self.draw_commands.clearRetainingCapacity();
 
         // Sanity checks - offsets should be aligned
@@ -799,35 +833,75 @@ pub const ChunkManager = struct {
     }
 
     /// Queue chunks for loading based on player position
+    /// C2ME-style rate limiting: Only queue up to max_chunks_per_update per call
+    /// This prevents frame spikes when entering new areas
     fn updateLoadQueue(self: *Self) void {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         const view_dist: i32 = @intCast(self.config.view_distance);
         const vert_dist: i32 = @intCast(self.config.vertical_view_distance);
+        const max_per_update: u32 = @intCast(self.config.max_chunks_per_update);
 
-        // Queue chunks within view distance
-        var dx: i32 = -view_dist;
-        while (dx <= view_dist) : (dx += 1) {
-            var dz: i32 = -view_dist;
-            while (dz <= view_dist) : (dz += 1) {
-                var dy: i32 = -vert_dist;
-                while (dy <= vert_dist) : (dy += 1) {
-                    const pos = ChunkPos{
-                        .x = self.player_chunk.x + dx,
-                        .z = self.player_chunk.z + dz,
-                        .section_y = self.player_chunk.section_y + dy,
-                    };
+        // Queue chunks within view distance (rate limited)
+        var chunks_queued: u32 = 0;
+        var chunks_skipped_loaded: u32 = 0;
+        var chunks_skipped_pending: u32 = 0;
+        var hit_limit = false;
+        {
+            const scan_zone = profiler.traceNamed("ScanForNewChunks");
+            defer scan_zone.end();
 
-                    // Skip if already loaded or pending
-                    if (self.chunk_storage.contains(pos)) continue;
-                    if (self.pending_loads.contains(pos)) continue;
+            var dx: i32 = -view_dist;
+            outer: while (dx <= view_dist) : (dx += 1) {
+                var dz: i32 = -view_dist;
+                while (dz <= view_dist) : (dz += 1) {
+                    var dy: i32 = -vert_dist;
+                    while (dy <= vert_dist) : (dy += 1) {
+                        const pos = ChunkPos{
+                            .x = self.player_chunk.x + dx,
+                            .z = self.player_chunk.z + dz,
+                            .section_y = self.player_chunk.section_y + dy,
+                        };
 
-                    // Check distance
-                    if (!pos.isWithinDistance(self.player_chunk, self.config.view_distance)) continue;
+                        // Skip if already loaded or pending
+                        if (self.chunk_storage.contains(pos)) {
+                            chunks_skipped_loaded += 1;
+                            continue;
+                        }
+                        if (self.pending_loads.contains(pos)) {
+                            chunks_skipped_pending += 1;
+                            continue;
+                        }
 
-                    // Queue for loading
-                    self.queueChunkLoad(pos);
+                        // Check distance
+                        if (!pos.isWithinDistance(self.player_chunk, self.config.view_distance)) continue;
+
+                        // Queue for loading
+                        self.queueChunkLoad(pos);
+                        chunks_queued += 1;
+
+                        // C2ME-style rate limiting: Stop early if we've queued enough chunks
+                        // Remaining chunks will be queued in subsequent frames
+                        if (chunks_queued >= max_per_update) {
+                            hit_limit = true;
+                            break :outer;
+                        }
+                    }
                 }
             }
         }
+
+        // If we hit the limit, mark dirty so we continue next frame
+        if (hit_limit) {
+            self.load_queue_dirty = true;
+        }
+
+        // Tracy plots for scan metrics
+        profiler.plotInt("ChunksQueued", @intCast(chunks_queued));
+        profiler.plotInt("ChunksSkippedLoaded", @intCast(chunks_skipped_loaded));
+        profiler.plotInt("ChunksSkippedPending", @intCast(chunks_skipped_pending));
+        zone.setValue(chunks_queued);
 
         // Unload distant chunks
         self.unloadDistantChunks();
@@ -835,6 +909,9 @@ pub const ChunkManager = struct {
 
     /// Queue a chunk position for loading
     fn queueChunkLoad(self: *Self, pos: ChunkPos) void {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         // Mark as pending
         self.pending_loads.put(pos, {}) catch return;
 
@@ -899,6 +976,9 @@ pub const ChunkManager = struct {
 
     /// Get neighbor chunk data for face culling
     fn getNeighborChunks(self: *Self, pos: ChunkPos) [6]?*const Chunk {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         var neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
 
         const offsets = [6]ChunkPos{
@@ -1084,25 +1164,42 @@ pub const ChunkManager = struct {
 
     /// Unload chunks beyond unload distance
     fn unloadDistantChunks(self: *Self) void {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         var to_unload: std.ArrayListUnmanaged(ChunkPos) = .{};
         defer to_unload.deinit(self.allocator);
 
-        var iter = self.chunk_storage.iterator();
-        while (iter.next()) |entry| {
-            const pos = entry.key_ptr.*;
-            if (!pos.isWithinDistance(self.player_chunk, self.config.unload_distance)) {
-                to_unload.append(self.allocator, pos) catch continue;
+        {
+            const scan_zone = profiler.traceNamed("ScanDistantChunks");
+            defer scan_zone.end();
+
+            var iter = self.chunk_storage.iterator();
+            while (iter.next()) |entry| {
+                const pos = entry.key_ptr.*;
+                if (!pos.isWithinDistance(self.player_chunk, self.config.unload_distance)) {
+                    to_unload.append(self.allocator, pos) catch continue;
+                }
             }
         }
 
-        for (to_unload.items) |pos| {
-            self.unloadChunk(pos);
+        {
+            const unload_zone = profiler.traceNamed("UnloadChunks");
+            defer unload_zone.end();
+            unload_zone.setValue(to_unload.items.len);
+
+            for (to_unload.items) |pos| {
+                self.unloadChunk(pos);
+            }
         }
     }
 
     /// Unload a single chunk
     /// Uses RCU to defer freeing until all workers have exited their critical sections
     fn unloadChunk(self: *Self, pos: ChunkPos) void {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         if (self.chunk_storage.remove(pos)) |render_chunk_ptr| {
 
             // Free buffer allocation immediately - workers don't access GPU buffers
@@ -1146,6 +1243,9 @@ pub const ChunkManager = struct {
 
     /// Worker task processing callback
     fn processTask(ctx: *WorkerContext, task: Task) void {
+        const zone = profiler.trace(@src());
+        defer zone.end();
+
         if (task.task_type != .generate_and_mesh) return;
 
         const task_data_ptr = task.data orelse return;
