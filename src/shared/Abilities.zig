@@ -9,7 +9,7 @@ pub const Abilities = struct {
     pub const DEFAULT_FLYING_SPEED: f32 = 0.05;
     pub const DEFAULT_WALKING_SPEED: f32 = 0.1;
     pub const MIN_FLYING_SPEED: f32 = 0.0;
-    pub const MAX_FLYING_SPEED: f32 = 0.2;
+    pub const MAX_FLYING_SPEED: f32 = 20.0; // TEMP: Increased for testing chunk loading at large distances
 
     // Ability flags
     invulnerable: bool = false,
