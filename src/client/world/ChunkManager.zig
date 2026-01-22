@@ -46,6 +46,9 @@ const chunk_mesher = @import("ChunkMesher.zig");
 const ChunkMesher = chunk_mesher.ChunkMesher;
 const WorkerMeshContext = chunk_mesher.WorkerMeshContext;
 
+const chunk_storage = @import("ChunkStorage.zig");
+const ChunkStorage = chunk_storage.ChunkStorage;
+
 /// Task type for chunk operations
 pub const ChunkTaskType = enum {
     /// Generate terrain + mesh (new chunk)
@@ -93,16 +96,14 @@ pub const ChunkManager = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
 
-    /// HashMap for loaded chunks
-    const ChunkMap = std.HashMap(ChunkPos, *RenderChunk, ChunkPosContext, std.hash_map.default_max_load_percentage);
     /// HashSet for pending positions
     const PosSet = std.HashMap(ChunkPos, void, ChunkPosContext, std.hash_map.default_max_load_percentage);
 
     allocator: std.mem.Allocator,
     io: Io,
 
-    /// Currently loaded chunks
-    loaded_chunks: ChunkMap,
+    /// Currently loaded chunks (ring buffer storage)
+    chunk_storage: ChunkStorage,
 
     /// Positions queued for loading (prevents duplicate tasks)
     pending_loads: PosSet,
@@ -170,10 +171,12 @@ pub const ChunkManager = struct {
     ) !Self {
         logger.info("Initializing ChunkManager with view distance {}", .{config.view_distance});
 
+        const storage = try ChunkStorage.init(allocator, config.unload_distance, config.vertical_view_distance);
+
         const self = Self{
             .allocator = allocator,
             .io = io,
-            .loaded_chunks = ChunkMap.init(allocator),
+            .chunk_storage = storage,
             .pending_loads = PosSet.init(allocator),
             .completed_queue = ThreadSafeQueue(CompletedMesh).init(allocator),
             .pool = try ThreadPool.init(allocator, config.worker_count, processTask),
@@ -311,7 +314,7 @@ pub const ChunkManager = struct {
         }
 
         // Free loaded chunks (and their buffer allocations)
-        var iter = self.loaded_chunks.iterator();
+        var iter = self.chunk_storage.iterator();
         while (iter.next()) |entry| {
             const chunk = entry.value_ptr.*;
             // Free buffer allocation if present
@@ -323,7 +326,7 @@ pub const ChunkManager = struct {
             chunk.deinit();
             self.allocator.destroy(chunk);
         }
-        self.loaded_chunks.deinit();
+        self.chunk_storage.deinit();
 
         // Free pending queues
         self.pending_loads.deinit();
@@ -419,7 +422,7 @@ pub const ChunkManager = struct {
             }
 
             // Find the corresponding render chunk
-            if (self.loaded_chunks.get(mesh.pos)) |render_chunk_ptr| {
+            if (self.chunk_storage.get(mesh.pos)) |render_chunk_ptr| {
                 // Copy generated chunk data if present (for generation tasks)
                 // This must happen before any collision/block access uses this chunk
                 if (mesh.generated_chunk) |gen_chunk| {
@@ -616,7 +619,7 @@ pub const ChunkManager = struct {
         const index_size: u64 = 4; // sizeof(u32)
 
         // Single pass: collect all draw commands from all chunks and all layers
-        var iter = self.loaded_chunks.iterator();
+        var iter = self.chunk_storage.iterator();
         while (iter.next()) |entry| {
             const chunk = entry.value_ptr.*;
 
@@ -778,7 +781,7 @@ pub const ChunkManager = struct {
     pub fn getVisibleChunks(self: *Self) []*RenderChunk {
         var result = std.ArrayList(*RenderChunk).init(self.allocator);
 
-        var iter = self.loaded_chunks.iterator();
+        var iter = self.chunk_storage.iterator();
         while (iter.next()) |entry| {
             const chunk = entry.value_ptr.*;
             if (chunk.isReady()) {
@@ -808,7 +811,7 @@ pub const ChunkManager = struct {
                     };
 
                     // Skip if already loaded or pending
-                    if (self.loaded_chunks.contains(pos)) continue;
+                    if (self.chunk_storage.contains(pos)) continue;
                     if (self.pending_loads.contains(pos)) continue;
 
                     // Check distance
@@ -832,18 +835,31 @@ pub const ChunkManager = struct {
         // Create render chunk placeholder
         const render_chunk_ptr = self.allocator.create(RenderChunk) catch return;
         render_chunk_ptr.* = RenderChunk.init(self.allocator, pos);
-        self.loaded_chunks.put(pos, render_chunk_ptr) catch {
+
+        // Put in storage - if there was an existing chunk at this slot (shouldn't happen),
+        // we need to clean it up
+        const previous = self.chunk_storage.put(pos, render_chunk_ptr) catch {
             self.allocator.destroy(render_chunk_ptr);
             _ = self.pending_loads.remove(pos);
             return;
         };
+        if (previous) |old_chunk| {
+            // This shouldn't happen if unloading works correctly, but handle it safely
+            if (self.buffer_manager) |buf_mgr| {
+                if (old_chunk.getBufferAllocation()) |alloc| {
+                    buf_mgr.free(alloc);
+                }
+            }
+            old_chunk.deinit();
+            self.allocator.destroy(old_chunk);
+        }
 
         // State stays as .loading - worker will generate terrain + mesh
 
         // Create task data - terrain will be generated by worker thread
         const task_data = self.allocator.create(ChunkTask) catch {
             // LEAK FIX: Clean up RenderChunk if task allocation fails
-            _ = self.loaded_chunks.remove(pos);
+            _ = self.chunk_storage.remove(pos);
             render_chunk_ptr.deinit();
             self.allocator.destroy(render_chunk_ptr);
             _ = self.pending_loads.remove(pos);
@@ -868,7 +884,7 @@ pub const ChunkManager = struct {
         }) catch {
             // LEAK FIX: Clean up everything if submission fails
             self.allocator.destroy(task_data);
-            _ = self.loaded_chunks.remove(pos);
+            _ = self.chunk_storage.remove(pos);
             render_chunk_ptr.deinit();
             self.allocator.destroy(render_chunk_ptr);
             _ = self.pending_loads.remove(pos);
@@ -896,7 +912,7 @@ pub const ChunkManager = struct {
                 .section_y = pos.section_y + offsets[i].section_y,
             };
 
-            if (self.loaded_chunks.get(neighbor_pos)) |neighbor| {
+            if (self.chunk_storage.get(neighbor_pos)) |neighbor| {
                 if (neighbor.state == .ready) {
                     neighbors[i] = &neighbor.chunk;
                 }
@@ -928,7 +944,7 @@ pub const ChunkManager = struct {
                 .section_y = pos.section_y + offsets[i].section_y,
             };
 
-            if (self.loaded_chunks.get(neighbor_pos)) |neighbor| {
+            if (self.chunk_storage.get(neighbor_pos)) |neighbor| {
                 // Only use neighbors that have valid block data (not still loading)
                 // .meshing, .ready, and .dirty all have valid chunk data
                 if (neighbor.state != .loading) {
@@ -964,7 +980,7 @@ pub const ChunkManager = struct {
     pub fn getBlockAt(self: *Self, world_x: i32, world_y: i32, world_z: i32) ?shared.BlockEntry {
         const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
 
-        const rchunk = self.loaded_chunks.get(chunk_pos) orelse return null;
+        const rchunk = self.chunk_storage.get(chunk_pos) orelse return null;
         if (rchunk.state != .ready) return null;
 
         // Convert to local coordinates (0-15)
@@ -981,7 +997,7 @@ pub const ChunkManager = struct {
     pub fn getBlockAtForCollision(self: *Self, world_x: i32, world_y: i32, world_z: i32) ?shared.BlockEntry {
         const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
 
-        const rchunk = self.loaded_chunks.get(chunk_pos) orelse return null;
+        const rchunk = self.chunk_storage.get(chunk_pos) orelse return null;
         // Skip chunks still being generated - their block data isn't ready yet
         // Chunks in meshing/ready/dirty states have valid block data
         if (rchunk.state == .loading) return null;
@@ -999,7 +1015,7 @@ pub const ChunkManager = struct {
     pub fn setBlockAt(self: *Self, world_x: i32, world_y: i32, world_z: i32, entry: shared.BlockEntry) bool {
         const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
 
-        const rchunk = self.loaded_chunks.get(chunk_pos) orelse return false;
+        const rchunk = self.chunk_storage.get(chunk_pos) orelse return false;
 
         // Convert to local coordinates (0-15)
         const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
@@ -1042,7 +1058,7 @@ pub const ChunkManager = struct {
     /// Helper to remesh a neighbor chunk if loaded
     fn remeshNeighborIfLoaded(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
         const neighbor_pos = ChunkPos{ .x = chunk_x, .z = chunk_z, .section_y = section_y };
-        if (self.loaded_chunks.get(neighbor_pos)) |neighbor_chunk| {
+        if (self.chunk_storage.get(neighbor_pos)) |neighbor_chunk| {
             if (neighbor_chunk.state == .ready) {
                 self.queueChunkRemesh(neighbor_pos, neighbor_chunk);
             }
@@ -1085,7 +1101,7 @@ pub const ChunkManager = struct {
         var to_unload: std.ArrayListUnmanaged(ChunkPos) = .{};
         defer to_unload.deinit(self.allocator);
 
-        var iter = self.loaded_chunks.iterator();
+        var iter = self.chunk_storage.iterator();
         while (iter.next()) |entry| {
             const pos = entry.key_ptr.*;
             if (!pos.isWithinDistance(self.player_chunk, self.config.unload_distance)) {
@@ -1101,8 +1117,7 @@ pub const ChunkManager = struct {
     /// Unload a single chunk
     /// Uses RCU to defer freeing until all workers have exited their critical sections
     fn unloadChunk(self: *Self, pos: ChunkPos) void {
-        if (self.loaded_chunks.fetchRemove(pos)) |kv| {
-            const render_chunk_ptr = kv.value;
+        if (self.chunk_storage.remove(pos)) |render_chunk_ptr| {
 
             // Free buffer allocation immediately - workers don't access GPU buffers
             if (self.buffer_manager) |buf_mgr| {
