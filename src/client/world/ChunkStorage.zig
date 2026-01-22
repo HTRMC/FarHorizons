@@ -32,9 +32,9 @@ pub const ChunkStorage = struct {
     allocator: std.mem.Allocator,
 
     /// Initialize the chunk storage with pre-allocated fixed-size array
-    pub fn init(allocator: std.mem.Allocator, unload_distance: u8, vertical_view_distance: u8) !Self {
-        const h_size: u32 = @as(u32, unload_distance) * 2 + 1;
-        const v_size: u32 = @as(u32, vertical_view_distance) * 2 + 1;
+    pub fn init(allocator: std.mem.Allocator, unload_distance: u32, vertical_view_distance: u32) !Self {
+        const h_size: u32 = unload_distance * 2 + 1;
+        const v_size: u32 = vertical_view_distance * 2 + 1;
         const cap = @as(usize, h_size) * h_size * v_size;
 
         const chunks = try allocator.alloc(?*RenderChunk, cap);
