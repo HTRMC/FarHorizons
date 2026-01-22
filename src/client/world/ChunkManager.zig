@@ -258,6 +258,10 @@ pub const ChunkManager = struct {
     /// Positions queued for loading (prevents duplicate tasks)
     pending_loads: PosSet,
 
+    /// Tracks all positions that are loaded or pending (C2ME pattern)
+    /// Used for O(1) skip check in updateLoadQueue
+    managed_positions: PosSet,
+
     /// Completed meshes ready for GPU upload
     completed_queue: ThreadSafeQueue(CompletedMesh),
 
@@ -344,6 +348,7 @@ pub const ChunkManager = struct {
             .io = io,
             .chunk_storage = storage,
             .pending_loads = PosSet.init(allocator),
+            .managed_positions = PosSet.init(allocator),
             .completed_queue = ThreadSafeQueue(CompletedMesh).init(allocator),
             .completed_terrain = ThreadSafeQueue(TerrainResult).init(allocator),
             .pending_mesh = PosSet.init(allocator),
@@ -503,6 +508,7 @@ pub const ChunkManager = struct {
 
         // Free pending queues
         self.pending_loads.deinit();
+        self.managed_positions.deinit();
         self.pending_mesh.deinit();
 
         // Free completed terrain that wasn't processed
@@ -1157,8 +1163,7 @@ pub const ChunkManager = struct {
 
         // Queue chunks using stateful spiral iterator (closest chunks first)
         var chunks_queued: u32 = 0;
-        var chunks_skipped_loaded: u32 = 0;
-        var chunks_skipped_pending: u32 = 0;
+        var chunks_skipped: u32 = 0;
         var positions_scanned: u32 = 0;
         {
             const scan_zone = profiler.traceNamed("ScanForNewChunks");
@@ -1175,18 +1180,20 @@ pub const ChunkManager = struct {
                     .section_y = self.player_chunk.section_y + offset.dy,
                 };
 
-                // Skip if already loaded or pending
-                if (self.chunk_storage.contains(pos)) {
-                    chunks_skipped_loaded += 1;
-                    continue;
-                }
-                if (self.pending_loads.contains(pos)) {
-                    chunks_skipped_pending += 1;
+                // C2ME-style O(1) skip check: single getOrPut replaces 2 contains() checks
+                // managed_positions tracks all positions we've either loaded or queued
+                const gop = self.managed_positions.getOrPut(pos) catch continue;
+                if (gop.found_existing) {
+                    chunks_skipped += 1;
                     continue;
                 }
 
                 // Check distance (spiral may generate positions outside circular view distance)
-                if (!pos.isWithinDistance(self.player_chunk, self.config.view_distance)) continue;
+                if (!pos.isWithinDistance(self.player_chunk, self.config.view_distance)) {
+                    // Position out of range - remove from managed_positions since we're not loading it
+                    _ = self.managed_positions.remove(pos);
+                    continue;
+                }
 
                 // Queue for loading
                 self.queueChunkLoad(pos);
@@ -1203,8 +1210,7 @@ pub const ChunkManager = struct {
 
         // Tracy plots for scan metrics
         profiler.plotInt("ChunksQueued", @intCast(chunks_queued));
-        profiler.plotInt("ChunksSkippedLoaded", @intCast(chunks_skipped_loaded));
-        profiler.plotInt("ChunksSkippedPending", @intCast(chunks_skipped_pending));
+        profiler.plotInt("ChunksSkipped", @intCast(chunks_skipped));
         profiler.plotInt("PositionsScanned", @intCast(positions_scanned));
         zone.setValue(chunks_queued);
 
@@ -1528,6 +1534,7 @@ pub const ChunkManager = struct {
             rcu_instance.retire(@ptrCast(deferred), DeferredChunkFree.free);
         }
         _ = self.pending_loads.remove(pos);
+        _ = self.managed_positions.remove(pos);
     }
 
     /// Worker task processing callback - C2ME-style two-phase system
