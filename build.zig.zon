@@ -25,7 +25,7 @@
         // Linux aarch64
         .@"farhorizons_deps_aarch64-linux-gnu" = .{
             .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_aarch64-linux-gnu.tar.gz",
-            .hash = "v0.0.22-linux-aarch64-placeholder",
+            .hash = "N-V-__8AAEIdEQJys7RIzSOgZvGI4gxm1JRYCcJbLyu_7RyP",
             .lazy = true,
         },
     },
