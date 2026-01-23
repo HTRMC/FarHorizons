@@ -19,7 +19,7 @@
         // Linux x86_64
         .@"farhorizons_deps_x86_64-linux-gnu" = .{
             .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_x86_64-linux-gnu.tar.gz",
-            .hash = "v0.0.22-linux-x86_64-placeholder",
+            .hash = "N-V-__8AAFDrSwLBQHcB2xmJINCsseZ_W_8gxaS68pEXSXA2",
             .lazy = true,
         },
         // Linux aarch64
