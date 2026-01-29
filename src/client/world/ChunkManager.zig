@@ -272,6 +272,9 @@ pub const ChunkManager = struct {
     /// Chunks needing GPU metadata upload (GPU-driven rendering)
     pending_metadata_uploads: std.ArrayListUnmanaged(*RenderChunk) = .{},
 
+    /// GPU slots needing to be zeroed (freed chunks - Voxy-style invalidation)
+    pending_slot_clears: std.ArrayListUnmanaged(u32) = .{},
+
     pub fn init(
         allocator: std.mem.Allocator,
         io: Io,
@@ -453,6 +456,7 @@ pub const ChunkManager = struct {
         self.vertex_buffer_cache.deinit(self.allocator);
         self.index_buffer_cache.deinit(self.allocator);
         self.pending_metadata_uploads.deinit(self.allocator);
+        self.pending_slot_clears.deinit(self.allocator);
 
         if (self.buffer_manager) |buf_mgr| {
             buf_mgr.deinit();
@@ -837,7 +841,18 @@ pub const ChunkManager = struct {
     }
 
     /// Commit pending GPU metadata uploads for GPU-driven rendering
+    /// Also clears metadata for freed slots (Voxy-style invalidation)
     pub fn commitMetadataUploads(self: *Self, cmd_buffer: vk.VkCommandBuffer) void {
+        // First, clear metadata for freed slots (upload zeroed data)
+        // This ensures compute shader skips these slots (all indexCount == 0)
+        for (self.pending_slot_clears.items) |slot| {
+            self.render_system.uploadChunkMetadata(slot, GPUDrivenTypes.ChunkGPUData.EMPTY, cmd_buffer) catch |err| {
+                logger.warn("Failed to clear chunk metadata slot {}: {}", .{ slot, err });
+            };
+        }
+        self.pending_slot_clears.clearRetainingCapacity();
+
+        // Then upload actual metadata for new/updated chunks
         for (self.pending_metadata_uploads.items) |chunk| {
             if (chunk.hasGPUSlot() and chunk.mesh != null) {
                 const gpu_data = chunk.buildGPUData();
@@ -970,20 +985,11 @@ pub const ChunkManager = struct {
         return self.index_buffer_cache.items;
     }
 
-    /// Returns count of chunks with valid GPU slots ready for GPU-driven rendering
+    /// Returns the high water mark of GPU slots for GPU-driven rendering
+    /// This is the maximum slot index ever allocated, ensuring compute shader
+    /// iterates over all slots (freed slots have zeroed metadata and are skipped)
     pub fn getActiveChunkCount(self: *const Self) u32 {
-        var count: u32 = 0;
-        var iter = self.chunk_storage.iterator();
-        while (iter.next()) |entry| {
-            const chunk = entry.value_ptr.*;
-            if (chunk.hasGPUSlot() and chunk.mesh != null) {
-                const state = chunk.getState();
-                if (state == .ready or state == .dirty) {
-                    count += 1;
-                }
-            }
-        }
-        return count;
+        return self.render_system.getChunkSlotHighWaterMark();
     }
 
     pub fn getStagingCopies(self: *Self) []const StagingCopy {
@@ -1310,8 +1316,10 @@ pub const ChunkManager = struct {
                 }
             }
 
-            // GPU-driven rendering: free the chunk's GPU slot
+            // GPU-driven rendering: queue slot for clearing, then free it
+            // This ensures the GPU metadata is zeroed so compute shader skips it (Voxy-style)
             if (render_chunk_ptr.hasGPUSlot()) {
+                self.pending_slot_clears.append(self.allocator, render_chunk_ptr.gpu_slot) catch {};
                 self.render_system.freeChunkSlot(render_chunk_ptr.gpu_slot);
                 render_chunk_ptr.gpu_slot = GPUDrivenTypes.SlotAllocator.INVALID_SLOT;
             }
