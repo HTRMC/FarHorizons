@@ -1,5 +1,3 @@
-// Player - extends LivingEntity with abilities and flying speed calculation
-
 const std = @import("std");
 const math = @import("Math.zig");
 const Vec3 = math.Vec3;
@@ -9,20 +7,16 @@ const Abilities = @import("Abilities.zig").Abilities;
 pub const Player = struct {
     const Self = @This();
 
-    // Y-axis dampening when flying (from Player.java:1322)
     pub const FLYING_Y_DAMPENING: f64 = 0.6;
 
-    // Base living entity
     living_entity: LivingEntity = LivingEntity.init(),
 
-    // Player abilities (flying speed, etc.)
     abilities: Abilities = Abilities.init(),
 
     pub fn init() Self {
         return .{};
     }
 
-    // Forward LivingEntity methods
     pub fn getDeltaMovement(self: *const Self) Vec3 {
         return self.living_entity.getDeltaMovement();
     }
@@ -108,13 +102,11 @@ pub const Player = struct {
     /// Applies Y-axis dampening of 0.6 when flying
     pub fn travel(self: *Self, input: Vec3) void {
         if (self.abilities.flying) {
-            // Save original Y velocity
             const original_y = self.getDeltaMovement().y;
 
-            // Call base travelFlying
             self.living_entity.travelFlying(input, self.getFlyingSpeed());
 
-            // Apply Y-axis dampening (multiply by 0.6)
+            // Apply Y-axis dampening
             const movement = self.getDeltaMovement();
             self.setDeltaMovement(Vec3{
                 .x = movement.x,
