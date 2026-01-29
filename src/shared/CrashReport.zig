@@ -210,6 +210,7 @@ pub const CrashReport = struct {
         var dummy = CrashReport.init(allocator, io, "Don't panic!", null);
         defer dummy.deinit();
 
+        // Warm up code paths - result intentionally discarded
         _ = dummy.getFriendlyReport() catch {};
 
         logger.info("Crash report system preloaded", .{});
@@ -270,7 +271,10 @@ pub const CrashReportCategory = struct {
 
     /// Add a detail to this category.
     pub fn setDetail(self: *Self, key: []const u8, value: []const u8) *Self {
-        self.entries.append(self.allocator, .{ .key = key, .value = value }) catch {};
+        self.entries.append(self.allocator, .{ .key = key, .value = value }) catch {
+            // During crash reporting, memory may be constrained - losing one entry is acceptable
+            std.debug.print("[WARN] CrashReport: Failed to add detail '{s}' - out of memory\n", .{key});
+        };
         return self;
     }
 
@@ -437,7 +441,9 @@ pub const SystemReport = struct {
         @memcpy(vendor_buf[8..12], @as(*const [4]u8, @ptrCast(&vendor_result.ecx)));
 
         const vendor_str = std.fmt.allocPrint(self.allocator, "{s}", .{vendor_buf[0..12]}) catch "Unknown";
-        self.allocated_values.append(self.allocator, vendor_str) catch {};
+        self.allocated_values.append(self.allocator, vendor_str) catch {
+            self.allocator.free(vendor_str);
+        };
         self.setDetail("Processor Vendor", vendor_str);
 
         // CPUID function 1: Get family, model, stepping
@@ -463,7 +469,9 @@ pub const SystemReport = struct {
             "{s} Family {d} Model {d} Stepping {d}",
             .{ vendor_buf[0..12], family, model, stepping },
         ) catch "Unknown";
-        self.allocated_values.append(self.allocator, identifier) catch {};
+        self.allocated_values.append(self.allocator, identifier) catch {
+            self.allocator.free(identifier);
+        };
         self.setDetail("Identifier", identifier);
 
         // CPUID function 0x80000002-0x80000004: Get processor brand string
@@ -500,7 +508,9 @@ pub const SystemReport = struct {
 
             if (end > start) {
                 const name = std.fmt.allocPrint(self.allocator, "{s}", .{brand_buf[start..end]}) catch "Unknown";
-                self.allocated_values.append(self.allocator, name) catch {};
+                self.allocated_values.append(self.allocator, name) catch {
+                    self.allocator.free(name);
+                };
                 self.setDetail("Processor Name", name);
             }
         }
@@ -716,10 +726,18 @@ pub const SystemReport = struct {
             const key_vram = std.fmt.allocPrint(self.allocator, "Graphics card #{d} VRAM (MiB)", .{gpu_index}) catch continue;
             const key_driver = std.fmt.allocPrint(self.allocator, "Graphics card #{d} versionInfo", .{gpu_index}) catch continue;
 
-            self.allocated_values.append(self.allocator, key_name) catch {};
-            self.allocated_values.append(self.allocator, key_vendor) catch {};
-            self.allocated_values.append(self.allocator, key_vram) catch {};
-            self.allocated_values.append(self.allocator, key_driver) catch {};
+            self.allocated_values.append(self.allocator, key_name) catch {
+                self.allocator.free(key_name);
+            };
+            self.allocated_values.append(self.allocator, key_vendor) catch {
+                self.allocator.free(key_vendor);
+            };
+            self.allocated_values.append(self.allocator, key_vram) catch {
+                self.allocator.free(key_vram);
+            };
+            self.allocated_values.append(self.allocator, key_driver) catch {
+                self.allocator.free(key_driver);
+            };
 
             self.setDetail(key_name, gpu_name);
 
@@ -728,7 +746,9 @@ pub const SystemReport = struct {
             var vendor_size: u32 = vendor_buf.len;
             if (RegQueryValueExA(hDevKey, "ProviderName", null, null, @ptrCast(&vendor_buf), &vendor_size) == 0 and vendor_size > 1) {
                 const vendor = std.fmt.allocPrint(self.allocator, "{s}", .{vendor_buf[0 .. vendor_size - 1]}) catch "Unknown";
-                self.allocated_values.append(self.allocator, vendor) catch {};
+                self.allocated_values.append(self.allocator, vendor) catch {
+                    self.allocator.free(vendor);
+                };
                 self.setDetail(key_vendor, vendor);
             } else {
                 self.setDetail(key_vendor, "Unknown");
@@ -739,7 +759,9 @@ pub const SystemReport = struct {
             var driver_size: u32 = driver_buf.len;
             if (RegQueryValueExA(hDevKey, "DriverVersion", null, null, @ptrCast(&driver_buf), &driver_size) == 0 and driver_size > 1) {
                 const driver = std.fmt.allocPrint(self.allocator, "{s}", .{driver_buf[0 .. driver_size - 1]}) catch "Unknown";
-                self.allocated_values.append(self.allocator, driver) catch {};
+                self.allocated_values.append(self.allocator, driver) catch {
+                    self.allocator.free(driver);
+                };
                 self.setDetail(key_driver, driver);
             }
 
@@ -1045,7 +1067,9 @@ pub const SystemReport = struct {
                 if (capacity_bytes) |bytes| {
                     const capacity_mib = @as(f64, @floatFromInt(bytes)) / (1024.0 * 1024.0);
                     const key = std.fmt.allocPrint(self.allocator, "Memory slot #{d} capacity (MiB)", .{slot_index}) catch continue;
-                    self.allocated_values.append(self.allocator, key) catch {};
+                    self.allocated_values.append(self.allocator, key) catch {
+                        self.allocator.free(key);
+                    };
                     self.setDetailFmt(key, "{d:.2}", .{capacity_mib});
                 }
             }
@@ -1059,7 +1083,9 @@ pub const SystemReport = struct {
                     const speed_ghz = @as(f64, @floatFromInt(speed_mhz)) / 1000.0;
 
                     const key = std.fmt.allocPrint(self.allocator, "Memory slot #{d} clockSpeed (GHz)", .{slot_index}) catch continue;
-                    self.allocated_values.append(self.allocator, key) catch {};
+                    self.allocated_values.append(self.allocator, key) catch {
+                        self.allocator.free(key);
+                    };
                     self.setDetailFmt(key, "{d:.2}", .{speed_ghz});
                 }
             }
@@ -1073,7 +1099,9 @@ pub const SystemReport = struct {
                     const type_name = getMemoryTypeName(mem_type);
 
                     const key = std.fmt.allocPrint(self.allocator, "Memory slot #{d} type", .{slot_index}) catch continue;
-                    self.allocated_values.append(self.allocator, key) catch {};
+                    self.allocated_values.append(self.allocator, key) catch {
+                        self.allocator.free(key);
+                    };
                     self.setDetail(key, type_name);
                 }
             }
@@ -1428,7 +1456,10 @@ pub const SystemReport = struct {
     }
 
     pub fn setDetail(self: *Self, key: []const u8, value: []const u8) void {
-        self.entries.append(self.allocator, .{ .key = key, .value = value }) catch {};
+        self.entries.append(self.allocator, .{ .key = key, .value = value }) catch {
+            // During crash reporting, memory may be constrained - losing one entry is acceptable
+            std.debug.print("[WARN] CrashReport: Failed to add system detail '{s}' - out of memory\n", .{key});
+        };
     }
 
     pub fn writeDetails(self: *Self, allocator: std.mem.Allocator, buffer: *std.ArrayListUnmanaged(u8)) !void {
