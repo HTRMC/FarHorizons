@@ -149,7 +149,6 @@ pub const DynamicPriorityQueue = struct {
             .bucket_counts = undefined,
         };
 
-        // Initialize all buckets as empty
         for (0..PRIORITY_BUCKETS) |i| {
             self.buckets[i] = .{};
             self.bucket_counts[i] = std.atomic.Value(u32).init(0);
@@ -206,7 +205,6 @@ pub const DynamicPriorityQueue = struct {
     /// Add a task to the queue (C2ME bucket-based approach)
     /// Priority is calculated at insertion time and task goes into appropriate bucket
     pub fn push(self: *Self, task: Task) !void {
-        // Shutdown tasks always go to highest priority bucket (0)
         const priority: u8 = if (task.task_type == .shutdown)
             0
         else
@@ -249,25 +247,18 @@ pub const DynamicPriorityQueue = struct {
         const zone = profiler.trace(@src());
         defer zone.end();
 
-        // Scan from highest priority (0) to lowest (MAX_PRIORITY)
         for (0..PRIORITY_BUCKETS) |priority| {
-            // Quick check: skip empty buckets without locking
             if (self.bucket_counts[priority].load(.acquire) == 0) {
                 continue;
             }
 
-            // Try to pop from this bucket
             if (self.buckets[priority].items.len > 0) {
-                // FIFO within bucket: pop from front for fairness
                 const task = self.buckets[priority].orderedRemove(0);
                 _ = self.bucket_counts[priority].fetchSub(1, .release);
 
-                // Handle remesh quota
                 if (task.chunk_task_kind == .remesh) {
                     self.remesh_count += 1;
-                    // If we hit remesh quota, consider resetting on next generate
                 } else {
-                    // Reset remesh counter when processing generate tasks
                     if (self.remesh_count >= MAX_REMESH_PER_CYCLE) {
                         self.remesh_count = 0;
                     }
@@ -280,9 +271,7 @@ pub const DynamicPriorityQueue = struct {
         return null;
     }
 
-    /// Check if queue is empty (unlocked version for internal use)
     fn isEmptyUnlocked(self: *Self) bool {
-        // Quick check: sum all bucket counts
         var total: u32 = 0;
         for (0..PRIORITY_BUCKETS) |i| {
             total += self.bucket_counts[i].load(.acquire);
@@ -348,7 +337,6 @@ pub const ThreadPool = struct {
         callback: TaskCallback,
     ) !Self {
         const worker_count = if (num_workers == 0) blk: {
-            // Default to number of CPU cores minus 1 (leave one for main thread)
             const cpu_count = std.Thread.getCpuCount() catch 4;
             break :blk @max(1, cpu_count - 1);
         } else num_workers;
@@ -369,7 +357,6 @@ pub const ThreadPool = struct {
     /// Start all worker threads
     /// Must be called after the ThreadPool is at its final memory location
     pub fn start(self: *Self) !void {
-        // Initialize contexts now that self is at its final location
         for (self.contexts, 0..) |*ctx, i| {
             ctx.* = WorkerContext{
                 .id = i,
@@ -377,7 +364,6 @@ pub const ThreadPool = struct {
             };
         }
 
-        // Start worker threads
         for (self.workers, 0..) |*worker, i| {
             worker.* = try std.Thread.spawn(.{}, workerLoop, .{&self.contexts[i]});
         }
@@ -406,18 +392,14 @@ pub const ThreadPool = struct {
     pub fn shutdown(self: *Self) void {
         logger.info("Shutting down thread pool...", .{});
 
-        // Signal shutdown
         self.running.store(false, .release);
 
-        // Push shutdown tasks for each worker
         for (0..self.workers.len) |_| {
             self.task_queue.push(Task{ .task_type = .shutdown }) catch {};
         }
 
-        // Wake all threads
         self.task_queue.broadcast();
 
-        // Wait for all workers
         for (self.workers) |worker| {
             worker.join();
         }
@@ -466,18 +448,15 @@ pub const ThreadPool = struct {
         logger.debug("Worker {} started", .{ctx.id});
 
         while (pool.running.load(.acquire)) {
-            // Wait for a task
             const task = pool.task_queue.pop() orelse continue;
 
             if (task.task_type == .shutdown) {
                 break;
             }
 
-            // Track active workers
             _ = pool.active_count.fetchAdd(1, .acq_rel);
             defer _ = pool.active_count.fetchSub(1, .acq_rel);
 
-            // Process the task
             pool.callback(ctx, task);
         }
 
