@@ -21,7 +21,6 @@ pub const ShaderCompiler = struct {
     default_options: ?shaderc.CompileOptions,
     cache: ShaderCache,
 
-    // Stats for profiling
     cache_hits: u32 = 0,
     cache_misses: u32 = 0,
 
@@ -35,7 +34,6 @@ pub const ShaderCompiler = struct {
         var cache = try ShaderCache.init(allocator, io, null);
         errdefer cache.deinit();
 
-        // Set up default compilation options
         var options = try shaderc.CompileOptions.init();
         options.setTargetEnv(.vulkan, 0); // Vulkan 1.0
         options.setOptimizationLevel(.performance);
@@ -75,18 +73,15 @@ pub const ShaderCompiler = struct {
         kind: ShaderKind,
         filename: []const u8,
     ) !CompiledShader {
-        // Preprocess to resolve #fh_import directives
         const processed_source = try self.preprocessor.process(source);
         defer self.allocator.free(processed_source);
 
-        // Hash the preprocessed source + shader kind for cache lookup
         // Include kind in hash so vertex/fragment shaders with same source are cached separately
         var hasher = std.hash.Wyhash.init(0);
         hasher.update(processed_source);
         hasher.update(&[_]u8{@intFromEnum(kind)});
         const source_hash = hasher.final();
 
-        // Check cache first
         if (self.cache.load(source_hash)) |cached_spv| {
             self.cache_hits += 1;
             logger.info("Cache hit for '{s}' ({d} bytes SPIR-V)", .{ filename, cached_spv.len });
@@ -99,11 +94,9 @@ pub const ShaderCompiler = struct {
 
         self.cache_misses += 1;
 
-        // Convert filename to null-terminated string
         const filename_z = try self.allocator.dupeZ(u8, filename);
         defer self.allocator.free(filename_z);
 
-        // Compile to SPIR-V
         var result = try self.compiler.compile(
             processed_source,
             kind.toShaderc(),
@@ -113,11 +106,9 @@ pub const ShaderCompiler = struct {
         );
         errdefer result.release();
 
-        // Copy SPIR-V data to owned memory
         const spv_data = result.getBytes();
         const owned_spv = try self.allocator.dupe(u8, spv_data);
 
-        // Log any warnings
         if (result.getNumWarnings() > 0) {
             if (result.getErrorMessage()) |msg| {
                 logger.warn("Shader '{s}' compilation warnings:\n{s}", .{ filename, msg });
@@ -128,7 +119,6 @@ pub const ShaderCompiler = struct {
 
         result.release();
 
-        // Store in cache for next time
         self.cache.store(source_hash, owned_spv) catch |err| {
             logger.warn("Failed to cache shader '{s}': {}", .{ filename, err });
         };
