@@ -38,7 +38,6 @@ pub const BlockOutlineRenderer = struct {
     ) usize {
         self.vertex_count = 0;
 
-        // Context for edge consumer callback
         var ctx = EdgeContext{
             .renderer = self,
             .block_x = @floatFromInt(block_pos.x),
@@ -46,7 +45,6 @@ pub const BlockOutlineRenderer = struct {
             .block_z = @floatFromInt(block_pos.z),
         };
 
-        // Iterate over all edges in the shape
         shape.forAllEdges(&addEdge, @ptrCast(&ctx));
 
         return self.vertex_count;
@@ -105,7 +103,6 @@ pub const BlockOutlineRenderer = struct {
         const fy2: f32 = @floatCast(y2);
         const fz2: f32 = @floatCast(z2);
 
-        // First vertex
         self.line_vertices[self.vertex_count] = .{
             .pos = .{
                 ctx.block_x + fx1,
@@ -116,7 +113,6 @@ pub const BlockOutlineRenderer = struct {
         };
         self.vertex_count += 1;
 
-        // Second vertex
         self.line_vertices[self.vertex_count] = .{
             .pos = .{
                 ctx.block_x + fx2,
