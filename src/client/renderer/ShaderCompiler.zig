@@ -132,13 +132,11 @@ pub const ShaderCompiler = struct {
 
     /// Compile a shader from a file path
     pub fn compileFile(self: *ShaderCompiler, path: []const u8) !CompiledShader {
-        // Determine shader kind from extension
         const kind = ShaderKind.fromExtension(path) orelse {
             logger.err("Unknown shader extension for file: {s}", .{path});
             return error.UnknownShaderType;
         };
 
-        // Read source file
         const file = Dir.cwd().openFile(self.io, path, .{}) catch |err| {
             logger.err("Failed to open shader file '{s}': {}", .{ path, err });
             return err;
