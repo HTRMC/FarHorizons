@@ -308,7 +308,7 @@ pub const FarHorizonsClient = struct {
                         self.local_player.getAbilities().adjustFlyingSpeed(@floatCast(scroll));
                     } else {
                         // Scroll wheel changes hotbar selection
-                        self.hotbar.scrollSlot(if (scroll > 0) -1 else 1);
+                        self.hotbar.scrollSlot(if (scroll > 0) 1 else -1);
                         self.render_system.setHotbarSelection(self.hotbar.getSelectedSlot());
                     }
                 }
