@@ -604,7 +604,12 @@ pub const ChunkManager = struct {
                 // Transition to 'generated' state - terrain ready, waiting for mesh
                 render_chunk_ptr.setState(.generated);
                 // Add to pending_mesh for dependency checking
-                self.pending_mesh.put(result.pos, {}) catch {};
+                self.pending_mesh.put(result.pos, {}) catch |err| {
+                    logger.warn("Failed to queue chunk ({},{},{}) for mesh: {}", .{
+                        result.pos.x, result.pos.z, result.pos.section_y, err,
+                    });
+                    continue;
+                };
                 processed += 1;
             }
             // Remove from pending_loads since terrain phase is done
@@ -708,11 +713,15 @@ pub const ChunkManager = struct {
             .data = @ptrCast(task_data),
             .chunk_pos = pos,
             .chunk_task_kind = .generate,
-        }) catch {
+        }) catch |submit_err| {
             self.allocator.destroy(task_data);
             // Revert state on failure
             render_chunk_ptr.setState(.generated);
-            self.pending_mesh.put(pos, {}) catch {};
+            self.pending_mesh.put(pos, {}) catch |requeue_err| {
+                logger.err("Double failure requeueing chunk ({},{},{}) after submit fail: submit={}, requeue={}", .{
+                    pos.x, pos.z, pos.section_y, submit_err, requeue_err,
+                });
+            };
         };
     }
 
