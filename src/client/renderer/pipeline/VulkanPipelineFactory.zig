@@ -23,6 +23,8 @@ pub const VulkanPipelineFactory = struct {
         ui_2d,
         /// Line vertex (pos, color)
         line_3d,
+        /// Icon vertex for hotbar block icons (pos[3], uv[2], tex_index)
+        icon_3d,
     };
 
     /// Parameters for creating a pipeline
@@ -300,6 +302,21 @@ pub const VulkanPipelineFactory = struct {
                     undefined,
                 };
                 result.attribute_count = 2;
+            },
+            .icon_3d => {
+                // IconVertex: pos[3], uv[2], tex_index
+                result.binding = .{
+                    .binding = 0,
+                    .stride = @sizeOf(f32) * 5 + @sizeOf(u32),
+                    .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
+                };
+                result.attributes = .{
+                    .{ .binding = 0, .location = 0, .format = vk.VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
+                    .{ .binding = 0, .location = 1, .format = vk.VK_FORMAT_R32G32_SFLOAT, .offset = @sizeOf(f32) * 3 },
+                    .{ .binding = 0, .location = 2, .format = vk.VK_FORMAT_R32_UINT, .offset = @sizeOf(f32) * 5 },
+                    undefined,
+                };
+                result.attribute_count = 3;
             },
         }
 

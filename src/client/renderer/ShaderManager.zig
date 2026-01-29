@@ -36,6 +36,9 @@ pub const ShaderManager = struct {
     /// Cached entity shaders
     entity_vert_spv: ?[]u8,
     entity_frag_spv: ?[]u8,
+    /// Cached hotbar icon shaders
+    hotbar_icon_vert_spv: ?[]u8,
+    hotbar_icon_frag_spv: ?[]u8,
 
     /// Base path for default shaders
     const default_shader_path = "assets/farhorizons/shaders/";
@@ -61,6 +64,8 @@ pub const ShaderManager = struct {
         var line_frag: ?[]u8 = null;
         var entity_vert: ?[]u8 = null;
         var entity_frag: ?[]u8 = null;
+        var hotbar_icon_vert: ?[]u8 = null;
+        var hotbar_icon_frag: ?[]u8 = null;
 
         if (enable_runtime_compilation) {
             var total_timer = std.time.Timer.start() catch unreachable;
@@ -139,6 +144,17 @@ pub const ShaderManager = struct {
             entity_frag_compiled.deinit();
             logger.info("Entity shaders compiled", .{});
 
+            // Compile hotbar icon shaders
+            logger.info("Compiling hotbar icon shaders...", .{});
+            var hotbar_icon_vert_compiled = try compiler.?.compileFile(default_shader_path ++ "hotbar_icon.vert");
+            hotbar_icon_vert = try allocator.dupe(u8, hotbar_icon_vert_compiled.spv_data);
+            hotbar_icon_vert_compiled.deinit();
+
+            var hotbar_icon_frag_compiled = try compiler.?.compileFile(default_shader_path ++ "hotbar_icon.frag");
+            hotbar_icon_frag = try allocator.dupe(u8, hotbar_icon_frag_compiled.spv_data);
+            hotbar_icon_frag_compiled.deinit();
+            logger.info("Hotbar icon shaders compiled", .{});
+
             const total_time_ms = @as(f64, @floatFromInt(total_timer.read())) / @as(f64, std.time.ns_per_ms);
             const cache_stats = compiler.?.getCacheStats();
             logger.info("Shader loading complete in {d:.2}ms (cache: {d} hits, {d} misses)", .{
@@ -165,6 +181,8 @@ pub const ShaderManager = struct {
             .line_frag_spv = line_frag,
             .entity_vert_spv = entity_vert,
             .entity_frag_spv = entity_frag,
+            .hotbar_icon_vert_spv = hotbar_icon_vert,
+            .hotbar_icon_frag_spv = hotbar_icon_frag,
         };
     }
 
@@ -213,6 +231,12 @@ pub const ShaderManager = struct {
             self.allocator.free(spv);
         }
         if (self.entity_frag_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.hotbar_icon_vert_spv) |spv| {
+            self.allocator.free(spv);
+        }
+        if (self.hotbar_icon_frag_spv) |spv| {
             self.allocator.free(spv);
         }
 
@@ -272,6 +296,14 @@ pub const ShaderManager = struct {
 
     pub fn getEntityFragSpv(self: *const ShaderManager) ?[]const u8 {
         return self.entity_frag_spv;
+    }
+
+    pub fn getHotbarIconVertSpv(self: *const ShaderManager) ?[]const u8 {
+        return self.hotbar_icon_vert_spv;
+    }
+
+    pub fn getHotbarIconFragSpv(self: *const ShaderManager) ?[]const u8 {
+        return self.hotbar_icon_frag_spv;
     }
 
     /// Load a shader pack from a directory

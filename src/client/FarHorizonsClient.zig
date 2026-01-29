@@ -125,7 +125,7 @@ pub const FarHorizonsClient = struct {
             .entity_texture_manager = null,
             .cow_id = null,
             .baby_cow_id = null,
-            .hotbar = Hotbar.init(),
+            .hotbar = Hotbar.initWithDefaults(),
         };
     }
 
@@ -170,6 +170,9 @@ pub const FarHorizonsClient = struct {
             self.texture_manager.?.getImageView(),
             self.texture_manager.?.getSampler(),
         );
+
+        // Initialize hotbar icons with block textures
+        try self.updateHotbarIcons();
 
         if (self.use_async_chunks) {
             self.chunk_manager = try ChunkManager.init(
@@ -527,6 +530,73 @@ pub const FarHorizonsClient = struct {
         }
 
         logger.info("Main loop ended, shutting down", .{});
+    }
+
+    /// Update hotbar icons with block textures
+    fn updateHotbarIcons(self: *Self) !void {
+        const tm = &(self.texture_manager orelse return error.TextureManagerNotInitialized);
+
+        var texture_indices: [9]?[6]u32 = .{null} ** 9;
+
+        for (0..9) |slot_idx| {
+            const block_entry = self.hotbar.getSlot(@intCast(slot_idx));
+            if (block_entry == null) continue;
+
+            const entry = block_entry.?;
+            if (entry.isAir()) continue;
+
+            // Get texture indices for each face based on block ID
+            // Face order: top(0), bottom(1), left/west(2), right/east(3), front/north(4), back/south(5)
+            const block = entry.getBlock();
+            const block_name = block.name;
+
+            // Get base texture (for simple blocks, all faces use the same texture)
+            const base_idx = tm.getTextureIndex(block_name);
+
+            // Special handling for blocks with different face textures
+            if (std.mem.eql(u8, block_name, "grass_block")) {
+                texture_indices[slot_idx] = .{
+                    tm.getTextureIndex("grass_block_top"),
+                    tm.getTextureIndex("dirt"),
+                    tm.getTextureIndex("grass_block_side"),
+                    tm.getTextureIndex("grass_block_side"),
+                    tm.getTextureIndex("grass_block_side"),
+                    tm.getTextureIndex("grass_block_side"),
+                };
+            } else if (std.mem.eql(u8, block_name, "oak_log") or std.mem.eql(u8, block_name, "birch_log") or
+                std.mem.eql(u8, block_name, "spruce_log") or std.mem.eql(u8, block_name, "jungle_log"))
+            {
+                // Log blocks have top/bottom bark texture, sides have log texture
+                const log_top_name = std.fmt.allocPrint(self.allocator, "{s}_top", .{block_name}) catch {
+                    texture_indices[slot_idx] = .{ base_idx, base_idx, base_idx, base_idx, base_idx, base_idx };
+                    continue;
+                };
+                defer self.allocator.free(log_top_name);
+                const top_idx = tm.getTextureIndex(log_top_name);
+                texture_indices[slot_idx] = .{
+                    top_idx,
+                    top_idx,
+                    base_idx,
+                    base_idx,
+                    base_idx,
+                    base_idx,
+                };
+            } else if (std.mem.eql(u8, block_name, "crafting_table")) {
+                texture_indices[slot_idx] = .{
+                    tm.getTextureIndex("crafting_table_top"),
+                    tm.getTextureIndex("oak_planks"),
+                    tm.getTextureIndex("crafting_table_side"),
+                    tm.getTextureIndex("crafting_table_front"),
+                    tm.getTextureIndex("crafting_table_front"),
+                    tm.getTextureIndex("crafting_table_side"),
+                };
+            } else {
+                // Simple blocks - same texture on all faces
+                texture_indices[slot_idx] = .{ base_idx, base_idx, base_idx, base_idx, base_idx, base_idx };
+            }
+        }
+
+        try self.render_system.updateHotbarIcons(texture_indices);
     }
 
     fn testModelLoading(self: *Self) !void {

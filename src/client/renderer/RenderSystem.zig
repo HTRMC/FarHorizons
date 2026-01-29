@@ -74,6 +74,44 @@ pub const Vertex = extern struct {
     }
 };
 
+/// Vertex format for hotbar block icons (isometric 3D preview)
+pub const IconVertex = extern struct {
+    pos: [3]f32,      // NDC position (pre-transformed)
+    uv: [2]f32,       // Texture coordinates
+    tex_index: u32,   // Texture array layer
+
+    pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
+        return .{
+            .binding = 0,
+            .stride = @sizeOf(IconVertex),
+            .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [3]vk.VkVertexInputAttributeDescription {
+        return .{
+            .{
+                .binding = 0,
+                .location = 0,
+                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = @offsetOf(IconVertex, "pos"),
+            },
+            .{
+                .binding = 0,
+                .location = 1,
+                .format = vk.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(IconVertex, "uv"),
+            },
+            .{
+                .binding = 0,
+                .location = 2,
+                .format = vk.VK_FORMAT_R32_UINT,
+                .offset = @offsetOf(IconVertex, "tex_index"),
+            },
+        };
+    }
+};
+
 pub const RenderSystem = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
@@ -139,6 +177,14 @@ pub const RenderSystem = struct {
     hotbar_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
     hotbar_selection_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
     hotbar_selected_slot: u8 = 0,
+
+    // Hotbar block icon rendering
+    hotbar_icon_pipeline: vk.VkPipeline = null,
+    hotbar_icon_pipeline_layout: vk.VkPipelineLayout = null,
+    hotbar_icon_buffer: ManagedBuffer = .{},
+    hotbar_icon_vertex_count: u32 = 0,
+    hotbar_icon_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
+    hotbar_icon_texture_indices: [9]?[6]u32 = .{null} ** 9, // Stored for recreation on resize
 
     line_pipeline_layout: vk.VkPipelineLayout = null,
     line_pipeline: vk.VkPipeline = null,
@@ -261,6 +307,7 @@ pub const RenderSystem = struct {
         try self.createUIDescriptorSetLayout();
         try self.createUIPipeline();
         try self.createLinePipeline();
+        try self.createHotbarIconPipeline();
         // Entity pipeline created separately via initEntityPipeline() after bindless resources are set
         try self.createFramebuffers();
         try self.createCommandPool();
@@ -279,6 +326,7 @@ pub const RenderSystem = struct {
         try self.createUIDescriptorPool();
         try self.createUIDescriptorSets();
         try self.createHotbarDescriptorSets();
+        try self.createHotbarIconDescriptorSets();
         try self.createCrosshairBuffer();
         try self.createHotbarBuffer();
         try self.createHotbarSelectionBuffer();
@@ -400,6 +448,17 @@ pub const RenderSystem = struct {
         // Now we can create descriptor pool and sets
         try self.createDescriptorPool();
         try self.createDescriptorSets();
+
+        // Update hotbar icon descriptor sets to point to block texture array
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            DescriptorSetManager.updateSampler(
+                self.device,
+                self.hotbar_icon_descriptor_sets[i],
+                0,
+                image_view,
+                sampler,
+            );
+        }
 
         logger.info("Texture resources set and descriptors created", .{});
     }
@@ -962,6 +1021,206 @@ pub const RenderSystem = struct {
             vkCmdBindVertexBuffers(command_buffer, 0, 1, &selection_buffers, &offsets);
             vkCmdDraw(command_buffer, 6, 1, 0, 0);
         }
+
+        // Draw block icons on top of hotbar
+        try self.drawHotbarIcons(command_buffer);
+    }
+
+    fn drawHotbarIcons(self: *Self, command_buffer: vk.VkCommandBuffer) !void {
+        if (self.hotbar_icon_pipeline == null or !self.hotbar_icon_buffer.isValid() or self.hotbar_icon_vertex_count == 0) return;
+
+        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+
+        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.hotbar_icon_pipeline);
+
+        const icon_sets = [_]vk.VkDescriptorSet{self.hotbar_icon_descriptor_sets[self.current_frame]};
+        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.hotbar_icon_pipeline_layout, 0, 1, &icon_sets, 0, null);
+
+        const icon_buffers = [_]vk.VkBuffer{self.hotbar_icon_buffer.handle};
+        const offsets = [_]vk.VkDeviceSize{0};
+        vkCmdBindVertexBuffers(command_buffer, 0, 1, &icon_buffers, &offsets);
+
+        vkCmdDraw(command_buffer, self.hotbar_icon_vertex_count, 1, 0, 0);
+    }
+
+    /// Update hotbar icons with isometric 3D block previews
+    /// texture_indices should contain texture array indices for each slot (null for empty slots)
+    pub fn updateHotbarIcons(self: *Self, texture_indices: [9]?[6]u32) !void {
+        // Store texture indices for recreation on resize
+        self.hotbar_icon_texture_indices = texture_indices;
+        try self.rebuildHotbarIconBuffer();
+    }
+
+    /// Rebuild the hotbar icon vertex buffer (called on init and resize)
+    fn rebuildHotbarIconBuffer(self: *Self) !void {
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+
+        const screen_height: f32 = @floatFromInt(self.swapchain_extent.height);
+        const screen_width: f32 = @floatFromInt(self.swapchain_extent.width);
+        const aspect_ratio: f32 = screen_width / screen_height;
+
+        // GUI scale calculation (same as hotbar)
+        const gui_scale: f32 = if (screen_height < 480) 1.0 else if (screen_height < 720) 2.0 else if (screen_height < 1080) 2.0 else 3.0;
+
+        // Hotbar dimensions from Minecraft spec: 182x22 pixels
+        const hotbar_width_pixels: f32 = 182.0 * gui_scale;
+        const hotbar_height_pixels: f32 = 22.0 * gui_scale;
+
+        // Slot spacing: hotbar has 9 slots, each ~20 pixels wide
+        const slot_spacing_pixels: f32 = 20.0 * gui_scale;
+        const first_slot_offset_pixels: f32 = 3.0 * gui_scale; // Offset from left edge
+
+        // Icon size in pixels (slightly smaller than slot)
+        const icon_size_pixels: f32 = 14.0 * gui_scale;
+
+        // Hotbar position (bottom center) in NDC
+        const hotbar_left_ndc: f32 = -hotbar_width_pixels / screen_width;
+        const hotbar_bottom_ndc: f32 = 1.0; // Bottom of screen in Vulkan NDC
+        const hotbar_top_ndc: f32 = hotbar_bottom_ndc - (hotbar_height_pixels / screen_height * 2.0);
+
+        // Isometric projection: use a single pixel-based scale, then convert to NDC
+        // This keeps the cube square regardless of aspect ratio
+        const iso_scale: f32 = 0.5; // Scale down the cube to fit nicely in slot
+
+        // Isometric angles (true isometric uses arctan(1/sqrt(2)) ≈ 35.264°)
+        // For simplicity, using 30° gives a nice look
+        const cos30: f32 = 0.866;
+        const sin30: f32 = 0.5;
+
+        // Collect vertices for all non-empty slots
+        var vertices: [9 * 18]IconVertex = undefined; // Max 9 slots * 18 vertices per cube
+        var vertex_count: u32 = 0;
+
+        for (0..9) |slot_idx| {
+            const tex_opt = self.hotbar_icon_texture_indices[slot_idx];
+            if (tex_opt == null) continue;
+            const tex = tex_opt.?;
+
+            // Calculate slot center position in pixels, then convert to NDC
+            const slot_x_pixels = first_slot_offset_pixels + @as(f32, @floatFromInt(slot_idx)) * slot_spacing_pixels + slot_spacing_pixels / 2.0;
+            const slot_center_x: f32 = hotbar_left_ndc + (slot_x_pixels / screen_width * 2.0);
+            const slot_center_y: f32 = (hotbar_top_ndc + hotbar_bottom_ndc) / 2.0;
+
+            // Cube half-size in pixels, then we'll convert each vertex to NDC
+            const cube_half_size: f32 = icon_size_pixels * iso_scale;
+
+            // Helper to convert pixel offset to NDC offset (accounting for aspect ratio)
+            const px_to_ndc_x = 2.0 / screen_width;
+            const px_to_ndc_y = 2.0 / screen_height;
+
+            // Isometric cube vertices in pixel offsets from center
+            // Top of cube (highest point)
+            const top_px_y: f32 = -cube_half_size;
+            // Middle row (top face corners and cube center visible point)
+            const mid_left_px_x: f32 = -cube_half_size * cos30;
+            const mid_left_px_y: f32 = -cube_half_size * sin30 * 0.5;
+            const mid_right_px_x: f32 = cube_half_size * cos30;
+            const mid_right_px_y: f32 = -cube_half_size * sin30 * 0.5;
+            // Bottom row (side face bottoms)
+            const bot_left_px_x: f32 = -cube_half_size * cos30;
+            const bot_left_px_y: f32 = cube_half_size * sin30 * 0.5;
+            const bot_right_px_x: f32 = cube_half_size * cos30;
+            const bot_right_px_y: f32 = cube_half_size * sin30 * 0.5;
+            // Bottom center (lowest point)
+            const bot_px_y: f32 = cube_half_size;
+
+            // Convert to NDC positions
+            const top_x: f32 = slot_center_x;
+            const top_y: f32 = slot_center_y + top_px_y * px_to_ndc_y;
+            const mid_left_x: f32 = slot_center_x + mid_left_px_x * px_to_ndc_x;
+            const mid_left_y: f32 = slot_center_y + mid_left_px_y * px_to_ndc_y;
+            const mid_right_x: f32 = slot_center_x + mid_right_px_x * px_to_ndc_x;
+            const mid_right_y: f32 = slot_center_y + mid_right_px_y * px_to_ndc_y;
+            const center_x: f32 = slot_center_x;
+            const center_y: f32 = slot_center_y;
+            const bot_left_x: f32 = slot_center_x + bot_left_px_x * px_to_ndc_x;
+            const bot_left_y: f32 = slot_center_y + bot_left_px_y * px_to_ndc_y;
+            const bot_right_x: f32 = slot_center_x + bot_right_px_x * px_to_ndc_x;
+            const bot_right_y: f32 = slot_center_y + bot_right_px_y * px_to_ndc_y;
+            const bot_x: f32 = slot_center_x;
+            const bot_y: f32 = slot_center_y + bot_px_y * px_to_ndc_y;
+
+            // Top face (texture index 0 = top) - diamond shape
+            const top_tex: u32 = tex[0];
+            // Triangle 1: top -> mid_left -> center
+            vertices[vertex_count] = .{ .pos = .{ top_x, top_y, 0.0 }, .uv = .{ 0.5, 0.0 }, .tex_index = top_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ mid_left_x, mid_left_y, 0.0 }, .uv = .{ 0.0, 0.5 }, .tex_index = top_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 0.5, 1.0 }, .tex_index = top_tex };
+            vertex_count += 1;
+            // Triangle 2: top -> center -> mid_right
+            vertices[vertex_count] = .{ .pos = .{ top_x, top_y, 0.0 }, .uv = .{ 0.5, 0.0 }, .tex_index = top_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 0.5, 1.0 }, .tex_index = top_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ mid_right_x, mid_right_y, 0.0 }, .uv = .{ 1.0, 0.5 }, .tex_index = top_tex };
+            vertex_count += 1;
+
+            // Left face (texture index 2 = side) - parallelogram
+            const left_tex: u32 = tex[2];
+            // Triangle 1: mid_left -> bot_left -> center
+            vertices[vertex_count] = .{ .pos = .{ mid_left_x, mid_left_y, 0.0 }, .uv = .{ 0.0, 0.0 }, .tex_index = left_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ bot_left_x, bot_left_y, 0.0 }, .uv = .{ 0.0, 1.0 }, .tex_index = left_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 1.0, 0.0 }, .tex_index = left_tex };
+            vertex_count += 1;
+            // Triangle 2: bot_left -> bot -> center
+            vertices[vertex_count] = .{ .pos = .{ bot_left_x, bot_left_y, 0.0 }, .uv = .{ 0.0, 1.0 }, .tex_index = left_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ bot_x, bot_y, 0.0 }, .uv = .{ 1.0, 1.0 }, .tex_index = left_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 1.0, 0.0 }, .tex_index = left_tex };
+            vertex_count += 1;
+
+            // Right face (texture index 3 = side) - parallelogram
+            const right_tex: u32 = tex[3];
+            // Triangle 1: mid_right -> center -> bot_right
+            vertices[vertex_count] = .{ .pos = .{ mid_right_x, mid_right_y, 0.0 }, .uv = .{ 1.0, 0.0 }, .tex_index = right_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 0.0, 0.0 }, .tex_index = right_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ bot_right_x, bot_right_y, 0.0 }, .uv = .{ 1.0, 1.0 }, .tex_index = right_tex };
+            vertex_count += 1;
+            // Triangle 2: center -> bot -> bot_right
+            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 0.0, 0.0 }, .tex_index = right_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ bot_x, bot_y, 0.0 }, .uv = .{ 0.0, 1.0 }, .tex_index = right_tex };
+            vertex_count += 1;
+            vertices[vertex_count] = .{ .pos = .{ bot_right_x, bot_right_y, 0.0 }, .uv = .{ 1.0, 1.0 }, .tex_index = right_tex };
+            vertex_count += 1;
+        }
+
+        // Destroy old buffer if exists
+        if (self.hotbar_icon_buffer.isValid()) {
+            gpu.destroyBufferRaw(.{
+                .handle = self.hotbar_icon_buffer.handle,
+                .memory = self.hotbar_icon_buffer.memory,
+            });
+            self.hotbar_icon_buffer = .{};
+        }
+
+        if (vertex_count == 0) {
+            self.hotbar_icon_vertex_count = 0;
+            return;
+        }
+
+        // Create new buffer with icon vertices
+        const result = try gpu.createBufferWithDataRaw(
+            IconVertex,
+            vertices[0..vertex_count],
+            vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        );
+
+        self.hotbar_icon_buffer = ManagedBuffer.fromRaw(result.handle, result.memory);
+        self.hotbar_icon_vertex_count = vertex_count;
+
+        // Suppress unused variable warning
+        _ = aspect_ratio;
     }
 
     // ============================================================
@@ -1410,6 +1669,11 @@ pub const RenderSystem = struct {
         self.hotbar_buffer.destroy(self.device);
         try self.createHotbarBuffer();
         self.writeHotbarSelectionVertices(self.hotbar_selected_slot);
+
+        // Rebuild hotbar icons with new screen dimensions
+        self.rebuildHotbarIconBuffer() catch |err| {
+            logger.warn("Failed to rebuild hotbar icons: {}", .{err});
+        };
 
         logger.info("Swapchain recreated: {}x{}", .{ self.swapchain_extent.width, self.swapchain_extent.height });
     }
@@ -2599,6 +2863,41 @@ pub const RenderSystem = struct {
         logger.info("Line pipeline created", .{});
     }
 
+    fn createHotbarIconPipeline(self: *Self) !void {
+        const sm = &(self.shader_manager orelse return error.ShaderManagerNotInitialized);
+
+        // Get hotbar icon shaders from ShaderManager
+        const vert_shader_code = sm.getHotbarIconVertSpv() orelse return error.ShaderNotAvailable;
+        const frag_shader_code = sm.getHotbarIconFragSpv() orelse return error.ShaderNotAvailable;
+
+        // Standard alpha blending for block icons
+        const alpha_blend = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        var factory = VulkanPipelineFactory.init(self.device, self.render_pass);
+        const result = try factory.create(.{
+            .config = RenderPipelines.Pipelines.UI,
+            .vertex_format = .icon_3d,
+            .descriptor_set_layout = self.ui_descriptor_set_layout,
+            .vertex_shader_code = vert_shader_code,
+            .fragment_shader_code = frag_shader_code,
+            .custom_blend = alpha_blend,
+        });
+
+        self.hotbar_icon_pipeline = result.pipeline;
+        self.hotbar_icon_pipeline_layout = result.layout;
+
+        logger.info("Hotbar icon pipeline created", .{});
+    }
+
     fn createEntityPipeline(self: *Self) !void {
         // Use bindless descriptor set layout if available, otherwise fall back to regular
         const layout_to_use = if (self.bindless_entity_descriptor_set_layout != null)
@@ -2695,10 +2994,10 @@ pub const RenderSystem = struct {
     }
 
     fn createUIDescriptorPool(self: *Self) !void {
-        // Need sets for: crosshair (2) + hotbar (2) + selection (2) = 6 sets
+        // Need sets for: crosshair (2) + hotbar (2) + selection (2) + icons (2) = 8 sets
         self.ui_descriptor_pool = try DescriptorPoolBuilder.init()
-            .withSamplers(MAX_FRAMES_IN_FLIGHT * 3)
-            .withMaxSets(MAX_FRAMES_IN_FLIGHT * 3)
+            .withSamplers(MAX_FRAMES_IN_FLIGHT * 4)
+            .withMaxSets(MAX_FRAMES_IN_FLIGHT * 4)
             .build(self.device);
 
         logger.info("UI descriptor pool created", .{});
@@ -2725,6 +3024,19 @@ pub const RenderSystem = struct {
         }
 
         logger.info("UI descriptor sets created", .{});
+    }
+
+    fn createHotbarIconDescriptorSets(self: *Self) !void {
+        try DescriptorSetManager.allocateSets(
+            self.device,
+            self.ui_descriptor_pool,
+            self.ui_descriptor_set_layout,
+            MAX_FRAMES_IN_FLIGHT,
+            &self.hotbar_icon_descriptor_sets,
+        );
+
+        // Note: These will be updated with block texture array in setTextureResources
+        logger.info("Hotbar icon descriptor sets allocated", .{});
     }
 
     fn createCrosshairBuffer(self: *Self) !void {
@@ -3762,6 +4074,16 @@ pub const RenderSystem = struct {
             if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
             self.hotbar_pipeline = null;
         }
+        // Destroy hotbar icon pipeline and buffer
+        if (self.hotbar_icon_pipeline) |p| {
+            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+            self.hotbar_icon_pipeline = null;
+        }
+        if (self.hotbar_icon_pipeline_layout) |l| {
+            if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
+            self.hotbar_icon_pipeline_layout = null;
+        }
+        self.hotbar_icon_buffer.destroy(self.device);
         if (self.ui_pipeline_layout) |l| {
             if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
             self.ui_pipeline_layout = null;
