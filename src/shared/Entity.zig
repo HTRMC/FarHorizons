@@ -1,5 +1,3 @@
-// Entity class
-
 const std = @import("std");
 const math = @import("Math.zig");
 const Vec3 = math.Vec3;
