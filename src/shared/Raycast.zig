@@ -366,7 +366,6 @@ pub fn traverseBlocks(
     context: Context,
     comptime getBlockShape: fn (ctx: Context, pos: BlockHitResult.BlockPos) ?[]const AABB,
 ) BlockHitResult {
-    // If from equals to, return miss
     if (from.x == to.x and from.y == to.y and from.z == to.z) {
         const delta = Vec3{ .x = from.x - to.x, .y = from.y - to.y, .z = from.z - to.z };
         return BlockHitResult.missFn(
@@ -389,7 +388,6 @@ pub fn traverseBlocks(
     var current_block_y = Mth.floor(from_y);
     var current_block_z = Mth.floor(from_z);
 
-    // Check first block
     const first_pos = BlockHitResult.BlockPos{
         .x = current_block_x,
         .y = current_block_y,
@@ -419,7 +417,6 @@ pub fn traverseBlocks(
     var t_y = t_delta_y * (if (sign_y > 0) 1.0 - Mth.frac(from_y) else Mth.frac(from_y));
     var t_z = t_delta_z * (if (sign_z > 0) 1.0 - Mth.frac(from_z) else Mth.frac(from_z));
 
-    // Traverse blocks
     while (t_x <= 1.0 or t_y <= 1.0 or t_z <= 1.0) {
         if (t_x < t_y) {
             if (t_x < t_z) {
@@ -450,7 +447,6 @@ pub fn traverseBlocks(
         }
     }
 
-    // Miss - return end position
     const delta = Vec3{ .x = from.x - to.x, .y = from.y - to.y, .z = from.z - to.z };
     return BlockHitResult.missFn(
         to,
