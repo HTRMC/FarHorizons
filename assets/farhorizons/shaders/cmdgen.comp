@@ -10,6 +10,7 @@ struct LayerGPUData {
 };
 
 // Per-chunk GPU data - matches ChunkGPUData in GPUDrivenTypes.zig
+// Total size: 112 bytes (multiple of 16 for std430 array alignment)
 struct ChunkGPUData {
     vec3 worldPos;
     float _pad0;
@@ -18,7 +19,7 @@ struct ChunkGPUData {
     vec3 aabbMax;
     float _pad2;
     LayerGPUData layers[3];
-    float _pad3;
+    vec4 _pad3;  // 16 bytes padding for alignment
 };
 
 // Indirect draw command - matches VkDrawIndexedIndirectCommand

@@ -42,6 +42,7 @@ pub const LayerGPUData = extern struct {
 
 /// Per-chunk data uploaded to GPU for frustum culling and command generation
 /// Layout matches GLSL std430 with explicit padding for alignment
+/// std430 requires array elements to be aligned to 16 bytes (vec3/vec4 alignment)
 pub const ChunkGPUData = extern struct {
     /// Chunk world position (center point)
     world_pos: [3]f32,
@@ -58,7 +59,8 @@ pub const ChunkGPUData = extern struct {
     /// Per-layer rendering data: [solid, cutout, translucent]
     layers: [3]LayerGPUData,
 
-    _pad3: f32 = 0,
+    /// Padding to reach 112 bytes (multiple of 16 for std430 array alignment)
+    _pad3: [4]f32 = .{ 0, 0, 0, 0 },
 
     pub const EMPTY = ChunkGPUData{
         .world_pos = .{ 0, 0, 0 },
@@ -68,12 +70,12 @@ pub const ChunkGPUData = extern struct {
     };
 
     comptime {
-        // Verify size is what we expect for GPU buffer layout
+        // Verify size is 112 bytes (multiple of 16 for std430 array alignment)
         // 3 vec4s (world_pos, aabb_min, aabb_max) = 48 bytes
         // 3 LayerGPUData (4 u32 each) = 48 bytes
-        // 1 padding float = 4 bytes
-        // Total = 100 bytes, but needs 16-byte alignment for vec4s
-        std.debug.assert(@sizeOf(ChunkGPUData) == 100);
+        // 4 padding floats = 16 bytes
+        // Total = 112 bytes
+        std.debug.assert(@sizeOf(ChunkGPUData) == 112);
     }
 };
 

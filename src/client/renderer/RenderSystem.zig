@@ -1122,7 +1122,6 @@ pub const RenderSystem = struct {
         entity_vb: ?vk.VkBuffer,
         entity_ib: ?vk.VkBuffer,
         adult_index_count: u32,
-        baby_index_start: u32,
         baby_index_count: u32,
     ) !void {
         const ctx = try self.beginFrame() orelse return;
@@ -1228,17 +1227,15 @@ pub const RenderSystem = struct {
             if (self.entity_pipeline != null and self.bindless_entity_descriptor_set != null) {
                 vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.entity_pipeline.?);
 
-                const entity_desc_sets = [_]vk.VkDescriptorSet{
-                    self.descriptor_sets[self.current_frame],
-                    self.bindless_entity_descriptor_set.?,
-                };
+                // Bind bindless entity descriptor set (contains UBO + all entity textures)
+                const bindless_sets = [_]vk.VkDescriptorSet{self.bindless_entity_descriptor_set.?};
                 vkCmdBindDescriptorSets(
                     command_buffer,
                     vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
                     self.entity_pipeline_layout.?,
                     0,
-                    2,
-                    &entity_desc_sets,
+                    1,
+                    &bindless_sets,
                     0,
                     null,
                 );
@@ -1247,13 +1244,10 @@ pub const RenderSystem = struct {
                 vkCmdBindVertexBuffers(command_buffer, 0, 1, &entity_vb.?, &zero_offset);
                 vkCmdBindIndexBuffer(command_buffer, entity_ib.?, 0, vk.VK_INDEX_TYPE_UINT32);
 
-                // Adult entities
-                if (adult_index_count > 0) {
-                    vkCmdDrawIndexed(command_buffer, adult_index_count, 1, 0, 0, 0);
-                }
-                // Baby entities
-                if (baby_index_count > 0) {
-                    vkCmdDrawIndexed(command_buffer, baby_index_count, 1, baby_index_start, 0, 0);
+                // Single draw call for all entities - texture index is per-vertex
+                const total_index_count = adult_index_count + baby_index_count;
+                if (total_index_count > 0) {
+                    vkCmdDrawIndexed(command_buffer, total_index_count, 1, 0, 0, 0);
                 }
             }
         }

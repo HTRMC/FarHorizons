@@ -437,7 +437,6 @@ pub const FarHorizonsClient = struct {
                         const entity_vb = if (self.entity_renderer) |*er| er.getVertexBuffer() else null;
                         const entity_ib = if (self.entity_renderer) |*er| er.getIndexBuffer() else null;
                         const adult_ic = if (self.entity_renderer) |*er| er.getAdultIndexCount() else 0;
-                        const baby_is = if (self.entity_renderer) |*er| er.getBabyIndexStart() else 0;
                         const baby_ic = if (self.entity_renderer) |*er| er.getBabyIndexCount() else 0;
 
                         const chunk_count = cm.getActiveChunkCount();
@@ -455,7 +454,6 @@ pub const FarHorizonsClient = struct {
                                 entity_vb,
                                 entity_ib,
                                 adult_ic,
-                                baby_is,
                                 baby_ic,
                             ) catch |err| {
                                 logger.err("Failed to draw GPU-driven frame: {}", .{err});
@@ -473,7 +471,6 @@ pub const FarHorizonsClient = struct {
                                 entity_vb,
                                 entity_ib,
                                 adult_ic,
-                                baby_is,
                                 baby_ic,
                             ) catch |err| {
                                 logger.err("Failed to draw frame with staging: {}", .{err});

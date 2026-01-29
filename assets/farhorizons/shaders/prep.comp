@@ -2,7 +2,8 @@
 layout(local_size_x = 1) in;
 
 // Draw counts buffer - matches DrawCountData in GPUDrivenTypes.zig
-layout(set = 0, binding = 0, std430) buffer DrawCounts {
+// binding = 1 to match cmdgen.comp and descriptor set layout
+layout(set = 0, binding = 1, std430) buffer DrawCounts {
     uint dispatchX;
     uint dispatchY;
     uint dispatchZ;
