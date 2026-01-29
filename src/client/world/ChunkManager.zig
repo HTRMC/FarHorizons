@@ -1311,8 +1311,12 @@ pub const ChunkManager = struct {
 
         if (self.chunk_storage.remove(pos)) |render_chunk_ptr| {
             if (self.buffer_manager) |buf_mgr| {
-                if (render_chunk_ptr.getBufferAllocation()) |alloc| {
-                    buf_mgr.free(alloc);
+                // Free all layer allocations (solid, cutout, translucent)
+                const allocations = render_chunk_ptr.getBufferAllocations();
+                for (allocations) |alloc_opt| {
+                    if (alloc_opt) |alloc| {
+                        buf_mgr.free(alloc);
+                    }
                 }
             }
 

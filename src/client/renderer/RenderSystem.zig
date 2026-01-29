@@ -1163,6 +1163,27 @@ pub const RenderSystem = struct {
             callback(command_buffer, self.pre_render_callback_ctx);
         }
 
+        // Memory barrier: metadata buffer copies must complete before compute shader reads
+        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
+        const transfer_to_compute_barrier = vk.VkMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+        };
+        vkCmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            1,
+            &transfer_to_compute_barrier,
+            0,
+            null,
+            0,
+            null,
+        );
+
         // GPU-driven compute pass (frustum cull + command generation)
         self.recordGPUDrivenCommands(command_buffer, chunk_count, view_proj);
 
@@ -2749,8 +2770,8 @@ pub const RenderSystem = struct {
         self.chunk_slot_allocator = GPUDrivenTypes.SlotAllocator.init(self.allocator, GPUDrivenTypes.MAX_CHUNKS);
 
         // Metadata staging buffer: host-visible for CPU writes, persists across frames
-        // Size for ~1000 metadata uploads per frame (should be plenty)
-        const staging_size: u64 = 1000 * @sizeOf(GPUDrivenTypes.ChunkGPUData);
+        // Size for up to 16K metadata uploads per frame (handles large view distances)
+        const staging_size: u64 = 16384 * @sizeOf(GPUDrivenTypes.ChunkGPUData);
         const host_visible = vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         const staging_result = try gpu.createBufferRaw(
             staging_size,
@@ -2962,7 +2983,7 @@ pub const RenderSystem = struct {
         if (!self.metadata_staging_buffer.isValid()) return error.StagingBufferNotInitialized;
 
         const data_size = @sizeOf(GPUDrivenTypes.ChunkGPUData);
-        const max_staging_size: u64 = 1000 * data_size;
+        const max_staging_size: u64 = 16384 * data_size;
 
         // Check if we have room in staging buffer (wraps around each frame)
         if (self.metadata_staging_offset + data_size > max_staging_size) {
