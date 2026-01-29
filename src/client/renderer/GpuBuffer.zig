@@ -213,7 +213,6 @@ pub const ManagedBuffer = struct {
         const vkFreeMemory = vk.vkFreeMemory orelse return;
         const vkUnmapMemory = vk.vkUnmapMemory orelse return;
 
-        // Unmap if mapped
         if (self.mapped != null) {
             vkUnmapMemory(device, self.memory);
             self.mapped = null;
