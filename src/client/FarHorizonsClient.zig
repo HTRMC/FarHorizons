@@ -209,7 +209,9 @@ pub const FarHorizonsClient = struct {
         }
 
         // Render first frame before showing window (avoids white flash)
-        self.render_system.drawFrame() catch {};
+        self.render_system.drawFrame() catch |err| {
+            logger.warn("Failed to render initial frame: {} - window may flash", .{err});
+        };
         self.window.show();
 
         // Track ESC key state for edge detection
