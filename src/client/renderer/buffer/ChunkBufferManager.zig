@@ -90,14 +90,12 @@ pub const ChunkBufferManager = struct {
     ) !Self {
         logger.info("Initializing ChunkBufferManager...", .{});
 
-        // Determine if we should use view distance-based pre-allocation
         const use_view_distance = config.view_distance > 0;
 
         var vertex_arena: GrowableBufferArena = undefined;
         var index_arena: GrowableBufferArena = undefined;
 
         if (use_view_distance) {
-            // Pre-allocate based on view distance for smooth gameplay
             logger.info("Using view distance-based pre-allocation: {}x{}", .{
                 config.view_distance,
                 config.vertical_view_distance,
@@ -126,7 +124,6 @@ pub const ChunkBufferManager = struct {
                 config.avg_chunk_index_size,
             );
         } else {
-            // Use fixed arena sizes
             vertex_arena = try GrowableBufferArena.init(
                 allocator,
                 device,
@@ -156,7 +153,6 @@ pub const ChunkBufferManager = struct {
         }
         errdefer index_arena.deinit();
 
-        // Create staging ring
         const staging = try StagingRing.init(
             allocator,
             device,
@@ -205,15 +201,12 @@ pub const ChunkBufferManager = struct {
         const vertex_size = @as(u64, vertex_count) * self.config.vertex_size;
         const index_size = @as(u64, index_count) * self.config.index_size;
 
-        // Try to allocate vertex space
         const vertex_slice = self.vertex_arena.alloc(vertex_size, vertex_count) orelse {
             logger.warn("Failed to allocate vertex buffer space: {} vertices ({} bytes) - will retry", .{ vertex_count, vertex_size });
             return null;
         };
 
-        // Try to allocate index space
         const index_slice = self.index_arena.alloc(index_size, index_count) orelse {
-            // Rollback vertex allocation
             self.vertex_arena.free(vertex_slice);
             logger.warn("Failed to allocate index buffer space: {} indices ({} bytes) - will retry", .{ index_count, index_size });
             return null;
