@@ -1183,8 +1183,11 @@ pub const RenderSystem = struct {
             const tex = tex_opt.?;
 
             // Calculate slot center position in NDC
+            // Slot centers: first slot at offset 3, then every 20 pixels, center at +10
             const slot_x_pixels = first_slot_offset_pixels + @as(f32, @floatFromInt(slot_idx)) * slot_spacing_pixels + slot_spacing_pixels / 2.0;
-            const slot_center_x: f32 = hotbar_left_ndc + (slot_x_pixels / screen_width * 2.0);
+            // Adjust X position to account for visual center shift after isometric rotation
+            const icon_offset_x: f32 = -2.0 * gui_scale; // Shift left to center visually
+            const slot_center_x: f32 = hotbar_left_ndc + ((slot_x_pixels + icon_offset_x) / screen_width * 2.0);
             const slot_center_y: f32 = (hotbar_top_ndc + hotbar_bottom_ndc) / 2.0;
 
             // Generate vertices for each face
