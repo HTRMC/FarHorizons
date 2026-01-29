@@ -79,6 +79,7 @@ pub const IconVertex = extern struct {
     pos: [3]f32,      // NDC position (pre-transformed)
     uv: [2]f32,       // Texture coordinates
     tex_index: u32,   // Texture array layer
+    tint: f32,        // Brightness tint (0.0-1.0)
 
     pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
         return .{
@@ -88,7 +89,7 @@ pub const IconVertex = extern struct {
         };
     }
 
-    pub fn getAttributeDescriptions() [3]vk.VkVertexInputAttributeDescription {
+    pub fn getAttributeDescriptions() [4]vk.VkVertexInputAttributeDescription {
         return .{
             .{
                 .binding = 0,
@@ -107,6 +108,12 @@ pub const IconVertex = extern struct {
                 .location = 2,
                 .format = vk.VK_FORMAT_R32_UINT,
                 .offset = @offsetOf(IconVertex, "tex_index"),
+            },
+            .{
+                .binding = 0,
+                .location = 3,
+                .format = vk.VK_FORMAT_R32_SFLOAT,
+                .offset = @offsetOf(IconVertex, "tint"),
             },
         };
     }
@@ -1048,151 +1055,210 @@ pub const RenderSystem = struct {
 
     /// Update hotbar icons with isometric 3D block previews
     /// texture_indices should contain texture array indices for each slot (null for empty slots)
+    /// Face order: [top, bottom, north, south, west, east]
     pub fn updateHotbarIcons(self: *Self, texture_indices: [9]?[6]u32) !void {
         // Store texture indices for recreation on resize
         self.hotbar_icon_texture_indices = texture_indices;
         try self.rebuildHotbarIconBuffer();
     }
 
-    /// Rebuild the hotbar icon vertex buffer (called on init and resize)
+    /// Rebuild the hotbar icon vertex buffer using actual 3D cube geometry
     fn rebuildHotbarIconBuffer(self: *Self) !void {
         var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
         const screen_height: f32 = @floatFromInt(self.swapchain_extent.height);
         const screen_width: f32 = @floatFromInt(self.swapchain_extent.width);
-        const aspect_ratio: f32 = screen_width / screen_height;
 
         // GUI scale calculation (same as hotbar)
         const gui_scale: f32 = if (screen_height < 480) 1.0 else if (screen_height < 720) 2.0 else if (screen_height < 1080) 2.0 else 3.0;
 
-        // Hotbar dimensions from Minecraft spec: 182x22 pixels
+        // Hotbar dimensions from Minecraft spec
         const hotbar_width_pixels: f32 = 182.0 * gui_scale;
         const hotbar_height_pixels: f32 = 22.0 * gui_scale;
-
-        // Slot spacing: hotbar has 9 slots, each ~20 pixels wide
         const slot_spacing_pixels: f32 = 20.0 * gui_scale;
-        const first_slot_offset_pixels: f32 = 3.0 * gui_scale; // Offset from left edge
-
-        // Icon size in pixels (slightly smaller than slot)
-        const icon_size_pixels: f32 = 14.0 * gui_scale;
+        const first_slot_offset_pixels: f32 = 3.0 * gui_scale;
 
         // Hotbar position (bottom center) in NDC
         const hotbar_left_ndc: f32 = -hotbar_width_pixels / screen_width;
-        const hotbar_bottom_ndc: f32 = 1.0; // Bottom of screen in Vulkan NDC
+        const hotbar_bottom_ndc: f32 = 1.0;
         const hotbar_top_ndc: f32 = hotbar_bottom_ndc - (hotbar_height_pixels / screen_height * 2.0);
 
-        // Isometric projection: use a single pixel-based scale, then convert to NDC
-        // This keeps the cube square regardless of aspect ratio
-        const iso_scale: f32 = 0.5; // Scale down the cube to fit nicely in slot
+        // Minecraft isometric view: rotate -45° around Y, then -30° around X
+        // This gives the classic front-right-top view
+        const angle_y: f32 = -std.math.pi / 4.0; // -45 degrees (turn right side toward us)
+        const angle_x: f32 = -std.math.pi / 6.0; // -30 degrees (tilt top toward us)
+        const cos_y: f32 = @cos(angle_y);
+        const sin_y: f32 = @sin(angle_y);
+        const cos_x: f32 = @cos(angle_x);
+        const sin_x: f32 = @sin(angle_x);
 
-        // Isometric angles (true isometric uses arctan(1/sqrt(2)) ≈ 35.264°)
-        // For simplicity, using 30° gives a nice look
-        const cos30: f32 = 0.866;
-        const sin30: f32 = 0.5;
+        // Combined rotation matrix (X * Y rotation)
+        // First rotate around Y, then around X
+        // Only need the first two rows for orthographic projection to 2D
+        const r00: f32 = cos_y;
+        const r01: f32 = 0;
+        const r02: f32 = sin_y;
+        const r10: f32 = sin_x * sin_y;
+        const r11: f32 = cos_x;
+        const r12: f32 = -sin_x * cos_y;
+
+        // Scale to fit in slot (in pixels, then convert to NDC)
+        const cube_size_pixels: f32 = 10.0 * gui_scale;
+        const scale_x: f32 = cube_size_pixels * 2.0 / screen_width;
+        const scale_y: f32 = cube_size_pixels * 2.0 / screen_height;
+
+        // Helper function to transform a 3D point to 2D NDC
+        const transform = struct {
+            fn apply(
+                x: f32,
+                y: f32,
+                z: f32,
+                m00: f32,
+                m01: f32,
+                m02: f32,
+                m10: f32,
+                m11: f32,
+                m12: f32,
+                sx: f32,
+                sy: f32,
+                tx: f32,
+                ty: f32,
+            ) [2]f32 {
+                // Apply rotation
+                const rx = m00 * x + m01 * y + m02 * z;
+                const ry = m10 * x + m11 * y + m12 * z;
+                // Scale and translate (ignore Z for orthographic)
+                // Negate Y for Vulkan coordinate system (Y+ is down)
+                return .{ rx * sx + tx, -ry * sy + ty };
+            }
+        };
 
         // Collect vertices for all non-empty slots
-        var vertices: [9 * 18]IconVertex = undefined; // Max 9 slots * 18 vertices per cube
+        // Each cube has 3 visible faces * 2 triangles * 3 vertices = 18 vertices
+        var vertices: [9 * 18]IconVertex = undefined;
         var vertex_count: u32 = 0;
+
+        // Unit cube vertices (centered at origin, size 1x1x1)
+        // Defined as corners: -0.5 to 0.5 on each axis
+        const cube_verts = [8][3]f32{
+            .{ -0.5, -0.5, -0.5 }, // 0: left-bottom-back
+            .{ 0.5, -0.5, -0.5 }, // 1: right-bottom-back
+            .{ 0.5, 0.5, -0.5 }, // 2: right-top-back
+            .{ -0.5, 0.5, -0.5 }, // 3: left-top-back
+            .{ -0.5, -0.5, 0.5 }, // 4: left-bottom-front
+            .{ 0.5, -0.5, 0.5 }, // 5: right-bottom-front
+            .{ 0.5, 0.5, 0.5 }, // 6: right-top-front
+            .{ -0.5, 0.5, 0.5 }, // 7: left-top-front
+        };
+
+        // Face definitions: vertex indices and UV coords for each face
+        // Format: [v0, v1, v2, v3] forming a quad (two triangles)
+        // Only render the 3 visible faces for isometric view (no depth buffer needed)
+        const Face = struct {
+            verts: [4]u8, // Vertex indices
+            uvs: [4][2]f32, // UV coordinates
+            tex_slot: u8, // Which texture slot to use
+            tint: f32, // Brightness
+        };
+
+        // Minecraft face shading values
+        const top_tint: f32 = 1.0;
+        const left_tint: f32 = 0.8; // Left visible face
+        const right_tint: f32 = 0.6; // Right visible face
+
+        // Only the 3 visible faces for isometric view (-45° Y, -30° X rotation)
+        // Looking from front-left-top, we see: Top, West (X-), North (Z-)
+        const faces = [3]Face{
+            // Top (Y+) - texture slot 0
+            .{ .verts = .{ 3, 2, 6, 7 }, .uvs = .{ .{ 0, 0 }, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 } }, .tex_slot = 0, .tint = top_tint },
+            // West (X-) - texture slot 4 - left face in isometric view
+            .{ .verts = .{ 3, 7, 4, 0 }, .uvs = .{ .{ 0, 0 }, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 } }, .tex_slot = 4, .tint = left_tint },
+            // North (Z-) - texture slot 2 - right face in isometric view
+            .{ .verts = .{ 2, 3, 0, 1 }, .uvs = .{ .{ 0, 0 }, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 } }, .tex_slot = 2, .tint = right_tint },
+        };
 
         for (0..9) |slot_idx| {
             const tex_opt = self.hotbar_icon_texture_indices[slot_idx];
             if (tex_opt == null) continue;
             const tex = tex_opt.?;
 
-            // Calculate slot center position in pixels, then convert to NDC
+            // Calculate slot center position in NDC
             const slot_x_pixels = first_slot_offset_pixels + @as(f32, @floatFromInt(slot_idx)) * slot_spacing_pixels + slot_spacing_pixels / 2.0;
             const slot_center_x: f32 = hotbar_left_ndc + (slot_x_pixels / screen_width * 2.0);
             const slot_center_y: f32 = (hotbar_top_ndc + hotbar_bottom_ndc) / 2.0;
 
-            // Cube half-size in pixels, then we'll convert each vertex to NDC
-            const cube_half_size: f32 = icon_size_pixels * iso_scale;
+            // Generate vertices for each face
+            for (faces) |face| {
+                const tex_idx = tex[face.tex_slot];
 
-            // Helper to convert pixel offset to NDC offset (accounting for aspect ratio)
-            const px_to_ndc_x = 2.0 / screen_width;
-            const px_to_ndc_y = 2.0 / screen_height;
+                // Get the 4 corner vertices transformed to 2D
+                var corners: [4][2]f32 = undefined;
+                for (0..4) |i| {
+                    const vi = face.verts[i];
+                    const v = cube_verts[vi];
+                    corners[i] = transform.apply(
+                        v[0],
+                        v[1],
+                        v[2],
+                        r00,
+                        r01,
+                        r02,
+                        r10,
+                        r11,
+                        r12,
+                        scale_x,
+                        scale_y,
+                        slot_center_x,
+                        slot_center_y,
+                    );
+                }
 
-            // Isometric cube vertices in pixel offsets from center
-            // Top of cube (highest point)
-            const top_px_y: f32 = -cube_half_size;
-            // Middle row (top face corners and cube center visible point)
-            const mid_left_px_x: f32 = -cube_half_size * cos30;
-            const mid_left_px_y: f32 = -cube_half_size * sin30 * 0.5;
-            const mid_right_px_x: f32 = cube_half_size * cos30;
-            const mid_right_px_y: f32 = -cube_half_size * sin30 * 0.5;
-            // Bottom row (side face bottoms)
-            const bot_left_px_x: f32 = -cube_half_size * cos30;
-            const bot_left_px_y: f32 = cube_half_size * sin30 * 0.5;
-            const bot_right_px_x: f32 = cube_half_size * cos30;
-            const bot_right_px_y: f32 = cube_half_size * sin30 * 0.5;
-            // Bottom center (lowest point)
-            const bot_px_y: f32 = cube_half_size;
+                // Triangle 1: v0, v2, v1 (swapped for Vulkan winding after Y negate)
+                vertices[vertex_count] = .{
+                    .pos = .{ corners[0][0], corners[0][1], 0.0 },
+                    .uv = face.uvs[0],
+                    .tex_index = tex_idx,
+                    .tint = face.tint,
+                };
+                vertex_count += 1;
+                vertices[vertex_count] = .{
+                    .pos = .{ corners[2][0], corners[2][1], 0.0 },
+                    .uv = face.uvs[2],
+                    .tex_index = tex_idx,
+                    .tint = face.tint,
+                };
+                vertex_count += 1;
+                vertices[vertex_count] = .{
+                    .pos = .{ corners[1][0], corners[1][1], 0.0 },
+                    .uv = face.uvs[1],
+                    .tex_index = tex_idx,
+                    .tint = face.tint,
+                };
+                vertex_count += 1;
 
-            // Convert to NDC positions
-            const top_x: f32 = slot_center_x;
-            const top_y: f32 = slot_center_y + top_px_y * px_to_ndc_y;
-            const mid_left_x: f32 = slot_center_x + mid_left_px_x * px_to_ndc_x;
-            const mid_left_y: f32 = slot_center_y + mid_left_px_y * px_to_ndc_y;
-            const mid_right_x: f32 = slot_center_x + mid_right_px_x * px_to_ndc_x;
-            const mid_right_y: f32 = slot_center_y + mid_right_px_y * px_to_ndc_y;
-            const center_x: f32 = slot_center_x;
-            const center_y: f32 = slot_center_y;
-            const bot_left_x: f32 = slot_center_x + bot_left_px_x * px_to_ndc_x;
-            const bot_left_y: f32 = slot_center_y + bot_left_px_y * px_to_ndc_y;
-            const bot_right_x: f32 = slot_center_x + bot_right_px_x * px_to_ndc_x;
-            const bot_right_y: f32 = slot_center_y + bot_right_px_y * px_to_ndc_y;
-            const bot_x: f32 = slot_center_x;
-            const bot_y: f32 = slot_center_y + bot_px_y * px_to_ndc_y;
-
-            // Top face (texture index 0 = top) - diamond shape
-            const top_tex: u32 = tex[0];
-            // Triangle 1: top -> mid_left -> center
-            vertices[vertex_count] = .{ .pos = .{ top_x, top_y, 0.0 }, .uv = .{ 0.5, 0.0 }, .tex_index = top_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ mid_left_x, mid_left_y, 0.0 }, .uv = .{ 0.0, 0.5 }, .tex_index = top_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 0.5, 1.0 }, .tex_index = top_tex };
-            vertex_count += 1;
-            // Triangle 2: top -> center -> mid_right
-            vertices[vertex_count] = .{ .pos = .{ top_x, top_y, 0.0 }, .uv = .{ 0.5, 0.0 }, .tex_index = top_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 0.5, 1.0 }, .tex_index = top_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ mid_right_x, mid_right_y, 0.0 }, .uv = .{ 1.0, 0.5 }, .tex_index = top_tex };
-            vertex_count += 1;
-
-            // Left face (texture index 2 = side) - parallelogram
-            const left_tex: u32 = tex[2];
-            // Triangle 1: mid_left -> bot_left -> center
-            vertices[vertex_count] = .{ .pos = .{ mid_left_x, mid_left_y, 0.0 }, .uv = .{ 0.0, 0.0 }, .tex_index = left_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ bot_left_x, bot_left_y, 0.0 }, .uv = .{ 0.0, 1.0 }, .tex_index = left_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 1.0, 0.0 }, .tex_index = left_tex };
-            vertex_count += 1;
-            // Triangle 2: bot_left -> bot -> center
-            vertices[vertex_count] = .{ .pos = .{ bot_left_x, bot_left_y, 0.0 }, .uv = .{ 0.0, 1.0 }, .tex_index = left_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ bot_x, bot_y, 0.0 }, .uv = .{ 1.0, 1.0 }, .tex_index = left_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 1.0, 0.0 }, .tex_index = left_tex };
-            vertex_count += 1;
-
-            // Right face (texture index 3 = side) - parallelogram
-            const right_tex: u32 = tex[3];
-            // Triangle 1: mid_right -> center -> bot_right
-            vertices[vertex_count] = .{ .pos = .{ mid_right_x, mid_right_y, 0.0 }, .uv = .{ 1.0, 0.0 }, .tex_index = right_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 0.0, 0.0 }, .tex_index = right_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ bot_right_x, bot_right_y, 0.0 }, .uv = .{ 1.0, 1.0 }, .tex_index = right_tex };
-            vertex_count += 1;
-            // Triangle 2: center -> bot -> bot_right
-            vertices[vertex_count] = .{ .pos = .{ center_x, center_y, 0.0 }, .uv = .{ 0.0, 0.0 }, .tex_index = right_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ bot_x, bot_y, 0.0 }, .uv = .{ 0.0, 1.0 }, .tex_index = right_tex };
-            vertex_count += 1;
-            vertices[vertex_count] = .{ .pos = .{ bot_right_x, bot_right_y, 0.0 }, .uv = .{ 1.0, 1.0 }, .tex_index = right_tex };
-            vertex_count += 1;
+                // Triangle 2: v0, v3, v2 (swapped for Vulkan winding after Y negate)
+                vertices[vertex_count] = .{
+                    .pos = .{ corners[0][0], corners[0][1], 0.0 },
+                    .uv = face.uvs[0],
+                    .tex_index = tex_idx,
+                    .tint = face.tint,
+                };
+                vertex_count += 1;
+                vertices[vertex_count] = .{
+                    .pos = .{ corners[3][0], corners[3][1], 0.0 },
+                    .uv = face.uvs[3],
+                    .tex_index = tex_idx,
+                    .tint = face.tint,
+                };
+                vertex_count += 1;
+                vertices[vertex_count] = .{
+                    .pos = .{ corners[2][0], corners[2][1], 0.0 },
+                    .uv = face.uvs[2],
+                    .tex_index = tex_idx,
+                    .tint = face.tint,
+                };
+                vertex_count += 1;
+            }
         }
 
         // Destroy old buffer if exists
@@ -1218,9 +1284,6 @@ pub const RenderSystem = struct {
 
         self.hotbar_icon_buffer = ManagedBuffer.fromRaw(result.handle, result.memory);
         self.hotbar_icon_vertex_count = vertex_count;
-
-        // Suppress unused variable warning
-        _ = aspect_ratio;
     }
 
     // ============================================================

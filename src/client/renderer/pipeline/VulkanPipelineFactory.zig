@@ -304,19 +304,19 @@ pub const VulkanPipelineFactory = struct {
                 result.attribute_count = 2;
             },
             .icon_3d => {
-                // IconVertex: pos[3], uv[2], tex_index
+                // IconVertex: pos[3], uv[2], tex_index, tint
                 result.binding = .{
                     .binding = 0,
-                    .stride = @sizeOf(f32) * 5 + @sizeOf(u32),
+                    .stride = @sizeOf(f32) * 5 + @sizeOf(u32) + @sizeOf(f32),
                     .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
                 };
                 result.attributes = .{
                     .{ .binding = 0, .location = 0, .format = vk.VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
                     .{ .binding = 0, .location = 1, .format = vk.VK_FORMAT_R32G32_SFLOAT, .offset = @sizeOf(f32) * 3 },
                     .{ .binding = 0, .location = 2, .format = vk.VK_FORMAT_R32_UINT, .offset = @sizeOf(f32) * 5 },
-                    undefined,
+                    .{ .binding = 0, .location = 3, .format = vk.VK_FORMAT_R32_SFLOAT, .offset = @sizeOf(f32) * 5 + @sizeOf(u32) },
                 };
-                result.attribute_count = 3;
+                result.attribute_count = 4;
             },
         }
 
