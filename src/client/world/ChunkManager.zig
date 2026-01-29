@@ -29,6 +29,7 @@ const ChunkBufferConfig = renderer.buffer.ChunkBufferConfig;
 const ChunkBufferAllocation = renderer.buffer.ChunkBufferAllocation;
 const ChunkDrawCommand = RenderSystem.ChunkDrawCommand;
 const StagingCopy = RenderSystem.StagingCopy;
+const GPUDrivenTypes = renderer.GPUDrivenTypes;
 
 const render_chunk = @import("RenderChunk.zig");
 const RenderChunk = render_chunk.RenderChunk;
@@ -268,6 +269,9 @@ pub const ChunkManager = struct {
     /// Chunks with terrain generated, waiting for neighbors before meshing
     pending_mesh: PosSet = undefined,
 
+    /// Chunks needing GPU metadata upload (GPU-driven rendering)
+    pending_metadata_uploads: std.ArrayListUnmanaged(*RenderChunk) = .{},
+
     pub fn init(
         allocator: std.mem.Allocator,
         io: Io,
@@ -420,6 +424,10 @@ pub const ChunkManager = struct {
                     buf_mgr.free(alloc);
                 }
             }
+            // Free GPU slot if present
+            if (chunk.hasGPUSlot()) {
+                self.render_system.freeChunkSlot(chunk.gpu_slot);
+            }
             chunk.deinit();
             self.allocator.destroy(chunk);
         }
@@ -442,6 +450,7 @@ pub const ChunkManager = struct {
         self.staging_copies.deinit(self.allocator);
         self.vertex_buffer_cache.deinit(self.allocator);
         self.index_buffer_cache.deinit(self.allocator);
+        self.pending_metadata_uploads.deinit(self.allocator);
 
         if (self.buffer_manager) |buf_mgr| {
             buf_mgr.deinit();
@@ -799,6 +808,14 @@ pub const ChunkManager = struct {
                 render_chunk_ptr.setMesh(chunk_mesh);
                 _ = self.pending_loads.remove(mesh.pos);
 
+                // GPU-driven rendering: allocate slot if needed and queue metadata upload
+                if (!render_chunk_ptr.hasGPUSlot()) {
+                    render_chunk_ptr.gpu_slot = self.render_system.allocateChunkSlot();
+                }
+                if (render_chunk_ptr.hasGPUSlot()) {
+                    self.pending_metadata_uploads.append(self.allocator, render_chunk_ptr) catch {};
+                }
+
                 uploads += 1;
             }
 
@@ -815,6 +832,19 @@ pub const ChunkManager = struct {
         if (!buf_mgr.hasPendingUploads()) return false;
         buf_mgr.commitUploads(cmd_buffer);
         return true;
+    }
+
+    /// Commit pending GPU metadata uploads for GPU-driven rendering
+    pub fn commitMetadataUploads(self: *Self, cmd_buffer: vk.VkCommandBuffer) void {
+        for (self.pending_metadata_uploads.items) |chunk| {
+            if (chunk.hasGPUSlot() and chunk.mesh != null) {
+                const gpu_data = chunk.buildGPUData();
+                self.render_system.uploadChunkMetadata(chunk.gpu_slot, gpu_data, cmd_buffer) catch |err| {
+                    logger.warn("Failed to upload chunk metadata: {}", .{err});
+                };
+            }
+        }
+        self.pending_metadata_uploads.clearRetainingCapacity();
     }
 
     /// Returns commands sorted by render layer for proper draw order
@@ -1260,6 +1290,12 @@ pub const ChunkManager = struct {
                 if (render_chunk_ptr.getBufferAllocation()) |alloc| {
                     buf_mgr.free(alloc);
                 }
+            }
+
+            // GPU-driven rendering: free the chunk's GPU slot
+            if (render_chunk_ptr.hasGPUSlot()) {
+                self.render_system.freeChunkSlot(render_chunk_ptr.gpu_slot);
+                render_chunk_ptr.gpu_slot = GPUDrivenTypes.SlotAllocator.INVALID_SLOT;
             }
 
             const rcu_instance = self.rcu orelse {

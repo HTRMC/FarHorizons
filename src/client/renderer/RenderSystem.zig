@@ -19,6 +19,7 @@ const DescriptorSetLayoutBuilder = @import("pipeline/DescriptorSetLayoutBuilder.
 const VulkanPipelineFactory = @import("pipeline/VulkanPipelineFactory.zig").VulkanPipelineFactory;
 const ImageViewHelper = @import("resource/ImageViewHelper.zig").ImageViewHelper;
 const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
+const GPUDrivenTypes = @import("GPUDrivenTypes.zig");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -167,6 +168,22 @@ pub const RenderSystem = struct {
     window: ?*platform.Window = null,
     shader_manager: ?ShaderManager = null,
 
+    // GPU-driven rendering buffers (Phase 1)
+    /// GPU buffer containing ChunkGPUData for all loaded chunks
+    chunk_metadata_buffer: ManagedBuffer = .{},
+    /// Visibility flags per chunk (u32 per chunk, stores frameId when visible)
+    visibility_buffer: ManagedBuffer = .{},
+    /// Atomic counters for draw command counts
+    draw_count_buffer: ManagedBuffer = .{},
+    /// GPU-generated draw commands (written by cmdgen.comp)
+    gpu_draw_buffer: ManagedBuffer = .{},
+    /// Maps chunk slot ID to chunk metadata index
+    chunk_slot_allocator: ?GPUDrivenTypes.SlotAllocator = null,
+
+    /// Callback for pre-render GPU uploads (called with command buffer before render pass)
+    pre_render_callback: ?*const fn (vk.VkCommandBuffer, ?*anyopaque) void = null,
+    pre_render_callback_ctx: ?*anyopaque = null,
+
     pub fn init(allocator: std.mem.Allocator, io: Io) Self {
         return .{ .allocator = allocator, .io = io };
     }
@@ -233,6 +250,7 @@ pub const RenderSystem = struct {
         // Note: Vertex/Index buffers are created by uploadMesh() with actual geometry
         try self.createUniformBuffers();
         try self.createIndirectBuffer();
+        try self.createGPUDrivenBuffers();
         // Note: Texture resources and descriptor sets are created after TextureManager is initialized
         // See initializeTextures() which must be called after setting texture resources
         try self.createCommandBuffers();
@@ -261,6 +279,7 @@ pub const RenderSystem = struct {
         // Note: texture_image_view and texture_sampler are owned by TextureManager
         self.destroyUniformBuffers();
         self.destroyIndirectBuffer();
+        self.destroyGPUDrivenBuffers();
         self.destroyBuffers();
         self.destroyFramebuffers();
         self.destroyPipeline();
@@ -362,6 +381,17 @@ pub const RenderSystem = struct {
     pub fn setBabyEntityTextureResources(self: *Self, image_view: vk.VkImageView, sampler: vk.VkSampler) !void {
         try self.createBabyEntityDescriptorSets(image_view, sampler);
         logger.info("Baby entity texture resources set and descriptors created", .{});
+    }
+
+    /// Set a callback to be invoked before each render pass with the command buffer
+    /// Used for GPU-driven rendering metadata uploads
+    pub fn setPreRenderCallback(
+        self: *Self,
+        callback: ?*const fn (vk.VkCommandBuffer, ?*anyopaque) void,
+        ctx: ?*anyopaque,
+    ) void {
+        self.pre_render_callback = callback;
+        self.pre_render_callback_ctx = ctx;
     }
 
     /// Set bindless entity texture resources from EntityTextureManager
@@ -591,6 +621,11 @@ pub const RenderSystem = struct {
         // Record staging buffer copies before render pass
         if (params.staging_copies.len > 0) {
             try self.recordStagingCopies(command_buffer, params.staging_copies);
+        }
+
+        // Pre-render callback for additional GPU uploads (e.g., chunk metadata)
+        if (self.pre_render_callback) |callback| {
+            callback(command_buffer, self.pre_render_callback_ctx);
         }
 
         const clear_values = [_]vk.VkClearValue{
@@ -2488,6 +2523,147 @@ pub const RenderSystem = struct {
     fn destroyIndirectBuffer(self: *Self) void {
         self.indirect_buffer.destroy(self.device);
         self.indirect_buffer_capacity = 0;
+    }
+
+    /// Create GPU-driven rendering buffers (Phase 1 infrastructure)
+    fn createGPUDrivenBuffers(self: *Self) !void {
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+
+        const device_local = vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+        // Chunk metadata buffer: stores ChunkGPUData for all chunks
+        const metadata_size = GPUDrivenTypes.getChunkMetadataBufferSize();
+        const metadata_result = try gpu.createBufferRaw(
+            metadata_size,
+            vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            device_local,
+        );
+        self.chunk_metadata_buffer = ManagedBuffer.fromRaw(metadata_result.handle, metadata_result.memory);
+
+        // Visibility buffer: u32 per chunk for occlusion culling (Phase 6)
+        const visibility_size = GPUDrivenTypes.getVisibilityBufferSize();
+        const visibility_result = try gpu.createBufferRaw(
+            visibility_size,
+            vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            device_local,
+        );
+        self.visibility_buffer = ManagedBuffer.fromRaw(visibility_result.handle, visibility_result.memory);
+
+        // Draw count buffer: atomic counters for dispatch and draw counts
+        // Needs INDIRECT_BUFFER for vkCmdDispatchIndirect
+        const count_size = GPUDrivenTypes.getDrawCountBufferSize();
+        const count_result = try gpu.createBufferRaw(
+            count_size,
+            vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            device_local,
+        );
+        self.draw_count_buffer = ManagedBuffer.fromRaw(count_result.handle, count_result.memory);
+
+        // GPU draw buffer: generated draw commands
+        // Needs INDIRECT_BUFFER for vkCmdDrawIndexedIndirectCount
+        const draw_size = GPUDrivenTypes.getGPUDrawBufferSize();
+        const draw_result = try gpu.createBufferRaw(
+            draw_size,
+            vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+            device_local,
+        );
+        self.gpu_draw_buffer = ManagedBuffer.fromRaw(draw_result.handle, draw_result.memory);
+
+        // Slot allocator for chunk GPU indices
+        self.chunk_slot_allocator = GPUDrivenTypes.SlotAllocator.init(self.allocator, GPUDrivenTypes.MAX_CHUNKS);
+
+        logger.info("GPU-driven buffers created: metadata={d:.2}MB, visibility={d:.2}MB, draw_count={d}B, draw_cmds={d:.2}MB", .{
+            @as(f64, @floatFromInt(metadata_size)) / (1024.0 * 1024.0),
+            @as(f64, @floatFromInt(visibility_size)) / (1024.0 * 1024.0),
+            count_size,
+            @as(f64, @floatFromInt(draw_size)) / (1024.0 * 1024.0),
+        });
+    }
+
+    /// Destroy GPU-driven rendering buffers
+    fn destroyGPUDrivenBuffers(self: *Self) void {
+        if (self.chunk_slot_allocator) |*allocator| {
+            allocator.deinit();
+            self.chunk_slot_allocator = null;
+        }
+        self.gpu_draw_buffer.destroy(self.device);
+        self.draw_count_buffer.destroy(self.device);
+        self.visibility_buffer.destroy(self.device);
+        self.chunk_metadata_buffer.destroy(self.device);
+    }
+
+    // ============================================================================
+    // GPU-Driven Rendering: Public Chunk Management API
+    // ============================================================================
+
+    /// Allocate a GPU slot for a chunk's metadata
+    /// Returns INVALID_SLOT if no slots available
+    pub fn allocateChunkSlot(self: *Self) u32 {
+        if (self.chunk_slot_allocator) |*allocator| {
+            return allocator.alloc();
+        }
+        return GPUDrivenTypes.SlotAllocator.INVALID_SLOT;
+    }
+
+    /// Free a chunk's GPU slot for reuse
+    pub fn freeChunkSlot(self: *Self, slot: u32) void {
+        if (self.chunk_slot_allocator) |*allocator| {
+            allocator.free(slot);
+        }
+    }
+
+    /// Upload chunk metadata to the GPU buffer at the given slot
+    /// Note: This stages the upload; actual transfer happens during frame commit
+    pub fn uploadChunkMetadata(
+        self: *Self,
+        slot: u32,
+        data: GPUDrivenTypes.ChunkGPUData,
+        cmd_buffer: vk.VkCommandBuffer,
+    ) !void {
+        if (slot == GPUDrivenTypes.SlotAllocator.INVALID_SLOT) return;
+        if (slot >= GPUDrivenTypes.MAX_CHUNKS) return;
+
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+
+        // Calculate offset in the metadata buffer
+        const offset = @as(u64, slot) * @sizeOf(GPUDrivenTypes.ChunkGPUData);
+
+        // Create staging buffer with the data
+        const staging = try gpu.createBufferWithDataRaw(
+            GPUDrivenTypes.ChunkGPUData,
+            &[_]GPUDrivenTypes.ChunkGPUData{data},
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        );
+        defer {
+            if (vk.vkDestroyBuffer) |destroy| destroy(self.device, staging.handle, null);
+            if (vk.vkFreeMemory) |free| free(self.device, staging.memory, null);
+        }
+
+        // Copy from staging to device-local buffer
+        const copy_region = vk.VkBufferCopy{
+            .srcOffset = 0,
+            .dstOffset = offset,
+            .size = @sizeOf(GPUDrivenTypes.ChunkGPUData),
+        };
+
+        const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return error.VulkanFunctionNotLoaded;
+        vkCmdCopyBuffer(cmd_buffer, staging.handle, self.chunk_metadata_buffer.handle, 1, &copy_region);
+    }
+
+    /// Get the number of allocated chunk slots (for dispatch sizing)
+    pub fn getActiveChunkSlotCount(self: *const Self) u32 {
+        if (self.chunk_slot_allocator) |allocator| {
+            return allocator.getAllocatedCount();
+        }
+        return 0;
+    }
+
+    /// Get the high-water mark of chunk slots (maximum ever allocated)
+    pub fn getChunkSlotHighWaterMark(self: *const Self) u32 {
+        if (self.chunk_slot_allocator) |allocator| {
+            return allocator.getHighWaterMark();
+        }
+        return 0;
     }
 
     // Note: Texture creation/destruction is now handled by TextureManager

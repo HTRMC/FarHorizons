@@ -11,6 +11,7 @@ const Vertex = renderer.Vertex;
 const Logger = shared.Logger;
 const ChunkBufferAllocation = renderer.buffer.ChunkBufferAllocation;
 const RenderLayer = shared.RenderLayer;
+const GPUDrivenTypes = renderer.GPUDrivenTypes;
 
 /// Number of render layers (derived from enum at comptime)
 pub const RENDER_LAYER_COUNT = @typeInfo(RenderLayer).@"enum".fields.len;
@@ -328,6 +329,9 @@ pub const RenderChunk = struct {
     /// Allocator for mesh data
     allocator: std.mem.Allocator,
 
+    /// GPU slot index for GPU-driven rendering metadata buffer
+    gpu_slot: u32 = GPUDrivenTypes.SlotAllocator.INVALID_SLOT,
+
     /// Backwards-compatible state getter (reads from future)
     pub fn getState(self: *const Self) ChunkState {
         return self.future.getStatus();
@@ -433,6 +437,65 @@ pub const RenderChunk = struct {
             .y = @floatFromInt(block_pos.y),
             .z = @floatFromInt(block_pos.z),
         };
+    }
+
+    /// Build GPU metadata for GPU-driven rendering
+    /// Returns ChunkGPUData with world position, AABB bounds, and per-layer data
+    pub fn buildGPUData(self: *const Self) GPUDrivenTypes.ChunkGPUData {
+        const block_pos = self.pos.getBlockPos();
+        const chunk_size: f32 = 16.0;
+
+        // Chunk AABB in world coordinates
+        const min_x: f32 = @floatFromInt(block_pos.x);
+        const min_y: f32 = @floatFromInt(block_pos.y);
+        const min_z: f32 = @floatFromInt(block_pos.z);
+
+        var gpu_data = GPUDrivenTypes.ChunkGPUData{
+            .world_pos = .{
+                min_x + chunk_size * 0.5,
+                min_y + chunk_size * 0.5,
+                min_z + chunk_size * 0.5,
+            },
+            .aabb_min = .{ min_x, min_y, min_z },
+            .aabb_max = .{
+                min_x + chunk_size,
+                min_y + chunk_size,
+                min_z + chunk_size,
+            },
+            .layers = .{
+                GPUDrivenTypes.LayerGPUData.EMPTY,
+                GPUDrivenTypes.LayerGPUData.EMPTY,
+                GPUDrivenTypes.LayerGPUData.EMPTY,
+            },
+        };
+
+        // Fill in per-layer data from buffer allocations
+        if (self.mesh) |mesh| {
+            for (0..RENDER_LAYER_COUNT) |i| {
+                const layer = &mesh.layers[i];
+                if (layer.buffer_allocation.valid and layer.index_count > 0) {
+                    const vertex_slice = layer.buffer_allocation.vertex_slice;
+                    const index_slice = layer.buffer_allocation.index_slice;
+
+                    gpu_data.layers[i] = .{
+                        .vertex_offset = @truncate(vertex_slice.offset),
+                        .index_offset = @truncate(index_slice.offset),
+                        .index_count = layer.index_count,
+                        .arena_indices = GPUDrivenTypes.LayerGPUData.pack(
+                            vertex_slice.arena_index,
+                            index_slice.arena_index,
+                        ),
+                    };
+                }
+            }
+        }
+
+        return gpu_data;
+    }
+
+    /// Check if this chunk has a valid GPU slot assigned
+    pub fn hasGPUSlot(self: *const Self) bool {
+        return self.gpu_slot != GPUDrivenTypes.SlotAllocator.INVALID_SLOT;
     }
 };
 

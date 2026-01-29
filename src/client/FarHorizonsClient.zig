@@ -51,6 +51,17 @@ fn terrainQueryFn(x: i32, y: i32, z: i32) shared.VoxelShape {
     return shared.voxel_shape.EMPTY;
 }
 
+const volk = @import("volk");
+const vk = volk.c;
+
+/// Pre-render callback for GPU-driven chunk metadata uploads
+fn preRenderMetadataUpload(cmd_buffer: vk.VkCommandBuffer, ctx: ?*anyopaque) void {
+    if (ctx) |ptr| {
+        const cm: *ChunkManager = @ptrCast(@alignCast(ptr));
+        cm.commitMetadataUploads(cmd_buffer);
+    }
+}
+
 const VoxelDirection = shared.Direction;
 
 pub const FarHorizonsClient = struct {
@@ -175,6 +186,10 @@ pub const FarHorizonsClient = struct {
             try self.chunk_manager.?.start();
             self.chunk_manager.?.updatePlayerPosition(self.local_player.getPosition(0));
             self.block_interaction = BlockInteraction.init(&self.chunk_manager.?);
+
+            // Set up pre-render callback for GPU-driven chunk metadata uploads
+            self.render_system.setPreRenderCallback(preRenderMetadataUpload, &self.chunk_manager.?);
+
             logger.info("Async chunk loading enabled", .{});
         } else {
             try self.testModelLoading();

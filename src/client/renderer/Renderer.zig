@@ -14,6 +14,7 @@ pub const ImageViewHelper = @import("resource/ImageViewHelper.zig").ImageViewHel
 pub const buffer = @import("buffer/Buffer.zig");
 pub const GpuBuffer = @import("GpuBuffer.zig").GpuBuffer;
 pub const ManagedBuffer = @import("GpuBuffer.zig").ManagedBuffer;
+pub const GPUDrivenTypes = @import("GPUDrivenTypes.zig");
 
 pub const DescriptorPoolBuilder = @import("descriptor/DescriptorPoolBuilder.zig").DescriptorPoolBuilder;
 pub const DescriptorSetManager = @import("descriptor/DescriptorSetManager.zig").DescriptorSetManager;
