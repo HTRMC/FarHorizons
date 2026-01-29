@@ -174,43 +174,34 @@ pub const FaceBakery = struct {
         light_emission: u8,
         texture_index: u32,
     ) BakedQuad {
-        // Get face info for vertex ordering
         const face_info = FaceInfo.fromFacing(facing);
 
-        // Calculate vertex positions
         var positions: [4][3]f32 = undefined;
         var packed_uvs: [4]u64 = undefined;
 
-        // Get UVs (use defaults if not specified)
         const uvs = face.uv orelse defaultFaceUV(from, to, facing);
 
         for (0..4) |i| {
-            // Get vertex info for this corner
             const vertex_info = face_info.getVertexInfo(@intCast(i));
 
-            // Select coordinates based on vertex info
             var vertex: [3]f32 = .{
                 vertex_info.x_face.select(from[0], from[1], from[2], to[0], to[1], to[2]),
                 vertex_info.y_face.select(from[0], from[1], from[2], to[0], to[1], to[2]),
                 vertex_info.z_face.select(from[0], from[1], from[2], to[0], to[1], to[2]),
             };
 
-            // Convert from 0-16 to 0-1 range
             vertex[0] /= 16.0;
             vertex[1] /= 16.0;
             vertex[2] /= 16.0;
 
-            // Apply element rotation if present
             if (element_rotation) |rot| {
                 rotateVertex(&vertex, rot);
             }
 
             positions[i] = vertex;
 
-            // Get UV for this vertex (divided by 16 to normalize)
             const raw_u = getU(uvs, face.rotation, @intCast(i));
             const raw_v = getV(uvs, face.rotation, @intCast(i));
-            // Normalize UVs from 0-16 to 0-1 range
             const u = raw_u / 16.0;
             const v = raw_v / 16.0;
             packed_uvs[i] = packUV(u, v);
@@ -280,20 +271,16 @@ pub const FaceBakery = struct {
         return (@as(u64, u_bits) << 32) | @as(u64, v_bits);
     }
 
-    /// Apply element rotation to a vertex
     fn rotateVertex(vertex: *[3]f32, rotation: BlockElementRotation) void {
-        // Translate to rotation origin
         const origin = rotation.origin;
         vertex[0] -= origin[0] / 16.0;
         vertex[1] -= origin[1] / 16.0;
         vertex[2] -= origin[2] / 16.0;
 
-        // Convert angle to radians
         const angle_rad = rotation.angle * std.math.pi / 180.0;
         const cos_a = @cos(angle_rad);
         const sin_a = @sin(angle_rad);
 
-        // Rotate around the specified axis
         switch (rotation.axis) {
             'x' => {
                 const y = vertex[1];
@@ -316,7 +303,6 @@ pub const FaceBakery = struct {
             else => {},
         }
 
-        // Apply rescale if needed
         if (rotation.rescale) {
             const scale = 1.0 / @max(cos_a, sin_a);
             switch (rotation.axis) {
@@ -336,35 +322,25 @@ pub const FaceBakery = struct {
             }
         }
 
-        // Translate back from rotation origin
         vertex[0] += origin[0] / 16.0;
         vertex[1] += origin[1] / 16.0;
         vertex[2] += origin[2] / 16.0;
     }
-
-    // =====================
-    // Model-Level Rotation (from blockstate variant x/y)
-    // =====================
 
     /// Apply model-level rotation (x/y from variant) to a baked quad
     /// x: rotation around X-axis (pitch) in degrees (0, 90, 180, 270)
     /// y: rotation around Y-axis (yaw) in degrees (0, 90, 180, 270)
     /// uvlock: if true, counter-rotate UVs to maintain world-aligned textures
     pub fn rotateQuad(quad: *BakedQuad, x: i16, y: i16, uvlock: bool) void {
-        // Skip if no rotation
         if (x == 0 and y == 0) return;
 
-        // Rotate all 4 vertex positions around block center (0.5, 0.5, 0.5)
-        // Apply Y rotation first, then X
         rotatePosition(&quad.position0, x, y);
         rotatePosition(&quad.position1, x, y);
         rotatePosition(&quad.position2, x, y);
         rotatePosition(&quad.position3, x, y);
 
-        // Rotate the face direction for correct culling
         quad.direction = rotateFaceDirection(quad.direction, x, y);
 
-        // If uvlock is true, counter-rotate UVs to keep them world-aligned
         if (uvlock) {
             rotateUVs(quad, x, y);
         }
