@@ -19,7 +19,6 @@ const OctahedralGroup = voxel_shape.OctahedralGroup;
 const rotate = voxel_shape.rotate;
 const rotateHorizontal = voxel_shape.rotateHorizontal;
 
-// IndexMerger for mixed-resolution operations
 const index_merger = @import("IndexMerger.zig");
 const MergerUnion = index_merger.MergerUnion;
 const createMerger = index_merger.createMerger;
@@ -76,10 +75,6 @@ pub const BooleanOp = enum {
     }
 };
 
-// ======================
-// Pre-defined Shapes
-// ======================
-
 pub const Shapes = struct {
     /// Empty shape (air, no collision/occlusion)
     pub const EMPTY = voxel_shape.EMPTY;
@@ -132,17 +127,6 @@ pub const Shapes = struct {
     /// Lily pad (full XZ, thin on Y)
     pub const LILY_PAD = voxel_shape.fromBlockBounds(.{ 0, 0, 0 }, .{ 16, 1.5, 16 });
 
-    // === Stair shapes ===
-    //
-    // Base shapes:
-    // - SHAPE_OUTER = column(16, 0, 8) OR box(0, 8, 0, 8, 16, 8)
-    //   = bottom_slab OR NW_corner_step
-    // - SHAPE_STRAIGHT = SHAPE_OUTER OR rotate(SHAPE_OUTER, 90)
-    //   = bottom_slab + NW + NE corners = north-facing straight stair
-    // - SHAPE_INNER = SHAPE_STRAIGHT OR rotate(SHAPE_STRAIGHT, 90)
-    //   = bottom_slab + N + E edges = NE inner corner stair
-
-    /// Block.column(16.0, 0.0, 8.0) = bottom slab
     fn column(size_xz: f32, min_y: f32, max_y: f32) VoxelShape {
         const half = size_xz / 2.0;
         return voxel_shape.fromBlockBounds(
@@ -151,45 +135,32 @@ pub const Shapes = struct {
         );
     }
 
-    /// SHAPE_OUTER: bottom slab + NW corner step
-    /// farhorizons: Shapes.or(Block.column(16.0, 0.0, 8.0), Block.box(0.0, 8.0, 0.0, 8.0, 16.0, 8.0))
+    /// Bottom slab + NW corner step
     const SHAPE_OUTER: VoxelShape = blk: {
         const bottom_slab = column(16.0, 0.0, 8.0);
         const nw_corner = voxel_shape.fromBlockBounds(.{ 0, 8, 0 }, .{ 8, 16, 8 });
         break :blk @"or"(&bottom_slab, &nw_corner);
     };
 
-    /// SHAPE_STRAIGHT: SHAPE_OUTER + rotate(SHAPE_OUTER, 90)
-    /// = bottom slab + NW corner + NE corner = north-facing straight stair
+    /// North-facing straight stair: bottom slab + NW + NE corners
     const SHAPE_STRAIGHT: VoxelShape = blk: {
         const rotated = rotate(SHAPE_OUTER, OctahedralGroup.BLOCK_ROT_Y_90);
         break :blk @"or"(&SHAPE_OUTER, &rotated);
     };
 
-    /// SHAPE_INNER: SHAPE_STRAIGHT + rotate(SHAPE_STRAIGHT, 90)
-    /// = north edge + east edge = NE inner corner
+    /// NE inner corner: north edge + east edge
     const SHAPE_INNER: VoxelShape = blk: {
         const rotated = rotate(SHAPE_STRAIGHT, OctahedralGroup.BLOCK_ROT_Y_90);
         break :blk @"or"(&SHAPE_STRAIGHT, &rotated);
     };
 
-    // === Direction-indexed shape maps ===
-    // Indexed by Direction enum: [down, up, north, south, west, east]
-    // Only horizontal directions are used: north=2, south=3, west=4, east=5
-
-    /// rotateHorizontal creates Map<Direction, VoxelShape>
-    /// Returns shapes indexed by direction
+    /// Creates shapes indexed by horizontal Direction (north=2, south=3, west=4, east=5)
     fn rotateHorizontalMap(base: VoxelShape, initial: OctahedralGroup) [6]VoxelShape {
         var result: [6]VoxelShape = undefined;
-        // North
         result[@intFromEnum(Direction.north)] = rotate(base, initial);
-        // East (90 CW)
         result[@intFromEnum(Direction.east)] = rotate(base, OctahedralGroup.BLOCK_ROT_Y_90.compose(initial));
-        // South (180)
         result[@intFromEnum(Direction.south)] = rotate(base, OctahedralGroup.BLOCK_ROT_Y_180.compose(initial));
-        // West (270)
         result[@intFromEnum(Direction.west)] = rotate(base, OctahedralGroup.BLOCK_ROT_Y_270.compose(initial));
-        // Fill unused directions with empty
         result[@intFromEnum(Direction.down)] = EMPTY;
         result[@intFromEnum(Direction.up)] = EMPTY;
         return result;
@@ -205,22 +176,13 @@ pub const Shapes = struct {
     pub const SHAPE_TOP_STRAIGHT = rotateHorizontalMap(SHAPE_STRAIGHT, OctahedralGroup.INVERT_Y);
     pub const SHAPE_TOP_INNER = rotateHorizontalMap(SHAPE_INNER, OctahedralGroup.INVERT_Y);
 
-    /// Get stair shape by state
-    /// shape_type: straight, inner_left, inner_right, outer_left, outer_right
-    /// half: bottom, top
-    /// facing: north, south, east, west (as Direction enum)
     pub fn getStairShape(shape_type: StairShape, half: StairHalf, facing: Direction) *const VoxelShape {
-        // Select the map based on shape type and half
         const map: *const [6]VoxelShape = switch (shape_type) {
             .straight => if (half == .bottom) &SHAPE_BOTTOM_STRAIGHT else &SHAPE_TOP_STRAIGHT,
             .outer_left, .outer_right => if (half == .bottom) &SHAPE_BOTTOM_OUTER else &SHAPE_TOP_OUTER,
             .inner_left, .inner_right => if (half == .bottom) &SHAPE_BOTTOM_INNER else &SHAPE_TOP_INNER,
         };
 
-        // Determine lookup direction based on shape type
-        // farhorizons: STRAIGHT, OUTER_LEFT, INNER_RIGHT -> facing
-        //           INNER_LEFT -> facing.getCounterClockWise()
-        //           OUTER_RIGHT -> facing.getClockWise()
         const lookup_dir: Direction = switch (shape_type) {
             .straight, .outer_left, .inner_right => facing,
             .inner_left => facing.counterClockwise(),
@@ -245,49 +207,36 @@ pub const Shapes = struct {
         top,
     };
 
-    // === Direct access constants for backwards compatibility ===
-    // These index into the direction maps
-
-    // Bottom-half straight stairs
     pub const STAIR_BOTTOM_NORTH = SHAPE_BOTTOM_STRAIGHT[@intFromEnum(Direction.north)];
     pub const STAIR_BOTTOM_EAST = SHAPE_BOTTOM_STRAIGHT[@intFromEnum(Direction.east)];
     pub const STAIR_BOTTOM_SOUTH = SHAPE_BOTTOM_STRAIGHT[@intFromEnum(Direction.south)];
     pub const STAIR_BOTTOM_WEST = SHAPE_BOTTOM_STRAIGHT[@intFromEnum(Direction.west)];
 
-    // Top-half straight stairs
     pub const STAIR_TOP_NORTH = SHAPE_TOP_STRAIGHT[@intFromEnum(Direction.north)];
     pub const STAIR_TOP_EAST = SHAPE_TOP_STRAIGHT[@intFromEnum(Direction.east)];
     pub const STAIR_TOP_SOUTH = SHAPE_TOP_STRAIGHT[@intFromEnum(Direction.south)];
     pub const STAIR_TOP_WEST = SHAPE_TOP_STRAIGHT[@intFromEnum(Direction.west)];
 
-    // Bottom-half inner corners (indexed by the corner direction they form)
     pub const STAIR_BOTTOM_INNER_NE = SHAPE_BOTTOM_INNER[@intFromEnum(Direction.north)];
     pub const STAIR_BOTTOM_INNER_SE = SHAPE_BOTTOM_INNER[@intFromEnum(Direction.east)];
     pub const STAIR_BOTTOM_INNER_SW = SHAPE_BOTTOM_INNER[@intFromEnum(Direction.south)];
     pub const STAIR_BOTTOM_INNER_NW = SHAPE_BOTTOM_INNER[@intFromEnum(Direction.west)];
 
-    // Top-half inner corners
     pub const STAIR_TOP_INNER_NE = SHAPE_TOP_INNER[@intFromEnum(Direction.north)];
     pub const STAIR_TOP_INNER_SE = SHAPE_TOP_INNER[@intFromEnum(Direction.east)];
     pub const STAIR_TOP_INNER_SW = SHAPE_TOP_INNER[@intFromEnum(Direction.south)];
     pub const STAIR_TOP_INNER_NW = SHAPE_TOP_INNER[@intFromEnum(Direction.west)];
 
-    // Bottom-half outer corners
     pub const STAIR_BOTTOM_OUTER_NW = SHAPE_BOTTOM_OUTER[@intFromEnum(Direction.north)];
     pub const STAIR_BOTTOM_OUTER_NE = SHAPE_BOTTOM_OUTER[@intFromEnum(Direction.east)];
     pub const STAIR_BOTTOM_OUTER_SE = SHAPE_BOTTOM_OUTER[@intFromEnum(Direction.south)];
     pub const STAIR_BOTTOM_OUTER_SW = SHAPE_BOTTOM_OUTER[@intFromEnum(Direction.west)];
 
-    // Top-half outer corners
     pub const STAIR_TOP_OUTER_NW = SHAPE_TOP_OUTER[@intFromEnum(Direction.north)];
     pub const STAIR_TOP_OUTER_NE = SHAPE_TOP_OUTER[@intFromEnum(Direction.east)];
     pub const STAIR_TOP_OUTER_SE = SHAPE_TOP_OUTER[@intFromEnum(Direction.south)];
     pub const STAIR_TOP_OUTER_SW = SHAPE_TOP_OUTER[@intFromEnum(Direction.west)];
 };
-
-// ======================
-// Factory Functions
-// ======================
 
 /// Create an empty shape
 pub fn empty() VoxelShape {
@@ -316,14 +265,8 @@ pub fn boxFromBlock(from: [3]f32, to: [3]f32) VoxelShape {
     return voxel_shape.fromBlockBounds(from, to);
 }
 
-// ======================
-// Boolean Operations
-// ======================
-
 /// Join two shapes with a boolean operation
-/// Currently only supports same-resolution CubeVoxelShapes
 pub fn join(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) VoxelShape {
-    // Fast paths for common cases
     switch (op) {
         .@"or" => {
             if (a.isEmpty()) return b.*;
@@ -348,7 +291,6 @@ pub fn join(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) VoxelShap
         else => {},
     }
 
-    // For cube shapes with same resolution, do direct bitwise operations
     if (a.* == .cube and b.* == .cube) {
         const ac = &a.cube;
         const bc = &b.cube;
@@ -361,14 +303,11 @@ pub fn join(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) VoxelShap
         }
     }
 
-    // For different resolutions or types, use IndexMerger-based join
     return joinUnoptimized(a, b, op);
 }
 
 /// Join two shapes with potentially different resolutions using IndexMergers
-/// This is the general case that handles any combination of shape types/resolutions
 fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) VoxelShape {
-    // Determine which shape's emptiness matters for this operation
     const first_only_matters = switch (op) {
         .only_first, .not_and => true,
         else => false,
@@ -378,7 +317,6 @@ fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) Vo
         else => false,
     };
 
-    // Get coordinate lists for each shape on each axis
     const a_x = getShapeCoords(a, .x);
     const a_y = getShapeCoords(a, .y);
     const a_z = getShapeCoords(a, .z);
@@ -386,10 +324,8 @@ fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) Vo
     const b_y = getShapeCoords(b, .y);
     const b_z = getShapeCoords(b, .z);
 
-    // Use page allocator for temporary mergers
     const allocator = std.heap.page_allocator;
 
-    // Create mergers for each axis with cost optimization
     var x_merger = createMerger(allocator, 1, a_x, b_x, first_only_matters, second_only_matters) catch return a.*;
     defer x_merger.deinit();
 
@@ -403,7 +339,6 @@ fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) Vo
 
     const z_size = z_merger.size();
 
-    // Create result discrete shape
     if (x_size < 2 or y_size < 2 or z_size < 2) {
         return Shapes.EMPTY;
     }
@@ -414,7 +349,6 @@ fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) Vo
         @intCast(z_size - 1),
     );
 
-    // Get discrete shapes for voxel queries
     const a_discrete = getDiscreteShape(a);
     const b_discrete = getDiscreteShape(b);
 
@@ -440,11 +374,9 @@ fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) Vo
         }
     }
 
-    // Check for empty or full block result
     if (result_shape.base.isEmpty()) return Shapes.EMPTY;
     if (result_shape.base.isFullBlock()) return Shapes.BLOCK;
 
-    // Determine result shape type based on mergers
     const x_coords = x_merger.getList();
     const y_coords = y_merger.getList();
     const z_coords = z_merger.getList();
@@ -452,10 +384,8 @@ fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) Vo
     const all_uniform = isUniformRange(x_coords) and isUniformRange(y_coords) and isUniformRange(z_coords);
 
     if (all_uniform) {
-        // Can use CubeVoxelShape
         return .{ .cube = CubeVoxelShape.fromDiscrete(result_shape) };
     } else {
-        // Need ArrayVoxelShape for non-uniform coordinates
         const array_shape = ArrayVoxelShape.initWithDiscreteAndCoords(
             result_shape,
             x_coords,
@@ -466,7 +396,6 @@ fn joinUnoptimized(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) Vo
     }
 }
 
-/// Helper to get coordinate slice from a shape
 fn getShapeCoords(shape: *const VoxelShape, axis: Axis) []const f64 {
     return switch (shape.*) {
         .cube => |*c| c.getCoordList(axis).constSlice(),
@@ -476,7 +405,6 @@ fn getShapeCoords(shape: *const VoxelShape, axis: Axis) []const f64 {
     };
 }
 
-/// Helper to get discrete shape from VoxelShape
 fn getDiscreteShape(shape: *const VoxelShape) ?*const BitSetDiscreteVoxelShape {
     return switch (shape.*) {
         .cube => |*c| &c.shape,
@@ -486,7 +414,6 @@ fn getDiscreteShape(shape: *const VoxelShape) ?*const BitSetDiscreteVoxelShape {
     };
 }
 
-/// Map result index to first shape index (simplified - uses merger size ratios)
 fn mapIndexToFirst(merger: *const MergerUnion, result_idx: usize) usize {
     return switch (merger.*) {
         .identical => result_idx,
@@ -505,7 +432,6 @@ fn mapIndexToFirst(merger: *const MergerUnion, result_idx: usize) usize {
     };
 }
 
-/// Map result index to second shape index
 fn mapIndexToSecond(merger: *const MergerUnion, result_idx: usize) usize {
     return switch (merger.*) {
         .identical => result_idx,
@@ -524,7 +450,6 @@ fn mapIndexToSecond(merger: *const MergerUnion, result_idx: usize) usize {
     };
 }
 
-/// Join two same-resolution CubeVoxelShapes directly
 fn joinCubesDirectly(a: *const CubeVoxelShape, b: *const CubeVoxelShape, op: BooleanOp) VoxelShape {
     var result = CubeVoxelShape.init(
         a.shape.base.x_size,
@@ -532,7 +457,6 @@ fn joinCubesDirectly(a: *const CubeVoxelShape, b: *const CubeVoxelShape, op: Boo
         a.shape.base.z_size,
     );
 
-    // Apply boolean operation to each voxel
     for (0..a.shape.base.x_size) |x| {
         for (0..a.shape.base.y_size) |y| {
             for (0..a.shape.base.z_size) |z| {
@@ -564,14 +488,8 @@ pub fn @"and"(a: *const VoxelShape, b: *const VoxelShape) VoxelShape {
     return join(a, b, .@"and");
 }
 
-// ======================
-// Occlusion Testing
-// ======================
-
 /// Check if joining two shapes with an operation produces a non-empty result
-/// Used for fast occlusion testing without creating the full result shape
 pub fn joinIsNotEmpty(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp) bool {
-    // Fast paths
     switch (op) {
         .@"or" => return !a.isEmpty() or !b.isEmpty(),
         .@"and" => {
@@ -591,7 +509,6 @@ pub fn joinIsNotEmpty(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp)
         else => {},
     }
 
-    // For cube shapes, do direct check
     if (a.* == .cube and b.* == .cube) {
         const ac = &a.cube;
         const bc = &b.cube;
@@ -616,31 +533,21 @@ pub fn joinIsNotEmpty(a: *const VoxelShape, b: *const VoxelShape, op: BooleanOp)
         }
     }
 
-    // Fallback: compute the join and check if empty
     const result = join(a, b, op);
     return !result.isEmpty();
 }
 
-/// Check if a face should be rendered based on neighbor occlusion
-/// This is the main entry point for face culling
 pub fn shouldRenderFace(
     block_shape: *const VoxelShape,
     neighbor_shape: *const VoxelShape,
     direction: Direction,
 ) bool {
-    // Use the optimized face occlusion check
     return block_shape.shouldRenderFace(direction, neighbor_shape);
 }
 
-/// Get face occlusion shape for a direction
-/// Returns a 2D shape representing which parts of the face are solid
 pub fn getFaceOcclusionShape(shape: *const VoxelShape, direction: Direction) BitSetDiscreteVoxelShape2D {
     return shape.getFaceShapeConst(direction);
 }
-
-// ======================
-// Tests
-// ======================
 
 test "Shapes constants" {
     try std.testing.expect(Shapes.EMPTY.isEmpty());
