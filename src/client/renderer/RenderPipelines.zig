@@ -5,10 +5,6 @@ const std = @import("std");
 const volk = @import("volk");
 const vk = volk.c;
 
-// ============================================================
-// Enums and Types
-// ============================================================
-
 pub const DepthTestFunction = enum {
     disabled,
     always,
@@ -163,38 +159,28 @@ pub const PrimitiveTopology = enum {
     }
 };
 
-// ============================================================
-// Pipeline Snippet - Reusable configuration fragment
-// ============================================================
-
 /// A reusable fragment of pipeline configuration that can be composed
 pub const PipelineSnippet = struct {
-    // Shaders
     vertex_shader: ?[]const u8 = null,
     fragment_shader: ?[]const u8 = null,
 
-    // Rasterization
     cull_mode: ?CullMode = null,
     polygon_mode: ?PolygonMode = null,
     line_width: ?f32 = null,
 
-    // Depth/Stencil
     depth_test: ?DepthTestFunction = null,
     depth_write: ?bool = null,
     depth_bias_enable: ?bool = null,
     depth_bias_constant: ?f32 = null,
     depth_bias_slope: ?f32 = null,
 
-    // Blending
     blend: ?BlendFunction = null,
     write_color: ?bool = null,
     write_alpha: ?bool = null,
 
-    // Input assembly
     topology: ?PrimitiveTopology = null,
     primitive_restart: ?bool = null,
 
-    // Multisampling
     sample_count: ?u8 = null,
 
     /// Merge another snippet into this one (other takes precedence)
@@ -228,10 +214,6 @@ pub const PipelineSnippet = struct {
         return result;
     }
 };
-
-// ============================================================
-// Pre-defined Snippets (like Minecraft's)
-// ============================================================
 
 pub const Snippets = struct {
     /// Base 3D rendering with depth test
@@ -339,10 +321,6 @@ pub const Snippets = struct {
         .blend = BlendFunction.TRANSLUCENT,
     };
 };
-
-// ============================================================
-// Pipeline Builder
-// ============================================================
 
 /// Builder for creating RenderPipeline configurations
 pub const PipelineBuilder = struct {
@@ -467,40 +445,30 @@ pub const PipelineBuilder = struct {
     }
 };
 
-// ============================================================
-// Final Pipeline Configuration
-// ============================================================
-
 /// Complete pipeline configuration ready for Vulkan pipeline creation
 pub const RenderPipelineConfig = struct {
     name: ?[]const u8,
 
-    // Shaders
     vertex_shader: []const u8,
     fragment_shader: []const u8,
 
-    // Rasterization
     cull_mode: CullMode,
     polygon_mode: PolygonMode,
     line_width: f32,
 
-    // Depth/Stencil
     depth_test: DepthTestFunction,
     depth_write: bool,
     depth_bias_enable: bool,
     depth_bias_constant: f32,
     depth_bias_slope: f32,
 
-    // Blending
     blend: BlendFunction,
     write_color: bool,
     write_alpha: bool,
 
-    // Input assembly
     topology: PrimitiveTopology,
     primitive_restart: bool,
 
-    // Multisampling
     sample_count: u8,
 
     /// Create from a snippet with defaults for missing values
@@ -597,10 +565,6 @@ pub const RenderPipelineConfig = struct {
         };
     }
 };
-
-// ============================================================
-// Pre-defined Pipelines (like Minecraft's RenderPipelines.java)
-// ============================================================
 
 pub const Pipelines = struct {
     pub const SOLID_BLOCK = PipelineBuilder.init()
