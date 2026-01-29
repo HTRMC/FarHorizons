@@ -201,7 +201,10 @@ pub const AllocationArena = struct {
     /// Reset the arena to initial state (all free)
     pub fn reset(self: *Self) void {
         self.free_list.clearRetainingCapacity();
-        self.free_list.append(self.allocator, .{ .offset = 0, .size = self.capacity }) catch {};
+        // Should not fail - we just cleared and are using retained capacity
+        self.free_list.append(self.allocator, .{ .offset = 0, .size = self.capacity }) catch |err| {
+            logger.err("Arena reset failed: {} - arena may be corrupted", .{err});
+        };
         self.used = 0;
     }
 
