@@ -1,5 +1,3 @@
-// LivingEntity - extends Entity with travel methods and friction
-
 const std = @import("std");
 const math = @import("Math.zig");
 const Vec3 = math.Vec3;
@@ -8,22 +6,18 @@ const Entity = @import("Entity.zig").Entity;
 pub const LivingEntity = struct {
     const Self = @This();
 
-    // Friction constants for flying movement
     pub const AIR_FRICTION: f64 = 0.91;
     pub const WATER_FRICTION: f64 = 0.8;
     pub const LAVA_FRICTION: f64 = 0.5;
 
-    // Base entity
     entity: Entity = Entity.init(),
 
-    // Sprinting state
     sprinting: bool = false,
 
     pub fn init() Self {
         return .{};
     }
 
-    // Forward entity methods
     pub fn getDeltaMovement(self: *const Self) Vec3 {
         return self.entity.getDeltaMovement();
     }
@@ -86,13 +80,10 @@ pub const LivingEntity = struct {
 
     /// Flying travel with friction
     pub fn travelFlying(self: *Self, input: Vec3, air_speed: f32) void {
-        // Apply movement relative to rotation
         self.moveRelative(air_speed, input);
 
-        // Move entity by delta
         self.move();
 
-        // Apply air friction (0.91)
         const movement = self.getDeltaMovement();
         self.setDeltaMovement(Vec3{
             .x = @floatCast(movement.x * AIR_FRICTION),
