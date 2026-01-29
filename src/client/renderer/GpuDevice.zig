@@ -14,17 +14,14 @@ pub const GpuDevice = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
 
-    // Core Vulkan handles
     device: vk.VkDevice,
     physical_device: vk.VkPhysicalDevice,
     command_pool: vk.VkCommandPool,
     graphics_queue: vk.VkQueue,
 
-    // Device properties
     uniform_offset_alignment: u32,
     max_texture_size: u32,
 
-    // Allocator for internal allocations
     allocator: std.mem.Allocator,
 
     pub fn init(
@@ -34,7 +31,6 @@ pub const GpuDevice = struct {
         graphics_queue: vk.VkQueue,
         allocator: std.mem.Allocator,
     ) Self {
-        // Query device properties
         var props: vk.VkPhysicalDeviceProperties = undefined;
         if (vk.vkGetPhysicalDeviceProperties) |getProps| {
             getProps(physical_device, &props);
@@ -50,10 +46,6 @@ pub const GpuDevice = struct {
             .allocator = allocator,
         };
     }
-
-    // ============================================================
-    // Buffer Creation
-    // ============================================================
 
     /// Create a buffer with the given usage and size
     pub fn createBuffer(
@@ -164,10 +156,6 @@ pub const GpuDevice = struct {
         self.allocator.destroy(buffer);
     }
 
-    // ============================================================
-    // Raw Buffer Creation (for backward compatibility)
-    // ============================================================
-
     /// Result of raw buffer creation
     pub const RawBuffer = struct {
         handle: vk.VkBuffer,
@@ -246,7 +234,6 @@ pub const GpuDevice = struct {
             if (vk.vkFreeMemory) |free| free(self.device, result.memory, null);
         }
 
-        // Map and copy data
         const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
         const vkUnmapMemory = vk.vkUnmapMemory orelse return error.VulkanFunctionNotLoaded;
 
@@ -315,10 +302,6 @@ pub const GpuDevice = struct {
         }
         self.destroyBufferRaw(.{ .handle = buffer.handle, .memory = buffer.memory });
     }
-
-    // ============================================================
-    // Command Execution Helpers
-    // ============================================================
 
     /// Execute a one-time command buffer
     pub fn executeOneTimeCommands(self: *Self, record_fn: *const fn (vk.VkCommandBuffer) anyerror!void) !void {
@@ -418,10 +401,6 @@ pub const GpuDevice = struct {
         }.record);
     }
 
-    // ============================================================
-    // Memory Type Finding
-    // ============================================================
-
     fn findMemoryType(self: *Self, type_filter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {
         const vkGetPhysicalDeviceMemoryProperties = vk.vkGetPhysicalDeviceMemoryProperties orelse return error.VulkanFunctionNotLoaded;
 
@@ -439,10 +418,6 @@ pub const GpuDevice = struct {
 
         return error.NoSuitableMemoryType;
     }
-
-    // ============================================================
-    // Device Properties
-    // ============================================================
 
     pub fn getUniformOffsetAlignment(self: *const Self) u32 {
         return self.uniform_offset_alignment;
