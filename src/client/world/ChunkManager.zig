@@ -313,10 +313,8 @@ pub const ChunkManager = struct {
             ChunkBufferConfig{
                 .view_distance = self.config.view_distance,
                 .vertical_view_distance = self.config.vertical_view_distance,
-                // Use single large buffer for GPU-driven rendering (Voxy approach)
-                // This ensures all chunks fit in arena 0, avoiding multi-arena buffer rebinding
-                .vertex_arena_size = 1024 * 1024 * 1024, // 1 GB
-                .index_arena_size = 512 * 1024 * 1024, // 512 MB
+                // Uses single-buffer mode by default (1GB vertex, 512MB index)
+                // Required for GPU-driven rendering where all geometry must be in one buffer
             },
         );
         self.buffer_manager = buffer_mgr;

@@ -38,24 +38,24 @@ pub const ChunkBufferAllocation = struct {
 
 /// Configuration for the chunk buffer manager
 pub const ChunkBufferConfig = struct {
-    /// Size of each vertex buffer arena (default 256 MB)
-    vertex_arena_size: u64 = 256 * 1024 * 1024,
-    /// Size of each index buffer arena (default 128 MB)
-    index_arena_size: u64 = 128 * 1024 * 1024,
+    /// Size of vertex buffer (single buffer for GPU-driven rendering)
+    vertex_arena_size: u64 = 1024 * 1024 * 1024, // 1 GB default for GPU-driven
+    /// Size of index buffer (single buffer for GPU-driven rendering)
+    index_arena_size: u64 = 512 * 1024 * 1024, // 512 MB default for GPU-driven
     /// Size of the staging ring buffer (default 64 MB)
     staging_size: u64 = 64 * 1024 * 1024,
     /// Vertex size in bytes (should match Vertex struct)
     vertex_size: u64 = 36,
     /// Index size in bytes
     index_size: u64 = 4, // u32 indices
-    /// View distance for pre-allocation (0 = use fixed arena count)
+    /// View distance (used for logging/stats only in single-buffer mode)
     view_distance: u32 = 0,
-    /// Vertical view distance for pre-allocation
+    /// Vertical view distance (used for logging/stats only)
     vertical_view_distance: u32 = 0,
     /// Average chunk mesh size estimate (for pre-allocation)
     avg_chunk_vertex_size: u64 = 64 * 1024, // 64 KB average
     avg_chunk_index_size: u64 = 32 * 1024, // 32 KB average
-    /// Expansion threshold percentage (0-100)
+    /// Expansion threshold percentage (0-100) - not used in single-buffer mode
     expansion_threshold: u8 = 75,
 };
 
@@ -82,75 +82,50 @@ pub const ChunkBufferManager = struct {
     allocator: std.mem.Allocator,
 
     /// Initialize the chunk buffer manager
+    /// Uses single large buffers for GPU-driven rendering (Voxy approach)
     pub fn init(
         allocator: std.mem.Allocator,
         device: vk.VkDevice,
         physical_device: vk.VkPhysicalDevice,
         config: ChunkBufferConfig,
     ) !Self {
-        logger.info("Initializing ChunkBufferManager...", .{});
+        logger.info("Initializing ChunkBufferManager (single-buffer mode for GPU-driven rendering)...", .{});
+        logger.info("  Vertex buffer: {} MB, Index buffer: {} MB", .{
+            config.vertex_arena_size / (1024 * 1024),
+            config.index_arena_size / (1024 * 1024),
+        });
 
-        const use_view_distance = config.view_distance > 0;
+        // Single large buffer for vertices (no multi-arena, no expansion)
+        // This is required for GPU-driven rendering where all geometry must be in one buffer
+        var vertex_arena = try GrowableBufferArena.init(
+            allocator,
+            device,
+            physical_device,
+            .{
+                .arena_size = config.vertex_arena_size,
+                .initial_arena_count = 1,
+                .max_arena_count = 1, // Enforce single buffer - no expansion to multiple arenas
+                .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                .alignment = config.vertex_size,
+                .expansion_threshold_percent = 100, // Disable expansion threshold
+            },
+        );
+        errdefer vertex_arena.deinit();
 
-        var vertex_arena: GrowableBufferArena = undefined;
-        var index_arena: GrowableBufferArena = undefined;
-
-        if (use_view_distance) {
-            logger.info("Using view distance-based pre-allocation: {}x{}", .{
-                config.view_distance,
-                config.vertical_view_distance,
-            });
-
-            vertex_arena = try GrowableBufferArena.initForViewDistance(
-                allocator,
-                device,
-                physical_device,
-                config.view_distance,
-                config.vertical_view_distance,
-                vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                config.vertex_size,
-                config.avg_chunk_vertex_size,
-            );
-            errdefer vertex_arena.deinit();
-
-            index_arena = try GrowableBufferArena.initForViewDistance(
-                allocator,
-                device,
-                physical_device,
-                config.view_distance,
-                config.vertical_view_distance,
-                vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                config.index_size,
-                config.avg_chunk_index_size,
-            );
-        } else {
-            vertex_arena = try GrowableBufferArena.init(
-                allocator,
-                device,
-                physical_device,
-                .{
-                    .arena_size = config.vertex_arena_size,
-                    .initial_arena_count = 1,
-                    .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-                    .alignment = config.vertex_size,
-                    .expansion_threshold_percent = config.expansion_threshold,
-                },
-            );
-            errdefer vertex_arena.deinit();
-
-            index_arena = try GrowableBufferArena.init(
-                allocator,
-                device,
-                physical_device,
-                .{
-                    .arena_size = config.index_arena_size,
-                    .initial_arena_count = 1,
-                    .usage = vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                    .alignment = config.index_size,
-                    .expansion_threshold_percent = config.expansion_threshold,
-                },
-            );
-        }
+        // Single large buffer for indices
+        var index_arena = try GrowableBufferArena.init(
+            allocator,
+            device,
+            physical_device,
+            .{
+                .arena_size = config.index_arena_size,
+                .initial_arena_count = 1,
+                .max_arena_count = 1, // Enforce single buffer
+                .usage = vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                .alignment = config.index_size,
+                .expansion_threshold_percent = 100, // Disable expansion threshold
+            },
+        );
         errdefer index_arena.deinit();
 
         const staging = try StagingRing.init(
