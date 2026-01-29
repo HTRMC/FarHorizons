@@ -5,7 +5,6 @@ const SparseSet = @import("sparse_set.zig").SparseSet;
 const SystemScheduler = @import("system.zig").SystemScheduler;
 const Phase = @import("system.zig").Phase;
 
-// Import all components
 const components = @import("components/components.zig");
 pub const Transform = components.Transform;
 pub const Velocity = components.Velocity;
@@ -112,10 +111,6 @@ pub const World = struct {
         self.tags.deinit();
     }
 
-    // =========================================
-    // Entity Management
-    // =========================================
-
     /// Create a new entity
     pub fn createEntity(self: *Self) !EntityId {
         return self.entities.create();
@@ -125,7 +120,6 @@ pub const World = struct {
     pub fn destroyEntity(self: *Self, id: EntityId) void {
         if (!self.entities.isValid(id)) return;
 
-        // Remove all components
         _ = self.transforms.remove(id);
         _ = self.velocities.remove(id);
         _ = self.physics_bodies.remove(id);
@@ -158,10 +152,6 @@ pub const World = struct {
     pub fn entityIterator(self: *const Self) EntityStorage.Iterator {
         return self.entities.iterator();
     }
-
-    // =========================================
-    // Component Access
-    // =========================================
 
     /// Add a component to an entity
     pub fn addComponent(self: *Self, comptime T: type, id: EntityId, component: T) !void {
@@ -235,10 +225,6 @@ pub const World = struct {
         };
     }
 
-    // =========================================
-    // Queries
-    // =========================================
-
     /// Query for entities with specific components
     /// Returns an iterator that yields entities matching all required components
     pub fn query(self: *Self, comptime Components: type) QueryIterator(Components) {
@@ -281,10 +267,6 @@ pub const World = struct {
             }
         };
     }
-
-    // =========================================
-    // System Management
-    // =========================================
 
     /// System function signature - takes World pointer directly
     pub const SystemFn = *const fn (*Self) void;
