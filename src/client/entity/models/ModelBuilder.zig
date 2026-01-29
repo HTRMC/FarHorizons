@@ -118,7 +118,7 @@ pub const CubeListBuilder = struct {
             .tex_offs_x = self.tex_offs_x,
             .tex_offs_y = self.tex_offs_y,
             .mirror = self.is_mirror,
-        }) catch {};
+        }) catch @panic("Failed to add cube to model - out of memory");
         return self;
     }
 
@@ -144,7 +144,7 @@ pub const PartDefinition = struct {
             .pose = pose,
             .children = std.StringHashMap(*PartDefinition).init(allocator),
         };
-        self.cubes.appendSlice(allocator, cubes) catch {};
+        self.cubes.appendSlice(allocator, cubes) catch @panic("Failed to copy cubes to PartDefinition - out of memory");
         return self;
     }
 
@@ -165,7 +165,13 @@ pub const PartDefinition = struct {
     pub fn addOrReplaceChild(self: *Self, name: []const u8, builder: *CubeListBuilder, pose: PartPose) *PartDefinition {
         const child = PartDefinition.init(self.allocator, builder.getCubes(), pose);
         const name_copy = self.allocator.dupe(u8, name) catch @panic("Failed to dupe name");
-        self.children.put(name_copy, child) catch {};
+        self.children.put(name_copy, child) catch {
+            // Cleanup to avoid memory leak before panicking
+            self.allocator.free(name_copy);
+            child.deinit();
+            self.allocator.destroy(child);
+            @panic("Failed to register child part - out of memory");
+        };
         return child;
     }
 
@@ -342,7 +348,8 @@ fn bakePart(allocator: std.mem.Allocator, def: *PartDefinition, tex_width: u32, 
     // Bake cubes
     var baked_cubes: std.ArrayList(BakedCube) = .empty;
     for (def.cubes.items) |cube_def| {
-        baked_cubes.append(allocator, bakeCube(cube_def, tex_width, tex_height)) catch {};
+        baked_cubes.append(allocator, bakeCube(cube_def, tex_width, tex_height)) catch
+            @panic("Failed to bake cube - out of memory");
     }
 
     // Bake children
@@ -350,12 +357,18 @@ fn bakePart(allocator: std.mem.Allocator, def: *PartDefinition, tex_width: u32, 
     var iter = def.children.iterator();
     while (iter.next()) |entry| {
         const child_part = bakePart(allocator, entry.value_ptr.*, tex_width, tex_height);
-        baked_children.put(entry.key_ptr.*, child_part) catch {};
+        baked_children.put(entry.key_ptr.*, child_part) catch {
+            // Cleanup orphaned child before panicking
+            child_part.deinit();
+            allocator.destroy(child_part);
+            @panic("Failed to register baked child part - out of memory");
+        };
     }
 
     part.* = .{
         .allocator = allocator,
-        .cubes = baked_cubes.toOwnedSlice(allocator) catch &.{},
+        .cubes = baked_cubes.toOwnedSlice(allocator) catch
+            @panic("Failed to convert baked cubes to slice - out of memory"),
         .children = baked_children,
         .pose = def.pose,
     };
