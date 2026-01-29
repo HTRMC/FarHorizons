@@ -442,8 +442,9 @@ pub const FarHorizonsClient = struct {
                         const chunk_count = cm.getActiveChunkCount();
 
                         if (vertex_buffers.len > 0 and index_buffers.len > 0 and chunk_count > 0) {
-                            // Compute view*proj matrix for GPU frustum culling
-                            const view_proj = Mat4.multiply(view, proj);
+                            // Compute proj*view matrix for GPU frustum culling
+                            // This transforms world space to clip space, required for frustum extraction
+                            const view_proj = Mat4.multiply(proj, view);
 
                             self.render_system.drawFrameGPUDriven(
                                 chunk_count,
@@ -461,7 +462,7 @@ pub const FarHorizonsClient = struct {
                             cm.clearStagingCopies();
                         } else if (staging_copies.len > 0 and vertex_buffers.len > 0 and index_buffers.len > 0) {
                             // No chunks ready yet, just process staging copies
-                            const view_proj = Mat4.multiply(view, proj);
+                            const view_proj = Mat4.multiply(proj, view);
                             self.render_system.drawFrameGPUDriven(
                                 0,
                                 view_proj.data,
