@@ -309,9 +309,7 @@ pub const FarHorizonsClient = struct {
                     } else {
                         // Scroll wheel changes hotbar selection
                         self.hotbar.scrollSlot(if (scroll > 0) -1 else 1);
-                        self.render_system.setHotbarSelection(self.hotbar.getSelectedSlot()) catch |err| {
-                            logger.err("Failed to update hotbar selection: {}", .{err});
-                        };
+                        self.render_system.setHotbarSelection(self.hotbar.getSelectedSlot());
                     }
                 }
             }
@@ -337,9 +335,7 @@ pub const FarHorizonsClient = struct {
                 for (number_keys, 0..) |key, i| {
                     if (self.window.isKeyPressed(key)) {
                         self.hotbar.selectSlot(@intCast(i));
-                        self.render_system.setHotbarSelection(self.hotbar.getSelectedSlot()) catch |err| {
-                            logger.err("Failed to update hotbar selection: {}", .{err});
-                        };
+                        self.render_system.setHotbarSelection(self.hotbar.getSelectedSlot());
                         break;
                     }
                 }

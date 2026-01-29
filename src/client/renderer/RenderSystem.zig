@@ -281,7 +281,7 @@ pub const RenderSystem = struct {
         try self.createHotbarDescriptorSets();
         try self.createCrosshairBuffer();
         try self.createHotbarBuffer();
-        try self.updateHotbarSelectionBuffer(0);
+        try self.createHotbarSelectionBuffer();
         // Note: Vertex/Index buffers are created by uploadMesh() with actual geometry
         try self.createUniformBuffers();
         try self.createIndirectBuffer();
@@ -1409,7 +1409,7 @@ pub const RenderSystem = struct {
 
         self.hotbar_buffer.destroy(self.device);
         try self.createHotbarBuffer();
-        try self.updateHotbarSelectionBuffer(self.hotbar_selected_slot);
+        self.writeHotbarSelectionVertices(self.hotbar_selected_slot);
 
         logger.info("Swapchain recreated: {}x{}", .{ self.swapchain_extent.width, self.swapchain_extent.height });
     }
@@ -2798,12 +2798,23 @@ pub const RenderSystem = struct {
         logger.info("Hotbar buffer created", .{});
     }
 
-    fn updateHotbarSelectionBuffer(self: *Self, selected_slot: u8) !void {
+    fn createHotbarSelectionBuffer(self: *Self) !void {
         var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
-        // Destroy old buffer if exists
-        self.hotbar_selection_buffer.destroy(self.device);
+        // Create a persistently mapped buffer for the selection indicator
+        const buffer_size = @sizeOf(UIVertex) * 6;
+        const result = try gpu.createMappedBufferRaw(buffer_size, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        self.hotbar_selection_buffer = .{
+            .handle = result.handle,
+            .memory = result.memory,
+            .mapped = result.mapped,
+        };
 
+        // Initialize with slot 0
+        self.writeHotbarSelectionVertices(0);
+    }
+
+    fn writeHotbarSelectionVertices(self: *Self, selected_slot: u8) void {
         const screen_height: f32 = @floatFromInt(self.swapchain_extent.height);
         const screen_width: f32 = @floatFromInt(self.swapchain_extent.width);
 
@@ -2824,9 +2835,8 @@ pub const RenderSystem = struct {
         const half_width_ndc: f32 = selection_width_pixels / screen_width;
         const height_ndc: f32 = (selection_height_pixels / screen_height) * 2.0;
 
-        // Y position: 1 pixel above hotbar bottom to overlap (in Vulkan coords)
-        const selection_bottom_offset: f32 = 1.0 * gui_scale;
-        const bottom_y: f32 = 1.0 + (selection_bottom_offset / screen_height) * 2.0;
+        // Y position: selection aligns with hotbar bottom
+        const bottom_y: f32 = 1.0;
         const top_y: f32 = bottom_y - height_ndc;
         const left_x: f32 = selection_center_x - half_width_ndc;
         const right_x: f32 = selection_center_x + half_width_ndc;
@@ -2840,8 +2850,11 @@ pub const RenderSystem = struct {
             .{ .pos = .{ left_x, bottom_y }, .uv = .{ 0.0, 1.0 } },
         };
 
-        const result = try gpu.createBufferWithDataRaw(UIVertex, &vertices, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-        self.hotbar_selection_buffer = ManagedBuffer.fromRaw(result.handle, result.memory);
+        // Write directly to mapped memory (no sync needed - host coherent)
+        if (self.hotbar_selection_buffer.mapped) |mapped| {
+            const dest: [*]UIVertex = @ptrCast(@alignCast(mapped));
+            @memcpy(dest[0..6], &vertices);
+        }
     }
 
     fn createHotbarDescriptorSets(self: *Self) !void {
@@ -2886,10 +2899,10 @@ pub const RenderSystem = struct {
     }
 
     /// Update hotbar selection position
-    pub fn setHotbarSelection(self: *Self, slot: u8) !void {
+    pub fn setHotbarSelection(self: *Self, slot: u8) void {
         if (slot != self.hotbar_selected_slot and slot < 9) {
             self.hotbar_selected_slot = slot;
-            try self.updateHotbarSelectionBuffer(slot);
+            self.writeHotbarSelectionVertices(slot);
         }
     }
 
