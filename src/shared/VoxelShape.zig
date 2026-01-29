@@ -11,7 +11,6 @@
 /// - ArrayVoxelShape: Arbitrary coordinate shapes (more flexible)
 const std = @import("std");
 
-// Re-export core types
 pub const DiscreteVoxelShape = @import("DiscreteVoxelShape.zig").DiscreteVoxelShape;
 pub const Axis = @import("DiscreteVoxelShape.zig").Axis;
 pub const Direction = @import("DiscreteVoxelShape.zig").Direction;
@@ -49,10 +48,6 @@ pub const VoxelShape = union(enum) {
     empty: void,
     /// Full block singleton
     block: void,
-
-    // =====================
-    // Shape Queries
-    // =====================
 
     /// Check if shape is empty (no volume)
     pub fn isEmpty(self: *const Self) bool {
@@ -103,10 +98,6 @@ pub const VoxelShape = union(enum) {
             .array => |*s| s.max(axis),
         };
     }
-
-    // =====================
-    // Face Occlusion
-    // =====================
 
     /// Get the 2D face shape for occlusion testing
     pub fn getFaceShape(self: *Self, direction: Direction) BitSetDiscreteVoxelShape2D {
@@ -215,10 +206,6 @@ pub const VoxelShape = union(enum) {
         return !neighbor.faceCoversRegion(direction.opposite(), face_bounds);
     }
 
-    // =====================
-    // Coordinate Queries
-    // =====================
-
     /// Get size along axis (number of divisions)
     pub fn getSize(self: *const Self, axis: Axis) u8 {
         return switch (self.*) {
@@ -245,10 +232,6 @@ pub const VoxelShape = union(enum) {
             .array => |*s| s.findIndex(axis, coord),
         };
     }
-
-    // =====================
-    // Collision Detection
-    // =====================
 
     /// AABB for collision detection (min/max for each axis)
     pub const AABB = struct {
@@ -300,10 +283,6 @@ pub const VoxelShape = union(enum) {
         );
     }
 
-    // =====================
-    // Voxel Queries
-    // =====================
-
     /// Check if voxel at position is filled
     pub fn isFull(self: *const Self, x: u8, y: u8, z: u8) bool {
         return switch (self.*) {
@@ -323,10 +302,6 @@ pub const VoxelShape = union(enum) {
             .array => |*s| &s.shape.base,
         };
     }
-
-    // =====================
-    // Edge Iteration (for block outline rendering)
-    // =====================
 
     /// Callback type for edge iteration
     /// Called with (x1, y1, z1, x2, y2, z2) for each edge in normalized coordinates (0-1)
@@ -351,10 +326,6 @@ pub const VoxelShape = union(enum) {
         }
     }
 
-    // =====================
-    // Cleanup
-    // =====================
-
     pub fn deinit(self: *Self) void {
         switch (self.*) {
             .array => |*s| s.deinit(),
@@ -362,10 +333,6 @@ pub const VoxelShape = union(enum) {
         }
     }
 };
-
-// =====================
-// Factory Functions
-// =====================
 
 /// Create an empty shape
 pub fn empty() VoxelShape {
@@ -418,10 +385,6 @@ pub fn create(
     return fromBlockBounds(from, to);
 }
 
-// =====================
-// Pre-defined Shapes
-// =====================
-
 /// Empty shape constant
 pub const EMPTY = VoxelShape{ .empty = {} };
 
@@ -430,10 +393,6 @@ pub const BLOCK = VoxelShape{ .block = {} };
 
 /// Block center point for rotation (0.5, 0.5, 0.5)
 pub const BLOCK_CENTER: [3]f64 = .{ 0.5, 0.5, 0.5 };
-
-// =====================
-// Shape Rotation
-// =====================
 
 /// Rotate a VoxelShape using an OctahedralGroup transformation
 pub fn rotate(shape: VoxelShape, rotation: OctahedralGroup) VoxelShape {
@@ -564,10 +523,6 @@ pub fn rotateHorizontalWithInitial(north_shape: VoxelShape, initial: OctahedralG
     };
 }
 
-// =====================
-// Edge Iteration Helpers
-// =====================
-
 /// Emit the 12 edges of an axis-aligned box
 fn emitBoxEdges(
     x1: f64,
@@ -579,26 +534,23 @@ fn emitBoxEdges(
     consumer: VoxelShape.EdgeConsumer,
     ctx: *anyopaque,
 ) void {
-    // Bottom face edges (y = y1)
-    consumer(x1, y1, z1, x2, y1, z1, ctx); // Front edge
-    consumer(x1, y1, z2, x2, y1, z2, ctx); // Back edge
-    consumer(x1, y1, z1, x1, y1, z2, ctx); // Left edge
-    consumer(x2, y1, z1, x2, y1, z2, ctx); // Right edge
-
-    // Top face edges (y = y2)
-    consumer(x1, y2, z1, x2, y2, z1, ctx); // Front edge
-    consumer(x1, y2, z2, x2, y2, z2, ctx); // Back edge
-    consumer(x1, y2, z1, x1, y2, z2, ctx); // Left edge
-    consumer(x2, y2, z1, x2, y2, z2, ctx); // Right edge
-
-    // Vertical edges connecting top and bottom
-    consumer(x1, y1, z1, x1, y2, z1, ctx); // Front-left
-    consumer(x2, y1, z1, x2, y2, z1, ctx); // Front-right
-    consumer(x1, y1, z2, x1, y2, z2, ctx); // Back-left
-    consumer(x2, y1, z2, x2, y2, z2, ctx); // Back-right
+    // Bottom face edges
+    consumer(x1, y1, z1, x2, y1, z1, ctx);
+    consumer(x1, y1, z2, x2, y1, z2, ctx);
+    consumer(x1, y1, z1, x1, y1, z2, ctx);
+    consumer(x2, y1, z1, x2, y1, z2, ctx);
+    // Top face edges
+    consumer(x1, y2, z1, x2, y2, z1, ctx);
+    consumer(x1, y2, z2, x2, y2, z2, ctx);
+    consumer(x1, y2, z1, x1, y2, z2, ctx);
+    consumer(x2, y2, z1, x2, y2, z2, ctx);
+    // Vertical edges
+    consumer(x1, y1, z1, x1, y2, z1, ctx);
+    consumer(x2, y1, z1, x2, y2, z1, ctx);
+    consumer(x1, y1, z2, x1, y2, z2, ctx);
+    consumer(x2, y1, z2, x2, y2, z2, ctx);
 }
 
-/// Context for edge iteration that converts discrete coords to normalized
 const EdgeIterContext = struct {
     consumer: VoxelShape.EdgeConsumer,
     user_ctx: *anyopaque,
@@ -607,11 +559,8 @@ const EdgeIterContext = struct {
     z_size: u8,
 };
 
-/// Callback that converts discrete coordinates to normalized (0-1) and forwards to user consumer
 fn discreteToNormalizedEdge(x1: u8, y1: u8, z1: u8, x2: u8, y2: u8, z2: u8, ctx_ptr: *anyopaque) void {
     const ctx: *const EdgeIterContext = @ptrCast(@alignCast(ctx_ptr));
-
-    // Convert discrete voxel coordinates to normalized (0-1)
     const fx1 = @as(f64, @floatFromInt(x1)) / @as(f64, @floatFromInt(ctx.x_size));
     const fy1 = @as(f64, @floatFromInt(y1)) / @as(f64, @floatFromInt(ctx.y_size));
     const fz1 = @as(f64, @floatFromInt(z1)) / @as(f64, @floatFromInt(ctx.z_size));
@@ -622,8 +571,6 @@ fn discreteToNormalizedEdge(x1: u8, y1: u8, z1: u8, x2: u8, y2: u8, z2: u8, ctx_
     ctx.consumer(fx1, fy1, fz1, fx2, fy2, fz2, ctx.user_ctx);
 }
 
-/// Edge iteration for CubeVoxelShape using proper voxel-based edge detection
-/// This correctly handles complex shapes like stairs by detecting actual shape edges
 fn forAllEdgesDiscrete(shape: *const CubeVoxelShape, consumer: VoxelShape.EdgeConsumer, ctx: *anyopaque) void {
     var iter_ctx = EdgeIterContext{
         .consumer = consumer,
@@ -633,11 +580,9 @@ fn forAllEdgesDiscrete(shape: *const CubeVoxelShape, consumer: VoxelShape.EdgeCo
         .z_size = shape.shape.base.z_size,
     };
 
-    // Use the proper edge detection algorithm with neighbor merging
     shape.shape.forAllEdges(&discreteToNormalizedEdge, @ptrCast(&iter_ctx), true);
 }
 
-/// Edge iteration for ArrayVoxelShape using proper voxel-based edge detection
 fn forAllEdgesDiscreteArray(shape: *const ArrayVoxelShape, consumer: VoxelShape.EdgeConsumer, ctx: *anyopaque) void {
     var iter_ctx = EdgeIterContext{
         .consumer = consumer,
@@ -646,14 +591,8 @@ fn forAllEdgesDiscreteArray(shape: *const ArrayVoxelShape, consumer: VoxelShape.
         .y_size = shape.shape.base.y_size,
         .z_size = shape.shape.base.z_size,
     };
-
-    // Use the proper edge detection algorithm with neighbor merging
     shape.shape.forAllEdges(&discreteToNormalizedEdge, @ptrCast(&iter_ctx), true);
 }
-
-// =====================
-// Tests
-// =====================
 
 test "VoxelShape empty and block" {
     try std.testing.expect(EMPTY.isEmpty());
@@ -714,10 +653,6 @@ test "VoxelShape shouldRenderFace" {
     // Slab next to air: render
     try std.testing.expect(slab.shouldRenderFace(.north, &air));
 }
-
-// =====================
-// Block Occlusion (using SliceShape)
-// =====================
 
 /// Static full block shape for blockOccludes fast paths
 var static_full_shape: BitSetDiscreteVoxelShape = BitSetDiscreteVoxelShape.initFull(1, 1, 1);
