@@ -224,6 +224,13 @@ pub fn build(b: *std.Build) void {
     linkDependencies(b, exe, tracy_enabled);
     b.installArtifact(exe);
 
+    // Install assets directory to zig-out/bin/assets
+    b.getInstallStep().dependOn(&b.addInstallDirectory(.{
+        .source_dir = b.path("assets"),
+        .install_dir = .bin,
+        .install_subdir = "assets",
+    }).step);
+
     // Server executable (no GLFW needed)
     const server_exe = b.addExecutable(.{
         .name = "FarHorizons-Server",
