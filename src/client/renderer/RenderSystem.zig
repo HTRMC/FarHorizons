@@ -113,6 +113,7 @@ pub const RenderSystem = struct {
 
     ui_pipeline_layout: vk.VkPipelineLayout = null,
     ui_pipeline: vk.VkPipeline = null,
+    hotbar_pipeline: vk.VkPipeline = null, // Separate pipeline with alpha blending for hotbar
     ui_descriptor_set_layout: vk.VkDescriptorSetLayout = null,
     ui_descriptor_pool: vk.VkDescriptorPool = null,
     ui_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
@@ -121,6 +122,23 @@ pub const RenderSystem = struct {
     crosshair_texture_memory: vk.VkDeviceMemory = null,
     crosshair_texture_view: vk.VkImageView = null,
     crosshair_sampler: vk.VkSampler = null,
+
+    // Hotbar UI resources
+    hotbar_texture: vk.VkImage = null,
+    hotbar_texture_memory: vk.VkDeviceMemory = null,
+    hotbar_texture_view: vk.VkImageView = null,
+    hotbar_sampler: vk.VkSampler = null,
+    hotbar_buffer: ManagedBuffer = .{},
+
+    hotbar_selection_texture: vk.VkImage = null,
+    hotbar_selection_texture_memory: vk.VkDeviceMemory = null,
+    hotbar_selection_texture_view: vk.VkImageView = null,
+    hotbar_selection_sampler: vk.VkSampler = null,
+    hotbar_selection_buffer: ManagedBuffer = .{},
+
+    hotbar_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
+    hotbar_selection_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
+    hotbar_selected_slot: u8 = 0,
 
     line_pipeline_layout: vk.VkPipelineLayout = null,
     line_pipeline: vk.VkPipeline = null,
@@ -257,9 +275,13 @@ pub const RenderSystem = struct {
         );
 
         try self.loadCrosshairTexture();
+        try self.loadHotbarTextures();
         try self.createUIDescriptorPool();
         try self.createUIDescriptorSets();
+        try self.createHotbarDescriptorSets();
         try self.createCrosshairBuffer();
+        try self.createHotbarBuffer();
+        try self.updateHotbarSelectionBuffer(0);
         // Note: Vertex/Index buffers are created by uploadMesh() with actual geometry
         try self.createUniformBuffers();
         try self.createIndirectBuffer();
@@ -689,84 +711,85 @@ pub const RenderSystem = struct {
 
         // Draw geometry using indirect drawing with layer-specific pipelines
         if (params.draw_commands) |commands| {
-            if (commands.len == 0) return;
-            if (params.vertex_buffers) |vb_array| {
-                if (params.index_buffers) |ib_array| {
-                    const vkCmdDrawIndexedIndirect = vk.vkCmdDrawIndexedIndirect orelse return error.VulkanFunctionNotLoaded;
+            if (commands.len > 0) {
+                if (params.vertex_buffers) |vb_array| {
+                    if (params.index_buffers) |ib_array| {
+                        const vkCmdDrawIndexedIndirect = vk.vkCmdDrawIndexedIndirect orelse return error.VulkanFunctionNotLoaded;
 
-                    // Write all commands to indirect buffer
-                    const indirect_cmds: [*]IndirectDrawCommand = @ptrCast(@alignCast(self.indirect_buffer.mapped.?));
-                    for (commands, 0..) |cmd, i| {
-                        indirect_cmds[i] = IndirectDrawCommand{
-                            .index_count = cmd.index_count,
-                            .instance_count = 1,
-                            .first_index = @intCast(cmd.index_offset / 4),
-                            .vertex_offset = @intCast(cmd.vertex_offset / @sizeOf(Vertex)),
-                            .first_instance = 0,
-                        };
-                    }
+                        // Write all commands to indirect buffer
+                        const indirect_cmds: [*]IndirectDrawCommand = @ptrCast(@alignCast(self.indirect_buffer.mapped.?));
+                        for (commands, 0..) |cmd, i| {
+                            indirect_cmds[i] = IndirectDrawCommand{
+                                .index_count = cmd.index_count,
+                                .instance_count = 1,
+                                .first_index = @intCast(cmd.index_offset / 4),
+                                .vertex_offset = @intCast(cmd.vertex_offset / @sizeOf(Vertex)),
+                                .first_instance = 0,
+                            };
+                        }
 
-                    // Issue batched indirect draws
-                    var batch_start: u32 = 0;
-                    var current_vertex_arena: u16 = 0xFFFF;
-                    var current_index_arena: u16 = 0xFFFF;
-                    var current_layer: u8 = 0xFF;
+                        // Issue batched indirect draws
+                        var batch_start: u32 = 0;
+                        var current_vertex_arena: u16 = 0xFFFF;
+                        var current_index_arena: u16 = 0xFFFF;
+                        var current_layer: u8 = 0xFF;
 
-                    for (commands, 0..) |cmd, i| {
-                        const need_state_change = cmd.render_layer != current_layer or
-                            cmd.vertex_arena != current_vertex_arena or
-                            cmd.index_arena != current_index_arena;
+                        for (commands, 0..) |cmd, i| {
+                            const need_state_change = cmd.render_layer != current_layer or
+                                cmd.vertex_arena != current_vertex_arena or
+                                cmd.index_arena != current_index_arena;
 
-                        if (need_state_change) {
-                            // Flush previous batch if any
-                            const batch_count = @as(u32, @intCast(i)) - batch_start;
-                            if (batch_count > 0 and current_layer != 0xFF) {
-                                const indirect_offset = @as(u64, batch_start) * @sizeOf(IndirectDrawCommand);
-                                vkCmdDrawIndexedIndirect(
-                                    command_buffer,
-                                    self.indirect_buffer.handle,
-                                    indirect_offset,
-                                    batch_count,
-                                    @sizeOf(IndirectDrawCommand),
-                                );
-                            }
+                            if (need_state_change) {
+                                // Flush previous batch if any
+                                const batch_count = @as(u32, @intCast(i)) - batch_start;
+                                if (batch_count > 0 and current_layer != 0xFF) {
+                                    const indirect_offset = @as(u64, batch_start) * @sizeOf(IndirectDrawCommand);
+                                    vkCmdDrawIndexedIndirect(
+                                        command_buffer,
+                                        self.indirect_buffer.handle,
+                                        indirect_offset,
+                                        batch_count,
+                                        @sizeOf(IndirectDrawCommand),
+                                    );
+                                }
 
-                            // Update state for new batch
-                            batch_start = @intCast(i);
+                                // Update state for new batch
+                                batch_start = @intCast(i);
 
-                            // Bind pipeline if layer changed
-                            if (cmd.render_layer != current_layer) {
-                                current_layer = cmd.render_layer;
-                                const pipeline = self.layer_pipelines[current_layer];
-                                vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-                            }
+                                // Bind pipeline if layer changed
+                                if (cmd.render_layer != current_layer) {
+                                    current_layer = cmd.render_layer;
+                                    const pipeline = self.layer_pipelines[current_layer];
+                                    vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                                }
 
-                            // Bind buffers if arena changed
-                            if (cmd.vertex_arena != current_vertex_arena or cmd.index_arena != current_index_arena) {
-                                current_vertex_arena = cmd.vertex_arena;
-                                current_index_arena = cmd.index_arena;
+                                // Bind buffers if arena changed
+                                if (cmd.vertex_arena != current_vertex_arena or cmd.index_arena != current_index_arena) {
+                                    current_vertex_arena = cmd.vertex_arena;
+                                    current_index_arena = cmd.index_arena;
 
-                                if (current_vertex_arena < vb_array.len and current_index_arena < ib_array.len) {
-                                    const arena_vb = [_]vk.VkBuffer{vb_array[current_vertex_arena]};
-                                    const offsets = [_]vk.VkDeviceSize{0};
-                                    vkCmdBindVertexBuffers(command_buffer, 0, 1, &arena_vb, &offsets);
-                                    vkCmdBindIndexBuffer(command_buffer, ib_array[current_index_arena], 0, vk.VK_INDEX_TYPE_UINT32);
+                                    if (current_vertex_arena < vb_array.len and current_index_arena < ib_array.len) {
+                                        const arena_vb = [_]vk.VkBuffer{vb_array[current_vertex_arena]};
+                                        const offsets = [_]vk.VkDeviceSize{0};
+                                        vkCmdBindVertexBuffers(command_buffer, 0, 1, &arena_vb, &offsets);
+                                        vkCmdBindIndexBuffer(command_buffer, ib_array[current_index_arena], 0, vk.VK_INDEX_TYPE_UINT32);
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    // Flush final batch
-                    const final_batch_count = @as(u32, @intCast(commands.len)) - batch_start;
-                    if (final_batch_count > 0 and current_layer != 0xFF) {
-                        const indirect_offset = @as(u64, batch_start) * @sizeOf(IndirectDrawCommand);
-                        vkCmdDrawIndexedIndirect(
-                            command_buffer,
-                            self.indirect_buffer.handle,
-                            indirect_offset,
-                            final_batch_count,
-                            @sizeOf(IndirectDrawCommand),
-                        );
+                        // Flush final batch
+                        const final_batch_count = @as(u32, @intCast(commands.len)) - batch_start;
+                        if (final_batch_count > 0 and current_layer != 0xFF) {
+                            const indirect_offset = @as(u64, batch_start) * @sizeOf(IndirectDrawCommand);
+                            vkCmdDrawIndexedIndirect(
+                                command_buffer,
+                                self.indirect_buffer.handle,
+                                indirect_offset,
+                                final_batch_count,
+                                @sizeOf(IndirectDrawCommand),
+                            );
+                        }
                     }
                 }
             }
@@ -817,7 +840,10 @@ pub const RenderSystem = struct {
         // Draw block outline (lines)
         try self.drawBlockOutline(command_buffer, &descriptor_sets);
 
-        // Draw crosshair (UI overlay)
+        // Draw hotbar (UI overlay)
+        try self.drawHotbar(command_buffer);
+
+        // Draw crosshair (UI overlay - on top of hotbar)
         try self.drawCrosshair(command_buffer);
 
         vkCmdEndRenderPass(command_buffer);
@@ -904,6 +930,38 @@ pub const RenderSystem = struct {
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &ui_vertex_buffers, &ui_offsets);
 
         vkCmdDraw(command_buffer, 6, 1, 0, 0);
+    }
+
+    /// Draw hotbar UI
+    fn drawHotbar(self: *Self, command_buffer: vk.VkCommandBuffer) !void {
+        if (self.hotbar_pipeline == null or !self.hotbar_buffer.isValid()) return;
+
+        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdDraw = vk.vkCmdDraw orelse return error.VulkanFunctionNotLoaded;
+
+        vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.hotbar_pipeline);
+
+        const offsets = [_]vk.VkDeviceSize{0};
+
+        // Draw main hotbar
+        const hotbar_sets = [_]vk.VkDescriptorSet{self.hotbar_descriptor_sets[self.current_frame]};
+        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline_layout, 0, 1, &hotbar_sets, 0, null);
+
+        const hotbar_buffers = [_]vk.VkBuffer{self.hotbar_buffer.handle};
+        vkCmdBindVertexBuffers(command_buffer, 0, 1, &hotbar_buffers, &offsets);
+        vkCmdDraw(command_buffer, 6, 1, 0, 0);
+
+        // Draw selection indicator
+        if (self.hotbar_selection_buffer.isValid()) {
+            const selection_sets = [_]vk.VkDescriptorSet{self.hotbar_selection_descriptor_sets[self.current_frame]};
+            vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.ui_pipeline_layout, 0, 1, &selection_sets, 0, null);
+
+            const selection_buffers = [_]vk.VkBuffer{self.hotbar_selection_buffer.handle};
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, &selection_buffers, &offsets);
+            vkCmdDraw(command_buffer, 6, 1, 0, 0);
+        }
     }
 
     // ============================================================
@@ -1276,6 +1334,12 @@ pub const RenderSystem = struct {
         // Line rendering (block outline)
         try self.drawBlockOutline(command_buffer, &descriptor_sets);
 
+        // Draw hotbar (UI overlay)
+        try self.drawHotbar(command_buffer);
+
+        // Draw crosshair (UI overlay - on top of hotbar)
+        try self.drawCrosshair(command_buffer);
+
         vkCmdEndRenderPass(command_buffer);
 
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
@@ -1338,6 +1402,14 @@ pub const RenderSystem = struct {
         try self.createImageViews();
         try self.createDepthResources();
         try self.createFramebuffers();
+
+        // Recreate UI buffers with new screen dimensions
+        self.crosshair_buffer.destroy(self.device);
+        try self.createCrosshairBuffer();
+
+        self.hotbar_buffer.destroy(self.device);
+        try self.createHotbarBuffer();
+        try self.updateHotbarSelectionBuffer(self.hotbar_selected_slot);
 
         logger.info("Swapchain recreated: {}x{}", .{ self.swapchain_extent.width, self.swapchain_extent.height });
     }
@@ -2472,6 +2544,33 @@ pub const RenderSystem = struct {
         self.ui_pipeline_layout = result.layout;
 
         logger.info("UI pipeline created", .{});
+
+        // Create separate hotbar pipeline with standard alpha blending
+        const alpha_blend = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        var hotbar_factory = VulkanPipelineFactory.init(self.device, self.render_pass);
+        const hotbar_result = try hotbar_factory.create(.{
+            .config = RenderPipelines.Pipelines.UI,
+            .vertex_format = .ui_2d,
+            .descriptor_set_layout = self.ui_descriptor_set_layout,
+            .vertex_shader_code = vert_shader_code,
+            .fragment_shader_code = frag_shader_code,
+            .custom_blend = alpha_blend,
+        });
+
+        self.hotbar_pipeline = hotbar_result.pipeline;
+        // Reuse the same layout since it's identical
+
+        logger.info("Hotbar pipeline created", .{});
     }
 
     fn createLinePipeline(self: *Self) !void {
@@ -2555,10 +2654,51 @@ pub const RenderSystem = struct {
         logger.info("Crosshair texture loaded ({}x{})", .{ texture.width, texture.height });
     }
 
+    fn loadHotbarTextures(self: *Self) !void {
+        const gpu = if (self.gpu_device) |*g| g else return error.GpuDeviceNotInitialized;
+
+        // Load main hotbar texture
+        const hotbar_tex = try TextureLoader.load(
+            gpu,
+            "assets/farhorizons/textures/gui/sprites/hud/hotbar.png",
+            .{
+                .filter = .nearest,
+                .address_mode = .clamp_to_edge,
+                .format = .rgba8_unorm,
+            },
+        );
+
+        self.hotbar_texture = hotbar_tex.image;
+        self.hotbar_texture_memory = hotbar_tex.memory;
+        self.hotbar_texture_view = hotbar_tex.view;
+        self.hotbar_sampler = hotbar_tex.sampler;
+
+        logger.info("Hotbar texture loaded ({}x{})", .{ hotbar_tex.width, hotbar_tex.height });
+
+        // Load selection texture
+        const selection_tex = try TextureLoader.load(
+            gpu,
+            "assets/farhorizons/textures/gui/sprites/hud/hotbar_selection.png",
+            .{
+                .filter = .nearest,
+                .address_mode = .clamp_to_edge,
+                .format = .rgba8_unorm,
+            },
+        );
+
+        self.hotbar_selection_texture = selection_tex.image;
+        self.hotbar_selection_texture_memory = selection_tex.memory;
+        self.hotbar_selection_texture_view = selection_tex.view;
+        self.hotbar_selection_sampler = selection_tex.sampler;
+
+        logger.info("Hotbar selection texture loaded ({}x{})", .{ selection_tex.width, selection_tex.height });
+    }
+
     fn createUIDescriptorPool(self: *Self) !void {
+        // Need sets for: crosshair (2) + hotbar (2) + selection (2) = 6 sets
         self.ui_descriptor_pool = try DescriptorPoolBuilder.init()
-            .withSamplers(MAX_FRAMES_IN_FLIGHT)
-            .withMaxSets(MAX_FRAMES_IN_FLIGHT)
+            .withSamplers(MAX_FRAMES_IN_FLIGHT * 3)
+            .withMaxSets(MAX_FRAMES_IN_FLIGHT * 3)
             .build(self.device);
 
         logger.info("UI descriptor pool created", .{});
@@ -2617,6 +2757,140 @@ pub const RenderSystem = struct {
         self.crosshair_buffer = ManagedBuffer.fromRaw(result.handle, result.memory);
 
         logger.info("Crosshair buffer created", .{});
+    }
+
+    fn createHotbarBuffer(self: *Self) !void {
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+
+        const screen_height: f32 = @floatFromInt(self.swapchain_extent.height);
+        const screen_width: f32 = @floatFromInt(self.swapchain_extent.width);
+
+        // GUI scale calculation (same as crosshair)
+        const gui_scale: f32 = if (screen_height < 480) 1.0 else if (screen_height < 720) 2.0 else if (screen_height < 1080) 2.0 else 3.0;
+
+        // Hotbar dimensions from Minecraft spec: 182x22 pixels
+        const hotbar_width_pixels: f32 = 182.0 * gui_scale;
+        const hotbar_height_pixels: f32 = 22.0 * gui_scale;
+
+        // Convert to NDC (centered horizontally, at bottom of screen)
+        // In Vulkan: Y=-1 is TOP, Y=+1 is BOTTOM
+        const half_width_ndc: f32 = hotbar_width_pixels / screen_width;
+        const height_ndc: f32 = (hotbar_height_pixels / screen_height) * 2.0;
+
+        // Position: bottom of screen (Y = +1 in Vulkan NDC), centered (X = 0)
+        const bottom_y: f32 = 1.0;
+        const top_y: f32 = bottom_y - height_ndc;
+        const left_x: f32 = -half_width_ndc;
+        const right_x: f32 = half_width_ndc;
+
+        const vertices = [_]UIVertex{
+            .{ .pos = .{ left_x, top_y }, .uv = .{ 0.0, 0.0 } },
+            .{ .pos = .{ right_x, top_y }, .uv = .{ 1.0, 0.0 } },
+            .{ .pos = .{ right_x, bottom_y }, .uv = .{ 1.0, 1.0 } },
+            .{ .pos = .{ left_x, top_y }, .uv = .{ 0.0, 0.0 } },
+            .{ .pos = .{ right_x, bottom_y }, .uv = .{ 1.0, 1.0 } },
+            .{ .pos = .{ left_x, bottom_y }, .uv = .{ 0.0, 1.0 } },
+        };
+
+        const result = try gpu.createBufferWithDataRaw(UIVertex, &vertices, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        self.hotbar_buffer = ManagedBuffer.fromRaw(result.handle, result.memory);
+
+        logger.info("Hotbar buffer created", .{});
+    }
+
+    fn updateHotbarSelectionBuffer(self: *Self, selected_slot: u8) !void {
+        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+
+        // Destroy old buffer if exists
+        self.hotbar_selection_buffer.destroy(self.device);
+
+        const screen_height: f32 = @floatFromInt(self.swapchain_extent.height);
+        const screen_width: f32 = @floatFromInt(self.swapchain_extent.width);
+
+        const gui_scale: f32 = if (screen_height < 480) 1.0 else if (screen_height < 720) 2.0 else if (screen_height < 1080) 2.0 else 3.0;
+
+        // Selection box dimensions: 24x23 pixels
+        const selection_width_pixels: f32 = 24.0 * gui_scale;
+        const selection_height_pixels: f32 = 23.0 * gui_scale;
+
+        // Selection position calculation (from Minecraft):
+        // x = screenCenter - 91 - 1 + (selectedSlot * 20)
+        // The selection box is centered on each slot
+        const slot_offset_from_center: f32 = (-91.0 - 1.0 + (@as(f32, @floatFromInt(selected_slot)) * 20.0) + 12.0) * gui_scale;
+
+        // Convert to NDC
+        // In Vulkan: Y=-1 is TOP, Y=+1 is BOTTOM
+        const selection_center_x: f32 = (slot_offset_from_center * 2.0) / screen_width;
+        const half_width_ndc: f32 = selection_width_pixels / screen_width;
+        const height_ndc: f32 = (selection_height_pixels / screen_height) * 2.0;
+
+        // Y position: 1 pixel above hotbar bottom to overlap (in Vulkan coords)
+        const selection_bottom_offset: f32 = 1.0 * gui_scale;
+        const bottom_y: f32 = 1.0 + (selection_bottom_offset / screen_height) * 2.0;
+        const top_y: f32 = bottom_y - height_ndc;
+        const left_x: f32 = selection_center_x - half_width_ndc;
+        const right_x: f32 = selection_center_x + half_width_ndc;
+
+        const vertices = [_]UIVertex{
+            .{ .pos = .{ left_x, top_y }, .uv = .{ 0.0, 0.0 } },
+            .{ .pos = .{ right_x, top_y }, .uv = .{ 1.0, 0.0 } },
+            .{ .pos = .{ right_x, bottom_y }, .uv = .{ 1.0, 1.0 } },
+            .{ .pos = .{ left_x, top_y }, .uv = .{ 0.0, 0.0 } },
+            .{ .pos = .{ right_x, bottom_y }, .uv = .{ 1.0, 1.0 } },
+            .{ .pos = .{ left_x, bottom_y }, .uv = .{ 0.0, 1.0 } },
+        };
+
+        const result = try gpu.createBufferWithDataRaw(UIVertex, &vertices, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        self.hotbar_selection_buffer = ManagedBuffer.fromRaw(result.handle, result.memory);
+    }
+
+    fn createHotbarDescriptorSets(self: *Self) !void {
+        // Allocate sets for hotbar
+        try DescriptorSetManager.allocateSets(
+            self.device,
+            self.ui_descriptor_pool,
+            self.ui_descriptor_set_layout,
+            MAX_FRAMES_IN_FLIGHT,
+            &self.hotbar_descriptor_sets,
+        );
+
+        // Allocate sets for selection
+        try DescriptorSetManager.allocateSets(
+            self.device,
+            self.ui_descriptor_pool,
+            self.ui_descriptor_set_layout,
+            MAX_FRAMES_IN_FLIGHT,
+            &self.hotbar_selection_descriptor_sets,
+        );
+
+        // Update hotbar descriptor sets
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            DescriptorSetManager.updateSampler(
+                self.device,
+                self.hotbar_descriptor_sets[i],
+                0,
+                self.hotbar_texture_view,
+                self.hotbar_sampler,
+            );
+
+            DescriptorSetManager.updateSampler(
+                self.device,
+                self.hotbar_selection_descriptor_sets[i],
+                0,
+                self.hotbar_selection_texture_view,
+                self.hotbar_selection_sampler,
+            );
+        }
+
+        logger.info("Hotbar descriptor sets created", .{});
+    }
+
+    /// Update hotbar selection position
+    pub fn setHotbarSelection(self: *Self, slot: u8) !void {
+        if (slot != self.hotbar_selected_slot and slot < 9) {
+            self.hotbar_selected_slot = slot;
+            try self.updateHotbarSelectionBuffer(slot);
+        }
     }
 
     fn createShaderModule(self: *Self, vkCreateShaderModule: anytype, code: []const u8) !vk.VkShaderModule {
@@ -3470,6 +3744,11 @@ pub const RenderSystem = struct {
             if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
             self.ui_pipeline = null;
         }
+        // Destroy hotbar pipeline
+        if (self.hotbar_pipeline) |p| {
+            if (vk.vkDestroyPipeline) |destroy| destroy(self.device, p, null);
+            self.hotbar_pipeline = null;
+        }
         if (self.ui_pipeline_layout) |l| {
             if (vk.vkDestroyPipelineLayout) |destroy| destroy(self.device, l, null);
             self.ui_pipeline_layout = null;
@@ -3492,6 +3771,43 @@ pub const RenderSystem = struct {
         if (self.crosshair_texture_memory) |m| {
             if (vk.vkFreeMemory) |free| free(self.device, m, null);
             self.crosshair_texture_memory = null;
+        }
+        // Destroy hotbar buffers
+        self.hotbar_buffer.destroy(self.device);
+        self.hotbar_selection_buffer.destroy(self.device);
+        // Destroy hotbar texture resources
+        if (self.hotbar_sampler) |s| {
+            if (vk.vkDestroySampler) |destroy| destroy(self.device, s, null);
+            self.hotbar_sampler = null;
+        }
+        if (self.hotbar_texture_view) |v| {
+            if (vk.vkDestroyImageView) |destroy| destroy(self.device, v, null);
+            self.hotbar_texture_view = null;
+        }
+        if (self.hotbar_texture) |img| {
+            if (vk.vkDestroyImage) |destroy| destroy(self.device, img, null);
+            self.hotbar_texture = null;
+        }
+        if (self.hotbar_texture_memory) |m| {
+            if (vk.vkFreeMemory) |free| free(self.device, m, null);
+            self.hotbar_texture_memory = null;
+        }
+        // Destroy hotbar selection texture resources
+        if (self.hotbar_selection_sampler) |s| {
+            if (vk.vkDestroySampler) |destroy| destroy(self.device, s, null);
+            self.hotbar_selection_sampler = null;
+        }
+        if (self.hotbar_selection_texture_view) |v| {
+            if (vk.vkDestroyImageView) |destroy| destroy(self.device, v, null);
+            self.hotbar_selection_texture_view = null;
+        }
+        if (self.hotbar_selection_texture) |img| {
+            if (vk.vkDestroyImage) |destroy| destroy(self.device, img, null);
+            self.hotbar_selection_texture = null;
+        }
+        if (self.hotbar_selection_texture_memory) |m| {
+            if (vk.vkFreeMemory) |free| free(self.device, m, null);
+            self.hotbar_selection_texture_memory = null;
         }
         // Destroy UI descriptor pool (sets are freed automatically)
         if (self.ui_descriptor_pool) |pool| {

@@ -10,6 +10,7 @@ const block_interaction = @import("BlockInteraction.zig");
 const BlockInteraction = block_interaction.BlockInteraction;
 const entity_interaction = @import("EntityInteraction.zig");
 const EntityInteraction = entity_interaction.EntityInteraction;
+const Hotbar = @import("Hotbar.zig").Hotbar;
 const profiler = shared.profiler;
 
 const GameConfig = shared.GameConfig;
@@ -92,6 +93,7 @@ pub const FarHorizonsClient = struct {
     entity_texture_manager: ?EntityTextureManager,
     cow_id: ?ecs.EntityId,
     baby_cow_id: ?ecs.EntityId,
+    hotbar: Hotbar,
 
     pub fn init(allocator: std.mem.Allocator, config: GameConfig, io: Io) Self {
         const display_data = DisplayData{
@@ -123,6 +125,7 @@ pub const FarHorizonsClient = struct {
             .entity_texture_manager = null,
             .cow_id = null,
             .baby_cow_id = null,
+            .hotbar = Hotbar.init(),
         };
     }
 
@@ -303,8 +306,12 @@ pub const FarHorizonsClient = struct {
                 if (scroll != 0) {
                     if (self.window.isKeyPressed(InputConstants.KEY_LEFT_SHIFT)) {
                         self.local_player.getAbilities().adjustFlyingSpeed(@floatCast(scroll));
-                    } else if (self.block_interaction) |*bi| {
-                        bi.cycleSelectedBlock(scroll > 0);
+                    } else {
+                        // Scroll wheel changes hotbar selection
+                        self.hotbar.scrollSlot(if (scroll > 0) -1 else 1);
+                        self.render_system.setHotbarSelection(self.hotbar.getSelectedSlot()) catch |err| {
+                            logger.err("Failed to update hotbar selection: {}", .{err});
+                        };
                     }
                 }
             }
@@ -320,6 +327,22 @@ pub const FarHorizonsClient = struct {
 
                 self.keyboard_input.tick();
                 self.local_player.aiStep();
+
+                // Number keys 1-9 for hotbar slot selection
+                const number_keys = [_]c_int{
+                    InputConstants.KEY_1, InputConstants.KEY_2, InputConstants.KEY_3,
+                    InputConstants.KEY_4, InputConstants.KEY_5, InputConstants.KEY_6,
+                    InputConstants.KEY_7, InputConstants.KEY_8, InputConstants.KEY_9,
+                };
+                for (number_keys, 0..) |key, i| {
+                    if (self.window.isKeyPressed(key)) {
+                        self.hotbar.selectSlot(@intCast(i));
+                        self.render_system.setHotbarSelection(self.hotbar.getSelectedSlot()) catch |err| {
+                            logger.err("Failed to update hotbar selection: {}", .{err});
+                        };
+                        break;
+                    }
+                }
 
                 if (self.chunk_manager) |*cm| {
                     cm.updatePlayerPosition(self.local_player.getPosition(0));
