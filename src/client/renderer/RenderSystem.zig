@@ -1,5 +1,3 @@
-// Render system - Vulkan state management
-
 const std = @import("std");
 const Io = std.Io;
 const volk = @import("volk");
@@ -10,7 +8,6 @@ const platform = @import("Platform");
 const ShaderManager = @import("ShaderManager.zig").ShaderManager;
 const stb_image = @import("stb_image");
 
-// New abstraction modules
 const GpuBuffer = @import("GpuBuffer.zig");
 const ManagedBuffer = GpuBuffer.ManagedBuffer;
 const GpuDevice = @import("GpuDevice.zig").GpuDevice;
@@ -25,19 +22,17 @@ const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
-// Uniform buffer object matching shader uniform
 pub const UniformBufferObject = extern struct {
     model: [16]f32,
     view: [16]f32,
     proj: [16]f32,
 };
 
-// Vertex structure matching shader input
 pub const Vertex = extern struct {
     pos: [3]f32,
     color: [3]f32,
     uv: [2]f32,
-    tex_index: u32, // Texture array layer index
+    tex_index: u32,
 
     pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
         return .{
@@ -77,53 +72,43 @@ pub const Vertex = extern struct {
     }
 };
 
-// Note: Geometry is now generated dynamically from block models via uploadMesh()
-
 pub const RenderSystem = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
 
-    // Core Vulkan objects
     instance: vk.VkInstance = null,
     surface: vk.VkSurfaceKHR = null,
     physical_device: vk.VkPhysicalDevice = null,
     device: vk.VkDevice = null,
 
-    // Queues
     graphics_queue: vk.VkQueue = null,
     present_queue: vk.VkQueue = null,
     graphics_family: u32 = 0,
     present_family: u32 = 0,
 
-    // Swapchain
     swapchain: vk.VkSwapchainKHR = null,
     swapchain_images: []vk.VkImage = &.{},
     swapchain_image_views: []vk.VkImageView = &.{},
     swapchain_format: vk.VkFormat = vk.VK_FORMAT_UNDEFINED,
     swapchain_extent: vk.VkExtent2D = .{ .width = 0, .height = 0 },
 
-    // Depth buffer
     depth_image: vk.VkImage = null,
     depth_image_memory: vk.VkDeviceMemory = null,
     depth_image_view: vk.VkImageView = null,
     depth_format: vk.VkFormat = vk.VK_FORMAT_UNDEFINED,
 
-    // Render pass & framebuffers
     render_pass: vk.VkRenderPass = null,
     framebuffers: []vk.VkFramebuffer = &.{},
 
-    // Pipeline
     pipeline_layout: vk.VkPipelineLayout = null,
     graphics_pipeline: vk.VkPipeline = null,
 
     // Layer-specific pipelines: [solid, cutout, translucent]
     layer_pipelines: [3]vk.VkPipeline = .{ null, null, null },
 
-    // Indirect drawing buffer (for batched draw calls)
     indirect_buffer: ManagedBuffer = .{},
     indirect_buffer_capacity: u32 = 0,
 
-    // UI Pipeline (for crosshair, HUD elements)
     ui_pipeline_layout: vk.VkPipelineLayout = null,
     ui_pipeline: vk.VkPipeline = null,
     ui_descriptor_set_layout: vk.VkDescriptorSetLayout = null,
@@ -135,69 +120,51 @@ pub const RenderSystem = struct {
     crosshair_texture_view: vk.VkImageView = null,
     crosshair_sampler: vk.VkSampler = null,
 
-    // Line Pipeline (for block outline rendering)
     line_pipeline_layout: vk.VkPipelineLayout = null,
     line_pipeline: vk.VkPipeline = null,
     line_buffer: ManagedBuffer = .{},
     line_vertex_count: u32 = 0,
 
-    // Entity Pipeline (with bindless textures)
     entity_pipeline_layout: vk.VkPipelineLayout = null,
     entity_pipeline: vk.VkPipeline = null,
     bindless_entity_descriptor_set_layout: vk.VkDescriptorSetLayout = null,
     bindless_entity_descriptor_set: vk.VkDescriptorSet = null,
 
-    // Vertex/Index buffers
     vertex_buffer: vk.VkBuffer = null,
     vertex_buffer_memory: vk.VkDeviceMemory = null,
     index_buffer: vk.VkBuffer = null,
     index_buffer_memory: vk.VkDeviceMemory = null,
     index_count: u32 = 0,
 
-    // Uniform buffers (one per frame in flight)
     uniform_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkBuffer = .{null} ** MAX_FRAMES_IN_FLIGHT,
     uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.VkDeviceMemory = .{null} ** MAX_FRAMES_IN_FLIGHT,
     uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
-    // Texture resources (set externally by TextureManager)
+    /// Set externally by TextureManager
     texture_image_view: vk.VkImageView = null,
     texture_sampler: vk.VkSampler = null,
 
-    // Descriptors
     descriptor_set_layout: vk.VkDescriptorSetLayout = null,
     descriptor_pool: vk.VkDescriptorPool = null,
     descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
-    // Entity descriptors (adult cow texture)
     entity_descriptor_pool: vk.VkDescriptorPool = null,
     entity_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
-    // Baby entity descriptors (baby cow texture)
     baby_entity_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet = .{null} ** MAX_FRAMES_IN_FLIGHT,
 
-    // Command buffers
     command_pool: vk.VkCommandPool = null,
     command_buffers: []vk.VkCommandBuffer = &.{},
 
-    // Synchronization
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore = .{null} ** MAX_FRAMES_IN_FLIGHT,
     render_finished_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore = .{null} ** MAX_FRAMES_IN_FLIGHT,
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence = .{null} ** MAX_FRAMES_IN_FLIGHT,
     current_frame: u32 = 0,
 
-    // Allocator for dynamic arrays
     allocator: std.mem.Allocator = undefined,
-
-    // I/O context for file operations
     io: Io = undefined,
-
-    // GPU device abstraction for resource creation
     gpu_device: ?GpuDevice = null,
-
-    // Window reference for swapchain recreation
     window: ?*platform.Window = null,
-
-    // Shader management (supports runtime shader packs)
     shader_manager: ?ShaderManager = null,
 
     pub fn init(allocator: std.mem.Allocator, io: Io) Self {
