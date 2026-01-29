@@ -21,13 +21,10 @@ pub fn run(world: *World) void {
         const velocity = world.getComponentMut(Velocity, id) orelse continue;
         const body = world.getComponent(PhysicsBody, id) orelse continue;
 
-        // Save previous transform values
         transform.savePrevious();
 
-        // Apply physics
         applyPhysics(transform, velocity, body, terrain);
 
-        // Tick jump system if present
         if (world.getComponentMut(Jump, id)) |jump| {
             jump.tick(velocity.on_ground);
         }
@@ -42,7 +39,6 @@ fn applyPhysics(
 ) void {
     const half_width = body.halfWidth();
 
-    // Get desired movement
     const move_x = velocity.linear.x;
     const move_y = velocity.linear.y;
     const move_z = velocity.linear.z;
@@ -135,16 +131,13 @@ fn applyPhysics(
         }
     }
 
-    // Update position
     transform.position.x = current_x;
     transform.position.y = current_y;
     transform.position.z = current_z;
 
-    // Apply gravity and drag
     velocity.linear.y -= body.effectiveGravity();
     velocity.applyDrag(body.drag);
 
-    // Apply ground friction
     if (velocity.on_ground) {
         velocity.applyFriction(body.ground_friction);
     }
