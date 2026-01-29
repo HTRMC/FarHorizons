@@ -4,6 +4,7 @@
 const std = @import("std");
 const volk = @import("volk");
 const vk = volk.c;
+const shared = @import("Shared");
 
 const GpuBuffer = @import("GpuBuffer.zig");
 
@@ -80,6 +81,7 @@ pub const ClearValues = struct {
 /// Render Pass - encapsulates command buffer recording state
 pub const RenderPass = struct {
     const Self = @This();
+    const logger = shared.Logger.scoped(Self);
 
     // Command buffer being recorded
     command_buffer: vk.VkCommandBuffer,
@@ -307,7 +309,9 @@ pub const RenderPass = struct {
 
     /// Close/end the render pass (alias for end)
     pub fn close(self: *Self) void {
-        self.end() catch {};
+        self.end() catch |err| {
+            logger.warn("Failed to end render pass: {}", .{err});
+        };
     }
 
     // ============================================================
