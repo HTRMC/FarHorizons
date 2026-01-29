@@ -2712,6 +2712,10 @@ pub const RenderSystem = struct {
         );
         self.chunk_metadata_buffer = ManagedBuffer.fromRaw(metadata_result.handle, metadata_result.memory);
 
+        // Zero the metadata buffer so uninitialized slots have indexCount=0
+        // This is critical - compute shader reads ALL slots up to high water mark
+        try self.zeroBuffer(self.chunk_metadata_buffer.handle, metadata_size);
+
         // Visibility buffer: u32 per chunk for occlusion culling (Phase 6)
         const visibility_size = GPUDrivenTypes.getVisibilityBufferSize();
         const visibility_result = try gpu.createBufferRaw(
@@ -3234,6 +3238,67 @@ pub const RenderSystem = struct {
         }
 
         return error.NoSuitableMemoryType;
+    }
+
+    /// Zero a GPU buffer using vkCmdFillBuffer (one-time command submission)
+    fn zeroBuffer(self: *Self, buffer: vk.VkBuffer, size: u64) !void {
+        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdFillBuffer = vk.vkCmdFillBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
+        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+
+        // Allocate one-time command buffer
+        var cmd_buffer: vk.VkCommandBuffer = null;
+        const alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = self.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+        if (vkAllocateCommandBuffers(self.device, &alloc_info, &cmd_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferAllocationFailed;
+        }
+        defer vkFreeCommandBuffers(self.device, self.command_pool, 1, &cmd_buffer);
+
+        // Begin recording
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        };
+        if (vkBeginCommandBuffer(cmd_buffer, &begin_info) != vk.VK_SUCCESS) {
+            return error.CommandBufferBeginFailed;
+        }
+
+        // Fill buffer with zeros
+        vkCmdFillBuffer(cmd_buffer, buffer, 0, size, 0);
+
+        // End recording
+        if (vkEndCommandBuffer(cmd_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferEndFailed;
+        }
+
+        // Submit and wait
+        const submit_info = vk.VkSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        };
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+            return error.QueueSubmitFailed;
+        }
+        _ = vkQueueWaitIdle(self.graphics_queue);
     }
 
     fn createCommandBuffers(self: *Self) !void {
