@@ -1,5 +1,3 @@
-// FarHorizons Client - main client orchestration
-
 const std = @import("std");
 const Io = std.Io;
 const shared = @import("Shared");
@@ -44,7 +42,6 @@ const ChunkConfig = world.chunk_manager.ChunkConfig;
 const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
 const EntityTextureManager = @import("entity/EntityTextureManager.zig").EntityTextureManager;
 
-// Terrain query for entity physics - returns VoxelShape for accurate collision
 var terrain_query_cm: ?*ChunkManager = null;
 
 fn terrainQueryFn(x: i32, y: i32, z: i32) shared.VoxelShape {
@@ -54,7 +51,6 @@ fn terrainQueryFn(x: i32, y: i32, z: i32) shared.VoxelShape {
     return shared.voxel_shape.EMPTY;
 }
 
-// VoxelShape culling
 const VoxelDirection = shared.Direction;
 
 pub const FarHorizonsClient = struct {
@@ -75,21 +71,14 @@ pub const FarHorizonsClient = struct {
     camera: Camera,
     local_player: LocalPlayer,
     allocator: std.mem.Allocator,
-    /// I/O context for file operations
     io: Io,
-    /// Use async chunk loading (set to false for legacy single-chunk mode)
     use_async_chunks: bool,
-    /// Block interaction handler
     block_interaction: ?BlockInteraction,
-    /// Entity interaction handler (targeting and attacking)
     entity_interaction: ?EntityInteraction,
-    /// Block outline renderer
     block_outline_renderer: BlockOutlineRenderer,
-    /// ECS World (replaces EntityManager)
     ecs_world: ?ecs.World,
     entity_renderer: ?EntityRenderer,
     entity_texture_manager: ?EntityTextureManager,
-    /// Stored entity IDs for reference
     cow_id: ?ecs.EntityId,
     baby_cow_id: ?ecs.EntityId,
 
@@ -100,8 +89,6 @@ pub const FarHorizonsClient = struct {
             .fullscreen = config.display.fullscreen,
         };
 
-        // Initialize camera for rendering
-        // Position/rotation will be set from LocalPlayer each frame
         const camera = Camera.init();
 
         return Self{
@@ -116,7 +103,7 @@ pub const FarHorizonsClient = struct {
             .local_player = undefined, // Initialized in run() after keyboard_input is ready
             .allocator = allocator,
             .io = io,
-            .use_async_chunks = true, // Enable async chunk loading by default
+            .use_async_chunks = true,
             .block_interaction = null, // Initialized in run() after chunk_manager
             .entity_interaction = null, // Initialized in run() after ecs_world
             .block_outline_renderer = BlockOutlineRenderer.init(),
@@ -129,13 +116,11 @@ pub const FarHorizonsClient = struct {
     }
 
     pub fn run(self: *Self) !void {
-        // Set Tracy thread name for main thread
         profiler.setThreadName("MainThread");
 
         logger.info("FarHorizons Client starting...", .{});
         logger.info("Game directory: {s}", .{self.config.location.game_directory});
 
-        // Initialize platform backend (GLFW)
         try platform.initBackend();
         defer platform.terminateBackend();
 
@@ -148,16 +133,13 @@ pub const FarHorizonsClient = struct {
         self.mouse_handler.setup();
         self.keyboard_input = KeyboardInput.init(&self.window);
 
-        // Initialize local player with keyboard input
         self.local_player = LocalPlayer.init(&self.keyboard_input);
         self.local_player.setPosition(Vec3{ .x = 8, .y = 100, .z = 20 }); // Above terrain (base height 64 + variation)
         self.local_player.setYRot(180); // Face towards -Z (towards the chunk)
 
-        // Initialize render system (Vulkan) with window for surface
         try self.render_system.initBackend(&self.window);
         defer self.render_system.shutdown();
 
-        // Initialize texture manager and load block textures
         self.texture_manager = TextureManager.init(
             self.allocator,
             self.io,
@@ -170,13 +152,11 @@ pub const FarHorizonsClient = struct {
         try self.texture_manager.?.loadBlockTextures();
         defer self.texture_manager.?.deinit();
 
-        // Set texture resources to render system and create descriptors
         try self.render_system.setTextureResources(
             self.texture_manager.?.getImageView(),
             self.texture_manager.?.getSampler(),
         );
 
-        // Initialize chunk manager for async loading
         if (self.use_async_chunks) {
             self.chunk_manager = try ChunkManager.init(
                 self.allocator,
@@ -193,13 +173,10 @@ pub const FarHorizonsClient = struct {
                 },
             );
             try self.chunk_manager.?.start();
-            // Trigger initial chunk loading based on player position
             self.chunk_manager.?.updatePlayerPosition(self.local_player.getPosition(0));
-            // Initialize block interaction handler
             self.block_interaction = BlockInteraction.init(&self.chunk_manager.?);
             logger.info("Async chunk loading enabled", .{});
         } else {
-            // Legacy single-chunk mode
             try self.testModelLoading();
         }
         defer {
@@ -214,29 +191,22 @@ pub const FarHorizonsClient = struct {
         };
         self.window.show();
 
-        // Track ESC key state for edge detection
         var esc_was_pressed = false;
-
-        // Tick timing (20 ticks/second)
         var timer = std.time.Timer.start() catch {
             logger.err("Failed to start timer", .{});
             return;
         };
         var tick_accumulator: f64 = 0;
 
-        // Initialize ECS World
         self.ecs_world = ecs.World.init(self.allocator);
         if (self.ecs_world) |*ecs_world| {
-            // Register all ECS systems
             try ecs.initSystems(ecs_world);
         }
 
-        // Initialize entity interaction with ECS
         if (self.ecs_world) |*ecs_world| {
             self.entity_interaction = EntityInteraction.init(ecs_world);
         }
 
-        // Initialize bindless entity texture manager
         self.entity_texture_manager = try EntityTextureManager.init(
             self.allocator,
             self.render_system.getDevice(),
@@ -245,7 +215,6 @@ pub const FarHorizonsClient = struct {
             self.render_system.getGraphicsQueue(),
         );
 
-        // Load entity textures into the bindless array
         const cow_tex_path = try std.fmt.allocPrint(
             self.allocator,
             "{s}/farhorizons/textures/entity/cow/cow.png",
@@ -265,14 +234,12 @@ pub const FarHorizonsClient = struct {
 
         logger.info("Loaded cow texture at index {}, baby cow at index {}", .{ cow_tex_index, baby_cow_tex_index });
 
-        // Set bindless resources on render system and initialize entity pipeline
         self.render_system.setBindlessEntityResources(
             self.entity_texture_manager.?.getDescriptorSetLayout(),
             self.entity_texture_manager.?.getDescriptorSet(),
         );
         try self.render_system.initEntityPipeline();
 
-        // Initialize entity renderer with texture indices
         self.entity_renderer = try EntityRenderer.initBindless(
             self.allocator,
             self.render_system.getGpuDevice().?,
@@ -280,99 +247,80 @@ pub const FarHorizonsClient = struct {
             baby_cow_tex_index,
         );
 
-        // Spawn a test cow with AI using ECS
-        // Cows spawn above terrain and will fall down due to gravity
+        // Spawn above terrain - gravity will pull them down
         if (self.ecs_world) |*ecs_world| {
             self.cow_id = try ecs.spawn.spawnCow(ecs_world, Vec3{ .x = 9, .y = 100, .z = 9 });
             logger.info("Spawned adult cow with ECS entity ID", .{});
 
-            // Spawn a baby cow next to the adult
             self.baby_cow_id = try ecs.spawn.spawnBabyCow(ecs_world, Vec3{ .x = 12, .y = 100, .z = 10 });
             logger.info("Spawned baby cow with ECS entity ID", .{});
         }
 
-        // Main loop
         logger.info("Entering main loop", .{});
         while (!self.window.shouldClose()) {
             const frame_zone = profiler.traceNamed("Frame");
             defer frame_zone.end();
 
-            // Calculate delta time for tick accumulator
             const delta_ns = timer.lap();
             const delta_ms: f64 = @as(f64, @floatFromInt(delta_ns)) / 1_000_000.0;
             tick_accumulator += delta_ms;
 
             platform.pollEvents();
 
-            // Check for escape key (edge detection - only trigger on press, not hold)
+            // Edge detection: only trigger on press, not hold
             const esc_pressed = self.window.isKeyPressed(InputConstants.KEY_ESCAPE);
             if (esc_pressed and !esc_was_pressed) {
                 if (self.mouse_handler.isMouseGrabbed()) {
-                    // Release mouse when ESC is pressed (pause menu)
                     self.mouse_handler.releaseMouse();
                 } else {
-                    // Close window if mouse is already released
                     self.window.setShouldClose(true);
                 }
             }
             esc_was_pressed = esc_pressed;
 
-            // Handle mouse movement for camera rotation (when grabbed)
             // Mouse look is frame-rate independent, not tied to ticks
             if (self.mouse_handler.isMouseGrabbed()) {
                 const rotation = self.mouse_handler.getCameraRotation();
                 self.local_player.setYRot(self.local_player.getYRot() + @as(f32, @floatCast(rotation.yaw)));
                 self.local_player.setXRot(self.local_player.getXRot() + @as(f32, @floatCast(rotation.pitch)));
 
-                // Handle scroll wheel: flying speed in spectator mode, block selection otherwise
                 const scroll = self.mouse_handler.getAccumulatedScroll();
                 if (scroll != 0) {
                     if (self.window.isKeyPressed(InputConstants.KEY_LEFT_SHIFT)) {
-                        // Shift+scroll = change flying speed
                         self.local_player.getAbilities().adjustFlyingSpeed(@floatCast(scroll));
                     } else if (self.block_interaction) |*bi| {
-                        // Scroll = cycle selected block
                         bi.cycleSelectedBlock(scroll > 0);
                     }
                 }
             }
 
-            // Run game ticks at fixed rate (20 ticks/second)
             while (tick_accumulator >= MS_PER_TICK) {
                 const tick_zone = profiler.traceNamed("GameTick");
                 defer tick_zone.end();
 
                 tick_accumulator -= MS_PER_TICK;
 
-                // Save old position before tick (for interpolation)
+                // For interpolation
                 self.local_player.setOldPosAndRot();
 
-                // Update keyboard input
                 self.keyboard_input.tick();
-
-                // Update player movement
                 self.local_player.aiStep();
 
-                // Update chunk loading based on player position
                 if (self.chunk_manager) |*cm| {
                     cm.updatePlayerPosition(self.local_player.getPosition(0));
                 }
 
-                // Update block interaction
                 if (self.block_interaction) |*bi| {
                     bi.tick();
                 }
 
-                // Update entity interaction
                 if (self.entity_interaction) |*ei| {
                     ei.tick();
                 }
 
-                // Handle interaction input (only when mouse is grabbed)
                 if (self.mouse_handler.isMouseGrabbed()) {
-                    // Left click = attack entity or break block
+                    // Left click: try entity attack first, fall back to block breaking
                     if (self.mouse_handler.isLeftPressed()) {
-                        // Try entity attack first (ECS), fall back to block breaking
                         var attacked_entity = false;
                         if (self.entity_interaction) |*ei| {
                             attacked_entity = ei.handleAttack(self.local_player.getPosition(0));
@@ -383,13 +331,11 @@ pub const FarHorizonsClient = struct {
                             }
                         }
                     }
-                    // Right click = place block (or interact with entity in future)
                     if (self.mouse_handler.isRightPressed()) {
                         if (self.block_interaction) |*bi| {
                             _ = bi.handleRightClick();
                         }
                     }
-                    // Middle click = pick block
                     if (self.mouse_handler.isMiddlePressed()) {
                         if (self.block_interaction) |*bi| {
                             bi.handleMiddleClick();
@@ -397,35 +343,28 @@ pub const FarHorizonsClient = struct {
                     }
                 }
 
-                // Tick ECS World - this runs all systems (physics, AI, animation, etc.)
+                // Tick ECS: runs physics, AI, animation, etc.
                 if (self.ecs_world) |*ecs_world| {
-                    // Set up terrain query for entity physics
                     terrain_query_cm = if (self.chunk_manager) |*cm| cm else null;
                     if (terrain_query_cm != null) {
                         ecs_world.setTerrainQuery(&terrainQueryFn);
                     }
 
-                    // Set player position for AI targeting
                     ecs_world.setPlayerPosition(self.local_player.getPosition(0));
-
-                    // Run all ECS systems for this tick
                     ecs_world.tick();
                 }
             }
 
-            // Process completed chunk meshes (main thread only)
+            // Main thread only: process completed chunk meshes
             if (self.chunk_manager) |*cm| {
-                // Begin frame for staging buffer synchronization
                 cm.beginFrame(self.render_system.getCurrentFrameFence());
-                // C2ME-style consolidation: flush load queue once per frame (not per tick)
+                // C2ME-style: flush load queue once per frame, not per tick
                 cm.flushLoadQueue();
                 cm.tick();
             }
 
-            // Calculate partial tick for interpolation (0.0 to 1.0)
             const partial_tick: f32 = @floatCast(tick_accumulator / MS_PER_TICK);
 
-            // Update entity meshes for rendering (using ECS)
             if (self.entity_renderer) |*er| {
                 if (self.ecs_world) |*ecs_world| {
                     er.updateFromECS(ecs_world, partial_tick) catch |err| {
@@ -434,24 +373,18 @@ pub const FarHorizonsClient = struct {
                 }
             }
 
-            // Sync camera with interpolated player position for smooth rendering
-            // Position is interpolated between ticks for smooth movement
-            // Rotation is NOT interpolated - mouse look must be instant
+            // Position interpolated for smooth movement; rotation NOT interpolated (instant mouse look)
             self.camera.position = self.local_player.getPosition(partial_tick);
             self.camera.setRotation(self.local_player.getYRot(), self.local_player.getXRot());
 
-            // Update entity targeting (every frame for responsive targeting)
             if (self.entity_interaction) |*ei| {
                 ei.updateTarget(&self.camera);
             }
 
-            // Update block interaction raycast (every frame for responsive crosshair)
             if (self.block_interaction) |*bi| {
                 bi.updateHitResult(&self.camera);
 
-                // Update block outline based on hit result
                 if (bi.hit_result) |hit| {
-                    // Get the block at the hit position and its actual VoxelShape
                     const block_entry = bi.chunk_manager.getBlockAt(
                         hit.block_pos.x,
                         hit.block_pos.y,
@@ -464,13 +397,11 @@ pub const FarHorizonsClient = struct {
                         logger.err("Failed to upload block outline: {}", .{err});
                     };
                 } else {
-                    // No block targeted, clear outline
                     self.block_outline_renderer.clear();
                     self.render_system.clearLineVertices();
                 }
             }
 
-            // Update MVP matrices
             const aspect = self.render_system.getAspectRatio();
             const model = Mat4.IDENTITY;
             const view = self.camera.getViewMatrix();
@@ -478,20 +409,17 @@ pub const FarHorizonsClient = struct {
 
             self.render_system.updateMVP(model.data, view.data, proj.data);
 
-            // Render frame
             {
                 const render_zone = profiler.traceNamed("RenderFrame");
                 defer render_zone.end();
 
                 if (self.use_async_chunks) {
-                    // Multi-chunk rendering with multiple arena buffers
                     if (self.chunk_manager) |*cm| {
                         const vertex_buffers = cm.getAllVertexBuffers();
                         const index_buffers = cm.getAllIndexBuffers();
                         const draw_commands = cm.getDrawCommands();
                         const staging_copies = cm.getStagingCopies();
 
-                        // Get entity rendering info
                         const entity_vb = if (self.entity_renderer) |*er| er.getVertexBuffer() else null;
                         const entity_ib = if (self.entity_renderer) |*er| er.getIndexBuffer() else null;
                         const entity_ic = if (self.entity_renderer) |*er| er.getIndexCount() else 0;
@@ -517,7 +445,6 @@ pub const FarHorizonsClient = struct {
                             // Clear staging copies after they've been submitted
                             cm.clearStagingCopies();
                         } else if (staging_copies.len > 0 and vertex_buffers.len > 0 and index_buffers.len > 0) {
-                            // Have staging data but no ready chunks yet - still need to upload
                             self.render_system.drawFrameMultiArena(
                                 vertex_buffers,
                                 index_buffers,
@@ -534,7 +461,6 @@ pub const FarHorizonsClient = struct {
                             };
                             cm.clearStagingCopies();
                         } else {
-                            // No chunks ready yet, draw empty frame
                             self.render_system.drawFrame() catch |err| {
                                 logger.err("Failed to draw frame: {}", .{err});
                             };
@@ -545,18 +471,15 @@ pub const FarHorizonsClient = struct {
                         };
                     }
                 } else {
-                    // Legacy single-chunk rendering
                     self.render_system.drawFrame() catch |err| {
                         logger.err("Failed to draw frame: {}", .{err});
                     };
                 }
             }
 
-            // Signal end of frame to Tracy
             profiler.frameMark();
         }
 
-        // Cleanup entity system
         if (self.entity_renderer) |*er| {
             er.deinit();
         }
@@ -573,7 +496,6 @@ pub const FarHorizonsClient = struct {
     fn testModelLoading(self: *Self) !void {
         logger.info("Loading and baking chunk...", .{});
 
-        // Initialize model loading system
         var model_loader = ModelLoader.init(self.allocator, self.io, self.config.location.asset_directory);
         defer model_loader.deinit();
 
@@ -588,10 +510,9 @@ pub const FarHorizonsClient = struct {
         );
         defer block_model_shaper.deinit();
 
-        // Generate a test chunk
         const chunk = Chunk.generateTestChunk();
 
-        // Count blocks in chunk to estimate buffer size
+        // Count blocks to estimate buffer size
         var block_count: usize = 0;
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
@@ -602,11 +523,10 @@ pub const FarHorizonsClient = struct {
             }
         }
 
-        // Worst case: every block has all faces visible
+        // Worst case: every block has all 6 faces visible
         const max_faces = block_count * 6;
         logger.info("Chunk has {d} blocks, allocating for up to {d} faces", .{ block_count, max_faces });
 
-        // Allocate arrays for vertices and indices
         const vertices = try self.allocator.alloc(Vertex, max_faces * 4);
         defer self.allocator.free(vertices);
         const indices = try self.allocator.alloc(u16, max_faces * 6);
@@ -615,26 +535,22 @@ pub const FarHorizonsClient = struct {
         var vertex_idx: usize = 0;
         var index_idx: usize = 0;
 
-        // Iterate through chunk and bake visible faces
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
                 for (0..CHUNK_SIZE) |x| {
                     const entry = chunk.getBlockEntry(@intCast(x), @intCast(y), @intCast(z));
                     if (entry.isAir()) continue;
 
-                    // Get the model for this block via blockstate system
                     const model = block_model_shaper.getModel(entry) catch |err| {
                         logger.warn("Failed to get model for block {}: {}", .{ entry.id, err });
                         continue;
                     };
 
-                    // Get variant for rotation info
                     const variant = block_model_shaper.getVariant(entry) catch |err| {
                         logger.warn("Failed to get variant for block {}: {}", .{ entry.id, err });
                         continue;
                     };
 
-                    // Bake with face culling and model rotation
                     try bakeBlockAt(
                         model,
                         &chunk,
@@ -657,7 +573,6 @@ pub const FarHorizonsClient = struct {
 
         logger.info("Generated {d} vertices and {d} indices", .{ vertex_idx, index_idx });
 
-        // Upload mesh to render system
         try self.render_system.uploadMesh(vertices[0..vertex_idx], indices[0..index_idx]);
 
         logger.info("Chunk baked and uploaded successfully!", .{});
@@ -682,7 +597,6 @@ pub const FarHorizonsClient = struct {
     ) !void {
         const elements = model.elements orelse return error.NoElements;
 
-        // White color (texture provides color)
         const color = [3]f32{ 1.0, 1.0, 1.0 };
 
         const directions = [_]Direction{ .down, .up, .north, .south, .west, .east };
@@ -690,16 +604,10 @@ pub const FarHorizonsClient = struct {
         for (elements) |*elem| {
             for (directions) |dir| {
                 if (elem.faces.get(dir)) |face| {
-                    // Only cull faces that have cullface specified
-                    // Internal faces (no cullface) should always render
+                    // Only cull faces with cullface specified; internal faces always render
                     if (face.cullface) |cullface_dir| {
-                        // Transform cullface direction by model rotation
                         const rotated_cullface = FaceBakery.rotateFaceDirection(cullface_dir, model_rotation_x, model_rotation_y);
-
-                        // Convert to VoxelDirection for culling (same enum values)
                         const rotated_voxel_dir: VoxelDirection = @enumFromInt(@intFromEnum(rotated_cullface));
-
-                        // Rotate element bounds by model rotation for accurate per-element culling
                         const rotated_bounds = FaceBakery.rotateElementBounds(
                             elem.from,
                             elem.to,
@@ -707,7 +615,6 @@ pub const FarHorizonsClient = struct {
                             model_rotation_y,
                         );
 
-                        // Use per-element face culling for precise handling
                         if (!chunk.shouldRenderElementFace(
                             x,
                             y,
@@ -717,15 +624,13 @@ pub const FarHorizonsClient = struct {
                             rotated_bounds.to,
                             null,
                         )) {
-                            continue; // Skip this face - occluded by neighbor's shape
+                            continue;
                         }
                     }
                     // No cullface = internal face, always render
 
-                    // Get texture index from texture name (returns 0/missing texture if not found)
                     const texture_index = texture_manager.getTextureIndex(face.texture);
 
-                    // Bake the face into a quad
                     var quad = FaceBakery.bakeQuad(
                         elem.from,
                         elem.to,
@@ -737,21 +642,17 @@ pub const FarHorizonsClient = struct {
                         texture_index,
                     );
 
-                    // Apply model-level rotation from blockstate variant
                     FaceBakery.rotateQuad(&quad, model_rotation_x, model_rotation_y, uvlock);
 
-                    // World position offset (chunk coords to world coords)
                     const offset_x: f32 = @floatFromInt(x);
                     const offset_y: f32 = @floatFromInt(y);
                     const offset_z: f32 = @floatFromInt(z);
 
-                    // Add vertices with position offset and UVs
                     const base_vertex: u16 = @intCast(vertex_idx.*);
                     for (0..4) |i| {
                         const pos = quad.position(@intCast(i));
                         const packed_uv = quad.packedUV(@intCast(i));
-                        // Unpack UV from u64 (u in high 32 bits, v in low 32 bits)
-                        // UVs are already normalized to 0-1 range by FaceBakery
+                        // UV packed as u64: u in high 32 bits, v in low 32 bits
                         const u: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
                         const v: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
                         vertices[vertex_idx.*] = .{
@@ -767,7 +668,7 @@ pub const FarHorizonsClient = struct {
                         vertex_idx.* += 1;
                     }
 
-                    // Add indices for two triangles (CCW winding)
+                    // CCW winding
                     indices[index_idx.*] = base_vertex;
                     indices[index_idx.* + 1] = base_vertex + 1;
                     indices[index_idx.* + 2] = base_vertex + 2;
