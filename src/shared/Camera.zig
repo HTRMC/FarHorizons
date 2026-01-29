@@ -1,5 +1,3 @@
-// Camera class
-
 const std = @import("std");
 const math = @import("Math.zig");
 const Vec3 = math.Vec3;
@@ -8,27 +6,22 @@ const Mat4 = math.Mat4;
 pub const Camera = struct {
     const Self = @This();
 
-    // Position in world space
     position: Vec3 = Vec3.ZERO,
 
-    // Rotation in degrees
     // yaw: horizontal rotation (0 = +Z, 90 = -X, 180 = -Z, 270 = +X)
     // pitch: vertical rotation (-90 = down, 0 = forward, 90 = up)
     yaw: f32 = 0,
     pitch: f32 = 0,
 
-    // Direction vectors (computed from rotation)
     forward: Vec3 = Vec3.FORWARD,
     up: Vec3 = Vec3.UP,
     right: Vec3 = Vec3.RIGHT,
 
-    // Camera settings
-    fov: f32 = 70.0, // Field of view in degrees
+    fov: f32 = 70.0,
     near: f32 = 0.05,
     far: f32 = 1000.0,
 
-    // Eye height for first person
-    eye_height: f32 = 1.62, // Player eye height
+    eye_height: f32 = 1.62,
 
     pub fn init() Self {
         var cam = Self{};
