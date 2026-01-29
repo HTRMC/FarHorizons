@@ -968,6 +968,22 @@ pub const ChunkManager = struct {
         return self.index_buffer_cache.items;
     }
 
+    /// Returns count of chunks with valid GPU slots ready for GPU-driven rendering
+    pub fn getActiveChunkCount(self: *const Self) u32 {
+        var count: u32 = 0;
+        var iter = self.chunk_storage.iterator();
+        while (iter.next()) |entry| {
+            const chunk = entry.value_ptr.*;
+            if (chunk.hasGPUSlot() and chunk.mesh != null) {
+                const state = chunk.getState();
+                if (state == .ready or state == .dirty) {
+                    count += 1;
+                }
+            }
+        }
+        return count;
+    }
+
     pub fn getStagingCopies(self: *Self) []const StagingCopy {
         const buf_mgr = self.buffer_manager orelse return &.{};
 

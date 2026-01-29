@@ -1,0 +1,28 @@
+#version 450
+layout(local_size_x = 1) in;
+
+// Draw counts buffer - matches DrawCountData in GPUDrivenTypes.zig
+layout(set = 0, binding = 0, std430) buffer DrawCounts {
+    uint dispatchX;
+    uint dispatchY;
+    uint dispatchZ;
+    uint solidCount;
+    uint cutoutCount;
+    uint translucentCount;
+} counts;
+
+layout(push_constant) uniform PushConstants {
+    uint chunkCount;
+} pc;
+
+void main() {
+    // Set dispatch size for cmdgen.comp (64 threads per workgroup)
+    counts.dispatchX = (pc.chunkCount + 63) / 64;
+    counts.dispatchY = 1;
+    counts.dispatchZ = 1;
+
+    // Zero draw counters
+    counts.solidCount = 0;
+    counts.cutoutCount = 0;
+    counts.translucentCount = 0;
+}

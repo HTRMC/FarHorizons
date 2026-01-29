@@ -20,6 +20,7 @@ const VulkanPipelineFactory = @import("pipeline/VulkanPipelineFactory.zig").Vulk
 const ImageViewHelper = @import("resource/ImageViewHelper.zig").ImageViewHelper;
 const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
 const GPUDrivenTypes = @import("GPUDrivenTypes.zig");
+const ComputePipeline = @import("ComputePipeline.zig");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -188,6 +189,14 @@ pub const RenderSystem = struct {
     pre_render_callback: ?*const fn (vk.VkCommandBuffer, ?*anyopaque) void = null,
     pre_render_callback_ctx: ?*anyopaque = null,
 
+    // GPU-driven compute pipelines (Phase 2)
+    compute_descriptor_set_layout: vk.VkDescriptorSetLayout = null,
+    compute_pipeline_layout: vk.VkPipelineLayout = null,
+    compute_descriptor_pool: vk.VkDescriptorPool = null,
+    compute_descriptor_set: vk.VkDescriptorSet = null,
+    prep_pipeline: vk.VkPipeline = null,
+    cmdgen_pipeline: vk.VkPipeline = null,
+
     pub fn init(allocator: std.mem.Allocator, io: Io) Self {
         return .{ .allocator = allocator, .io = io };
     }
@@ -255,6 +264,7 @@ pub const RenderSystem = struct {
         try self.createUniformBuffers();
         try self.createIndirectBuffer();
         try self.createGPUDrivenBuffers();
+        try self.createComputePipelines();
         // Note: Texture resources and descriptor sets are created after TextureManager is initialized
         // See initializeTextures() which must be called after setting texture resources
         try self.createCommandBuffers();
@@ -283,6 +293,7 @@ pub const RenderSystem = struct {
         // Note: texture_image_view and texture_sampler are owned by TextureManager
         self.destroyUniformBuffers();
         self.destroyIndirectBuffer();
+        self.destroyComputePipelines();
         self.destroyGPUDrivenBuffers();
         self.destroyBuffers();
         self.destroyFramebuffers();
@@ -1096,6 +1107,166 @@ pub const RenderSystem = struct {
             .vertex_buffers = vertex_buffers,
             .index_buffers = index_buffers,
         });
+        try self.endFrame(ctx);
+    }
+
+    /// Draw a frame using GPU-driven rendering (compute cull + indirect draws)
+    /// This is the new rendering path that uses GPU frustum culling
+    pub fn drawFrameGPUDriven(
+        self: *Self,
+        chunk_count: u32,
+        view_proj: [16]f32,
+        vertex_buffers: []const vk.VkBuffer,
+        index_buffers: []const vk.VkBuffer,
+        staging_copies: []const StagingCopy,
+        entity_vb: ?vk.VkBuffer,
+        entity_ib: ?vk.VkBuffer,
+        adult_index_count: u32,
+        baby_index_start: u32,
+        baby_index_count: u32,
+    ) !void {
+        const ctx = try self.beginFrame() orelse return;
+
+        const vkResetCommandBuffer = vk.vkResetCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBeginRenderPass = vk.vkCmdBeginRenderPass orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdEndRenderPass = vk.vkCmdEndRenderPass orelse return error.VulkanFunctionNotLoaded;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdSetViewport = vk.vkCmdSetViewport orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdSetScissor = vk.vkCmdSetScissor orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindVertexBuffers = vk.vkCmdBindVertexBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdBindIndexBuffer = vk.vkCmdBindIndexBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdDrawIndexed = vk.vkCmdDrawIndexed orelse return error.VulkanFunctionNotLoaded;
+
+        const command_buffer = ctx.command_buffer;
+
+        _ = vkResetCommandBuffer(command_buffer, 0);
+
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = 0,
+            .pInheritanceInfo = null,
+        };
+        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
+            return error.CommandBufferBeginFailed;
+        }
+
+        // Record staging buffer copies
+        if (staging_copies.len > 0) {
+            try self.recordStagingCopies(command_buffer, staging_copies);
+        }
+
+        // Pre-render callback (metadata uploads)
+        if (self.pre_render_callback) |callback| {
+            callback(command_buffer, self.pre_render_callback_ctx);
+        }
+
+        // GPU-driven compute pass (frustum cull + command generation)
+        self.recordGPUDrivenCommands(command_buffer, chunk_count, view_proj);
+
+        // Begin render pass
+        const clear_values = [_]vk.VkClearValue{
+            .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
+            .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+        };
+        const render_pass_info = vk.VkRenderPassBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .pNext = null,
+            .renderPass = self.render_pass,
+            .framebuffer = self.framebuffers[ctx.image_index],
+            .renderArea = .{ .offset = .{ .x = 0, .y = 0 }, .extent = self.swapchain_extent },
+            .clearValueCount = clear_values.len,
+            .pClearValues = &clear_values,
+        };
+        vkCmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
+
+        // Set viewport and scissor
+        const viewport = vk.VkViewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapchain_extent.width),
+            .height = @floatFromInt(self.swapchain_extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        };
+        vkCmdSetViewport(command_buffer, 0, 1, &viewport);
+
+        const scissor = vk.VkRect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        };
+        vkCmdSetScissor(command_buffer, 0, 1, &scissor);
+
+        // Bind descriptor set
+        const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
+        vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
+
+        // Bind buffers and issue GPU-driven draws for each layer
+        if (vertex_buffers.len > 0 and index_buffers.len > 0) {
+            const zero_offset: u64 = 0;
+            vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers[0], &zero_offset);
+            vkCmdBindIndexBuffer(command_buffer, index_buffers[0], 0, vk.VK_INDEX_TYPE_UINT32);
+
+            // Solid layer
+            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.layer_pipelines[0]);
+            self.issueGPUDrivenDrawsForLayer(command_buffer, 0);
+
+            // Cutout layer
+            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.layer_pipelines[1]);
+            self.issueGPUDrivenDrawsForLayer(command_buffer, 1);
+
+            // Translucent layer
+            vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.layer_pipelines[2]);
+            self.issueGPUDrivenDrawsForLayer(command_buffer, 2);
+        }
+
+        // Entity rendering
+        if (entity_vb != null and entity_ib != null and (adult_index_count > 0 or baby_index_count > 0)) {
+            if (self.entity_pipeline != null and self.bindless_entity_descriptor_set != null) {
+                vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.entity_pipeline.?);
+
+                const entity_desc_sets = [_]vk.VkDescriptorSet{
+                    self.descriptor_sets[self.current_frame],
+                    self.bindless_entity_descriptor_set.?,
+                };
+                vkCmdBindDescriptorSets(
+                    command_buffer,
+                    vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    self.entity_pipeline_layout.?,
+                    0,
+                    2,
+                    &entity_desc_sets,
+                    0,
+                    null,
+                );
+
+                const zero_offset: u64 = 0;
+                vkCmdBindVertexBuffers(command_buffer, 0, 1, &entity_vb.?, &zero_offset);
+                vkCmdBindIndexBuffer(command_buffer, entity_ib.?, 0, vk.VK_INDEX_TYPE_UINT32);
+
+                // Adult entities
+                if (adult_index_count > 0) {
+                    vkCmdDrawIndexed(command_buffer, adult_index_count, 1, 0, 0, 0);
+                }
+                // Baby entities
+                if (baby_index_count > 0) {
+                    vkCmdDrawIndexed(command_buffer, baby_index_count, 1, baby_index_start, 0, 0);
+                }
+            }
+        }
+
+        // Line rendering (block outline)
+        try self.drawBlockOutline(command_buffer, &descriptor_sets);
+
+        vkCmdEndRenderPass(command_buffer);
+
+        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
+            return error.CommandBufferEndFailed;
+        }
+
         try self.endFrame(ctx);
     }
 
@@ -2620,6 +2791,144 @@ pub const RenderSystem = struct {
         self.chunk_metadata_buffer.destroy(self.device);
     }
 
+    /// Create compute pipelines for GPU-driven rendering (Phase 2)
+    fn createComputePipelines(self: *Self) !void {
+        const vkCreateDescriptorPool = vk.vkCreateDescriptorPool orelse return error.VulkanFunctionNotLoaded;
+        const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+
+        // Create descriptor set layout for compute shaders
+        // Bindings: 0=chunks, 1=counts, 2=solid_cmds, 3=cutout_cmds, 4=translucent_cmds
+        const bindings = [_]vk.VkDescriptorSetLayoutBinding{
+            ComputePipeline.storageBufferBinding(0, vk.VK_SHADER_STAGE_COMPUTE_BIT), // ChunkMetadata
+            ComputePipeline.storageBufferBinding(1, vk.VK_SHADER_STAGE_COMPUTE_BIT), // DrawCounts
+            ComputePipeline.storageBufferBinding(2, vk.VK_SHADER_STAGE_COMPUTE_BIT), // SolidCommands
+            ComputePipeline.storageBufferBinding(3, vk.VK_SHADER_STAGE_COMPUTE_BIT), // CutoutCommands
+            ComputePipeline.storageBufferBinding(4, vk.VK_SHADER_STAGE_COMPUTE_BIT), // TranslucentCommands
+        };
+        self.compute_descriptor_set_layout = try ComputePipeline.createDescriptorSetLayout(self.device, &bindings);
+
+        // Push constant range for prep.comp (just chunkCount)
+        // and cmdgen.comp (viewProj matrix + chunkCount + vertexStride)
+        const push_constant_ranges = [_]vk.VkPushConstantRange{
+            .{
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .offset = 0,
+                .size = 64 + 4 + 4, // mat4 (64) + chunkCount (4) + vertexStride (4)
+            },
+        };
+        const layouts = [_]vk.VkDescriptorSetLayout{self.compute_descriptor_set_layout};
+        self.compute_pipeline_layout = try ComputePipeline.createPipelineLayout(self.device, &layouts, &push_constant_ranges);
+
+        // Create descriptor pool
+        const pool_sizes = [_]vk.VkDescriptorPoolSize{
+            .{ .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 5 },
+        };
+        const pool_info = vk.VkDescriptorPoolCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .maxSets = 1,
+            .poolSizeCount = pool_sizes.len,
+            .pPoolSizes = &pool_sizes,
+        };
+        if (vkCreateDescriptorPool(self.device, &pool_info, null, &self.compute_descriptor_pool) != vk.VK_SUCCESS) {
+            return error.DescriptorPoolCreationFailed;
+        }
+
+        // Allocate descriptor set
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.compute_descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &layouts,
+        };
+        if (vkAllocateDescriptorSets(self.device, &alloc_info, @ptrCast(&self.compute_descriptor_set)) != vk.VK_SUCCESS) {
+            return error.DescriptorSetAllocationFailed;
+        }
+
+        // Update descriptor set with buffer bindings
+        try self.updateComputeDescriptorSet();
+
+        // Compile and create compute pipelines
+        var sm = self.shader_manager orelse return error.ShaderManagerNotInitialized;
+        const vkCreateShaderModule = vk.vkCreateShaderModule orelse return error.VulkanFunctionNotLoaded;
+
+        const prep_spirv = try sm.compileShaderFile("assets/farhorizons/shaders/prep.comp");
+        defer self.allocator.free(prep_spirv);
+        const prep_module = try self.createShaderModule(vkCreateShaderModule, prep_spirv);
+        defer if (vk.vkDestroyShaderModule) |destroy| destroy(self.device, prep_module, null);
+
+        self.prep_pipeline = try ComputePipeline.create(self.device, .{
+            .shader_module = prep_module,
+            .pipeline_layout = self.compute_pipeline_layout,
+        });
+
+        const cmdgen_spirv = try sm.compileShaderFile("assets/farhorizons/shaders/cmdgen.comp");
+        defer self.allocator.free(cmdgen_spirv);
+        const cmdgen_module = try self.createShaderModule(vkCreateShaderModule, cmdgen_spirv);
+        defer if (vk.vkDestroyShaderModule) |destroy| destroy(self.device, cmdgen_module, null);
+
+        self.cmdgen_pipeline = try ComputePipeline.create(self.device, .{
+            .shader_module = cmdgen_module,
+            .pipeline_layout = self.compute_pipeline_layout,
+        });
+
+        logger.info("GPU-driven compute pipelines created", .{});
+    }
+
+    /// Update compute descriptor set with current buffer bindings
+    fn updateComputeDescriptorSet(self: *Self) !void {
+        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
+
+        const buffer_infos = [_]vk.VkDescriptorBufferInfo{
+            .{ .buffer = self.chunk_metadata_buffer.handle, .offset = 0, .range = vk.VK_WHOLE_SIZE },
+            .{ .buffer = self.draw_count_buffer.handle, .offset = 0, .range = vk.VK_WHOLE_SIZE },
+            .{ .buffer = self.gpu_draw_buffer.handle, .offset = 0, .range = vk.VK_WHOLE_SIZE },
+            .{ .buffer = self.gpu_draw_buffer.handle, .offset = GPUDrivenTypes.MAX_DRAWS_PER_LAYER * @sizeOf(GPUDrivenTypes.IndirectDrawCommand), .range = vk.VK_WHOLE_SIZE },
+            .{ .buffer = self.gpu_draw_buffer.handle, .offset = 2 * GPUDrivenTypes.MAX_DRAWS_PER_LAYER * @sizeOf(GPUDrivenTypes.IndirectDrawCommand), .range = vk.VK_WHOLE_SIZE },
+        };
+
+        var writes: [5]vk.VkWriteDescriptorSet = undefined;
+        for (0..5) |i| {
+            writes[i] = .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.compute_descriptor_set,
+                .dstBinding = @intCast(i),
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &buffer_infos[i],
+                .pTexelBufferView = null,
+            };
+        }
+
+        vkUpdateDescriptorSets(self.device, 5, &writes, 0, null);
+    }
+
+    /// Destroy compute pipelines
+    fn destroyComputePipelines(self: *Self) void {
+        const vkDestroyPipeline = vk.vkDestroyPipeline orelse return;
+        const vkDestroyPipelineLayout = vk.vkDestroyPipelineLayout orelse return;
+        const vkDestroyDescriptorSetLayout = vk.vkDestroyDescriptorSetLayout orelse return;
+        const vkDestroyDescriptorPool = vk.vkDestroyDescriptorPool orelse return;
+
+        if (self.cmdgen_pipeline) |p| vkDestroyPipeline(self.device, p, null);
+        if (self.prep_pipeline) |p| vkDestroyPipeline(self.device, p, null);
+        if (self.compute_descriptor_pool) |p| vkDestroyDescriptorPool(self.device, p, null);
+        if (self.compute_pipeline_layout) |l| vkDestroyPipelineLayout(self.device, l, null);
+        if (self.compute_descriptor_set_layout) |l| vkDestroyDescriptorSetLayout(self.device, l, null);
+
+        self.cmdgen_pipeline = null;
+        self.prep_pipeline = null;
+        self.compute_descriptor_set = null;
+        self.compute_descriptor_pool = null;
+        self.compute_pipeline_layout = null;
+        self.compute_descriptor_set_layout = null;
+    }
+
     // ============================================================================
     // GPU-Driven Rendering: Public Chunk Management API
     // ============================================================================
@@ -2702,6 +3011,116 @@ pub const RenderSystem = struct {
             return allocator.getHighWaterMark();
         }
         return 0;
+    }
+
+    /// Record GPU-driven rendering commands (compute cull + indirect draws)
+    /// This replaces the CPU-driven draw loop when GPU-driven rendering is enabled
+    pub fn recordGPUDrivenCommands(
+        self: *Self,
+        cmd_buffer: vk.VkCommandBuffer,
+        chunk_count: u32,
+        view_proj: [16]f32,
+    ) void {
+        if (self.prep_pipeline == null or self.cmdgen_pipeline == null) return;
+        if (chunk_count == 0) return;
+
+        const vkCmdBindPipeline = vk.vkCmdBindPipeline orelse return;
+        const vkCmdBindDescriptorSets = vk.vkCmdBindDescriptorSets orelse return;
+        const vkCmdPushConstants = vk.vkCmdPushConstants orelse return;
+        const vkCmdDispatch = vk.vkCmdDispatch orelse return;
+        const vkCmdDispatchIndirect = vk.vkCmdDispatchIndirect orelse return;
+
+        // Bind compute descriptor set
+        const descriptor_sets = [_]vk.VkDescriptorSet{self.compute_descriptor_set};
+        vkCmdBindDescriptorSets(
+            cmd_buffer,
+            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+            self.compute_pipeline_layout,
+            0,
+            1,
+            &descriptor_sets,
+            0,
+            null,
+        );
+
+        // === PREP PASS: Zero counters and set dispatch size ===
+        vkCmdBindPipeline(cmd_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.prep_pipeline.?);
+
+        // Push constant for prep shader (just chunk count)
+        const prep_push = extern struct { chunk_count: u32 }{ .chunk_count = chunk_count };
+        vkCmdPushConstants(
+            cmd_buffer,
+            self.compute_pipeline_layout,
+            vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            @sizeOf(@TypeOf(prep_push)),
+            &prep_push,
+        );
+
+        vkCmdDispatch(cmd_buffer, 1, 1, 1);
+
+        // Memory barrier: prep writes -> cmdgen reads
+        ComputePipeline.insertComputeBarrier(cmd_buffer);
+
+        // === COMMAND GENERATION PASS: Frustum cull and generate draw commands ===
+        vkCmdBindPipeline(cmd_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.cmdgen_pipeline.?);
+
+        // Push constants for cmdgen shader (viewProj + chunkCount + vertexStride)
+        const CmdgenPush = extern struct {
+            view_proj: [16]f32,
+            chunk_count: u32,
+            vertex_stride: u32,
+        };
+        const cmdgen_push = CmdgenPush{
+            .view_proj = view_proj,
+            .chunk_count = chunk_count,
+            .vertex_stride = @sizeOf(Vertex),
+        };
+        vkCmdPushConstants(
+            cmd_buffer,
+            self.compute_pipeline_layout,
+            vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            @sizeOf(CmdgenPush),
+            &cmdgen_push,
+        );
+
+        // Indirect dispatch - size determined by prep.comp
+        vkCmdDispatchIndirect(cmd_buffer, self.draw_count_buffer.handle, 0);
+
+        // Memory barrier: cmdgen writes -> draw reads
+        ComputePipeline.insertComputeToDrawBarrier(cmd_buffer);
+    }
+
+    /// Issue GPU-driven draw calls using vkCmdDrawIndexedIndirectCount
+    /// Call after recordGPUDrivenCommands and after binding vertex/index buffers
+    pub fn issueGPUDrivenDrawsForLayer(
+        self: *Self,
+        cmd_buffer: vk.VkCommandBuffer,
+        layer: u32,
+    ) void {
+        const vkCmdDrawIndexedIndirectCount = vk.vkCmdDrawIndexedIndirectCount orelse return;
+
+        const max_draws = GPUDrivenTypes.MAX_DRAWS_PER_LAYER;
+        const cmd_stride = @sizeOf(GPUDrivenTypes.IndirectDrawCommand);
+
+        const count_offsets = [3]usize{
+            @offsetOf(GPUDrivenTypes.DrawCountData, "solid_count"),
+            @offsetOf(GPUDrivenTypes.DrawCountData, "cutout_count"),
+            @offsetOf(GPUDrivenTypes.DrawCountData, "translucent_count"),
+        };
+
+        const cmd_offset = layer * max_draws * cmd_stride;
+
+        vkCmdDrawIndexedIndirectCount(
+            cmd_buffer,
+            self.gpu_draw_buffer.handle,
+            cmd_offset,
+            self.draw_count_buffer.handle,
+            count_offsets[layer],
+            max_draws,
+            cmd_stride,
+        );
     }
 
     // Note: Texture creation/destruction is now handled by TextureManager

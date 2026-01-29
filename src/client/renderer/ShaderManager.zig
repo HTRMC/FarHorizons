@@ -371,6 +371,17 @@ pub const ShaderManager = struct {
         return error.RuntimeCompilationDisabled;
     }
 
+    /// Compile a shader file directly (for compute shaders, etc.)
+    /// Returns owned SPIR-V data that must be freed by the caller
+    pub fn compileShaderFile(self: *ShaderManager, path: []const u8) ![]u8 {
+        if (self.compiler) |*compiler| {
+            var compiled = try compiler.compileFile(path);
+            defer compiled.deinit();
+            return try self.allocator.dupe(u8, compiled.spv_data);
+        }
+        return error.RuntimeCompilationDisabled;
+    }
+
     /// Clear the shader cache (call before reloading a pack)
     pub fn clearCache(self: *ShaderManager) void {
         var iter = self.shader_cache.iterator();

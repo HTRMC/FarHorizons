@@ -1,0 +1,193 @@
+#version 450
+layout(local_size_x = 64) in;
+
+// Per-layer GPU data - matches LayerGPUData in GPUDrivenTypes.zig
+struct LayerGPUData {
+    uint vertexOffset;
+    uint indexOffset;
+    uint indexCount;
+    uint arenaIndices;  // vertex_arena << 16 | index_arena
+};
+
+// Per-chunk GPU data - matches ChunkGPUData in GPUDrivenTypes.zig
+struct ChunkGPUData {
+    vec3 worldPos;
+    float _pad0;
+    vec3 aabbMin;
+    float _pad1;
+    vec3 aabbMax;
+    float _pad2;
+    LayerGPUData layers[3];
+    float _pad3;
+};
+
+// Indirect draw command - matches VkDrawIndexedIndirectCommand
+struct DrawCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  vertexOffset;
+    uint firstInstance;
+};
+
+// Chunk metadata buffer
+layout(set = 0, binding = 0, std430) readonly buffer ChunkMetadata {
+    ChunkGPUData chunks[];
+};
+
+// Draw count buffer (atomic counters)
+layout(set = 0, binding = 1, std430) buffer DrawCounts {
+    uint dispatchX;
+    uint dispatchY;
+    uint dispatchZ;
+    uint solidCount;
+    uint cutoutCount;
+    uint translucentCount;
+} counts;
+
+// Output draw commands - 3 arrays for solid, cutout, translucent
+layout(set = 0, binding = 2, std430) writeonly buffer SolidCommands {
+    DrawCommand solidCmds[];
+};
+
+layout(set = 0, binding = 3, std430) writeonly buffer CutoutCommands {
+    DrawCommand cutoutCmds[];
+};
+
+layout(set = 0, binding = 4, std430) writeonly buffer TranslucentCommands {
+    DrawCommand translucentCmds[];
+};
+
+layout(push_constant) uniform PushConstants {
+    mat4 viewProj;
+    uint chunkCount;
+    uint vertexStride;  // Bytes per vertex (for offset calculation)
+} pc;
+
+// Extract frustum planes from view-projection matrix
+vec4 frustumPlanes[6];
+
+void extractFrustumPlanes() {
+    mat4 m = pc.viewProj;
+
+    // Left plane
+    frustumPlanes[0] = vec4(
+        m[0][3] + m[0][0],
+        m[1][3] + m[1][0],
+        m[2][3] + m[2][0],
+        m[3][3] + m[3][0]
+    );
+
+    // Right plane
+    frustumPlanes[1] = vec4(
+        m[0][3] - m[0][0],
+        m[1][3] - m[1][0],
+        m[2][3] - m[2][0],
+        m[3][3] - m[3][0]
+    );
+
+    // Bottom plane
+    frustumPlanes[2] = vec4(
+        m[0][3] + m[0][1],
+        m[1][3] + m[1][1],
+        m[2][3] + m[2][1],
+        m[3][3] + m[3][1]
+    );
+
+    // Top plane
+    frustumPlanes[3] = vec4(
+        m[0][3] - m[0][1],
+        m[1][3] - m[1][1],
+        m[2][3] - m[2][1],
+        m[3][3] - m[3][1]
+    );
+
+    // Near plane
+    frustumPlanes[4] = vec4(
+        m[0][3] + m[0][2],
+        m[1][3] + m[1][2],
+        m[2][3] + m[2][2],
+        m[3][3] + m[3][2]
+    );
+
+    // Far plane
+    frustumPlanes[5] = vec4(
+        m[0][3] - m[0][2],
+        m[1][3] - m[1][2],
+        m[2][3] - m[2][2],
+        m[3][3] - m[3][2]
+    );
+
+    // Normalize planes
+    for (int i = 0; i < 6; i++) {
+        float len = length(frustumPlanes[i].xyz);
+        frustumPlanes[i] /= len;
+    }
+}
+
+bool frustumTestAABB(vec3 aabbMin, vec3 aabbMax) {
+    for (int i = 0; i < 6; i++) {
+        vec4 plane = frustumPlanes[i];
+
+        // Find the positive vertex (furthest along plane normal)
+        vec3 pVertex = vec3(
+            plane.x > 0 ? aabbMax.x : aabbMin.x,
+            plane.y > 0 ? aabbMax.y : aabbMin.y,
+            plane.z > 0 ? aabbMax.z : aabbMin.z
+        );
+
+        // If positive vertex is outside, AABB is outside frustum
+        if (dot(plane.xyz, pVertex) + plane.w < 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= pc.chunkCount) return;
+
+    extractFrustumPlanes();
+
+    ChunkGPUData chunk = chunks[idx];
+
+    // Frustum culling
+    if (!frustumTestAABB(chunk.aabbMin, chunk.aabbMax)) {
+        return;  // Chunk not visible, skip
+    }
+
+    // Generate draw commands for each non-empty layer
+    for (uint layer = 0; layer < 3; layer++) {
+        LayerGPUData ld = chunk.layers[layer];
+
+        if (ld.indexCount == 0) continue;
+
+        // Atomically allocate slot in appropriate command array
+        uint slot;
+        if (layer == 0) {
+            slot = atomicAdd(counts.solidCount, 1);
+        } else if (layer == 1) {
+            slot = atomicAdd(counts.cutoutCount, 1);
+        } else {
+            slot = atomicAdd(counts.translucentCount, 1);
+        }
+
+        // Build draw command
+        DrawCommand cmd;
+        cmd.indexCount = ld.indexCount;
+        cmd.instanceCount = 1;
+        cmd.firstIndex = ld.indexOffset / 4;  // Convert bytes to indices (u32)
+        cmd.vertexOffset = int(ld.vertexOffset / pc.vertexStride);  // Convert bytes to vertices
+        cmd.firstInstance = idx;  // Chunk ID for vertex shader
+
+        // Write to appropriate command buffer
+        if (layer == 0) {
+            solidCmds[slot] = cmd;
+        } else if (layer == 1) {
+            cutoutCmds[slot] = cmd;
+        } else {
+            translucentCmds[slot] = cmd;
+        }
+    }
+}

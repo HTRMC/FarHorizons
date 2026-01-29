@@ -432,42 +432,46 @@ pub const FarHorizonsClient = struct {
                     if (self.chunk_manager) |*cm| {
                         const vertex_buffers = cm.getAllVertexBuffers();
                         const index_buffers = cm.getAllIndexBuffers();
-                        const draw_commands = cm.getDrawCommands();
                         const staging_copies = cm.getStagingCopies();
 
                         const entity_vb = if (self.entity_renderer) |*er| er.getVertexBuffer() else null;
                         const entity_ib = if (self.entity_renderer) |*er| er.getIndexBuffer() else null;
-                        const entity_ic = if (self.entity_renderer) |*er| er.getIndexCount() else 0;
                         const adult_ic = if (self.entity_renderer) |*er| er.getAdultIndexCount() else 0;
                         const baby_is = if (self.entity_renderer) |*er| er.getBabyIndexStart() else 0;
                         const baby_ic = if (self.entity_renderer) |*er| er.getBabyIndexCount() else 0;
 
-                        if (vertex_buffers.len > 0 and index_buffers.len > 0 and draw_commands.len > 0) {
-                            self.render_system.drawFrameMultiArena(
+                        const chunk_count = cm.getActiveChunkCount();
+
+                        if (vertex_buffers.len > 0 and index_buffers.len > 0 and chunk_count > 0) {
+                            // Compute view*proj matrix for GPU frustum culling
+                            const view_proj = Mat4.multiply(view, proj);
+
+                            self.render_system.drawFrameGPUDriven(
+                                chunk_count,
+                                view_proj.data,
                                 vertex_buffers,
                                 index_buffers,
-                                draw_commands,
                                 staging_copies,
                                 entity_vb,
                                 entity_ib,
-                                entity_ic,
                                 adult_ic,
                                 baby_is,
                                 baby_ic,
                             ) catch |err| {
-                                logger.err("Failed to draw multi-arena frame: {}", .{err});
+                                logger.err("Failed to draw GPU-driven frame: {}", .{err});
                             };
-                            // Clear staging copies after they've been submitted
                             cm.clearStagingCopies();
                         } else if (staging_copies.len > 0 and vertex_buffers.len > 0 and index_buffers.len > 0) {
-                            self.render_system.drawFrameMultiArena(
+                            // No chunks ready yet, just process staging copies
+                            const view_proj = Mat4.multiply(view, proj);
+                            self.render_system.drawFrameGPUDriven(
+                                0,
+                                view_proj.data,
                                 vertex_buffers,
                                 index_buffers,
-                                &.{},
                                 staging_copies,
                                 entity_vb,
                                 entity_ib,
-                                entity_ic,
                                 adult_ic,
                                 baby_is,
                                 baby_ic,
