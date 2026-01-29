@@ -56,7 +56,6 @@ pub const AllocationArena = struct {
             .allocator = allocator,
         };
 
-        // Start with entire capacity as free
         try arena.free_list.append(allocator, .{ .offset = 0, .size = capacity });
 
         return arena;
@@ -71,7 +70,6 @@ pub const AllocationArena = struct {
     pub fn alloc(self: *Self, size: u64) ?Allocation {
         if (size == 0) return null;
 
-        // Align size up
         const aligned_size = alignUp(size, self.alignment);
 
         // Find best-fit free region (smallest region that fits)
@@ -99,12 +97,9 @@ pub const AllocationArena = struct {
         const padding = aligned_offset - region.offset;
         const total_needed = padding + aligned_size;
 
-        // Remove or shrink the free region
         if (region.size == total_needed) {
-            // Exact fit - remove the region
             _ = self.free_list.orderedRemove(idx);
         } else {
-            // Shrink the region (move start forward)
             self.free_list.items[idx] = .{
                 .offset = aligned_offset + aligned_size,
                 .size = region.size - total_needed,
@@ -149,7 +144,6 @@ pub const AllocationArena = struct {
             insert_idx = i + 1;
         }
 
-        // Check for merge with previous region
         var merged = new_region;
         if (insert_idx > 0) {
             const prev = self.free_list.items[insert_idx - 1];
@@ -160,7 +154,6 @@ pub const AllocationArena = struct {
             }
         }
 
-        // Check for merge with next region
         if (insert_idx < self.free_list.items.len) {
             const next = self.free_list.items[insert_idx];
             if (merged.end() == next.offset) {
@@ -169,7 +162,6 @@ pub const AllocationArena = struct {
             }
         }
 
-        // Insert the (possibly merged) region
         self.free_list.insert(self.allocator, insert_idx, merged) catch {
             logger.err("Failed to insert free region", .{});
         };
