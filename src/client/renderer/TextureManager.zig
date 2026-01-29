@@ -32,13 +32,11 @@ pub const TextureManager = struct {
     texture_indices: std.StringHashMap(u32),
     texture_count: u32,
 
-    // Vulkan resources
     texture_array: vk.VkImage,
     texture_array_memory: vk.VkDeviceMemory,
     texture_array_view: vk.VkImageView,
     texture_sampler: vk.VkSampler,
 
-    // Device reference for Vulkan calls
     device: vk.VkDevice,
     physical_device: vk.VkPhysicalDevice,
     command_pool: vk.VkCommandPool,
@@ -89,7 +87,6 @@ pub const TextureManager = struct {
             vkFreeMemory(self.device, memory, null);
         }
 
-        // Free texture name keys
         var it = self.texture_indices.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -107,7 +104,6 @@ pub const TextureManager = struct {
         );
         defer self.allocator.free(texture_dir);
 
-        // Open directory and collect PNG files
         var dir = Dir.cwd().openDir(self.io, texture_dir, .{ .iterate = true }) catch |err| {
             logger.err("Failed to open texture directory: {s} - {}", .{ texture_dir, err });
             return error.TextureDirectoryNotFound;
@@ -133,7 +129,6 @@ pub const TextureManager = struct {
         // Create the texture array image with +1 for missing texture at index 0
         try self.createTextureArray(count + 1);
 
-        // Load procedural missing texture to layer 0
         try self.loadMissingTextureToLayer(MISSING_TEXTURE_INDEX);
         logger.info("Loaded missing texture (pink/black checkerboard) to layer 0", .{});
 
@@ -146,7 +141,6 @@ pub const TextureManager = struct {
         var layer_index: u32 = 1; // Start at 1, layer 0 is missing texture
         while (try iter.next(self.io)) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".png")) {
-                // Build null-terminated path using stack buffer
                 var path_buf: [512:0]u8 = undefined;
                 const path_slice = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ texture_dir, entry.name }) catch {
                     logger.err("Path too long: {s}/{s}", .{ texture_dir, entry.name });
@@ -156,8 +150,8 @@ pub const TextureManager = struct {
 
                 try self.loadTextureToLayer(&path_buf, layer_index);
 
-                // Store texture name without extension
-                const name_len = entry.name.len - 4; // Remove ".png"
+                const name_len = entry.name.len - 4;
+
                 const texture_name = try self.allocator.dupe(u8, entry.name[0..name_len]);
                 try self.texture_indices.put(texture_name, layer_index);
 
@@ -168,7 +162,6 @@ pub const TextureManager = struct {
 
         self.texture_count = layer_index;
 
-        // Create image view and sampler
         try self.createTextureArrayView();
         try self.createTextureSampler();
 
@@ -261,7 +254,6 @@ pub const TextureManager = struct {
         const vkDestroyBuffer = vk.vkDestroyBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkFreeMemory = vk.vkFreeMemory orelse return error.VulkanFunctionNotLoaded;
 
-        // Load image with stb_image
         stb_image.setFlipVerticallyOnLoad(false);
         const image = stb_image.load(file_path, 4) catch {
             logger.err("Failed to load texture: {s}", .{file_path});
@@ -282,7 +274,6 @@ pub const TextureManager = struct {
 
         const image_size: vk.VkDeviceSize = TEXTURE_SIZE * TEXTURE_SIZE * 4;
 
-        // Create staging buffer
         var staging_buffer: vk.VkBuffer = null;
         var staging_buffer_memory: vk.VkDeviceMemory = null;
 
@@ -324,7 +315,6 @@ pub const TextureManager = struct {
             return error.BufferMemoryBindFailed;
         }
 
-        // Copy pixel data to staging buffer
         var data: ?*anyopaque = null;
         if (vkMapMemory(self.device, staging_buffer_memory, 0, image_size, 0, &data) != vk.VK_SUCCESS) {
             return error.MemoryMapFailed;
@@ -333,7 +323,6 @@ pub const TextureManager = struct {
         @memcpy(dest[0..@intCast(image_size)], image.data[0..@intCast(image_size)]);
         vkUnmapMemory(self.device, staging_buffer_memory);
 
-        // Transition image layout and copy buffer to image layer
         try self.transitionImageLayoutForLayer(
             self.texture_array,
             layer_index,
@@ -365,7 +354,6 @@ pub const TextureManager = struct {
 
         const image_size: vk.VkDeviceSize = TEXTURE_SIZE * TEXTURE_SIZE * 4;
 
-        // Create staging buffer
         var staging_buffer: vk.VkBuffer = null;
         var staging_buffer_memory: vk.VkDeviceMemory = null;
 
@@ -407,7 +395,6 @@ pub const TextureManager = struct {
             return error.BufferMemoryBindFailed;
         }
 
-        // Generate the missing texture procedurally (pink/black checkerboard)
         var data: ?*anyopaque = null;
         if (vkMapMemory(self.device, staging_buffer_memory, 0, image_size, 0, &data) != vk.VK_SUCCESS) {
             return error.MemoryMapFailed;
@@ -416,7 +403,7 @@ pub const TextureManager = struct {
         const pixels: [*]u32 = @ptrCast(@alignCast(data));
         const half_size = TEXTURE_SIZE / 2;
 
-        // Generate Minecraft-style missing texture: 2x2 checkerboard of pink and black
+        // 2x2 checkerboard of pink and black
         for (0..TEXTURE_SIZE) |y| {
             for (0..TEXTURE_SIZE) |x| {
                 const in_top_half = y < half_size;
@@ -442,7 +429,6 @@ pub const TextureManager = struct {
 
         vkUnmapMemory(self.device, staging_buffer_memory);
 
-        // Transition image layout and copy buffer to image layer
         try self.transitionImageLayoutForLayer(
             self.texture_array,
             layer_index,
