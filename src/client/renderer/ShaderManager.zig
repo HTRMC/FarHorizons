@@ -169,7 +169,6 @@ pub const ShaderManager = struct {
     }
 
     pub fn deinit(self: *ShaderManager) void {
-        // Free cached shaders
         var iter = self.shader_cache.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -300,11 +299,9 @@ pub const ShaderManager = struct {
         }
         self.active_pack = try self.allocator.dupe(u8, pack_path);
 
-        // Register the pack's include directory
         const include_path = try Dir.path.join(self.allocator, &.{ pack_path, "shaders", "include" });
         defer self.allocator.free(include_path);
 
-        // Check if include directory exists before registering
         if (Dir.cwd().openDir(self.io, include_path, .{})) |dir| {
             dir.close(self.io);
             try self.compiler.?.registerNamespace("pack", include_path);
@@ -317,12 +314,10 @@ pub const ShaderManager = struct {
     /// Get a shader by name, compiling if necessary
     /// Returns SPIR-V bytes
     pub fn getShader(self: *ShaderManager, name: []const u8, kind: ShaderKind) ![]const u8 {
-        // Check cache first
         if (self.shader_cache.get(name)) |cached| {
             return cached.data;
         }
 
-        // If no active pack, return default
         if (self.active_pack == null) {
             return switch (kind) {
                 .vertex => self.getDefaultVertexShader(),
@@ -331,7 +326,6 @@ pub const ShaderManager = struct {
             };
         }
 
-        // Compile from pack
         if (self.compiler) |*compiler| {
             const ext = switch (kind) {
                 .vertex => ".vert",
@@ -352,7 +346,6 @@ pub const ShaderManager = struct {
             var compiled = try compiler.compileFile(shader_path);
             defer compiled.deinit();
 
-            // Cache the result
             const key = try self.allocator.dupe(u8, name);
             errdefer self.allocator.free(key);
             const data = try self.allocator.dupe(u8, compiled.spv_data);
