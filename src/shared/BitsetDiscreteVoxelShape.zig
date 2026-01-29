@@ -41,7 +41,6 @@ pub const BitSetDiscreteVoxelShape = struct {
         };
     }
 
-    /// Create a shape with a filled rectangular region
     pub fn withFilledBounds(
         x_size: u8,
         y_size: u8,
@@ -55,7 +54,6 @@ pub const BitSetDiscreteVoxelShape = struct {
     ) Self {
         var shape = init(x_size, y_size, z_size);
 
-        // Fill the specified region
         for (x_min..x_max) |x| {
             for (y_min..y_max) |y| {
                 for (z_min..z_max) |z| {
@@ -64,7 +62,6 @@ pub const BitSetDiscreteVoxelShape = struct {
             }
         }
 
-        // Update bounds
         if (x_min < x_max and y_min < y_max and z_min < z_max) {
             shape.base.x_min = x_min;
             shape.base.y_min = y_min;
@@ -82,14 +79,12 @@ pub const BitSetDiscreteVoxelShape = struct {
         return withFilledBounds(x_size, y_size, z_size, 0, 0, 0, x_size, y_size, z_size);
     }
 
-    /// Get linear index from 3D coordinates
     fn getIndex(self: *const Self, x: u8, y: u8, z: u8) usize {
         return @as(usize, x) * self.base.y_size * self.base.z_size +
             @as(usize, y) * self.base.z_size +
             @as(usize, z);
     }
 
-    /// Check if voxel is filled (internal, direct access)
     fn getDirect(self: *const Self, x: u8, y: u8, z: u8) bool {
         const idx = self.getIndex(x, y, z);
         const word_idx = idx / 64;
@@ -97,7 +92,6 @@ pub const BitSetDiscreteVoxelShape = struct {
         return (self.storage[word_idx] & (@as(u64, 1) << bit_idx)) != 0;
     }
 
-    /// Set voxel state (internal, direct access)
     fn setDirect(self: *Self, x: u8, y: u8, z: u8, value: bool) void {
         const idx = self.getIndex(x, y, z);
         const word_idx = idx / 64;
@@ -108,8 +102,6 @@ pub const BitSetDiscreteVoxelShape = struct {
             self.storage[word_idx] &= ~(@as(u64, 1) << bit_idx);
         }
     }
-
-    // === DiscreteVoxelShape interface implementation ===
 
     fn isFull(base: *const DiscreteVoxelShape, x: u8, y: u8, z: u8) bool {
         const self: *const Self = @fieldParentPtr("base", base);
@@ -161,16 +153,12 @@ pub const BitSetDiscreteVoxelShape = struct {
         return true;
     }
 
-    // === Additional methods specific to BitSetDiscreteVoxelShape ===
-
-    /// Get the raw bitset storage
     pub fn getStorage(self: *const Self) []const u64 {
         const volume = @as(usize, self.base.x_size) * self.base.y_size * self.base.z_size;
         const words_used = (volume + 63) / 64;
         return self.storage[0..words_used];
     }
 
-    /// Perform OR operation with another shape (union)
     pub fn orWith(self: *Self, other: *const Self) void {
         std.debug.assert(self.base.x_size == other.base.x_size and
             self.base.y_size == other.base.y_size and
@@ -182,7 +170,6 @@ pub const BitSetDiscreteVoxelShape = struct {
             self.storage[i] |= other.storage[i];
         }
 
-        // Update bounds
         self.base.x_min = @min(self.base.x_min, other.base.x_min);
         self.base.y_min = @min(self.base.y_min, other.base.y_min);
         self.base.z_min = @min(self.base.z_min, other.base.z_min);
@@ -191,7 +178,6 @@ pub const BitSetDiscreteVoxelShape = struct {
         self.base.z_max = @max(self.base.z_max, other.base.z_max);
     }
 
-    /// Perform AND operation with another shape (intersection)
     pub fn andWith(self: *Self, other: *const Self) void {
         std.debug.assert(self.base.x_size == other.base.x_size and
             self.base.y_size == other.base.y_size and
@@ -203,11 +189,9 @@ pub const BitSetDiscreteVoxelShape = struct {
             self.storage[i] &= other.storage[i];
         }
 
-        // Bounds need recalculation after AND
         self.base.recalculateBounds();
     }
 
-    /// Perform NOT operation (invert)
     pub fn invert(self: *Self) void {
         const volume = @as(usize, self.base.x_size) * self.base.y_size * self.base.z_size;
         const full_words = volume / 64;
@@ -224,8 +208,7 @@ pub const BitSetDiscreteVoxelShape = struct {
         self.base.recalculateBounds();
     }
 
-    /// Check if (self AND NOT other) is empty
-    /// Used for occlusion: returns true if other completely covers self
+    /// Returns true if other completely covers self
     pub fn isSubsetOf(self: *const Self, other: *const Self) bool {
         std.debug.assert(self.base.x_size == other.base.x_size and
             self.base.y_size == other.base.y_size and
@@ -241,7 +224,6 @@ pub const BitSetDiscreteVoxelShape = struct {
         return true;
     }
 
-    /// Count filled voxels (population count)
     pub fn popCount(self: *const Self) usize {
         const volume = @as(usize, self.base.x_size) * self.base.y_size * self.base.z_size;
         const words_used = (volume + 63) / 64;
@@ -252,33 +234,28 @@ pub const BitSetDiscreteVoxelShape = struct {
         return count;
     }
 
-    /// Rotate the shape using an OctahedralGroup transformation
-    /// Returns a new rotated shape
     pub fn rotate(self: *const Self, rotation: OctahedralGroup) Self {
         if (rotation.isIdentity()) {
             return self.*;
         }
 
-        // Rotate the size vector to get new dimensions
         const size_vec = rotation.rotateVec(
             @as(i32, self.base.x_size),
             @as(i32, self.base.y_size),
             @as(i32, self.base.z_size),
         );
 
-        // Handle negative sizes (absolute value) and calculate shift
         const new_x_size: u8 = @intCast(if (size_vec.x < 0) -size_vec.x else size_vec.x);
         const new_y_size: u8 = @intCast(if (size_vec.y < 0) -size_vec.y else size_vec.y);
         const new_z_size: u8 = @intCast(if (size_vec.z < 0) -size_vec.z else size_vec.z);
 
-        // Calculate shift for negative coordinates (fixupCoordinate equivalent)
+        // Shift for negative coordinates
         const shift_x: i32 = if (size_vec.x < 0) -size_vec.x - 1 else 0;
         const shift_y: i32 = if (size_vec.y < 0) -size_vec.y - 1 else 0;
         const shift_z: i32 = if (size_vec.z < 0) -size_vec.z - 1 else 0;
 
         var result = init(new_x_size, new_y_size, new_z_size);
 
-        // Iterate over all voxels and rotate their positions
         for (0..self.base.x_size) |x| {
             for (0..self.base.y_size) |y| {
                 for (0..self.base.z_size) |z| {
@@ -297,39 +274,20 @@ pub const BitSetDiscreteVoxelShape = struct {
             }
         }
 
-        // Update bounds
         result.base.recalculateBounds();
         return result;
     }
 
-    // === Edge Iteration (for block outline rendering) ===
-
-    /// Callback type for edge iteration
-    /// Called with (x1, y1, z1, x2, y2, z2) for each edge in discrete voxel coordinates
     pub const IntEdgeConsumer = *const fn (x1: u8, y1: u8, z1: u8, x2: u8, y2: u8, z2: u8, ctx: *anyopaque) void;
 
-    /// Iterate over all visible edges of the shape
-    /// This implements Minecraft's edge detection algorithm that correctly handles
-    /// complex shapes like stairs by checking adjacent voxel configurations.
-    ///
-    /// An edge is drawn when:
-    /// - Exactly 1 adjacent voxel is filled (external edge)
-    /// - Exactly 3 adjacent voxels are filled (concave corner)
-    /// - Exactly 2 diagonal voxels are filled (internal corner)
-    ///
-    /// merge_neighbors: if true, collinear edge segments are merged into single lines
+    /// Edge detection: draws edges at boundary transitions between filled/empty voxels.
+    /// merge_neighbors: if true, collinear segments are merged into single lines
     pub fn forAllEdges(self: *const Self, consumer: IntEdgeConsumer, ctx: *anyopaque, merge_neighbors: bool) void {
-        // Process edges along each axis
-        // X-axis edges (lines parallel to X)
         self.forAllAxisEdges(consumer, ctx, merge_neighbors, .x);
-        // Y-axis edges (lines parallel to Y)
         self.forAllAxisEdges(consumer, ctx, merge_neighbors, .y);
-        // Z-axis edges (lines parallel to Z)
         self.forAllAxisEdges(consumer, ctx, merge_neighbors, .z);
     }
 
-    /// Process edges along a specific axis
-    /// edge_axis: the axis that edges run parallel to (the "c" axis in the algorithm)
     fn forAllAxisEdges(
         self: *const Self,
         consumer: IntEdgeConsumer,
@@ -337,8 +295,6 @@ pub const BitSetDiscreteVoxelShape = struct {
         merge_neighbors: bool,
         edge_axis: @import("DiscreteVoxelShape.zig").Axis,
     ) void {
-        // Get the two perpendicular axes (a, b) and the edge axis (c)
-        // We iterate over all (a, b) positions and scan along c
         const a_size: usize = switch (edge_axis) {
             .x => self.base.y_size,
             .y => self.base.x_size,
@@ -355,19 +311,15 @@ pub const BitSetDiscreteVoxelShape = struct {
             .z => self.base.z_size,
         };
 
-        // Iterate over all edge positions in the (a, b) plane
-        // Edges can be at positions 0..=a_size and 0..=b_size (on the boundary)
         var a: usize = 0;
         while (a <= a_size) : (a += 1) {
             var b: usize = 0;
             while (b <= b_size) : (b += 1) {
                 var last_start: i32 = -1;
 
-                // Scan along the c axis
                 var c: usize = 0;
                 while (c <= c_size) : (c += 1) {
-                    // Check the 4 adjacent voxels around this edge position
-                    // The edge is at the corner of 4 voxels: (a-1,b-1), (a-1,b), (a,b-1), (a,b)
+                    // Check 4 adjacent voxels around this edge position
                     var full_sectors: u8 = 0;
                     var odd_sectors: u8 = 0;
 
@@ -375,23 +327,17 @@ pub const BitSetDiscreteVoxelShape = struct {
                     while (da <= 1) : (da += 1) {
                         var db: usize = 0;
                         while (db <= 1) : (db += 1) {
-                            // Calculate voxel coordinates with bounds checking
                             const va = if (a + da > 0) a + da - 1 else continue;
                             const vb = if (b + db > 0) b + db - 1 else continue;
 
                             if (self.isFullWideAxis(edge_axis, va, vb, c)) {
                                 full_sectors += 1;
-                                // XOR for diagonal detection: odd if da != db
                                 odd_sectors ^= @intCast(da ^ db);
                             }
                         }
                     }
 
-                    // Determine if this edge should be drawn
-                    // Edge conditions:
-                    // - 1 voxel filled: external boundary edge
-                    // - 3 voxels filled: concave corner (one voxel missing)
-                    // - 2 voxels filled AND diagonal: internal corner (checkerboard pattern)
+                    // Edge at: 1 filled (external), 3 filled (concave), 2 diagonal (internal corner)
                     const should_draw = (full_sectors == 1) or
                         (full_sectors == 3) or
                         (full_sectors == 2 and (odd_sectors & 1) == 0);
@@ -402,17 +348,14 @@ pub const BitSetDiscreteVoxelShape = struct {
                                 last_start = @intCast(c);
                             }
                         } else {
-                            // Emit single unit edge
                             self.emitEdge(consumer, ctx, edge_axis, a, b, c, c + 1);
                         }
                     } else if (last_start != -1) {
-                        // End of merged segment
                         self.emitEdge(consumer, ctx, edge_axis, a, b, @intCast(last_start), c);
                         last_start = -1;
                     }
                 }
 
-                // Handle segment that extends to the end
                 if (last_start != -1) {
                     self.emitEdge(consumer, ctx, edge_axis, a, b, @intCast(last_start), c_size);
                 }
@@ -420,14 +363,11 @@ pub const BitSetDiscreteVoxelShape = struct {
         }
     }
 
-    /// Check if voxel is filled using axis-relative coordinates
-    /// edge_axis is the axis we're iterating edges along
     fn isFullWideAxis(self: *const Self, edge_axis: @import("DiscreteVoxelShape.zig").Axis, a: usize, b: usize, c: usize) bool {
-        // Convert axis-relative (a, b, c) to absolute (x, y, z) coordinates
         const coords = switch (edge_axis) {
-            .x => .{ c, a, b }, // X edges: c=x, a=y, b=z
-            .y => .{ a, c, b }, // Y edges: a=x, c=y, b=z
-            .z => .{ a, b, c }, // Z edges: a=x, b=y, c=z
+            .x => .{ c, a, b },
+            .y => .{ a, c, b },
+            .z => .{ a, b, c },
         };
 
         const x = coords[0];
@@ -441,7 +381,6 @@ pub const BitSetDiscreteVoxelShape = struct {
         return self.getDirect(@intCast(x), @intCast(y), @intCast(z));
     }
 
-    /// Emit an edge to the consumer, converting from axis-relative to absolute coordinates
     fn emitEdge(
         self: *const Self,
         consumer: IntEdgeConsumer,
@@ -453,7 +392,6 @@ pub const BitSetDiscreteVoxelShape = struct {
         c2: usize,
     ) void {
         _ = self;
-        // Convert axis-relative coordinates to absolute (x, y, z)
         const start = switch (edge_axis) {
             .x => .{ c1, a, b },
             .y => .{ a, c1, b },
@@ -476,12 +414,9 @@ pub const BitSetDiscreteVoxelShape = struct {
         );
     }
 
-    /// Create a 2D slice of the shape along an axis at a given position
-    /// Returns a new 2D BitSetDiscreteVoxelShape
     pub fn getSlice(self: *const Self, axis: @import("DiscreteVoxelShape.zig").Axis, pos: u8) BitSetDiscreteVoxelShape2D {
         return switch (axis) {
             .x => blk: {
-                // YZ slice at X=pos
                 var slice = BitSetDiscreteVoxelShape2D.init(self.base.y_size, self.base.z_size);
                 if (pos < self.base.x_size) {
                     for (0..self.base.y_size) |y| {
@@ -495,7 +430,6 @@ pub const BitSetDiscreteVoxelShape = struct {
                 break :blk slice;
             },
             .y => blk: {
-                // XZ slice at Y=pos
                 var slice = BitSetDiscreteVoxelShape2D.init(self.base.x_size, self.base.z_size);
                 if (pos < self.base.y_size) {
                     for (0..self.base.x_size) |x| {
@@ -509,7 +443,6 @@ pub const BitSetDiscreteVoxelShape = struct {
                 break :blk slice;
             },
             .z => blk: {
-                // XY slice at Z=pos
                 var slice = BitSetDiscreteVoxelShape2D.init(self.base.x_size, self.base.y_size);
                 if (pos < self.base.z_size) {
                     for (0..self.base.x_size) |x| {
@@ -526,7 +459,6 @@ pub const BitSetDiscreteVoxelShape = struct {
     }
 };
 
-/// 2D Bitset for face shapes / slices
 pub const BitSetDiscreteVoxelShape2D = struct {
     const Self = @This();
 
