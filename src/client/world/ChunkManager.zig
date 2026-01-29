@@ -79,38 +79,29 @@ pub const MeshTask = struct {
     is_remesh: bool,
 };
 
-/// Union task data for the thread pool
 pub const ChunkTask = struct {
     pos: ChunkPos,
     task_type: ChunkTaskType,
-    /// Task-specific data
     data: union {
         terrain: TerrainTask,
         mesh: MeshTask,
     },
 };
 
-/// Result from terrain generation (Phase 1 completion)
 pub const TerrainResult = struct {
     pos: ChunkPos,
     chunk: Chunk,
     render_chunk: *RenderChunk,
 };
 
-/// Configuration for chunk loading
 pub const ChunkConfig = struct {
-    /// Horizontal view distance in chunks
     view_distance: u32 = 4,
-    /// Vertical view distance in chunk sections
     vertical_view_distance: u32 = 4,
-    /// Distance at which to unload chunks (hysteresis)
+    /// Hysteresis to prevent load/unload thrashing at view distance boundary
     unload_distance: u32 = 6,
-    /// Number of worker threads
     worker_count: u8 = 4,
-    /// Maximum chunk uploads per frame
     max_uploads_per_tick: u8 = 4,
-    /// Maximum chunks to queue per update (C2ME-style rate limiting)
-    /// Prevents frame spikes when entering new areas by spreading chunk loading across frames
+    /// C2ME-style rate limiting: prevents frame spikes when entering new areas
     max_chunks_per_update: u16 = 32,
 };
 
@@ -132,33 +123,27 @@ pub const SpiralIterator = struct {
     /// Spiral directions: right, down, left, up (matching C2ME)
     const Direction = enum(u2) { right = 0, down = 1, left = 2, up = 3 };
 
-    /// Position offset returned by next()
     pub const Offset = struct { dx: i32, dz: i32, dy: i32 };
 
-    /// Current relative position (offset from origin)
     x: i32 = 0,
     z: i32 = 0,
-    /// Current Y layer within the current X/Z position
+    /// Current Y layer being iterated at this X/Z position
     y: i32 = 0,
 
     /// Spiral arm length (increases every 2 direction changes)
     span_total: u32 = 1,
     /// Progress along current arm
     span_progress: u32 = 0,
-    /// Number of arms completed at current length (0 or 1)
+    /// Arms completed at current length (0 or 1, resets when span_total increases)
     span_count: u2 = 0,
-    /// Current movement direction
     direction: Direction = .right,
 
-    /// View distances (set on reset)
     view_dist: i32 = 0,
     vert_dist: i32 = 0,
 
-    /// C2ME-style: need to step before returning next position
     /// First call returns origin without stepping
     need_step: bool = false,
 
-    /// Reset the iterator for a new scan
     pub fn reset(self: *Self, view_distance: u32, vertical_view_distance: u32) void {
         self.x = 0;
         self.z = 0;
@@ -169,41 +154,31 @@ pub const SpiralIterator = struct {
         self.direction = .right;
         self.view_dist = @intCast(view_distance);
         self.vert_dist = @intCast(vertical_view_distance);
-        // C2ME-style: need_step=true means origin is "placed", first exhaust will step to (1,0)
         self.need_step = true;
     }
 
-    /// C2ME-style hasNext: spiral ends at (radius, radius)
+    /// Spiral ends at corner (radius, radius)
     fn hasNextXZ(self: *const Self) bool {
         return self.x != self.view_dist or self.z != self.view_dist;
     }
 
-    /// Get the next position in spiral order
-    /// Returns null when iteration is complete
     pub fn next(self: *Self) ?Offset {
-        // Check if we need to advance to next X/Z position
         if (self.y > self.vert_dist) {
-            // Y exhausted at current X/Z, need to move to next spiral position
             if (!self.hasNextXZ()) {
-                return null; // Spiral complete
+                return null;
             }
             self.y = -self.vert_dist;
             self.stepSpiral();
         }
 
-        // Return current position
         const result = Offset{ .dx = self.x, .dz = self.z, .dy = self.y };
-
-        // Advance Y for next call
         self.y += 1;
 
         return result;
     }
 
-    /// C2ME-style spiral step (only X/Z)
     fn stepSpiral(self: *Self) void {
         if (self.need_step) {
-            // Move one step in current direction
             switch (self.direction) {
                 .right => self.x += 1,
                 .down => self.z -= 1,
@@ -211,7 +186,6 @@ pub const SpiralIterator = struct {
                 .up => self.z += 1,
             }
 
-            // Update spiral state
             self.span_progress += 1;
             if (self.span_progress >= self.span_total) {
                 self.span_progress = 0;
@@ -220,25 +194,20 @@ pub const SpiralIterator = struct {
                     self.span_total += 1;
                     self.span_count = 0;
                 }
-                // Rotate direction
                 self.direction = @enumFromInt((@intFromEnum(self.direction) +% 1) & 0x3);
             }
         }
         self.need_step = true;
     }
 
-    /// Check if iteration is complete
     pub fn isComplete(self: *const Self) bool {
         return self.y > self.vert_dist and !self.hasNextXZ();
     }
 };
 
-/// Per-worker data containing both manager reference and thread-local mesh context
-/// This eliminates per-chunk allocations by reusing pre-allocated buffers
+/// Eliminates per-chunk allocations by reusing pre-allocated buffers per worker
 pub const WorkerData = struct {
-    /// Reference to the ChunkManager (for shared resources)
     manager: *ChunkManager,
-    /// Thread-local mesh context with pre-allocated buffers
     mesh_context: *WorkerMeshContext,
 };
 
@@ -246,91 +215,59 @@ pub const ChunkManager = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
 
-    /// HashSet for pending positions
     const PosSet = std.HashMap(ChunkPos, void, ChunkPosContext, std.hash_map.default_max_load_percentage);
 
     allocator: std.mem.Allocator,
     io: Io,
 
-    /// Currently loaded chunks (ring buffer storage)
     chunk_storage: ChunkStorage,
 
-    /// Positions queued for loading (prevents duplicate tasks)
+    /// Prevents duplicate load tasks for the same position
     pending_loads: PosSet,
 
-    /// Tracks all positions that are loaded or pending (C2ME pattern)
-    /// Used for O(1) skip check in updateLoadQueue
+    /// O(1) skip check in updateLoadQueue - tracks loaded + pending positions
     managed_positions: PosSet,
 
-    /// Completed meshes ready for GPU upload
     completed_queue: ThreadSafeQueue(CompletedMesh),
-
-    /// Thread pool for async operations
     pool: ThreadPool,
-
-    /// Current player chunk position
     player_chunk: ChunkPos,
-
-    /// Configuration
     config: ChunkConfig,
-
-    /// Reference to render system for GPU uploads
     render_system: *RenderSystem,
-
-    /// Shared texture manager reference (read-only, thread-safe)
+    /// Read-only after init, safe for worker threads
     texture_manager: *TextureManager,
-
-    /// Asset directory for model loading
     asset_directory: []const u8,
 
-    /// Shared block model shaper (pre-warmed, read-only after init)
+    /// Pre-warmed and read-only after init for thread safety
     shared_model_shaper: ?*BlockModelShaper = null,
     shared_model_loader: ?*ModelLoader = null,
     shared_blockstate_loader: ?*BlockstateLoader = null,
 
-    /// Buffer manager for GPU buffer arena allocation
     buffer_manager: ?*ChunkBufferManager = null,
-
-    /// Terrain generator for procedural chunk generation
     terrain_generator: ?*TerrainGenerator = null,
-
-    /// Reusable draw commands list
     draw_commands: std.ArrayListUnmanaged(ChunkDrawCommand) = .{},
-
-    /// Reusable staging copies list
     staging_copies: std.ArrayListUnmanaged(StagingCopy) = .{},
 
-    /// C2ME-style consolidation: defer updateLoadQueue to once per frame
-    /// This prevents cascading slowdowns when multiple ticks run in one frame
+    /// Defers updateLoadQueue to once per frame to prevent cascading slowdowns
     load_queue_dirty: bool = false,
 
-    /// C2ME-style stateful spiral iterator for chunk loading
-    /// Remembers position between frames to avoid rescanning already-processed positions
-    /// Reset when player moves to a new chunk
+    /// Remembers position between frames; reset when player moves to new chunk
     chunk_load_iterator: SpiralIterator = .{},
 
-    /// Cached vertex buffer list for multi-arena rendering
     vertex_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
-
-    /// Cached index buffer list for multi-arena rendering
     index_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
 
-    /// RCU for safe concurrent chunk access
-    /// Protects neighbor chunk pointers during meshing
+    /// Protects neighbor chunk pointers during async meshing
     rcu: ?*Rcu = null,
 
-    /// Per-worker data with thread-local mesh contexts (C2ME-style optimization)
     /// Eliminates ~2.4MB of allocations per chunk by reusing buffers
     worker_data: ?[]WorkerData = null,
 
-    /// C2ME-style two-phase loading: completed terrain waiting for main thread processing
+    /// Completed terrain waiting for main thread to copy to RenderChunk
     completed_terrain: ThreadSafeQueue(TerrainResult) = undefined,
 
-    /// C2ME-style dependency tracking: chunks waiting for mesh dependencies
-    /// These chunks have terrain generated but are waiting for neighbors to be generated/ready
+    /// Chunks with terrain generated, waiting for neighbors before meshing
     pending_mesh: PosSet = undefined,
 
-    /// Initialize the chunk manager
     pub fn init(
         allocator: std.mem.Allocator,
         io: Io,
@@ -363,9 +300,7 @@ pub const ChunkManager = struct {
         return self;
     }
 
-    /// Start the worker threads
     pub fn start(self: *Self) !void {
-        // Initialize buffer manager for GPU buffer arena allocation
         const buffer_mgr = try self.allocator.create(ChunkBufferManager);
         buffer_mgr.* = try ChunkBufferManager.init(
             self.allocator,
@@ -378,7 +313,6 @@ pub const ChunkManager = struct {
         );
         self.buffer_manager = buffer_mgr;
 
-        // Initialize shared model loading resources (pre-warmed, read-only for workers)
         const model_loader = try self.allocator.create(ModelLoader);
         model_loader.* = ModelLoader.init(self.allocator, self.io, self.asset_directory);
         self.shared_model_loader = model_loader;
@@ -396,19 +330,16 @@ pub const ChunkManager = struct {
         );
         self.shared_model_shaper = shaper;
 
-        // Pre-warm model cache with all blocks
         for (1..256) |id| {
             _ = shaper.getModel(BlockEntry.simple(@intCast(id))) catch {};
         }
         logger.info("Model cache pre-warmed", .{});
 
-        // Initialize RCU for safe concurrent chunk access
         const rcu_instance = try self.allocator.create(Rcu);
         rcu_instance.* = Rcu.init(self.allocator, self.config.worker_count);
         self.rcu = rcu_instance;
         logger.info("RCU initialized for {} worker threads", .{self.config.worker_count});
 
-        // Initialize terrain generator
         const terrain_gen = try self.allocator.create(TerrainGenerator);
         terrain_gen.* = TerrainGenerator.init(.{ .seed = 12345 }) orelse {
             logger.err("Failed to initialize terrain generator", .{});
@@ -418,16 +349,13 @@ pub const ChunkManager = struct {
         self.terrain_generator = terrain_gen;
         logger.info("Terrain generator initialized with ridged terrain", .{});
 
-        // Start pool first (this initializes contexts)
         try self.pool.start();
 
-        // Initialize per-worker thread-local mesh contexts (C2ME-style optimization)
-        // Each worker gets ~3.6MB of pre-allocated buffers that are reused across all chunks
+        // Each worker gets ~3.6MB of pre-allocated buffers reused across all chunks
         const worker_count = self.config.worker_count;
         self.worker_data = try self.allocator.alloc(WorkerData, worker_count);
 
         for (0..worker_count) |i| {
-            // Create the mesh context with pre-allocated buffers
             const mesh_ctx = try self.allocator.create(WorkerMeshContext);
             mesh_ctx.* = try WorkerMeshContext.init(self.allocator);
 
@@ -436,28 +364,22 @@ pub const ChunkManager = struct {
                 .mesh_context = mesh_ctx,
             };
 
-            // Set user data to point to our WorkerData struct
             self.pool.setWorkerData(i, @ptrCast(&self.worker_data.?[i]));
         }
 
         const total_buffer_mb = @as(f32, @floatFromInt(worker_count)) * 3.6;
         logger.info("ChunkManager started with {} workers (~{d:.1}MB thread-local buffers)", .{ worker_count, total_buffer_mb });
 
-        // Initialize spiral iterator for initial chunk loading
-        // This ensures chunks around spawn position are loaded on first frame
         self.chunk_load_iterator.reset(self.config.view_distance, self.config.vertical_view_distance);
         self.load_queue_dirty = true;
     }
 
-    /// Shutdown and cleanup
     pub fn deinit(self: *Self) void {
         logger.info("Shutting down ChunkManager...", .{});
 
-        // Shutdown thread pool
         self.pool.shutdown();
         self.pool.deinit();
 
-        // Free per-worker thread-local mesh contexts
         if (self.worker_data) |workers| {
             for (workers) |*wd| {
                 wd.mesh_context.deinit();
@@ -467,8 +389,7 @@ pub const ChunkManager = struct {
             self.worker_data = null;
         }
 
-        // Synchronize RCU and free deferred items
-        // This must happen after pool shutdown to ensure all workers have exited
+        // Must happen after pool shutdown to ensure all workers have exited
         if (self.rcu) |rcu_instance| {
             logger.info("Synchronizing RCU before cleanup...", .{});
             rcu_instance.synchronize();
@@ -477,7 +398,6 @@ pub const ChunkManager = struct {
             self.rcu = null;
         }
 
-        // Free shared model resources
         if (self.shared_model_shaper) |shaper| {
             shaper.deinit();
             self.allocator.destroy(shaper);
@@ -491,7 +411,6 @@ pub const ChunkManager = struct {
             self.allocator.destroy(loader);
         }
 
-        // Free loaded chunks (and their buffer allocations)
         var iter = self.chunk_storage.iterator();
         while (iter.next()) |entry| {
             const chunk = entry.value_ptr.*;
@@ -506,37 +425,29 @@ pub const ChunkManager = struct {
         }
         self.chunk_storage.deinit();
 
-        // Free pending queues
         self.pending_loads.deinit();
         self.managed_positions.deinit();
         self.pending_mesh.deinit();
 
-        // Free completed terrain that wasn't processed
-        while (self.completed_terrain.tryPop()) |_| {
-            // TerrainResult doesn't own any heap allocations, just drop it
-        }
+        while (self.completed_terrain.tryPop()) |_| {}
         self.completed_terrain.deinit();
 
-        // Free completed meshes that weren't processed
         while (self.completed_queue.tryPop()) |*mesh| {
             var m = mesh.*;
             m.deinit();
         }
         self.completed_queue.deinit();
 
-        // Free draw commands, staging copies, and buffer caches
         self.draw_commands.deinit(self.allocator);
         self.staging_copies.deinit(self.allocator);
         self.vertex_buffer_cache.deinit(self.allocator);
         self.index_buffer_cache.deinit(self.allocator);
 
-        // Free buffer manager
         if (self.buffer_manager) |buf_mgr| {
             buf_mgr.deinit();
             self.allocator.destroy(buf_mgr);
         }
 
-        // Free terrain generator
         if (self.terrain_generator) |terrain_gen| {
             terrain_gen.deinit();
             self.allocator.destroy(terrain_gen);
@@ -545,42 +456,33 @@ pub const ChunkManager = struct {
         logger.info("ChunkManager shutdown complete", .{});
     }
 
-    /// Update player position and queue chunks for loading/unloading
     pub fn updatePlayerPosition(self: *Self, position: Vec3) void {
         const zone = profiler.trace(@src());
         defer zone.end();
 
         const new_chunk = ChunkPos.fromWorldPos(position.x, position.y, position.z);
 
-        // Only update if player moved to a new chunk
         if (new_chunk.eql(self.player_chunk)) return;
 
         self.player_chunk = new_chunk;
 
-        // Update thread pool's camera position for dynamic priority calculation
-        // This ensures closest chunks are always processed first, even as player moves
+        // Ensures closest chunks are always processed first, even as player moves
         self.pool.updateCameraPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
 
-        // C2ME-style: Reset spiral iterator when player moves to new chunk
-        // This ensures we rescan from the center (closest chunks first)
+        // Rescan from center (closest chunks first)
         self.chunk_load_iterator.reset(self.config.view_distance, self.config.vertical_view_distance);
 
-        // C2ME-style consolidation: Mark dirty instead of immediate update
-        // The actual updateLoadQueue will be called once per frame in flushLoadQueue()
-        // This prevents cascading slowdowns when multiple ticks run in one frame
+        // Actual updateLoadQueue called once per frame in flushLoadQueue()
         self.load_queue_dirty = true;
     }
 
-    /// C2ME-style: Flush consolidated load queue updates once per frame
-    /// Call this ONCE per frame, after all ticks have run, not per tick
+    /// Call once per frame after all ticks, not per tick
     pub fn flushLoadQueue(self: *Self) void {
         if (!self.load_queue_dirty) return;
         self.load_queue_dirty = false;
         self.updateLoadQueue();
     }
 
-    /// Begin a new frame - call this before tick() with the current frame fence
-    /// This ensures staging buffer synchronization
     pub fn beginFrame(self: *Self, frame_fence: vk.VkFence) void {
         if (self.buffer_manager) |buf_mgr| {
             buf_mgr.beginFrame(frame_fence) catch |err| {
@@ -589,21 +491,15 @@ pub const ChunkManager = struct {
         }
     }
 
-    /// C2ME Phase 1 completion: Process terrain that workers have generated
-    /// Copies terrain data to RenderChunk, sets state to 'generated', adds to pending_mesh
     fn processCompletedTerrain(self: *Self) void {
         const zone = profiler.traceNamed("ProcessCompletedTerrain");
         defer zone.end();
 
         var processed: u32 = 0;
         while (self.completed_terrain.tryPop()) |result| {
-            // Find the RenderChunk and copy terrain data
             if (self.chunk_storage.get(result.pos)) |render_chunk_ptr| {
-                // Copy terrain data to RenderChunk
                 render_chunk_ptr.chunk = result.chunk;
-                // Transition to 'generated' state - terrain ready, waiting for mesh
                 render_chunk_ptr.setState(.generated);
-                // Add to pending_mesh for dependency checking
                 self.pending_mesh.put(result.pos, {}) catch |err| {
                     logger.warn("Failed to queue chunk ({},{},{}) for mesh: {}", .{
                         result.pos.x, result.pos.z, result.pos.section_y, err,
@@ -612,19 +508,16 @@ pub const ChunkManager = struct {
                 };
                 processed += 1;
             }
-            // Remove from pending_loads since terrain phase is done
             _ = self.pending_loads.remove(result.pos);
         }
         zone.setValue(processed);
     }
 
-    /// C2ME dependency check: Try to queue mesh tasks for chunks whose dependencies are satisfied
-    /// Dependencies: all 6 neighbors must be 'generated' or 'ready' (have valid terrain data)
+    /// Queue mesh tasks for chunks whose neighbors are generated/ready
     fn checkMeshDependencies(self: *Self) void {
         const zone = profiler.traceNamed("CheckMeshDependencies");
         defer zone.end();
 
-        // Collect positions that can be meshed (can't modify HashMap while iterating)
         var ready_to_mesh: std.ArrayListUnmanaged(ChunkPos) = .{};
         defer ready_to_mesh.deinit(self.allocator);
 
@@ -636,7 +529,6 @@ pub const ChunkManager = struct {
             }
         }
 
-        // Queue mesh tasks for chunks whose dependencies are satisfied
         var queued: u32 = 0;
         for (ready_to_mesh.items) |pos| {
             _ = self.pending_mesh.remove(pos);
@@ -646,8 +538,7 @@ pub const ChunkManager = struct {
         zone.setValue(queued);
     }
 
-    /// Check if a chunk can be meshed (all neighbor dependencies satisfied)
-    /// C2ME-style: neighbors must be 'generated' or 'ready' to have valid terrain data
+    /// Neighbors must be generated/ready to have valid terrain data
     fn canMesh(self: *Self, pos: ChunkPos) bool {
         const offsets = [6]ChunkPos{
             .{ .x = 0, .z = 0, .section_y = -1 }, // down
@@ -665,49 +556,41 @@ pub const ChunkManager = struct {
                 .section_y = pos.section_y + offset.section_y,
             };
 
-            // Check if neighbor exists and has terrain data
             if (self.chunk_storage.get(neighbor_pos)) |neighbor| {
                 const state = neighbor.getState();
-                // Neighbor must be generated, meshing, ready, or dirty (all have valid terrain)
                 if (state == .loading) {
-                    return false; // Neighbor still loading, can't mesh yet
+                    return false;
                 }
             }
-            // If neighbor doesn't exist, that's OK - we'll mesh without it (edge chunks)
+            // Missing neighbors OK - mesh without them (edge chunks)
         }
         return true;
     }
 
-    /// Queue a mesh task for a chunk (Phase 2)
-    /// IMPORTANT: Called from main thread, captures neighbors NOW when dependencies are satisfied
+    /// Called from main thread - captures neighbors when dependencies are satisfied
     fn queueMeshTask(self: *Self, pos: ChunkPos) void {
         const zone = profiler.traceNamed("QueueMeshTask");
         defer zone.end();
 
         const render_chunk_ptr = self.chunk_storage.get(pos) orelse return;
 
-        // Set state to meshing
         render_chunk_ptr.setState(.meshing);
 
-        // Capture neighbors NOW - this is safe because we're on the main thread
-        // and we just verified dependencies are satisfied
         const neighbors = self.getNeighborChunks(pos);
 
-        // Create mesh task
         const task_data = self.allocator.create(ChunkTask) catch return;
         task_data.* = ChunkTask{
             .pos = pos,
             .task_type = .generate_mesh,
             .data = .{ .mesh = MeshTask{
                 .pos = pos,
-                .chunk = render_chunk_ptr.chunk, // Copy chunk data
-                .neighbors = neighbors, // Safe: captured when deps satisfied
+                .chunk = render_chunk_ptr.chunk,
+                .neighbors = neighbors,
                 .render_chunk = render_chunk_ptr,
                 .is_remesh = false,
             } },
         };
 
-        // Submit to thread pool
         self.pool.submit(Task{
             .task_type = .generate_and_mesh,
             .data = @ptrCast(task_data),
@@ -715,7 +598,6 @@ pub const ChunkManager = struct {
             .chunk_task_kind = .generate,
         }) catch |submit_err| {
             self.allocator.destroy(task_data);
-            // Revert state on failure
             render_chunk_ptr.setState(.generated);
             self.pending_mesh.put(pos, {}) catch |requeue_err| {
                 logger.err("Double failure requeueing chunk ({},{},{}) after submit fail: submit={}, requeue={}", .{
@@ -725,9 +607,7 @@ pub const ChunkManager = struct {
         };
     }
 
-    /// Process completed terrain and meshes, check mesh dependencies
-    /// Call this once per frame from the main thread (after beginFrame)
-    /// C2ME-style two-phase: terrain → check deps → mesh → upload
+    /// Call once per frame from main thread after beginFrame
     pub fn tick(self: *Self) void {
         const zone = profiler.trace(@src());
         defer zone.end();
@@ -740,17 +620,11 @@ pub const ChunkManager = struct {
         profiler.plotInt("CompletedTerrain", @intCast(self.completed_terrain.len()));
         profiler.plotInt("CompletedMesh", @intCast(self.completed_queue.len()));
 
-        // ============ PHASE 1: Process completed terrain ============
-        // Terrain generation has no dependencies, just copy data to RenderChunk
         self.processCompletedTerrain();
-
-        // ============ DEPENDENCY CHECK: Try to queue mesh tasks ============
-        // Check chunks waiting for mesh dependencies (neighbors must be generated/ready)
         self.checkMeshDependencies();
 
         const buf_mgr = self.buffer_manager orelse return;
 
-        // Process completed meshes (limit per frame to avoid stalls)
         var uploads: u8 = 0;
         while (uploads < self.config.max_uploads_per_tick) {
             const mesh_opt = self.completed_queue.tryPop();
@@ -758,9 +632,7 @@ pub const ChunkManager = struct {
 
             var mesh = mesh_opt.?;
 
-            // STALENESS CHECK: Skip chunks that moved out of view range while queued
-            // This is the key optimization - when flying fast, many queued meshes are
-            // already behind the player. Don't waste GPU upload time on them.
+            // Skip chunks that moved out of view range while queued
             const dx = if (mesh.pos.x > self.player_chunk.x)
                 mesh.pos.x - self.player_chunk.x
             else
@@ -779,33 +651,25 @@ pub const ChunkManager = struct {
                 dy > self.config.vertical_view_distance + 2;
 
             if (is_stale) {
-                // Chunk is out of range - the unload logic will handle cleanup
-                // Just free the mesh data and skip the expensive GPU upload
                 mesh.deinit();
                 _ = self.pending_loads.remove(mesh.pos);
                 continue;
             }
 
-            // Find the corresponding render chunk
             if (self.chunk_storage.get(mesh.pos)) |render_chunk_ptr| {
-                // Copy generated chunk data if present (for generation tasks)
-                // This must happen before any collision/block access uses this chunk
                 if (mesh.generated_chunk) |gen_chunk| {
                     render_chunk_ptr.chunk = gen_chunk;
                 }
 
-                // Handle empty meshes (e.g., all-air chunks)
                 const total_vertices = mesh.getTotalVertexCount();
                 const total_indices = mesh.getTotalIndexCount();
                 if (total_vertices == 0 or total_indices == 0) {
-                    // Still mark as ready - chunk data is valid, just no visible geometry
                     render_chunk_ptr.setState(.ready);
                     mesh.deinit();
                     _ = self.pending_loads.remove(mesh.pos);
                     continue;
                 }
 
-                // Validate indices are within vertex bounds for each layer
                 var valid = true;
                 for (0..RENDER_LAYER_COUNT) |i| {
                     const layer = &mesh.layers[i];
@@ -834,7 +698,6 @@ pub const ChunkManager = struct {
                     continue;
                 }
 
-                // Allocate buffer space for each non-empty layer
                 var layer_allocations: [RENDER_LAYER_COUNT]?ChunkBufferAllocation = .{ null, null, null };
                 var allocation_failed = false;
 
@@ -854,19 +717,16 @@ pub const ChunkManager = struct {
                 }
 
                 if (allocation_failed) {
-                    // Free any allocations we did make
                     for (layer_allocations) |alloc_opt| {
                         if (alloc_opt) |alloc| {
                             buf_mgr.free(alloc);
                         }
                     }
-                    // Remove from pending so chunk can be re-queued on next update
                     _ = self.pending_loads.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 }
 
-                // Stage vertex and index data for each layer
                 var staging_failed = false;
                 for (0..RENDER_LAYER_COUNT) |i| {
                     const layer = &mesh.layers[i];
@@ -874,7 +734,6 @@ pub const ChunkManager = struct {
                     if (alloc_opt == null) continue;
                     const allocation = alloc_opt.?;
 
-                    // Stage vertex data
                     const vertex_bytes = std.mem.sliceAsBytes(layer.vertices);
                     buf_mgr.stageVertices(allocation, vertex_bytes) catch |err| {
                         logger.warn("Failed to stage vertex data for layer {}: {}", .{ i, err });
@@ -882,7 +741,6 @@ pub const ChunkManager = struct {
                         break;
                     };
 
-                    // Stage index data
                     const index_bytes = std.mem.sliceAsBytes(layer.indices);
                     buf_mgr.stageIndices(allocation, index_bytes) catch |err| {
                         logger.warn("Failed to stage index data for layer {}: {}", .{ i, err });
@@ -897,13 +755,11 @@ pub const ChunkManager = struct {
                             buf_mgr.free(alloc);
                         }
                     }
-                    // Remove from pending so chunk can be re-queued on next update
                     _ = self.pending_loads.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 }
 
-                // Prepare per-layer vertex/index slices for ChunkMesh.init
                 var layer_vertices: [RENDER_LAYER_COUNT][]const Vertex = undefined;
                 var layer_indices: [RENDER_LAYER_COUNT][]const u32 = undefined;
                 for (0..RENDER_LAYER_COUNT) |i| {
@@ -911,7 +767,6 @@ pub const ChunkManager = struct {
                     layer_indices[i] = mesh.layers[i].indices;
                 }
 
-                // Create ChunkMesh with per-layer allocations
                 var chunk_mesh = ChunkMesh.init(
                     self.allocator,
                     layer_vertices,
@@ -923,20 +778,17 @@ pub const ChunkManager = struct {
                             buf_mgr.free(alloc);
                         }
                     }
-                    // Remove from pending so chunk can be re-queued on next update
                     _ = self.pending_loads.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 };
 
-                // Set buffer allocations for each layer
                 for (0..RENDER_LAYER_COUNT) |i| {
                     if (layer_allocations[i]) |alloc| {
                         chunk_mesh.setLayerBufferAllocation(i, alloc);
                     }
                 }
 
-                // Free OLD buffer allocations BEFORE swapping (atomic swap pattern)
                 const old_allocations = render_chunk_ptr.getBufferAllocations();
                 for (old_allocations) |old_alloc_opt| {
                     if (old_alloc_opt) |old_alloc| {
@@ -944,29 +796,20 @@ pub const ChunkManager = struct {
                     }
                 }
 
-                // Store mesh in render chunk (this frees old mesh CPU data)
                 render_chunk_ptr.setMesh(chunk_mesh);
-
-                // Remove from pending
                 _ = self.pending_loads.remove(mesh.pos);
 
                 uploads += 1;
             }
 
-            // Free the completed mesh data (ChunkMesh made a copy)
             mesh.deinit();
         }
 
-        // Advance RCU epoch to free deferred chunk deletions
-        // This allows chunks that were unloaded in previous frames to be freed
-        // once all workers have exited their critical sections
         if (self.rcu) |rcu_instance| {
             _ = rcu_instance.tryAdvance();
         }
     }
 
-    /// Commit staged uploads to GPU (call before rendering)
-    /// Returns true if there were uploads to commit
     pub fn commitUploads(self: *Self, cmd_buffer: vk.VkCommandBuffer) bool {
         const buf_mgr = self.buffer_manager orelse return false;
         if (!buf_mgr.hasPendingUploads()) return false;
@@ -974,30 +817,25 @@ pub const ChunkManager = struct {
         return true;
     }
 
-    /// Get draw commands for all ready chunks
-    /// Commands are sorted by render layer: solid (0), cutout (1), translucent (2)
+    /// Returns commands sorted by render layer for proper draw order
     pub fn getDrawCommands(self: *Self) []const ChunkDrawCommand {
         const zone = profiler.trace(@src());
         defer zone.end();
 
         self.draw_commands.clearRetainingCapacity();
 
-        // Sanity checks - offsets should be aligned
-        const vertex_size: u64 = 36; // sizeof(Vertex)
-        const index_size: u64 = 4; // sizeof(u32)
+        const vertex_size: u64 = 36;
+        const index_size: u64 = 4;
 
-        // Single pass: collect all draw commands from all chunks and all layers
         var iter = self.chunk_storage.iterator();
         while (iter.next()) |entry| {
             const chunk = entry.value_ptr.*;
 
-            // Render chunks that are ready OR dirty (dirty = rebuilding, still has old mesh)
             const state = chunk.getState();
             if (state != .ready and state != .dirty) continue;
 
             const m = chunk.mesh orelse continue;
 
-            // Generate commands for all non-empty layers in this chunk
             for (0..RENDER_LAYER_COUNT) |layer_idx| {
                 const layer = &m.layers[layer_idx];
                 if (layer.index_count == 0) continue;
@@ -1038,9 +876,6 @@ pub const ChunkManager = struct {
             }
         }
 
-        // Sort draw commands by (render_layer, vertex_arena, index_arena) for:
-        // 1. Proper rendering order: solid (0) -> cutout (1) -> translucent (2)
-        // 2. Batching commands with same pipeline and buffer bindings for indirect drawing
         std.mem.sort(ChunkDrawCommand, self.draw_commands.items, {}, struct {
             fn lessThan(_: void, a: ChunkDrawCommand, b: ChunkDrawCommand) bool {
                 if (a.render_layer != b.render_layer) return a.render_layer < b.render_layer;
@@ -1052,40 +887,31 @@ pub const ChunkManager = struct {
         return self.draw_commands.items;
     }
 
-    /// Get the primary vertex buffer for rendering (arena 0)
-    /// For multi-buffer rendering, use getVertexBufferForArena()
     pub fn getVertexBuffer(self: *const Self) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
         return buf_mgr.getPrimaryVertexBuffer();
     }
 
-    /// Get the primary index buffer for rendering (arena 0)
-    /// For multi-buffer rendering, use getIndexBufferForArena()
     pub fn getIndexBuffer(self: *const Self) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
         return buf_mgr.getPrimaryIndexBuffer();
     }
 
-    /// Get a vertex buffer for a specific arena index
     pub fn getVertexBufferForArena(self: *const Self, arena_index: u16) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
         return buf_mgr.getVertexBuffer(arena_index);
     }
 
-    /// Get an index buffer for a specific arena index
     pub fn getIndexBufferForArena(self: *const Self, arena_index: u16) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
         return buf_mgr.getIndexBuffer(arena_index);
     }
 
-    /// Get the number of vertex buffer arenas
     pub fn getVertexArenaCount(self: *const Self) usize {
         const buf_mgr = self.buffer_manager orelse return 0;
         return buf_mgr.getVertexArenaCount();
     }
 
-    /// Get all vertex buffers for multi-arena rendering
-    /// Returns a slice of VkBuffers, one per arena
     pub fn getAllVertexBuffers(self: *Self) []const vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return &.{};
         const count = buf_mgr.getVertexArenaCount();
@@ -1099,8 +925,6 @@ pub const ChunkManager = struct {
         return self.vertex_buffer_cache.items;
     }
 
-    /// Get all index buffers for multi-arena rendering
-    /// Returns a slice of VkBuffers, one per arena
     pub fn getAllIndexBuffers(self: *Self) []const vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return &.{};
         const count = buf_mgr.getIndexArenaCount();
@@ -1114,12 +938,9 @@ pub const ChunkManager = struct {
         return self.index_buffer_cache.items;
     }
 
-    /// Get pending staging copies for GPU upload
-    /// Call this after tick() and before drawFrameMultiChunk()
     pub fn getStagingCopies(self: *Self) []const StagingCopy {
         const buf_mgr = self.buffer_manager orelse return &.{};
 
-        // Build staging copies from pending copies
         self.staging_copies.clearRetainingCapacity();
 
         const staging_buffer = buf_mgr.getStagingBuffer();
@@ -1138,7 +959,6 @@ pub const ChunkManager = struct {
         return self.staging_copies.items;
     }
 
-    /// Clear pending staging copies after they've been committed
     pub fn clearStagingCopies(self: *Self) void {
         if (self.buffer_manager) |buf_mgr| {
             buf_mgr.clearPendingCopies();
@@ -1146,7 +966,6 @@ pub const ChunkManager = struct {
         self.staging_copies.clearRetainingCapacity();
     }
 
-    /// Get all chunks ready for rendering
     pub fn getVisibleChunks(self: *Self) []*RenderChunk {
         var result = std.ArrayList(*RenderChunk).init(self.allocator);
 
@@ -1161,16 +980,12 @@ pub const ChunkManager = struct {
         return result.toOwnedSlice() catch &.{};
     }
 
-    /// Queue chunks for loading based on player position
-    /// C2ME-style: Uses stateful spiral iterator to avoid rescanning processed positions
-    /// Combined with rate limiting to prevent frame spikes
     fn updateLoadQueue(self: *Self) void {
         const zone = profiler.trace(@src());
         defer zone.end();
 
         const max_per_update: u32 = @intCast(self.config.max_chunks_per_update);
 
-        // Queue chunks using stateful spiral iterator (closest chunks first)
         var chunks_queued: u32 = 0;
         var chunks_skipped: u32 = 0;
         var positions_scanned: u32 = 0;
@@ -1178,8 +993,6 @@ pub const ChunkManager = struct {
             const scan_zone = profiler.traceNamed("ScanForNewChunks");
             defer scan_zone.end();
 
-            // C2ME-style: Continue from where we left off (stateful iterator)
-            // When player moves to new chunk, iterator is reset in updatePlayerPosition
             while (self.chunk_load_iterator.next()) |offset| {
                 positions_scanned += 1;
 
@@ -1189,27 +1002,20 @@ pub const ChunkManager = struct {
                     .section_y = self.player_chunk.section_y + offset.dy,
                 };
 
-                // C2ME-style O(1) skip check: single getOrPut replaces 2 contains() checks
-                // managed_positions tracks all positions we've either loaded or queued
                 const gop = self.managed_positions.getOrPut(pos) catch continue;
                 if (gop.found_existing) {
                     chunks_skipped += 1;
                     continue;
                 }
 
-                // Check distance (spiral may generate positions outside circular view distance)
                 if (!pos.isWithinDistance(self.player_chunk, self.config.view_distance)) {
-                    // Position out of range - remove from managed_positions since we're not loading it
                     _ = self.managed_positions.remove(pos);
                     continue;
                 }
 
-                // Queue for loading
                 self.queueChunkLoad(pos);
                 chunks_queued += 1;
 
-                // C2ME-style rate limiting: Stop early if we've queued enough chunks
-                // Iterator remembers position - will continue from here next frame
                 if (chunks_queued >= max_per_update) {
                     self.load_queue_dirty = true;
                     break;
@@ -1217,38 +1023,29 @@ pub const ChunkManager = struct {
             }
         }
 
-        // Tracy plots for scan metrics
         profiler.plotInt("ChunksQueued", @intCast(chunks_queued));
         profiler.plotInt("ChunksSkipped", @intCast(chunks_skipped));
         profiler.plotInt("PositionsScanned", @intCast(positions_scanned));
         zone.setValue(chunks_queued);
 
-        // Unload distant chunks
         self.unloadDistantChunks();
     }
 
-    /// Queue a chunk position for loading (Phase 1: terrain generation only)
-    /// C2ME-style: terrain generation has NO dependencies, can run immediately
     fn queueChunkLoad(self: *Self, pos: ChunkPos) void {
         const zone = profiler.trace(@src());
         defer zone.end();
 
-        // Mark as pending
         self.pending_loads.put(pos, {}) catch return;
 
-        // Create render chunk placeholder
         const render_chunk_ptr = self.allocator.create(RenderChunk) catch return;
         render_chunk_ptr.* = RenderChunk.init(self.allocator, pos);
 
-        // Put in storage - if there was an existing chunk at this slot (shouldn't happen),
-        // we need to clean it up
         const previous = self.chunk_storage.put(pos, render_chunk_ptr) catch {
             self.allocator.destroy(render_chunk_ptr);
             _ = self.pending_loads.remove(pos);
             return;
         };
         if (previous) |old_chunk| {
-            // This shouldn't happen if unloading works correctly, but handle it safely
             if (self.buffer_manager) |buf_mgr| {
                 if (old_chunk.getBufferAllocation()) |alloc| {
                     buf_mgr.free(alloc);
@@ -1258,11 +1055,7 @@ pub const ChunkManager = struct {
             self.allocator.destroy(old_chunk);
         }
 
-        // State stays as .loading - Phase 1 will generate terrain
-
-        // Create terrain task data - NO NEIGHBORS NEEDED for terrain generation
         const task_data = self.allocator.create(ChunkTask) catch {
-            // LEAK FIX: Clean up RenderChunk if task allocation fails
             _ = self.chunk_storage.remove(pos);
             render_chunk_ptr.deinit();
             self.allocator.destroy(render_chunk_ptr);
@@ -1278,15 +1071,12 @@ pub const ChunkManager = struct {
             } },
         };
 
-        // Submit to thread pool for terrain generation only (Phase 1)
-        // Meshing (Phase 2) happens after terrain is done and dependencies are met
         self.pool.submit(Task{
             .task_type = .generate_and_mesh,
             .data = @ptrCast(task_data),
             .chunk_pos = pos,
             .chunk_task_kind = .generate,
         }) catch {
-            // LEAK FIX: Clean up everything if submission fails
             self.allocator.destroy(task_data);
             _ = self.chunk_storage.remove(pos);
             render_chunk_ptr.deinit();
@@ -1296,9 +1086,7 @@ pub const ChunkManager = struct {
         };
     }
 
-    /// Get neighbor chunk data for face culling
-    /// Get copies of neighbor chunks for mesh generation
-    /// Returns copies (not pointers) to ensure data remains valid during async mesh generation
+    /// Returns copies to ensure data remains valid during async mesh generation
     fn getNeighborChunks(self: *Self, pos: ChunkPos) [6]?Chunk {
         const zone = profiler.trace(@src());
         defer zone.end();
@@ -1323,9 +1111,8 @@ pub const ChunkManager = struct {
 
             if (self.chunk_storage.get(neighbor_pos)) |neighbor| {
                 const state = neighbor.getState();
-                // Copy neighbor chunk data if it has valid terrain
                 if (state == .generated or state == .meshing or state == .ready or state == .dirty) {
-                    neighbors[i] = neighbor.chunk; // COPY the chunk data
+                    neighbors[i] = neighbor.chunk;
                 }
             }
         }
@@ -1333,21 +1120,12 @@ pub const ChunkManager = struct {
         return neighbors;
     }
 
-    // NOTE: getNeighborChunksForWorker was REMOVED because it caused a data race.
-    // Workers must NOT access chunk_storage directly - it's not thread-safe.
-    // Instead, use the pre-computed neighbors snapshot from task_data (C2ME pattern).
-
-    // ========== Block Access Methods ==========
-
-    /// Get block entry at world position
-    /// Returns null if chunk is not loaded or not ready (for rendering)
     pub fn getBlockAt(self: *Self, world_x: i32, world_y: i32, world_z: i32) ?shared.BlockEntry {
         const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
 
         const rchunk = self.chunk_storage.get(chunk_pos) orelse return null;
         if (rchunk.getState() != .ready) return null;
 
-        // Convert to local coordinates (0-15)
         const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
         const local_y: u32 = @intCast(@mod(world_y, CHUNK_SIZE));
         const local_z: u32 = @intCast(@mod(world_z, CHUNK_SIZE));
@@ -1355,18 +1133,13 @@ pub const ChunkManager = struct {
         return rchunk.chunk.getBlockEntry(local_x, local_y, local_z);
     }
 
-    /// Get block entry at world position regardless of chunk state
-    /// Used for collision - block data is valid even during remeshing
-    /// Returns null if chunk is unloaded or still being generated
+    /// For collision - block data is valid even during remeshing
     pub fn getBlockAtForCollision(self: *Self, world_x: i32, world_y: i32, world_z: i32) ?shared.BlockEntry {
         const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
 
         const rchunk = self.chunk_storage.get(chunk_pos) orelse return null;
-        // Skip chunks still being generated - their block data isn't ready yet
-        // Chunks in meshing/ready/dirty states have valid block data
         if (rchunk.getState() == .loading) return null;
 
-        // Convert to local coordinates (0-15)
         const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
         const local_y: u32 = @intCast(@mod(world_y, CHUNK_SIZE));
         const local_z: u32 = @intCast(@mod(world_z, CHUNK_SIZE));
@@ -1374,24 +1147,19 @@ pub const ChunkManager = struct {
         return rchunk.chunk.getBlockEntry(local_x, local_y, local_z);
     }
 
-    /// Set block entry at world position
-    /// Returns true if successful, false if chunk is not loaded
     pub fn setBlockAt(self: *Self, world_x: i32, world_y: i32, world_z: i32, entry: shared.BlockEntry) bool {
         const chunk_pos = ChunkPos.fromBlockPos(world_x, world_y, world_z);
 
         const rchunk = self.chunk_storage.get(chunk_pos) orelse return false;
 
-        // Convert to local coordinates (0-15)
         const local_x: u32 = @intCast(@mod(world_x, CHUNK_SIZE));
         const local_y: u32 = @intCast(@mod(world_y, CHUNK_SIZE));
         const local_z: u32 = @intCast(@mod(world_z, CHUNK_SIZE));
 
         rchunk.chunk.setBlockEntry(local_x, local_y, local_z, entry);
 
-        // Mark chunk for re-meshing
         self.queueChunkRemesh(chunk_pos, rchunk);
 
-        // Also remesh neighbors if block is on chunk boundary
         if (local_x == 0) self.remeshNeighborIfLoaded(chunk_pos.x - 1, chunk_pos.z, chunk_pos.section_y);
         if (local_x == CHUNK_SIZE - 1) self.remeshNeighborIfLoaded(chunk_pos.x + 1, chunk_pos.z, chunk_pos.section_y);
         if (local_y == 0) self.remeshNeighborIfLoaded(chunk_pos.x, chunk_pos.z, chunk_pos.section_y - 1);
@@ -1402,24 +1170,17 @@ pub const ChunkManager = struct {
         return true;
     }
 
-    /// Check if a block at world position is solid (for collision/raycasting)
-    /// Uses collision-safe block access that works during chunk remeshing
     pub fn isBlockSolid(self: *Self, world_x: i32, world_y: i32, world_z: i32) bool {
         const entry = self.getBlockAtForCollision(world_x, world_y, world_z) orelse return false;
         return !entry.isAir() and entry.isSolid();
     }
 
-    /// Get the collision shape for a block at world position
-    /// Returns VoxelShape.EMPTY for air or out-of-bounds positions
-    /// Like Minecraft's BlockState.getCollisionShape()
     pub fn getCollisionShape(self: *Self, world_x: i32, world_y: i32, world_z: i32) shared.VoxelShape {
         const entry = self.getBlockAtForCollision(world_x, world_y, world_z) orelse return shared.voxel_shape.EMPTY;
         if (entry.isAir()) return shared.voxel_shape.EMPTY;
-        // Get the shape from the block registry
         return shared.block.getShape(entry.id, entry.state).*;
     }
 
-    /// Helper to remesh a neighbor chunk if loaded
     fn remeshNeighborIfLoaded(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
         const neighbor_pos = ChunkPos{ .x = chunk_x, .z = chunk_z, .section_y = section_y };
         if (self.chunk_storage.get(neighbor_pos)) |neighbor_chunk| {
@@ -1429,17 +1190,11 @@ pub const ChunkManager = struct {
         }
     }
 
-    /// Queue a chunk for re-meshing
-    /// For remesh, the chunk already has terrain and neighbors should be stable
     fn queueChunkRemesh(self: *Self, pos: ChunkPos, render_chunk_ptr: *RenderChunk) void {
-        // Don't clear mesh - keep rendering old mesh until new one arrives
-        // Mark as dirty as we know a rebuild is pending (fires on_dirty callback)
         render_chunk_ptr.setState(.dirty);
 
-        // Capture neighbors NOW - safe because chunk and neighbors are already loaded
         const neighbors = self.getNeighborChunks(pos);
 
-        // Create task data - remesh uses existing chunk data
         const task_data = self.allocator.create(ChunkTask) catch return;
         task_data.* = ChunkTask{
             .pos = pos,
@@ -1453,8 +1208,6 @@ pub const ChunkManager = struct {
             } },
         };
 
-        // Submit to thread pool for meshing only
-        // Priority is calculated at poll time - remesh tasks have a quota limit
         self.pool.submit(Task{
             .task_type = .generate_and_mesh,
             .data = @ptrCast(task_data),
@@ -1466,7 +1219,6 @@ pub const ChunkManager = struct {
         };
     }
 
-    /// Unload chunks beyond unload distance
     fn unloadDistantChunks(self: *Self) void {
         const zone = profiler.trace(@src());
         defer zone.end();
@@ -1498,28 +1250,22 @@ pub const ChunkManager = struct {
         }
     }
 
-    /// Unload a single chunk
-    /// Uses RCU to defer freeing until all workers have exited their critical sections
+    /// Uses RCU to defer freeing until all workers have exited critical sections
     fn unloadChunk(self: *Self, pos: ChunkPos) void {
         const zone = profiler.trace(@src());
         defer zone.end();
 
         if (self.chunk_storage.remove(pos)) |render_chunk_ptr| {
-
-            // Free buffer allocation immediately - workers don't access GPU buffers
             if (self.buffer_manager) |buf_mgr| {
                 if (render_chunk_ptr.getBufferAllocation()) |alloc| {
                     buf_mgr.free(alloc);
                 }
             }
 
-            // Defer freeing the RenderChunk itself via RCU
-            // Workers might still be accessing this chunk's data as a neighbor
             const rcu_instance = self.rcu orelse {
-                @panic("RCU must be initialized before unloading chunks - this indicates a bug in initialization order");
+                @panic("RCU must be initialized before unloading chunks");
             };
 
-            // Create closure data for deferred free
             const DeferredChunkFree = struct {
                 chunk: *RenderChunk,
                 allocator: std.mem.Allocator,
@@ -1546,7 +1292,6 @@ pub const ChunkManager = struct {
         _ = self.managed_positions.remove(pos);
     }
 
-    /// Worker task processing callback - C2ME-style two-phase system
     fn processTask(ctx: *WorkerContext, task: Task) void {
         const zone = profiler.trace(@src());
         defer zone.end();
@@ -1556,20 +1301,16 @@ pub const ChunkManager = struct {
         const task_data_ptr = task.data orelse return;
         const task_data: *ChunkTask = @ptrCast(@alignCast(task_data_ptr));
 
-        // Get per-worker data (contains both manager ref and thread-local mesh context)
         const worker_data: *WorkerData = @ptrCast(@alignCast(ctx.user_data orelse return));
         const self = worker_data.manager;
         const mesh_ctx = worker_data.mesh_context;
 
-        // Defer cleanup of task data
         defer self.allocator.destroy(task_data);
 
         switch (task_data.task_type) {
-            // ========== PHASE 1: Terrain Generation (no dependencies) ==========
             .generate_terrain => {
                 const terrain_task = task_data.data.terrain;
 
-                // Generate terrain on worker thread
                 var chunk: Chunk = undefined;
                 if (self.terrain_generator) |terrain_gen| {
                     chunk = terrain_gen.generateChunk(
@@ -1578,11 +1319,9 @@ pub const ChunkManager = struct {
                         terrain_task.pos.z,
                     );
                 } else {
-                    // Fallback to test chunk if terrain generator unavailable
                     chunk = Chunk.generateTestChunk();
                 }
 
-                // Push to completed_terrain queue (main thread will process)
                 self.completed_terrain.push(TerrainResult{
                     .pos = terrain_task.pos,
                     .chunk = chunk,
@@ -1592,17 +1331,11 @@ pub const ChunkManager = struct {
                 };
             },
 
-            // ========== PHASE 2: Mesh Generation (dependencies satisfied) ==========
             .generate_mesh, .remesh => {
                 var mesh_task = task_data.data.mesh;
 
                 const shaper = self.shared_model_shaper orelse return;
 
-                // No RCU needed - neighbors are COPIES, not pointers to shared storage
-                // The data is entirely owned by this task and cannot be invalidated
-
-                // Convert optional Chunk copies to optional Chunk pointers for generateMesh
-                // These pointers are valid because they point to our local copies in mesh_task
                 var neighbor_ptrs: [6]?*const Chunk = .{ null, null, null, null, null, null };
                 for (0..6) |i| {
                     if (mesh_task.neighbors[i] != null) {
@@ -1610,11 +1343,10 @@ pub const ChunkManager = struct {
                     }
                 }
 
-                // Generate mesh using thread-local pre-allocated buffers
                 var mesh = mesh_ctx.generateMesh(
                     &mesh_task.chunk,
                     mesh_task.pos,
-                    neighbor_ptrs, // Safe: points to local copies in mesh_task
+                    neighbor_ptrs,
                     shaper,
                     self.texture_manager,
                 ) catch |err| {
@@ -1622,11 +1354,8 @@ pub const ChunkManager = struct {
                     return;
                 };
 
-                // For remesh tasks, no generated_chunk (data already exists)
-                // For initial mesh tasks, chunk data was already copied in Phase 1
                 mesh.generated_chunk = null;
 
-                // Push to completed_queue
                 self.completed_queue.push(mesh) catch |err| {
                     logger.warn("Failed to push completed mesh: {}", .{err});
                     mesh.deinit();
