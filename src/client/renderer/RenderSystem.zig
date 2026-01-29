@@ -177,6 +177,10 @@ pub const RenderSystem = struct {
     draw_count_buffer: ManagedBuffer = .{},
     /// GPU-generated draw commands (written by cmdgen.comp)
     gpu_draw_buffer: ManagedBuffer = .{},
+    /// Host-visible staging buffer for metadata uploads (persists across frames)
+    metadata_staging_buffer: ManagedBuffer = .{},
+    /// Current write offset in metadata staging buffer
+    metadata_staging_offset: u64 = 0,
     /// Maps chunk slot ID to chunk metadata index
     chunk_slot_allocator: ?GPUDrivenTypes.SlotAllocator = null,
 
@@ -488,6 +492,9 @@ pub const RenderSystem = struct {
 
         const fence = self.in_flight_fences[self.current_frame];
         _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
+
+        // Reset metadata staging offset for new frame
+        self.metadata_staging_offset = 0;
 
         var image_index: u32 = 0;
         const acquire_result = vkAcquireNextImageKHR(
@@ -2572,11 +2579,31 @@ pub const RenderSystem = struct {
         // Slot allocator for chunk GPU indices
         self.chunk_slot_allocator = GPUDrivenTypes.SlotAllocator.init(self.allocator, GPUDrivenTypes.MAX_CHUNKS);
 
-        logger.info("GPU-driven buffers created: metadata={d:.2}MB, visibility={d:.2}MB, draw_count={d}B, draw_cmds={d:.2}MB", .{
+        // Metadata staging buffer: host-visible for CPU writes, persists across frames
+        // Size for ~1000 metadata uploads per frame (should be plenty)
+        const staging_size: u64 = 1000 * @sizeOf(GPUDrivenTypes.ChunkGPUData);
+        const host_visible = vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        const staging_result = try gpu.createBufferRaw(
+            staging_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            host_visible,
+        );
+
+        // Map the staging buffer persistently
+        const vkMapMemory = vk.vkMapMemory orelse return error.VulkanFunctionNotLoaded;
+        var mapped: ?*anyopaque = null;
+        if (vkMapMemory(self.device, staging_result.memory, 0, staging_size, 0, &mapped) != vk.VK_SUCCESS) {
+            return error.MemoryMapFailed;
+        }
+        self.metadata_staging_buffer = ManagedBuffer.fromMapped(staging_result.handle, staging_result.memory, mapped.?);
+        self.metadata_staging_offset = 0;
+
+        logger.info("GPU-driven buffers created: metadata={d:.2}MB, visibility={d:.2}MB, draw_count={d}B, draw_cmds={d:.2}MB, staging={d:.2}KB", .{
             @as(f64, @floatFromInt(metadata_size)) / (1024.0 * 1024.0),
             @as(f64, @floatFromInt(visibility_size)) / (1024.0 * 1024.0),
             count_size,
             @as(f64, @floatFromInt(draw_size)) / (1024.0 * 1024.0),
+            @as(f64, @floatFromInt(staging_size)) / 1024.0,
         });
     }
 
@@ -2586,6 +2613,7 @@ pub const RenderSystem = struct {
             allocator.deinit();
             self.chunk_slot_allocator = null;
         }
+        self.metadata_staging_buffer.destroy(self.device);
         self.gpu_draw_buffer.destroy(self.device);
         self.draw_count_buffer.destroy(self.device);
         self.visibility_buffer.destroy(self.device);
@@ -2614,6 +2642,8 @@ pub const RenderSystem = struct {
 
     /// Upload chunk metadata to the GPU buffer at the given slot
     /// Note: This stages the upload; actual transfer happens during frame commit
+    /// Upload chunk metadata to the GPU buffer at the given slot
+    /// Uses persistent staging buffer - data is written and copy command recorded
     pub fn uploadChunkMetadata(
         self: *Self,
         slot: u32,
@@ -2622,32 +2652,40 @@ pub const RenderSystem = struct {
     ) !void {
         if (slot == GPUDrivenTypes.SlotAllocator.INVALID_SLOT) return;
         if (slot >= GPUDrivenTypes.MAX_CHUNKS) return;
+        if (!self.metadata_staging_buffer.isValid()) return error.StagingBufferNotInitialized;
 
-        var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
+        const data_size = @sizeOf(GPUDrivenTypes.ChunkGPUData);
+        const max_staging_size: u64 = 1000 * data_size;
 
-        // Calculate offset in the metadata buffer
-        const offset = @as(u64, slot) * @sizeOf(GPUDrivenTypes.ChunkGPUData);
-
-        // Create staging buffer with the data
-        const staging = try gpu.createBufferWithDataRaw(
-            GPUDrivenTypes.ChunkGPUData,
-            &[_]GPUDrivenTypes.ChunkGPUData{data},
-            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        );
-        defer {
-            if (vk.vkDestroyBuffer) |destroy| destroy(self.device, staging.handle, null);
-            if (vk.vkFreeMemory) |free| free(self.device, staging.memory, null);
+        // Check if we have room in staging buffer (wraps around each frame)
+        if (self.metadata_staging_offset + data_size > max_staging_size) {
+            // Reset to beginning - previous frame's data is no longer needed
+            self.metadata_staging_offset = 0;
         }
 
-        // Copy from staging to device-local buffer
+        // Write data to staging buffer
+        const staging_ptr: [*]u8 = @ptrCast(self.metadata_staging_buffer.mapped.?);
+        const dest: *GPUDrivenTypes.ChunkGPUData = @ptrCast(@alignCast(staging_ptr + self.metadata_staging_offset));
+        dest.* = data;
+
+        // Record copy command from staging to device-local buffer
+        const dst_offset = @as(u64, slot) * data_size;
         const copy_region = vk.VkBufferCopy{
-            .srcOffset = 0,
-            .dstOffset = offset,
-            .size = @sizeOf(GPUDrivenTypes.ChunkGPUData),
+            .srcOffset = self.metadata_staging_offset,
+            .dstOffset = dst_offset,
+            .size = data_size,
         };
 
         const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return error.VulkanFunctionNotLoaded;
-        vkCmdCopyBuffer(cmd_buffer, staging.handle, self.chunk_metadata_buffer.handle, 1, &copy_region);
+        vkCmdCopyBuffer(cmd_buffer, self.metadata_staging_buffer.handle, self.chunk_metadata_buffer.handle, 1, &copy_region);
+
+        // Advance staging offset for next upload
+        self.metadata_staging_offset += data_size;
+    }
+
+    /// Reset metadata staging buffer offset (call at start of frame)
+    pub fn resetMetadataStagingOffset(self: *Self) void {
+        self.metadata_staging_offset = 0;
     }
 
     /// Get the number of allocated chunk slots (for dispatch sizing)
