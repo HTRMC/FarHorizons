@@ -433,10 +433,13 @@ pub const ChunkManager = struct {
         var iter = self.chunk_storage.iterator();
         while (iter.next()) |entry| {
             const chunk = entry.value_ptr.*;
-            // Free buffer allocation if present
+            // Free all layer allocations (solid, cutout, translucent)
             if (self.buffer_manager) |buf_mgr| {
-                if (chunk.getBufferAllocation()) |alloc| {
-                    buf_mgr.free(alloc);
+                const allocations = chunk.getBufferAllocations();
+                for (allocations) |alloc_opt| {
+                    if (alloc_opt) |alloc| {
+                        buf_mgr.free(alloc);
+                    }
                 }
             }
             // Free GPU slot if present
