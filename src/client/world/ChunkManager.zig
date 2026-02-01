@@ -387,6 +387,16 @@ pub const ChunkManager = struct {
         logger.info("Shutting down ChunkManager...", .{});
 
         self.pool.shutdown();
+
+        // Drain any remaining tasks that weren't processed before shutdown
+        // These contain ChunkTask allocations that would otherwise leak
+        while (self.pool.task_queue.tryPop()) |task| {
+            if (task.data) |data_ptr| {
+                const task_data: *ChunkTask = @ptrCast(@alignCast(data_ptr));
+                self.allocator.destroy(task_data);
+            }
+        }
+
         self.pool.deinit();
 
         if (self.worker_data) |workers| {
