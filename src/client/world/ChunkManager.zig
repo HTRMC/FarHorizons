@@ -684,6 +684,7 @@ pub const ChunkManager = struct {
             if (is_stale) {
                 mesh.deinit();
                 _ = self.pending_loads.remove(mesh.pos);
+                _ = self.managed_positions.remove(mesh.pos);
                 continue;
             }
 
@@ -726,6 +727,7 @@ pub const ChunkManager = struct {
                 if (!valid) {
                     mesh.deinit();
                     _ = self.pending_loads.remove(mesh.pos);
+                    _ = self.managed_positions.remove(mesh.pos);
                     continue;
                 }
 
@@ -754,6 +756,7 @@ pub const ChunkManager = struct {
                         }
                     }
                     _ = self.pending_loads.remove(mesh.pos);
+                    _ = self.managed_positions.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 }
@@ -787,6 +790,7 @@ pub const ChunkManager = struct {
                         }
                     }
                     _ = self.pending_loads.remove(mesh.pos);
+                    _ = self.managed_positions.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 }
@@ -810,6 +814,7 @@ pub const ChunkManager = struct {
                         }
                     }
                     _ = self.pending_loads.remove(mesh.pos);
+                    _ = self.managed_positions.remove(mesh.pos);
                     mesh.deinit();
                     continue;
                 };
