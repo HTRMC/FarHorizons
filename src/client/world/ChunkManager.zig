@@ -1079,8 +1079,19 @@ pub const ChunkManager = struct {
 
                 const gop = self.managed_positions.getOrPut(pos) catch continue;
                 if (gop.found_existing) {
-                    chunks_skipped += 1;
-                    continue;
+                    // Check if this position is actually tracked somewhere
+                    const in_storage = self.chunk_storage.contains(pos);
+                    const in_pending = self.pending_loads.contains(pos);
+                    const in_pending_mesh = self.pending_mesh.contains(pos);
+                    if (!in_storage and !in_pending and !in_pending_mesh) {
+                        // Orphan entry - remove it and allow re-loading
+                        _ = self.managed_positions.remove(pos);
+                        // Re-add it fresh so this iteration processes it
+                        _ = self.managed_positions.getOrPut(pos) catch continue;
+                    } else {
+                        chunks_skipped += 1;
+                        continue;
+                    }
                 }
 
                 if (!pos.isWithinDistance(self.player_chunk, self.config.view_distance)) {
@@ -1088,7 +1099,11 @@ pub const ChunkManager = struct {
                     continue;
                 }
 
-                self.queueChunkLoad(pos);
+                if (!self.queueChunkLoad(pos)) {
+                    // Failed to queue, remove from managed_positions so it can be retried
+                    _ = self.managed_positions.remove(pos);
+                    continue;
+                }
                 chunks_queued += 1;
 
                 if (chunks_queued >= max_per_update) {
@@ -1106,19 +1121,22 @@ pub const ChunkManager = struct {
         self.unloadDistantChunks();
     }
 
-    fn queueChunkLoad(self: *Self, pos: ChunkPos) void {
+    fn queueChunkLoad(self: *Self, pos: ChunkPos) bool {
         const zone = profiler.trace(@src());
         defer zone.end();
 
-        self.pending_loads.put(pos, {}) catch return;
+        self.pending_loads.put(pos, {}) catch return false;
 
-        const render_chunk_ptr = self.allocator.create(RenderChunk) catch return;
+        const render_chunk_ptr = self.allocator.create(RenderChunk) catch {
+            _ = self.pending_loads.remove(pos);
+            return false;
+        };
         render_chunk_ptr.* = RenderChunk.init(self.allocator, pos);
 
         const previous = self.chunk_storage.put(pos, render_chunk_ptr) catch {
             self.allocator.destroy(render_chunk_ptr);
             _ = self.pending_loads.remove(pos);
-            return;
+            return false;
         };
         if (previous) |old_chunk| {
             if (self.buffer_manager) |buf_mgr| {
@@ -1144,7 +1162,7 @@ pub const ChunkManager = struct {
             render_chunk_ptr.deinit();
             self.allocator.destroy(render_chunk_ptr);
             _ = self.pending_loads.remove(pos);
-            return;
+            return false;
         };
         task_data.* = ChunkTask{
             .pos = pos,
@@ -1166,8 +1184,10 @@ pub const ChunkManager = struct {
             render_chunk_ptr.deinit();
             self.allocator.destroy(render_chunk_ptr);
             _ = self.pending_loads.remove(pos);
-            return;
+            return false;
         };
+
+        return true;
     }
 
     /// Returns copies to ensure data remains valid during async mesh generation
@@ -1317,7 +1337,11 @@ pub const ChunkManager = struct {
             var iter = self.chunk_storage.iterator();
             while (iter.next()) |entry| {
                 const pos = entry.key_ptr.*;
-                if (!pos.isWithinDistance(self.player_chunk, self.config.unload_distance)) {
+                // Check both horizontal and vertical distance
+                const horizontally_distant = !pos.isWithinDistance(self.player_chunk, self.config.unload_distance);
+                const dy = @abs(pos.section_y - self.player_chunk.section_y);
+                const vertically_distant = dy > self.config.vertical_view_distance + 2;
+                if (horizontally_distant or vertically_distant) {
                     to_unload.append(self.allocator, pos) catch continue;
                 }
             }
@@ -1386,6 +1410,7 @@ pub const ChunkManager = struct {
         }
         _ = self.pending_loads.remove(pos);
         _ = self.managed_positions.remove(pos);
+        _ = self.pending_mesh.remove(pos);
     }
 
     fn processTask(ctx: *WorkerContext, task: Task) void {
