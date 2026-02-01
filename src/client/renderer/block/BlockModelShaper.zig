@@ -62,6 +62,13 @@ pub const BlockModelShaper = struct {
     /// Get the resolved and cached model for a BlockEntry
     /// This is the main entry point for mesh generation
     pub fn getModel(self: *Self, entry: BlockEntry) !*const BlockModel {
+        // Skip air blocks - they have no model to render
+        // This catches both real air (id=0) and unknown blocks that fall back to air
+        const block_name = blocks.getBlockName(entry.id);
+        if (std.mem.eql(u8, block_name, "air")) {
+            return error.AirBlockHasNoModel;
+        }
+
         const cache_key = makeCacheKey(entry);
 
         // Check cache
@@ -76,6 +83,12 @@ pub const BlockModelShaper = struct {
 
     /// Get the variant info (for rotation) for a BlockEntry
     pub fn getVariant(self: *Self, entry: BlockEntry) !ModelVariant {
+        // Skip air blocks - they have no model to render
+        const block_name = blocks.getBlockName(entry.id);
+        if (std.mem.eql(u8, block_name, "air")) {
+            return error.AirBlockHasNoModel;
+        }
+
         const cache_key = makeCacheKey(entry);
 
         // Check cache
