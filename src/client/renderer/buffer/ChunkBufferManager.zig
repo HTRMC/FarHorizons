@@ -59,10 +59,19 @@ pub const ChunkBufferConfig = struct {
     expansion_threshold: u8 = 75,
 };
 
+/// Deferred free entry - allocation to be freed after GPU is done with it
+const DeferredFree = struct {
+    allocation: ChunkBufferAllocation,
+    frame_count: u64,
+};
+
 /// Manages GPU buffer allocation for chunks with dynamic growth
 pub const ChunkBufferManager = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
+
+    /// Number of frames to wait before actually freeing (ensures GPU is done)
+    const DEFERRED_FREE_FRAMES: u64 = 3;
 
     /// Growable vertex buffer arena
     vertex_arena: GrowableBufferArena,
@@ -80,6 +89,11 @@ pub const ChunkBufferManager = struct {
     config: ChunkBufferConfig,
 
     allocator: std.mem.Allocator,
+
+    /// Pending frees - allocations waiting to be freed after GPU is done
+    pending_frees: std.ArrayListUnmanaged(DeferredFree) = .{},
+    /// Current frame counter for deferred free tracking
+    frame_counter: u64 = 0,
 
     /// Initialize the chunk buffer manager
     /// Uses single large buffers for GPU-driven rendering (Voxy approach)
@@ -159,6 +173,13 @@ pub const ChunkBufferManager = struct {
     pub fn deinit(self: *Self) void {
         logger.info("Shutting down ChunkBufferManager...", .{});
 
+        // Process any remaining deferred frees
+        for (self.pending_frees.items) |entry| {
+            self.vertex_arena.free(entry.allocation.vertex_slice);
+            self.index_arena.free(entry.allocation.index_slice);
+        }
+        self.pending_frees.deinit(self.allocator);
+
         self.staging.deinit();
         self.index_arena.deinit();
         self.vertex_arena.deinit();
@@ -194,12 +215,38 @@ pub const ChunkBufferManager = struct {
         };
     }
 
-    /// Free a chunk's buffer allocation
+    /// Free a chunk's buffer allocation (deferred to ensure GPU is done with it)
     pub fn free(self: *Self, allocation: ChunkBufferAllocation) void {
         if (!allocation.valid) return;
 
-        self.vertex_arena.free(allocation.vertex_slice);
-        self.index_arena.free(allocation.index_slice);
+        // Defer the free until the GPU is definitely done with this memory
+        self.pending_frees.append(self.allocator, DeferredFree{
+            .allocation = allocation,
+            .frame_count = self.frame_counter,
+        }) catch {
+            // If we can't defer, log warning but still free immediately
+            // This could cause visual glitches but won't crash
+            logger.warn("Failed to defer buffer free, freeing immediately (may cause visual artifacts)", .{});
+            self.vertex_arena.free(allocation.vertex_slice);
+            self.index_arena.free(allocation.index_slice);
+        };
+    }
+
+    /// Process deferred frees - frees allocations that are old enough
+    /// Call this at the start of each frame
+    fn processDeferredFrees(self: *Self) void {
+        // Process from end to beginning so we can swap-remove
+        var i: usize = self.pending_frees.items.len;
+        while (i > 0) {
+            i -= 1;
+            const entry = self.pending_frees.items[i];
+            if (self.frame_counter >= entry.frame_count + DEFERRED_FREE_FRAMES) {
+                // This allocation is old enough, safe to free now
+                self.vertex_arena.free(entry.allocation.vertex_slice);
+                self.index_arena.free(entry.allocation.index_slice);
+                _ = self.pending_frees.swapRemove(i);
+            }
+        }
     }
 
     /// Stage vertex data for upload
@@ -242,6 +289,8 @@ pub const ChunkBufferManager = struct {
 
     /// Begin a new frame (call before staging)
     pub fn beginFrame(self: *Self, frame_fence: vk.VkFence) !void {
+        self.frame_counter += 1;
+        self.processDeferredFrees();
         try self.staging.beginFrame(frame_fence);
     }
 

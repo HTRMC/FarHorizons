@@ -504,6 +504,9 @@ pub const ChunkManager = struct {
                 logger.warn("Failed to begin frame for buffer manager: {}", .{err});
             };
         }
+        // Synchronize slot allocator's frame counter with buffer manager
+        // This ensures deferred frees for both are processed at the same time
+        self.render_system.advanceSlotAllocatorFrame();
     }
 
     fn processCompletedTerrain(self: *Self) void {
@@ -1101,9 +1104,18 @@ pub const ChunkManager = struct {
         };
         if (previous) |old_chunk| {
             if (self.buffer_manager) |buf_mgr| {
-                if (old_chunk.getBufferAllocation()) |alloc| {
-                    buf_mgr.free(alloc);
+                // Free all layer allocations (solid, cutout, translucent)
+                const allocations = old_chunk.getBufferAllocations();
+                for (allocations) |alloc_opt| {
+                    if (alloc_opt) |alloc| {
+                        buf_mgr.free(alloc);
+                    }
                 }
+            }
+            // GPU-driven rendering: queue slot for clearing, then free it
+            if (old_chunk.hasGPUSlot()) {
+                self.pending_slot_clears.append(self.allocator, old_chunk.gpu_slot) catch {};
+                self.render_system.freeChunkSlot(old_chunk.gpu_slot);
             }
             old_chunk.deinit();
             self.allocator.destroy(old_chunk);

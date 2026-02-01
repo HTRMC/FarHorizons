@@ -113,17 +113,31 @@ pub const IndirectDrawCommand = extern struct {
     }
 };
 
+/// Deferred slot free entry
+const DeferredSlotFree = struct {
+    slot: u32,
+    frame_count: u64,
+};
+
 /// Simple slot allocator for tracking chunk GPU metadata indices
 /// Uses a free-list for O(1) allocation and deallocation
+/// Supports deferred freeing to prevent slot reuse while GPU is still using it
 pub const SlotAllocator = struct {
     const Self = @This();
 
+    /// Number of frames to wait before actually freeing a slot
+    const DEFERRED_FREE_FRAMES: u64 = 3;
+
     /// Free slot indices available for allocation
     free_list: std.ArrayListUnmanaged(u32),
+    /// Slots pending free (waiting for GPU to finish)
+    pending_frees: std.ArrayListUnmanaged(DeferredSlotFree),
     /// Next slot index to allocate when free list is empty
     next_slot: u32,
     /// Maximum number of slots
     max_slots: u32,
+    /// Current frame counter
+    frame_counter: u64,
     /// Memory allocator
     allocator: std.mem.Allocator,
 
@@ -132,14 +146,34 @@ pub const SlotAllocator = struct {
     pub fn init(allocator: std.mem.Allocator, max_slots: u32) Self {
         return Self{
             .free_list = .{},
+            .pending_frees = .{},
             .next_slot = 0,
             .max_slots = max_slots,
+            .frame_counter = 0,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.pending_frees.deinit(self.allocator);
         self.free_list.deinit(self.allocator);
+    }
+
+    /// Call at the start of each frame to process deferred frees
+    pub fn beginFrame(self: *Self) void {
+        self.frame_counter += 1;
+
+        // Process deferred frees - move old enough entries to the actual free list
+        var i: usize = self.pending_frees.items.len;
+        while (i > 0) {
+            i -= 1;
+            const entry = self.pending_frees.items[i];
+            if (self.frame_counter >= entry.frame_count + DEFERRED_FREE_FRAMES) {
+                // Slot is old enough, safe to reuse now
+                self.free_list.append(self.allocator, entry.slot) catch {};
+                _ = self.pending_frees.swapRemove(i);
+            }
+        }
     }
 
     /// Allocate a slot, returns INVALID_SLOT if none available
@@ -159,15 +193,21 @@ pub const SlotAllocator = struct {
         return INVALID_SLOT;
     }
 
-    /// Free a slot for reuse
+    /// Free a slot for reuse (deferred to ensure GPU is done with it)
     pub fn free(self: *Self, slot: u32) void {
         if (slot == INVALID_SLOT or slot >= self.next_slot) return;
-        self.free_list.append(self.allocator, slot) catch {
-            // If we can't track the free slot, it's leaked but not critical
+
+        // Defer the free until GPU is done with this slot
+        self.pending_frees.append(self.allocator, DeferredSlotFree{
+            .slot = slot,
+            .frame_count = self.frame_counter,
+        }) catch {
+            // If we can't defer, add to free list immediately (may cause visual glitches)
+            self.free_list.append(self.allocator, slot) catch {};
         };
     }
 
-    /// Get the number of allocated slots
+    /// Get the number of allocated slots (includes pending frees as they're still "in use")
     pub fn getAllocatedCount(self: *const Self) u32 {
         return self.next_slot - @as(u32, @intCast(self.free_list.items.len));
     }

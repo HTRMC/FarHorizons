@@ -3633,6 +3633,14 @@ pub const RenderSystem = struct {
         }
     }
 
+    /// Advance the slot allocator's frame counter and process deferred frees
+    /// Call this at the start of each frame, synchronized with ChunkBufferManager.beginFrame
+    pub fn advanceSlotAllocatorFrame(self: *Self) void {
+        if (self.chunk_slot_allocator) |*allocator| {
+            allocator.beginFrame();
+        }
+    }
+
     /// Upload chunk metadata to the GPU buffer at the given slot
     /// Note: This stages the upload; actual transfer happens during frame commit
     /// Upload chunk metadata to the GPU buffer at the given slot
