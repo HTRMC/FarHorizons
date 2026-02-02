@@ -10,7 +10,9 @@ const BufferArena = @import("BufferArena.zig").BufferArena;
 const BufferSlice = @import("BufferArena.zig").BufferSlice;
 
 /// Pending copy operation to be executed
+/// Layout matches RenderSystem.StagingCopy for direct use without conversion
 pub const PendingCopy = struct {
+    src_buffer: vk.VkBuffer,
     src_offset: u64,
     dst_buffer: vk.VkBuffer,
     dst_offset: u64,
@@ -235,6 +237,7 @@ pub const StagingRing = struct {
 
         // Record pending copy
         try self.pending_copies.append(self.allocator, PendingCopy{
+            .src_buffer = self.buffer,
             .src_offset = src_offset,
             .dst_buffer = dst_buffer,
             .dst_offset = dst_offset,
@@ -262,7 +265,7 @@ pub const StagingRing = struct {
                 .dstOffset = copy.dst_offset,
                 .size = copy.size,
             };
-            vkCmdCopyBuffer(cmd_buffer, self.buffer, copy.dst_buffer, 1, &region);
+            vkCmdCopyBuffer(cmd_buffer, copy.src_buffer, copy.dst_buffer, 1, &region);
         }
 
         logger.debug("Committed {} buffer copies", .{self.pending_copies.items.len});

@@ -334,6 +334,15 @@ pub const ChunkBufferManager = struct {
         return self.index_arena.getArenaCount();
     }
 
+    /// Get a version number that changes when arenas are added
+    /// Used for cache invalidation in ChunkManager
+    pub fn getArenaVersion(self: *const Self) u32 {
+        // Combine vertex and index expansion counts into a single version
+        const vertex_version: u32 = self.vertex_arena.getExpansionCount();
+        const index_version: u32 = self.index_arena.getExpansionCount();
+        return (vertex_version << 16) | index_version;
+    }
+
     /// Get the staging buffer for copy commands
     pub fn getStagingBuffer(self: *const Self) vk.VkBuffer {
         return self.staging.getBuffer();

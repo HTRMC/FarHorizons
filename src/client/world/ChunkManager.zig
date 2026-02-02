@@ -246,7 +246,6 @@ pub const ChunkManager = struct {
     buffer_manager: ?*ChunkBufferManager = null,
     terrain_generator: ?*TerrainGenerator = null,
     draw_commands: std.ArrayListUnmanaged(ChunkDrawCommand) = .{},
-    staging_copies: std.ArrayListUnmanaged(StagingCopy) = .{},
 
     /// Defers updateLoadQueue to once per frame to prevent cascading slowdowns
     load_queue_dirty: bool = false,
@@ -256,6 +255,8 @@ pub const ChunkManager = struct {
 
     vertex_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
     index_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
+    /// Cached arena version to avoid rebuilding buffer lists every frame
+    cached_arena_version: u32 = 0,
 
     /// Protects neighbor chunk pointers during async meshing
     rcu: ?*Rcu = null,
@@ -465,7 +466,6 @@ pub const ChunkManager = struct {
         self.completed_queue.deinit();
 
         self.draw_commands.deinit(self.allocator);
-        self.staging_copies.deinit(self.allocator);
         self.vertex_buffer_cache.deinit(self.allocator);
         self.index_buffer_cache.deinit(self.allocator);
         self.pending_metadata_uploads.deinit(self.allocator);
@@ -981,29 +981,47 @@ pub const ChunkManager = struct {
     }
 
     pub fn getAllVertexBuffers(self: *Self) []const vk.VkBuffer {
-        const buf_mgr = self.buffer_manager orelse return &.{};
-        const count = buf_mgr.getVertexArenaCount();
-
-        self.vertex_buffer_cache.clearRetainingCapacity();
-        for (0..count) |i| {
-            if (buf_mgr.getVertexBuffer(@intCast(i))) |buf| {
-                self.vertex_buffer_cache.append(self.allocator, buf) catch continue;
-            }
-        }
+        self.refreshBufferCachesIfNeeded();
         return self.vertex_buffer_cache.items;
     }
 
     pub fn getAllIndexBuffers(self: *Self) []const vk.VkBuffer {
-        const buf_mgr = self.buffer_manager orelse return &.{};
-        const count = buf_mgr.getIndexArenaCount();
+        self.refreshBufferCachesIfNeeded();
+        return self.index_buffer_cache.items;
+    }
 
+    /// Refreshes buffer caches only when arena version changes (new arenas added)
+    /// This eliminates per-frame allocations in getAllVertexBuffers/getAllIndexBuffers
+    fn refreshBufferCachesIfNeeded(self: *Self) void {
+        const buf_mgr = self.buffer_manager orelse return;
+        const current_version = buf_mgr.getArenaVersion();
+
+        // Only rebuild if arenas have changed
+        if (current_version == self.cached_arena_version and
+            self.vertex_buffer_cache.items.len > 0)
+        {
+            return;
+        }
+
+        self.cached_arena_version = current_version;
+
+        // Rebuild vertex buffer cache
+        const vertex_count = buf_mgr.getVertexArenaCount();
+        self.vertex_buffer_cache.clearRetainingCapacity();
+        for (0..vertex_count) |i| {
+            if (buf_mgr.getVertexBuffer(@intCast(i))) |buf| {
+                self.vertex_buffer_cache.append(self.allocator, buf) catch continue;
+            }
+        }
+
+        // Rebuild index buffer cache
+        const index_count = buf_mgr.getIndexArenaCount();
         self.index_buffer_cache.clearRetainingCapacity();
-        for (0..count) |i| {
+        for (0..index_count) |i| {
             if (buf_mgr.getIndexBuffer(@intCast(i))) |buf| {
                 self.index_buffer_cache.append(self.allocator, buf) catch continue;
             }
         }
-        return self.index_buffer_cache.items;
     }
 
     /// Returns the high water mark of GPU slots for GPU-driven rendering
@@ -1013,32 +1031,19 @@ pub const ChunkManager = struct {
         return self.render_system.getChunkSlotHighWaterMark();
     }
 
+    /// Returns pending staging copies directly from buffer manager
+    /// PendingCopy and StagingCopy have identical layouts, so we cast directly
     pub fn getStagingCopies(self: *Self) []const StagingCopy {
         const buf_mgr = self.buffer_manager orelse return &.{};
-
-        self.staging_copies.clearRetainingCapacity();
-
-        const staging_buffer = buf_mgr.getStagingBuffer();
         const pending = buf_mgr.getPendingCopies();
-
-        for (pending) |copy| {
-            self.staging_copies.append(self.allocator, StagingCopy{
-                .src_buffer = staging_buffer,
-                .src_offset = copy.src_offset,
-                .dst_buffer = copy.dst_buffer,
-                .dst_offset = copy.dst_offset,
-                .size = copy.size,
-            }) catch continue;
-        }
-
-        return self.staging_copies.items;
+        // PendingCopy and StagingCopy have identical memory layouts
+        return @ptrCast(pending);
     }
 
     pub fn clearStagingCopies(self: *Self) void {
         if (self.buffer_manager) |buf_mgr| {
             buf_mgr.clearPendingCopies();
         }
-        self.staging_copies.clearRetainingCapacity();
     }
 
     pub fn getVisibleChunks(self: *Self) []*RenderChunk {

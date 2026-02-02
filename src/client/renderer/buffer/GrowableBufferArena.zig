@@ -254,6 +254,12 @@ pub const GrowableBufferArena = struct {
         return self.arenas.items.len;
     }
 
+    /// Get the expansion count (incremented each time an arena is added)
+    /// Used for cache invalidation - only rebuild buffer lists when this changes
+    pub fn getExpansionCount(self: *const Self) u16 {
+        return self.expansion_count;
+    }
+
     /// Get statistics for all arenas
     pub fn getStats(self: *const Self) struct {
         total_capacity: u64,
