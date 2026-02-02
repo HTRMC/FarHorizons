@@ -207,6 +207,60 @@ pub const StagingRing = struct {
         };
     }
 
+    /// Non-blocking check if a frame's fence is signaled
+    /// Returns true if fence is signaled (GPU work complete) or no fence exists
+    pub fn isFenceReady(self: *const Self, frame_index: usize) bool {
+        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return true;
+
+        if (frame_index >= MAX_FRAMES_IN_FLIGHT) return true;
+
+        if (self.frame_allocations[frame_index]) |alloc| {
+            if (alloc.fence != null) {
+                return vkGetFenceStatus(self.device, alloc.fence) == vk.VK_SUCCESS;
+            }
+        }
+        return true; // No fence means ready
+    }
+
+    /// Non-blocking check if any fence is signaled
+    pub fn checkFence(self: *const Self, fence: vk.VkFence) bool {
+        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return true;
+        if (fence == null) return true;
+        return vkGetFenceStatus(self.device, fence) == vk.VK_SUCCESS;
+    }
+
+    /// Try to begin a new frame without blocking
+    /// Returns false if previous frame's fence is not ready (caller should skip)
+    /// Returns true and advances frame if ready
+    pub fn tryBeginFrame(self: *Self, frame_fence: vk.VkFence) !bool {
+        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return error.VulkanFunctionNotLoaded;
+
+        const next_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+
+        // Check if next frame slot's fence is ready (non-blocking)
+        if (self.frame_allocations[next_frame]) |old_alloc| {
+            if (old_alloc.fence != null) {
+                if (vkGetFenceStatus(self.device, old_alloc.fence) != vk.VK_SUCCESS) {
+                    // Fence not ready, caller should skip this frame's staging
+                    return false;
+                }
+            }
+            self.frame_allocations[next_frame] = null;
+        }
+
+        // Fence ready, advance frame
+        self.current_frame = next_frame;
+
+        // Record start of this frame's allocations
+        self.frame_allocations[self.current_frame] = FrameAllocation{
+            .start = self.write_pos,
+            .end = self.write_pos,
+            .fence = frame_fence,
+        };
+
+        return true;
+    }
+
     /// Stage data for upload to a destination buffer
     /// Returns the offset in the staging buffer where data was written
     pub fn stage(
@@ -297,6 +351,19 @@ pub const StagingRing = struct {
     /// Clear pending copies after they've been committed
     pub fn clearPendingCopies(self: *Self) void {
         self.pending_copies.clearRetainingCapacity();
+    }
+
+    /// Get the current number of pending copies (for tracking before staging)
+    pub fn getPendingCount(self: *const Self) usize {
+        return self.pending_copies.items.len;
+    }
+
+    /// Cancel pending copies added after a certain point (used when staging fails partway)
+    /// This prevents copy commands referencing freed buffer regions
+    pub fn cancelPendingCopiesAfter(self: *Self, count: usize) void {
+        if (count < self.pending_copies.items.len) {
+            self.pending_copies.shrinkRetainingCapacity(count);
+        }
     }
 
     fn findMemoryType(

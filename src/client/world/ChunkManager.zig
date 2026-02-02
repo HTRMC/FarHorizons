@@ -51,6 +51,10 @@ const WorkerMeshContext = chunk_mesher.WorkerMeshContext;
 const chunk_storage = @import("ChunkStorage.zig");
 const ChunkStorage = chunk_storage.ChunkStorage;
 
+const upload_thread = @import("UploadThread.zig");
+const UploadThread = upload_thread.UploadThread;
+const UploadResult = upload_thread.UploadResult;
+
 /// Task type for chunk operations (C2ME-style two-phase loading)
 pub const ChunkTaskType = enum {
     /// Phase 1: Generate terrain only (no dependencies needed)
@@ -245,6 +249,9 @@ pub const ChunkManager = struct {
 
     buffer_manager: ?*ChunkBufferManager = null,
     terrain_generator: ?*TerrainGenerator = null,
+
+    /// Dedicated upload thread for GPU staging (AAA pattern)
+    upload_thread: ?*UploadThread = null,
     draw_commands: std.ArrayListUnmanaged(ChunkDrawCommand) = .{},
 
     /// Defers updateLoadQueue to once per frame to prevent cascading slowdowns
@@ -380,12 +387,42 @@ pub const ChunkManager = struct {
         const total_buffer_mb = @as(f32, @floatFromInt(worker_count)) * 3.6;
         logger.info("ChunkManager started with {} workers (~{d:.1}MB thread-local buffers)", .{ worker_count, total_buffer_mb });
 
+        // Initialize and start the upload thread (AAA pattern)
+        // Upload thread OWNS its own staging ring and does all buffer allocations/frees
+        // Upload thread prepares command buffers, main thread submits (thread-safe)
+        if (self.buffer_manager) |buf_mgr| {
+            const ut = try self.allocator.create(UploadThread);
+            ut.* = try UploadThread.init(
+                self.allocator,
+                self.io,
+                self.render_system.getDevice(),
+                self.render_system.getPhysicalDevice(),
+                self.render_system.getGraphicsFamily(),
+                buf_mgr,
+                &self.completed_queue,
+                self.config.view_distance,
+                self.config.vertical_view_distance,
+                self.config.unload_distance,
+                .{}, // Use default config (0.5ms budget)
+            );
+            try ut.start();
+            self.upload_thread = ut;
+            logger.info("Upload thread started (0.5ms time budget)", .{});
+        }
+
         self.chunk_load_iterator.reset(self.config.view_distance, self.config.vertical_view_distance);
         self.load_queue_dirty = true;
     }
 
     pub fn deinit(self: *Self) void {
         logger.info("Shutting down ChunkManager...", .{});
+
+        // Shutdown upload thread first (it reads from completed_queue)
+        if (self.upload_thread) |ut| {
+            ut.deinit();
+            self.allocator.destroy(ut);
+            self.upload_thread = null;
+        }
 
         self.pool.shutdown();
 
@@ -497,6 +534,11 @@ pub const ChunkManager = struct {
         // Ensures closest chunks are always processed first, even as player moves
         self.pool.updateCameraPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
 
+        // Update upload thread for staleness checks
+        if (self.upload_thread) |ut| {
+            ut.updatePlayerPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
+        }
+
         // Rescan from center (closest chunks first)
         self.chunk_load_iterator.reset(self.config.view_distance, self.config.vertical_view_distance);
 
@@ -511,14 +553,8 @@ pub const ChunkManager = struct {
         self.updateLoadQueue();
     }
 
-    pub fn beginFrame(self: *Self, frame_fence: vk.VkFence) void {
-        if (self.buffer_manager) |buf_mgr| {
-            buf_mgr.beginFrame(frame_fence) catch |err| {
-                logger.warn("Failed to begin frame for buffer manager: {}", .{err});
-            };
-        }
-        // Synchronize slot allocator's frame counter with buffer manager
-        // This ensures deferred frees for both are processed at the same time
+    pub fn beginFrame(self: *Self) void {
+        // Synchronize slot allocator's frame counter
         self.render_system.advanceSlotAllocatorFrame();
     }
 
@@ -639,6 +675,7 @@ pub const ChunkManager = struct {
     }
 
     /// Call once per frame from main thread after beginFrame
+    /// AAA pattern: minimal work - no allocations, no uploads, no waits
     pub fn tick(self: *Self) void {
         const zone = profiler.trace(@src());
         defer zone.end();
@@ -651,206 +688,118 @@ pub const ChunkManager = struct {
         profiler.plotInt("CompletedTerrain", @intCast(self.completed_terrain.len()));
         profiler.plotInt("CompletedMesh", @intCast(self.completed_queue.len()));
 
+        // Plot upload thread stats
+        if (self.upload_thread) |ut| {
+            profiler.plotInt("UploadQueueDepth", @intCast(ut.getOutputQueueDepth()));
+        }
+
         self.processCompletedTerrain();
         self.checkMeshDependencies();
 
-        const buf_mgr = self.buffer_manager orelse return;
+        // AAA pattern: main thread submits prepared batches (thread-safe queue access)
+        if (self.upload_thread) |ut| {
+            const submitted = ut.submitPreparedBatches(self.render_system.getGraphicsQueue());
+            if (submitted > 0) {
+                profiler.plotInt("BatchesSubmitted", @intCast(submitted));
+            }
+        }
 
-        var uploads: u8 = 0;
-        while (uploads < self.config.max_uploads_per_tick) {
-            const mesh_opt = self.completed_queue.tryPop();
-            if (mesh_opt == null) break;
+        // AAA pattern: process ready uploads from upload thread (non-blocking)
+        self.processReadyUploads();
 
-            var mesh = mesh_opt.?;
+        // RCU advancement (already opportunistic via tryAdvance)
+        if (self.rcu) |rcu_instance| {
+            _ = rcu_instance.tryAdvance();
+        }
+    }
 
-            // Skip chunks that moved out of view range while queued
-            const dx = if (mesh.pos.x > self.player_chunk.x)
-                mesh.pos.x - self.player_chunk.x
-            else
-                self.player_chunk.x - mesh.pos.x;
-            const dz = if (mesh.pos.z > self.player_chunk.z)
-                mesh.pos.z - self.player_chunk.z
-            else
-                self.player_chunk.z - mesh.pos.z;
-            const dy = if (mesh.pos.section_y > self.player_chunk.section_y)
-                mesh.pos.section_y - self.player_chunk.section_y
-            else
-                self.player_chunk.section_y - mesh.pos.section_y;
+    /// Process ready uploads from the upload thread (non-blocking)
+    /// Only applies uploads that are ready - no waiting, no allocations
+    /// AAA pattern: uses vkGetFenceStatus (never waits) to check GPU completion
+    /// AAA pattern: queues frees to upload thread instead of freeing directly
+    fn processReadyUploads(self: *Self) void {
+        const zone = profiler.traceNamed("ProcessReadyUploads");
+        defer zone.end();
 
-            const horizontal_dist = @max(dx, dz);
-            const is_stale = horizontal_dist > self.config.unload_distance or
-                dy > self.config.vertical_view_distance + 2;
+        const ut = self.upload_thread orelse return;
+        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return;
+        const device = self.render_system.getDevice();
 
-            if (is_stale) {
-                mesh.deinit();
-                _ = self.pending_loads.remove(mesh.pos);
-                _ = self.managed_positions.remove(mesh.pos);
+        var processed: u32 = 0;
+
+        // Process uploads with ready fences (AAA pattern: never wait)
+        // Peek first, check fence, only pop if ready
+        while (ut.output_queue.peek()) |result_ptr| {
+            // Check if GPU copy is complete (non-blocking)
+            if (result_ptr.upload_fence != null) {
+                if (vkGetFenceStatus(device, result_ptr.upload_fence) != vk.VK_SUCCESS) {
+                    // Fence not signaled - GPU still copying
+                    // Since batches are ordered, later items won't be ready either
+                    break;
+                }
+            }
+
+            // Fence is ready, pop and process
+            const result = ut.output_queue.tryPop() orelse break;
+            // Check if chunk still exists (might have been unloaded while uploading)
+            const render_chunk_ptr = self.chunk_storage.get(result.pos) orelse {
+                // Chunk was unloaded, clean up the result
+                if (result.valid) {
+                    var mesh = result.mesh;
+                    // Queue GPU allocations for freeing (AAA: never touch buffer_manager from main thread)
+                    for (0..RENDER_LAYER_COUNT) |i| {
+                        if (mesh.layers[i].buffer_allocation.valid) {
+                            ut.queueFree(mesh.layers[i].buffer_allocation);
+                        }
+                    }
+                    mesh.deinit();
+                }
+                _ = self.pending_loads.remove(result.pos);
+                _ = self.managed_positions.remove(result.pos);
+                continue;
+            };
+
+            // Handle invalid/empty results (empty meshes)
+            if (!result.valid) {
+                // Copy generated chunk data if present
+                if (result.generated_chunk) |gen_chunk| {
+                    render_chunk_ptr.chunk = gen_chunk;
+                }
+                render_chunk_ptr.setState(.ready);
+                _ = self.pending_loads.remove(result.pos);
                 continue;
             }
 
-            if (self.chunk_storage.get(mesh.pos)) |render_chunk_ptr| {
-                if (mesh.generated_chunk) |gen_chunk| {
-                    render_chunk_ptr.chunk = gen_chunk;
-                }
-
-                const total_vertices = mesh.getTotalVertexCount();
-                const total_indices = mesh.getTotalIndexCount();
-                if (total_vertices == 0 or total_indices == 0) {
-                    render_chunk_ptr.setState(.ready);
-                    mesh.deinit();
-                    _ = self.pending_loads.remove(mesh.pos);
-                    continue;
-                }
-
-                var valid = true;
-                for (0..RENDER_LAYER_COUNT) |i| {
-                    const layer = &mesh.layers[i];
-                    if (layer.vertices.len == 0) continue;
-
-                    var max_index: u32 = 0;
-                    for (layer.indices) |idx| {
-                        if (idx > max_index) max_index = idx;
-                    }
-                    if (max_index >= layer.vertices.len) {
-                        logger.err("Chunk ({},{},{}) layer {} has invalid index {} >= vertex count {}", .{
-                            mesh.pos.x,
-                            mesh.pos.z,
-                            mesh.pos.section_y,
-                            i,
-                            max_index,
-                            layer.vertices.len,
-                        });
-                        valid = false;
-                        break;
-                    }
-                }
-                if (!valid) {
-                    mesh.deinit();
-                    _ = self.pending_loads.remove(mesh.pos);
-                    _ = self.managed_positions.remove(mesh.pos);
-                    continue;
-                }
-
-                var layer_allocations: [RENDER_LAYER_COUNT]?ChunkBufferAllocation = .{ null, null, null };
-                var allocation_failed = false;
-
-                for (0..RENDER_LAYER_COUNT) |i| {
-                    const layer = &mesh.layers[i];
-                    if (layer.vertices.len == 0) continue;
-
-                    layer_allocations[i] = buf_mgr.allocate(
-                        @intCast(layer.vertices.len),
-                        @intCast(layer.indices.len),
-                    );
-                    if (layer_allocations[i] == null) {
-                        logger.warn("Failed to allocate buffer space for chunk layer {}", .{i});
-                        allocation_failed = true;
-                        break;
-                    }
-                }
-
-                if (allocation_failed) {
-                    for (layer_allocations) |alloc_opt| {
-                        if (alloc_opt) |alloc| {
-                            buf_mgr.free(alloc);
-                        }
-                    }
-                    _ = self.pending_loads.remove(mesh.pos);
-                    _ = self.managed_positions.remove(mesh.pos);
-                    mesh.deinit();
-                    continue;
-                }
-
-                var staging_failed = false;
-                for (0..RENDER_LAYER_COUNT) |i| {
-                    const layer = &mesh.layers[i];
-                    const alloc_opt = layer_allocations[i];
-                    if (alloc_opt == null) continue;
-                    const allocation = alloc_opt.?;
-
-                    const vertex_bytes = std.mem.sliceAsBytes(layer.vertices);
-                    buf_mgr.stageVertices(allocation, vertex_bytes) catch |err| {
-                        logger.warn("Failed to stage vertex data for layer {}: {}", .{ i, err });
-                        staging_failed = true;
-                        break;
-                    };
-
-                    const index_bytes = std.mem.sliceAsBytes(layer.indices);
-                    buf_mgr.stageIndices(allocation, index_bytes) catch |err| {
-                        logger.warn("Failed to stage index data for layer {}: {}", .{ i, err });
-                        staging_failed = true;
-                        break;
-                    };
-                }
-
-                if (staging_failed) {
-                    for (layer_allocations) |alloc_opt| {
-                        if (alloc_opt) |alloc| {
-                            buf_mgr.free(alloc);
-                        }
-                    }
-                    _ = self.pending_loads.remove(mesh.pos);
-                    _ = self.managed_positions.remove(mesh.pos);
-                    mesh.deinit();
-                    continue;
-                }
-
-                var layer_vertices: [RENDER_LAYER_COUNT][]const Vertex = undefined;
-                var layer_indices: [RENDER_LAYER_COUNT][]const u32 = undefined;
-                for (0..RENDER_LAYER_COUNT) |i| {
-                    layer_vertices[i] = mesh.layers[i].vertices;
-                    layer_indices[i] = mesh.layers[i].indices;
-                }
-
-                var chunk_mesh = ChunkMesh.init(
-                    self.allocator,
-                    layer_vertices,
-                    layer_indices,
-                ) catch {
-                    logger.warn("Failed to create chunk mesh", .{});
-                    for (layer_allocations) |alloc_opt| {
-                        if (alloc_opt) |alloc| {
-                            buf_mgr.free(alloc);
-                        }
-                    }
-                    _ = self.pending_loads.remove(mesh.pos);
-                    _ = self.managed_positions.remove(mesh.pos);
-                    mesh.deinit();
-                    continue;
-                };
-
-                for (0..RENDER_LAYER_COUNT) |i| {
-                    if (layer_allocations[i]) |alloc| {
-                        chunk_mesh.setLayerBufferAllocation(i, alloc);
-                    }
-                }
-
-                const old_allocations = render_chunk_ptr.getBufferAllocations();
-                for (old_allocations) |old_alloc_opt| {
-                    if (old_alloc_opt) |old_alloc| {
-                        buf_mgr.free(old_alloc);
-                    }
-                }
-
-                render_chunk_ptr.setMesh(chunk_mesh);
-                _ = self.pending_loads.remove(mesh.pos);
-
-                // GPU-driven rendering: allocate slot if needed and queue metadata upload
-                if (!render_chunk_ptr.hasGPUSlot()) {
-                    render_chunk_ptr.gpu_slot = self.render_system.allocateChunkSlot();
-                }
-                if (render_chunk_ptr.hasGPUSlot()) {
-                    self.pending_metadata_uploads.append(self.allocator, render_chunk_ptr) catch {};
-                }
-
-                uploads += 1;
+            // Copy generated chunk data if present
+            if (result.generated_chunk) |gen_chunk| {
+                render_chunk_ptr.chunk = gen_chunk;
             }
 
-            mesh.deinit();
+            // Queue old mesh allocations for freeing (AAA: never touch buffer_manager from main thread)
+            const old_allocations = render_chunk_ptr.getBufferAllocations();
+            for (old_allocations) |old_alloc_opt| {
+                if (old_alloc_opt) |old_alloc| {
+                    ut.queueFree(old_alloc);
+                }
+            }
+
+            // Apply the new mesh
+            render_chunk_ptr.setMesh(result.mesh);
+            _ = self.pending_loads.remove(result.pos);
+
+            // GPU-driven rendering: allocate slot if needed and queue metadata upload
+            if (!render_chunk_ptr.hasGPUSlot()) {
+                render_chunk_ptr.gpu_slot = self.render_system.allocateChunkSlot();
+            }
+            if (render_chunk_ptr.hasGPUSlot()) {
+                self.pending_metadata_uploads.append(self.allocator, render_chunk_ptr) catch {};
+            }
+
+            processed += 1;
         }
 
-        if (self.rcu) |rcu_instance| {
-            _ = rcu_instance.tryAdvance();
+        if (processed > 0) {
+            profiler.plotInt("UploadsApplied", @intCast(processed));
         }
     }
 
@@ -1147,12 +1096,12 @@ pub const ChunkManager = struct {
             return false;
         };
         if (previous) |old_chunk| {
-            if (self.buffer_manager) |buf_mgr| {
-                // Free all layer allocations (solid, cutout, translucent)
+            // Queue allocations for freeing (AAA: never touch buffer_manager from main thread)
+            if (self.upload_thread) |ut| {
                 const allocations = old_chunk.getBufferAllocations();
                 for (allocations) |alloc_opt| {
                     if (alloc_opt) |alloc| {
-                        buf_mgr.free(alloc);
+                        ut.queueFree(alloc);
                     }
                 }
             }
@@ -1372,12 +1321,12 @@ pub const ChunkManager = struct {
         defer zone.end();
 
         if (self.chunk_storage.remove(pos)) |render_chunk_ptr| {
-            if (self.buffer_manager) |buf_mgr| {
-                // Free all layer allocations (solid, cutout, translucent)
+            // Queue allocations for freeing (AAA: never touch buffer_manager from main thread)
+            if (self.upload_thread) |ut| {
                 const allocations = render_chunk_ptr.getBufferAllocations();
                 for (allocations) |alloc_opt| {
                     if (alloc_opt) |alloc| {
-                        buf_mgr.free(alloc);
+                        ut.queueFree(alloc);
                     }
                 }
             }

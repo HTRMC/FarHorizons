@@ -392,12 +392,14 @@ pub const FarHorizonsClient = struct {
                 }
             }
 
-            // Main thread only: process completed chunk meshes
+            // AAA pattern: minimal main thread work
+            // Heavy upload work (staging, allocations) is done by dedicated upload thread
+            // tick() only processes ready uploads from upload thread (non-blocking)
             if (self.chunk_manager) |*cm| {
-                cm.beginFrame(self.render_system.getCurrentFrameFence());
+                cm.beginFrame();
                 // C2ME-style: flush load queue once per frame, not per tick
                 cm.flushLoadQueue();
-                cm.tick();
+                cm.tick(); // Now minimal: just applies ready uploads
             }
 
             const partial_tick: f32 = @floatCast(tick_accumulator / MS_PER_TICK);

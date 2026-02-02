@@ -563,6 +563,11 @@ pub const RenderSystem = struct {
         return self.graphics_queue;
     }
 
+    /// Get graphics queue family index (for command pool creation)
+    pub fn getGraphicsFamily(self: *const Self) u32 {
+        return self.graphics_family;
+    }
+
     /// Get the GPU device abstraction for resource creation
     pub fn getGpuDevice(self: *Self) ?*GpuDevice {
         if (self.gpu_device) |*dev| {

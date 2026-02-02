@@ -232,6 +232,13 @@ pub const ChunkBufferManager = struct {
         };
     }
 
+    /// Advance frame and process deferred frees (for upload thread use)
+    /// Does NOT touch staging ring - use when only deferred free processing is needed
+    pub fn advanceFrameAndProcessFrees(self: *Self) void {
+        self.frame_counter += 1;
+        self.processDeferredFrees();
+    }
+
     /// Process deferred frees - frees allocations that are old enough
     /// Call this at the start of each frame
     fn processDeferredFrees(self: *Self) void {
