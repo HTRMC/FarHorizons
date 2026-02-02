@@ -10,7 +10,7 @@ const BufferArena = @import("BufferArena.zig").BufferArena;
 const BufferSlice = @import("BufferArena.zig").BufferSlice;
 
 /// Pending copy operation to be executed
-/// Layout matches RenderSystem.StagingCopy for direct use without conversion
+/// RenderSystem.StagingCopy is aliased to this type (single source of truth)
 pub const PendingCopy = struct {
     src_buffer: vk.VkBuffer,
     src_offset: u64,

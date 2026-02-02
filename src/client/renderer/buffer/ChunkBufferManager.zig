@@ -336,8 +336,10 @@ pub const ChunkBufferManager = struct {
 
     /// Get a version number that changes when arenas are added
     /// Used for cache invalidation in ChunkManager
+    /// Note: Each u16 counter wraps at 65535. In the unlikely event of wrap-around,
+    /// the cache may not invalidate. This would require 65535+ arena expansions
+    /// (each expansion adds ~1GB), which far exceeds practical memory limits.
     pub fn getArenaVersion(self: *const Self) u32 {
-        // Combine vertex and index expansion counts into a single version
         const vertex_version: u32 = self.vertex_arena.getExpansionCount();
         const index_version: u32 = self.index_arena.getExpansionCount();
         return (vertex_version << 16) | index_version;

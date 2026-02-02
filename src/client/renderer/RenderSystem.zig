@@ -21,6 +21,7 @@ const ImageViewHelper = @import("resource/ImageViewHelper.zig").ImageViewHelper;
 const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
 const GPUDrivenTypes = @import("GPUDrivenTypes.zig");
 const ComputePipeline = @import("ComputePipeline.zig");
+const StagingRing = @import("buffer/StagingRing.zig");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -1398,13 +1399,8 @@ pub const RenderSystem = struct {
     };
 
     /// Staging copy info for buffer uploads
-    pub const StagingCopy = struct {
-        src_buffer: vk.VkBuffer,
-        src_offset: u64,
-        dst_buffer: vk.VkBuffer,
-        dst_offset: u64,
-        size: u64,
-    };
+    /// Aliased from StagingRing.PendingCopy to ensure single source of truth
+    pub const StagingCopy = StagingRing.PendingCopy;
 
     /// Indirect draw command matching VkDrawIndexedIndirectCommand layout
     pub const IndirectDrawCommand = extern struct {

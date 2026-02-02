@@ -1010,7 +1010,10 @@ pub const ChunkManager = struct {
         self.vertex_buffer_cache.clearRetainingCapacity();
         for (0..vertex_count) |i| {
             if (buf_mgr.getVertexBuffer(@intCast(i))) |buf| {
-                self.vertex_buffer_cache.append(self.allocator, buf) catch continue;
+                self.vertex_buffer_cache.append(self.allocator, buf) catch {
+                    logger.err("Failed to cache vertex buffer {}, rendering may be incomplete", .{i});
+                    continue;
+                };
             }
         }
 
@@ -1019,7 +1022,10 @@ pub const ChunkManager = struct {
         self.index_buffer_cache.clearRetainingCapacity();
         for (0..index_count) |i| {
             if (buf_mgr.getIndexBuffer(@intCast(i))) |buf| {
-                self.index_buffer_cache.append(self.allocator, buf) catch continue;
+                self.index_buffer_cache.append(self.allocator, buf) catch {
+                    logger.err("Failed to cache index buffer {}, rendering may be incomplete", .{i});
+                    continue;
+                };
             }
         }
     }
@@ -1032,12 +1038,9 @@ pub const ChunkManager = struct {
     }
 
     /// Returns pending staging copies directly from buffer manager
-    /// PendingCopy and StagingCopy have identical layouts, so we cast directly
     pub fn getStagingCopies(self: *Self) []const StagingCopy {
         const buf_mgr = self.buffer_manager orelse return &.{};
-        const pending = buf_mgr.getPendingCopies();
-        // PendingCopy and StagingCopy have identical memory layouts
-        return @ptrCast(pending);
+        return buf_mgr.getPendingCopies();
     }
 
     pub fn clearStagingCopies(self: *Self) void {
