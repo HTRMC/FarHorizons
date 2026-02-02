@@ -93,6 +93,20 @@ pub const FarHorizonsClient = struct {
     baby_cow_id: ?ecs.EntityId,
     hotbar: Hotbar,
 
+    /// Helper to access the player's Transform component (read-only)
+    fn getPlayerTransform(self: *Self) ?*const ecs.Transform {
+        const ecs_world = &(self.ecs_world orelse return null);
+        const pid = self.player_entity_id orelse return null;
+        return ecs_world.getComponent(ecs.Transform, pid);
+    }
+
+    /// Helper to access the player's Transform component (mutable)
+    fn getPlayerTransformMut(self: *Self) ?*ecs.Transform {
+        const ecs_world = &(self.ecs_world orelse return null);
+        const pid = self.player_entity_id orelse return null;
+        return ecs_world.getComponentMut(ecs.Transform, pid);
+    }
+
     pub fn init(allocator: std.mem.Allocator, config: GameConfig, io: Io) Self {
         const display_data = DisplayData{
             .width = @intCast(config.display.width),
@@ -185,12 +199,8 @@ pub const FarHorizonsClient = struct {
             );
             try self.chunk_manager.?.start();
             // Update chunk manager with initial player position from ECS
-            if (self.ecs_world) |*ecs_world| {
-                if (self.player_entity_id) |pid| {
-                    if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
-                        self.chunk_manager.?.updatePlayerPosition(t.position);
-                    }
-                }
+            if (self.getPlayerTransform()) |t| {
+                self.chunk_manager.?.updatePlayerPosition(t.position);
             }
             self.block_interaction = BlockInteraction.init(&self.chunk_manager.?);
 
@@ -313,13 +323,9 @@ pub const FarHorizonsClient = struct {
             if (self.mouse_handler.isMouseGrabbed()) {
                 const rotation = self.mouse_handler.getCameraRotation();
                 // Apply mouse rotation directly to ECS transform
-                if (self.ecs_world) |*ecs_world| {
-                    if (self.player_entity_id) |pid| {
-                        if (ecs_world.getComponentMut(ecs.Transform, pid)) |t| {
-                            t.yaw += @floatCast(rotation.yaw);
-                            t.pitch = std.math.clamp(t.pitch + @as(f32, @floatCast(rotation.pitch)), -90.0, 90.0);
-                        }
-                    }
+                if (self.getPlayerTransformMut()) |t| {
+                    t.yaw += @floatCast(rotation.yaw);
+                    t.pitch = std.math.clamp(t.pitch + @as(f32, @floatCast(rotation.pitch)), -90.0, 90.0);
                 }
 
                 const scroll = self.mouse_handler.getAccumulatedScroll();
@@ -365,12 +371,8 @@ pub const FarHorizonsClient = struct {
                 }
 
                 if (self.chunk_manager) |*cm| {
-                    if (self.ecs_world) |*ecs_world| {
-                        if (self.player_entity_id) |pid| {
-                            if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
-                                cm.updatePlayerPosition(t.position);
-                            }
-                        }
+                    if (self.getPlayerTransform()) |t| {
+                        cm.updatePlayerPosition(t.position);
                     }
                 }
 
@@ -387,15 +389,7 @@ pub const FarHorizonsClient = struct {
                     if (self.mouse_handler.isLeftPressed()) {
                         var attacked_entity = false;
                         if (self.entity_interaction) |*ei| {
-                            // Get player position from ECS
-                            var player_pos = Vec3{ .x = 0, .y = 0, .z = 0 };
-                            if (self.ecs_world) |*ecs_world| {
-                                if (self.player_entity_id) |pid| {
-                                    if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
-                                        player_pos = t.position;
-                                    }
-                                }
-                            }
+                            const player_pos = if (self.getPlayerTransform()) |t| t.position else Vec3{ .x = 0, .y = 0, .z = 0 };
                             attacked_entity = ei.handleAttack(player_pos);
                         }
                         if (!attacked_entity) {
@@ -435,10 +429,8 @@ pub const FarHorizonsClient = struct {
                     );
 
                     // Set player position for AI targeting (from ECS entity)
-                    if (self.player_entity_id) |pid| {
-                        if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
-                            ecs_world.setPlayerPosition(t.position);
-                        }
+                    if (self.getPlayerTransform()) |t| {
+                        ecs_world.setPlayerPosition(t.position);
                     }
                     ecs_world.tick();
                 }
@@ -465,13 +457,9 @@ pub const FarHorizonsClient = struct {
             }
 
             // Position interpolated for smooth movement; rotation from ECS transform
-            if (self.ecs_world) |*ecs_world| {
-                if (self.player_entity_id) |pid| {
-                    if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
-                        self.camera.position = t.getInterpolatedPosition(partial_tick);
-                        self.camera.setRotation(t.getInterpolatedYaw(partial_tick), t.getInterpolatedPitch(partial_tick));
-                    }
-                }
+            if (self.getPlayerTransform()) |t| {
+                self.camera.position = t.getInterpolatedPosition(partial_tick);
+                self.camera.setRotation(t.getInterpolatedYaw(partial_tick), t.getInterpolatedPitch(partial_tick));
             }
 
             if (self.entity_interaction) |*ei| {
