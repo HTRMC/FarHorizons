@@ -3,6 +3,7 @@ const World = @import("../world.zig").World;
 const Transform = @import("../components/transform.zig").Transform;
 const Velocity = @import("../components/velocity.zig").Velocity;
 const PhysicsBody = @import("../components/physics.zig").PhysicsBody;
+const PlayerAbilities = @import("../components/player_abilities.zig").PlayerAbilities;
 const Jump = @import("../components/jump.zig").Jump;
 const VoxelShape = @import("Shared").VoxelShape;
 const VoxelShapeAABB = VoxelShape.AABB;
@@ -23,7 +24,13 @@ pub fn run(world: *World) void {
 
         transform.savePrevious();
 
-        applyPhysics(transform, velocity, body, terrain);
+        // Check if entity is flying (skip gravity for flying players)
+        const is_flying = if (world.getComponent(PlayerAbilities, id)) |abilities|
+            abilities.flying
+        else
+            false;
+
+        applyPhysics(transform, velocity, body, terrain, is_flying);
 
         if (world.getComponentMut(Jump, id)) |jump| {
             jump.tick(velocity.on_ground);
@@ -36,6 +43,7 @@ fn applyPhysics(
     velocity: *Velocity,
     body: *const PhysicsBody,
     terrain: World.TerrainQuery,
+    is_flying: bool,
 ) void {
     const half_width = body.halfWidth();
 
@@ -135,11 +143,14 @@ fn applyPhysics(
     transform.position.y = current_y;
     transform.position.z = current_z;
 
-    velocity.linear.y -= body.effectiveGravity();
-    velocity.applyDrag(body.drag);
+    // Skip gravity for flying entities (player movement system handles flying drag)
+    if (!is_flying) {
+        velocity.linear.y -= body.effectiveGravity();
+        velocity.applyDrag(body.drag);
 
-    if (velocity.on_ground) {
-        velocity.applyFriction(body.ground_friction);
+        if (velocity.on_ground) {
+            velocity.applyFriction(body.ground_friction);
+        }
     }
 }
 

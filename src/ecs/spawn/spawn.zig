@@ -10,3 +10,4 @@ pub const spawnBabyCow = cow.spawnBabyCow;
 pub const spawnMooshroom = cow.spawnMooshroom;
 pub const spawnBabyMooshroom = cow.spawnBabyMooshroom;
 pub const spawnPlayer = player.spawnPlayer;
+pub const spawnLocalPlayer = player.spawnLocalPlayer;

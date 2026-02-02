@@ -5,7 +5,6 @@ const platform = @import("Platform");
 const renderer = @import("Renderer");
 const world = @import("World");
 const ecs = @import("ecs");
-const client_player = @import("player/Player.zig");
 const block_interaction = @import("BlockInteraction.zig");
 const BlockInteraction = block_interaction.BlockInteraction;
 const entity_interaction = @import("EntityInteraction.zig");
@@ -37,7 +36,6 @@ const BakedQuad = renderer.block.BakedQuad;
 const Direction = renderer.block.Direction;
 const BlockstateLoader = renderer.block.BlockstateLoader;
 const BlockModelShaper = renderer.block.BlockModelShaper;
-const LocalPlayer = client_player.LocalPlayer;
 const ChunkManager = world.ChunkManager;
 const ChunkConfig = world.chunk_manager.ChunkConfig;
 const EntityRenderer = @import("entity/EntityRenderer.zig").EntityRenderer;
@@ -81,7 +79,7 @@ pub const FarHorizonsClient = struct {
     texture_manager: ?TextureManager,
     chunk_manager: ?ChunkManager,
     camera: Camera,
-    local_player: LocalPlayer,
+    player_entity_id: ?ecs.EntityId,
     allocator: std.mem.Allocator,
     io: Io,
     use_async_chunks: bool,
@@ -113,7 +111,7 @@ pub const FarHorizonsClient = struct {
             .texture_manager = null, // Initialized in run() after render_system
             .chunk_manager = null, // Initialized in run() after texture_manager
             .camera = camera,
-            .local_player = undefined, // Initialized in run() after keyboard_input is ready
+            .player_entity_id = null, // Initialized in run() after ecs_world
             .allocator = allocator,
             .io = io,
             .use_async_chunks = true,
@@ -146,10 +144,6 @@ pub const FarHorizonsClient = struct {
         self.mouse_handler = MouseHandler.init(&self.window);
         self.mouse_handler.setup();
         self.keyboard_input = KeyboardInput.init(&self.window);
-
-        self.local_player = LocalPlayer.init(&self.keyboard_input);
-        self.local_player.setPosition(Vec3{ .x = 8, .y = 100, .z = 20 }); // Above terrain (base height 64 + variation)
-        self.local_player.setYRot(180); // Face towards -Z (towards the chunk)
 
         try self.render_system.initBackend(&self.window);
         defer self.render_system.shutdown();
@@ -190,7 +184,14 @@ pub const FarHorizonsClient = struct {
                 },
             );
             try self.chunk_manager.?.start();
-            self.chunk_manager.?.updatePlayerPosition(self.local_player.getPosition(0));
+            // Update chunk manager with initial player position from ECS
+            if (self.ecs_world) |*ecs_world| {
+                if (self.player_entity_id) |pid| {
+                    if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
+                        self.chunk_manager.?.updatePlayerPosition(t.position);
+                    }
+                }
+            }
             self.block_interaction = BlockInteraction.init(&self.chunk_manager.?);
 
             // Set up pre-render callback for GPU-driven chunk metadata uploads
@@ -222,6 +223,15 @@ pub const FarHorizonsClient = struct {
         self.ecs_world = ecs.World.init(self.allocator);
         if (self.ecs_world) |*ecs_world| {
             try ecs.initSystems(ecs_world);
+
+            // Spawn local player entity
+            self.player_entity_id = try ecs.spawn.spawnLocalPlayer(ecs_world, Vec3{ .x = 8, .y = 100, .z = 20 });
+            ecs_world.local_player_id = self.player_entity_id;
+
+            // Set initial facing direction
+            if (ecs_world.getComponentMut(ecs.Transform, self.player_entity_id.?)) |t| {
+                t.yaw = 180; // Face towards -Z (towards the chunk)
+            }
         }
 
         if (self.ecs_world) |*ecs_world| {
@@ -302,13 +312,27 @@ pub const FarHorizonsClient = struct {
             // Mouse look is frame-rate independent, not tied to ticks
             if (self.mouse_handler.isMouseGrabbed()) {
                 const rotation = self.mouse_handler.getCameraRotation();
-                self.local_player.setYRot(self.local_player.getYRot() + @as(f32, @floatCast(rotation.yaw)));
-                self.local_player.setXRot(self.local_player.getXRot() + @as(f32, @floatCast(rotation.pitch)));
+                // Apply mouse rotation directly to ECS transform
+                if (self.ecs_world) |*ecs_world| {
+                    if (self.player_entity_id) |pid| {
+                        if (ecs_world.getComponentMut(ecs.Transform, pid)) |t| {
+                            t.yaw += @floatCast(rotation.yaw);
+                            t.pitch = std.math.clamp(t.pitch + @as(f32, @floatCast(rotation.pitch)), -90.0, 90.0);
+                        }
+                    }
+                }
 
                 const scroll = self.mouse_handler.getAccumulatedScroll();
                 if (scroll != 0) {
                     if (self.window.isKeyPressed(InputConstants.KEY_LEFT_SHIFT)) {
-                        self.local_player.getAbilities().adjustFlyingSpeed(@floatCast(scroll));
+                        // Adjust flying speed via ECS component
+                        if (self.ecs_world) |*ecs_world| {
+                            if (self.player_entity_id) |pid| {
+                                if (ecs_world.getComponentMut(ecs.components.PlayerAbilities, pid)) |abilities| {
+                                    abilities.adjustFlyingSpeed(@floatCast(scroll));
+                                }
+                            }
+                        }
                     } else {
                         // Scroll wheel changes hotbar selection
                         self.hotbar.scrollSlot(if (scroll > 0) 1 else -1);
@@ -323,11 +347,8 @@ pub const FarHorizonsClient = struct {
 
                 tick_accumulator -= MS_PER_TICK;
 
-                // For interpolation
-                self.local_player.setOldPosAndRot();
-
+                // Update keyboard input state each tick
                 self.keyboard_input.tick();
-                self.local_player.aiStep();
 
                 // Number keys 1-9 for hotbar slot selection
                 const number_keys = [_]c_int{
@@ -344,7 +365,13 @@ pub const FarHorizonsClient = struct {
                 }
 
                 if (self.chunk_manager) |*cm| {
-                    cm.updatePlayerPosition(self.local_player.getPosition(0));
+                    if (self.ecs_world) |*ecs_world| {
+                        if (self.player_entity_id) |pid| {
+                            if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
+                                cm.updatePlayerPosition(t.position);
+                            }
+                        }
+                    }
                 }
 
                 if (self.block_interaction) |*bi| {
@@ -360,7 +387,16 @@ pub const FarHorizonsClient = struct {
                     if (self.mouse_handler.isLeftPressed()) {
                         var attacked_entity = false;
                         if (self.entity_interaction) |*ei| {
-                            attacked_entity = ei.handleAttack(self.local_player.getPosition(0));
+                            // Get player position from ECS
+                            var player_pos = Vec3{ .x = 0, .y = 0, .z = 0 };
+                            if (self.ecs_world) |*ecs_world| {
+                                if (self.player_entity_id) |pid| {
+                                    if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
+                                        player_pos = t.position;
+                                    }
+                                }
+                            }
+                            attacked_entity = ei.handleAttack(player_pos);
                         }
                         if (!attacked_entity) {
                             if (self.block_interaction) |*bi| {
@@ -387,7 +423,23 @@ pub const FarHorizonsClient = struct {
                         ecs_world.setTerrainQuery(&terrainQueryFn);
                     }
 
-                    ecs_world.setPlayerPosition(self.local_player.getPosition(0));
+                    // Pass current keyboard input to ECS before tick
+                    const key_presses = self.keyboard_input.getKeyPresses();
+                    const move_vec = self.keyboard_input.getMoveVector();
+                    ecs_world.setCurrentInput(
+                        move_vec.z, // forward/backward
+                        move_vec.x, // left/right (strafe)
+                        key_presses.jump,
+                        key_presses.shift,
+                        key_presses.sprint,
+                    );
+
+                    // Set player position for AI targeting (from ECS entity)
+                    if (self.player_entity_id) |pid| {
+                        if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
+                            ecs_world.setPlayerPosition(t.position);
+                        }
+                    }
                     ecs_world.tick();
                 }
             }
@@ -412,9 +464,15 @@ pub const FarHorizonsClient = struct {
                 }
             }
 
-            // Position interpolated for smooth movement; rotation NOT interpolated (instant mouse look)
-            self.camera.position = self.local_player.getPosition(partial_tick);
-            self.camera.setRotation(self.local_player.getYRot(), self.local_player.getXRot());
+            // Position interpolated for smooth movement; rotation from ECS transform
+            if (self.ecs_world) |*ecs_world| {
+                if (self.player_entity_id) |pid| {
+                    if (ecs_world.getComponent(ecs.Transform, pid)) |t| {
+                        self.camera.position = t.getInterpolatedPosition(partial_tick);
+                        self.camera.setRotation(t.getInterpolatedYaw(partial_tick), t.getInterpolatedPitch(partial_tick));
+                    }
+                }
+            }
 
             if (self.entity_interaction) |*ei| {
                 ei.updateTarget(&self.camera);

@@ -16,14 +16,14 @@ pub const Tags = packed struct {
     /// Is this a mooshroom
     is_mooshroom: bool = false,
 
-    /// Is this a player
+    /// Is this a player (server-authoritative player entity)
     is_player: bool = false,
+
+    /// Is this the local player (client-controlled player entity)
+    is_local_player: bool = false,
 
     /// Is this entity marked for removal
     marked_for_removal: bool = false,
-
-    /// Padding to make it a full byte
-    _padding: u1 = 0,
 
     pub fn init() Tags {
         return .{};
@@ -49,11 +49,20 @@ pub const Tags = packed struct {
         };
     }
 
-    /// Create tags for a player entity
+    /// Create tags for a player entity (server-side)
     pub fn player() Tags {
         return .{
             .is_living = true,
             .is_player = true,
+        };
+    }
+
+    /// Create tags for a local player entity (client-side with control)
+    pub fn localPlayer() Tags {
+        return .{
+            .is_living = true,
+            .is_player = true,
+            .is_local_player = true,
         };
     }
 };

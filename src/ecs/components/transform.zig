@@ -15,6 +15,12 @@ pub const Transform = struct {
     /// Previous yaw (for interpolation)
     prev_yaw: f32 = 0,
 
+    /// Rotation around X-axis (pitch) in degrees - for player camera
+    pitch: f32 = 0,
+
+    /// Previous pitch (for interpolation)
+    prev_pitch: f32 = 0,
+
     /// Body yaw offset (for body rotation following head)
     body_yaw_offset: f32 = 0,
 
@@ -56,10 +62,16 @@ pub const Transform = struct {
         return self.prev_yaw + delta * partial_tick;
     }
 
+    /// Get interpolated pitch for rendering
+    pub fn getInterpolatedPitch(self: *const Transform, partial_tick: f32) f32 {
+        return self.prev_pitch + (self.pitch - self.prev_pitch) * partial_tick;
+    }
+
     /// Store current values as previous (call at start of tick)
     pub fn savePrevious(self: *Transform) void {
         self.prev_position = self.position;
         self.prev_yaw = self.yaw;
+        self.prev_pitch = self.pitch;
     }
 
     /// Set position and update prev_position

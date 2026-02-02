@@ -19,3 +19,5 @@ pub const LookControlState = @import("look_control.zig").LookControlState;
 pub const RenderData = @import("render_data.zig").RenderData;
 pub const CowData = @import("cow_data.zig").CowData;
 pub const Tags = @import("tags.zig").Tags;
+pub const PlayerAbilities = @import("player_abilities.zig").PlayerAbilities;
+pub const PlayerInput = @import("player_input.zig").PlayerInput;

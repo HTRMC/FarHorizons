@@ -12,6 +12,8 @@ const HeadRotation = @import("../components/head_rotation.zig").HeadRotation;
 const Jump = @import("../components/jump.zig").Jump;
 const RenderData = @import("../components/render_data.zig").RenderData;
 const Tags = @import("../components/tags.zig").Tags;
+const PlayerAbilities = @import("../components/player_abilities.zig").PlayerAbilities;
+const PlayerInput = @import("../components/player_input.zig").PlayerInput;
 
 // Player constants
 const PLAYER_MAX_HEALTH: f32 = 20.0;
@@ -51,6 +53,9 @@ pub fn spawnPlayer(world: *World, position: Vec3) !EntityId {
     // Tags
     try world.addComponent(Tags, id, Tags.player());
 
+    // Player abilities (server authoritative)
+    try world.addComponent(PlayerAbilities, id, PlayerAbilities.init());
+
     return id;
 }
 
@@ -88,4 +93,49 @@ pub fn setPlayerLook(world: *World, id: EntityId, yaw: f32, pitch: f32) void {
 
     transform.yaw = yaw;
     head.pitch = pitch;
+}
+
+/// Spawn a local player entity (client-side with input handling)
+/// This is the player controlled by keyboard/mouse input
+pub fn spawnLocalPlayer(world: *World, position: Vec3) !EntityId {
+    const id = try world.createEntity();
+    errdefer world.destroyEntity(id);
+
+    // Transform
+    try world.addComponent(Transform, id, Transform.initVec(position));
+
+    // Velocity
+    try world.addComponent(Velocity, id, Velocity.init());
+
+    // Physics body (player dimensions)
+    try world.addComponent(PhysicsBody, id, PhysicsBody.initWithSize(PLAYER_WIDTH, PLAYER_HEIGHT));
+
+    // Health
+    try world.addComponent(Health, id, Health.initWith(PLAYER_MAX_HEALTH));
+
+    // Animation
+    try world.addComponent(Animation, id, Animation.init());
+
+    // Head rotation
+    try world.addComponent(HeadRotation, id, HeadRotation.init());
+
+    // Jump
+    try world.addComponent(Jump, id, Jump.init());
+
+    // Render data
+    try world.addComponent(RenderData, id, RenderData.init(.player));
+
+    // Tags with is_local_player = true
+    try world.addComponent(Tags, id, Tags.localPlayer());
+
+    // Player abilities (start in flying mode for client)
+    var abilities = PlayerAbilities.init();
+    abilities.flying = true;
+    abilities.may_fly = true;
+    try world.addComponent(PlayerAbilities, id, abilities);
+
+    // Player input (CLIENT-ONLY)
+    try world.addComponent(PlayerInput, id, PlayerInput.init());
+
+    return id;
 }

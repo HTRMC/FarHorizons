@@ -20,6 +20,8 @@ pub const LookControlState = components.LookControlState;
 pub const RenderData = components.RenderData;
 pub const CowData = components.CowData;
 pub const Tags = components.Tags;
+pub const PlayerAbilities = components.PlayerAbilities;
+pub const PlayerInput = components.PlayerInput;
 
 /// The ECS World - manages all entities, components, and systems
 pub const World = struct {
@@ -45,6 +47,8 @@ pub const World = struct {
     render_data: SparseSet(RenderData),
     cow_data: SparseSet(CowData),
     tags: SparseSet(Tags),
+    player_abilities: SparseSet(PlayerAbilities),
+    player_inputs: SparseSet(PlayerInput),
 
     /// System scheduler
     scheduler: SystemScheduler,
@@ -57,6 +61,12 @@ pub const World = struct {
 
     /// Terrain query callback (for physics)
     terrain_query: ?TerrainQuery,
+
+    /// Local player entity ID (for quick access)
+    local_player_id: ?EntityId,
+
+    /// Current input state (set by client each tick before ECS tick)
+    current_input: PlayerInput,
 
     /// Terrain query function type
     pub const TerrainQuery = *const fn (x: i32, y: i32, z: i32) @import("Shared").VoxelShape;
@@ -79,11 +89,15 @@ pub const World = struct {
             .render_data = SparseSet(RenderData).init(allocator),
             .cow_data = SparseSet(CowData).init(allocator),
             .tags = SparseSet(Tags).init(allocator),
+            .player_abilities = SparseSet(PlayerAbilities).init(allocator),
+            .player_inputs = SparseSet(PlayerInput).init(allocator),
             // Scheduler context will be set in setup() after World is in final location
             .scheduler = SystemScheduler.init(undefined),
             .tick_count = 0,
             .player_position = null,
             .terrain_query = null,
+            .local_player_id = null,
+            .current_input = PlayerInput.init(),
         };
     }
 
@@ -109,6 +123,8 @@ pub const World = struct {
         self.render_data.deinit();
         self.cow_data.deinit();
         self.tags.deinit();
+        self.player_abilities.deinit();
+        self.player_inputs.deinit();
     }
 
     /// Create a new entity
@@ -134,6 +150,15 @@ pub const World = struct {
         _ = self.render_data.remove(id);
         _ = self.cow_data.remove(id);
         _ = self.tags.remove(id);
+        _ = self.player_abilities.remove(id);
+        _ = self.player_inputs.remove(id);
+
+        // Clear local_player_id if this entity is the local player
+        if (self.local_player_id) |local_id| {
+            if (local_id == id) {
+                self.local_player_id = null;
+            }
+        }
 
         _ = self.entities.destroy(id);
     }
@@ -200,6 +225,8 @@ pub const World = struct {
             RenderData => &self.render_data,
             CowData => &self.cow_data,
             Tags => &self.tags,
+            PlayerAbilities => &self.player_abilities,
+            PlayerInput => &self.player_inputs,
             else => @compileError("Unknown component type: " ++ @typeName(T)),
         };
     }
@@ -221,6 +248,8 @@ pub const World = struct {
             RenderData => &self.render_data,
             CowData => &self.cow_data,
             Tags => &self.tags,
+            PlayerAbilities => &self.player_abilities,
+            PlayerInput => &self.player_inputs,
             else => @compileError("Unknown component type: " ++ @typeName(T)),
         };
     }
@@ -309,6 +338,15 @@ pub const World = struct {
     /// Set the terrain query function (for physics)
     pub fn setTerrainQuery(self: *Self, terrain_fn: TerrainQuery) void {
         self.terrain_query = terrain_fn;
+    }
+
+    /// Set the current input state (called by client before tick)
+    pub fn setCurrentInput(self: *Self, move_forward: f32, move_strafe: f32, jump: bool, shift: bool, sprint: bool) void {
+        self.current_input.move_forward = move_forward;
+        self.current_input.move_strafe = move_strafe;
+        self.current_input.jump = jump;
+        self.current_input.shift = shift;
+        self.current_input.sprint = sprint;
     }
 };
 

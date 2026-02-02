@@ -52,6 +52,8 @@ pub const LookControlState = components.LookControlState;
 pub const RenderData = components.RenderData;
 pub const CowData = components.CowData;
 pub const Tags = components.Tags;
+pub const PlayerAbilities = components.PlayerAbilities;
+pub const PlayerInput = components.PlayerInput;
 
 // Systems
 pub const systems = @import("systems/systems.zig");
@@ -69,14 +71,15 @@ pub fn initSystems(world: *World) !void {
     // Fix up the scheduler's context pointer now that World is in final location
     world.setup();
 
-    // Pre-update phase
-    // (none yet)
+    // Pre-update phase - player input before everything else
+    try world.addSystem("player_input", systems.player_input_system.run, .pre_update, -10);
 
     // Update phase - order matters!
     try world.addSystem("aging", systems.aging_system.run, .update, 10);
     try world.addSystem("breeding", systems.breeding_system.run, .update, 20);
     try world.addSystem("health", systems.health_system.run, .update, 30);
     try world.addSystem("ai", systems.ai_system.run, .update, 40);
+    try world.addSystem("player_movement", systems.player_movement_system.run, .update, 45);
     try world.addSystem("physics", systems.physics_system.run, .update, 50);
     try world.addSystem("animation", systems.animation_system.run, .update, 60);
 
