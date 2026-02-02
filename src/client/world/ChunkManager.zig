@@ -556,6 +556,16 @@ pub const ChunkManager = struct {
     pub fn beginFrame(self: *Self) void {
         // Synchronize slot allocator's frame counter
         self.render_system.advanceSlotAllocatorFrame();
+
+        // CRITICAL: Advance buffer manager's frame for staging synchronization
+        // Without this, staging ring fences aren't tracked and buffer reuse
+        // causes GPU hangs (VK_ERROR_DEVICE_LOST -> SwapchainAcquireFailed)
+        if (self.buffer_manager) |buf_mgr| {
+            const frame_fence = self.render_system.getCurrentFrameFence();
+            buf_mgr.beginFrame(frame_fence) catch |err| {
+                logger.warn("Failed to begin frame for buffer manager: {}", .{err});
+            };
+        }
     }
 
     fn processCompletedTerrain(self: *Self) void {
