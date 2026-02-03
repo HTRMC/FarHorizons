@@ -73,7 +73,9 @@ pub const Main = struct {
     };
 
     fn parseArgs(allocator: std.mem.Allocator) !ParsedArgs {
-        var args = try std.process.argsWithAllocator(allocator);
+        const cmd_line = std.os.windows.peb().ProcessParameters.CommandLine;
+        const cmd_line_slice = cmd_line.Buffer.?[0 .. cmd_line.Length / 2];
+        var args = try std.process.Args.Iterator.initAllocator(.{ .vector = cmd_line_slice }, allocator);
         defer args.deinit();
 
         // Skip executable name
@@ -147,7 +149,9 @@ pub fn main() void {
     const crash_allocator = std.heap.page_allocator;
 
     // Initialize the I/O subsystem
-    var io_threaded = Io.Threaded.init(crash_allocator, .{});
+    var io_threaded = Io.Threaded.init(crash_allocator, .{
+        .environ = std.process.Environ.empty,
+    });
     defer io_threaded.deinit();
     const io = io_threaded.io();
 

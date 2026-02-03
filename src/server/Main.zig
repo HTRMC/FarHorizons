@@ -16,7 +16,9 @@ pub const Main = struct {
         defer _ = gpa.deinit();
         const allocator = gpa.allocator();
 
-        var args = try std.process.argsWithAllocator(allocator);
+        const cmd_line = std.os.windows.peb().ProcessParameters.CommandLine;
+        const cmd_line_slice = cmd_line.Buffer.?[0 .. cmd_line.Length / 2];
+        var args = try std.process.Args.Iterator.initAllocator(.{ .vector = cmd_line_slice }, allocator);
         defer args.deinit();
 
         logger.info("Starting FarHorizons Server", .{});
