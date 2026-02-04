@@ -295,9 +295,12 @@ pub const ChunkBufferManager = struct {
     }
 
     /// Begin a new frame (call before staging)
+    /// NOTE: Does NOT process deferred frees - that's done by upload thread via advanceFrameAndProcessFrees()
+    /// This only advances the frame counter for allocation tracking and begins the staging frame
     pub fn beginFrame(self: *Self, frame_fence: vk.VkFence) !void {
-        self.frame_counter += 1;
-        self.processDeferredFrees();
+        // NOTE: frame_counter is also incremented by upload thread in advanceFrameAndProcessFrees()
+        // This is intentional - main thread tracks its own frame for staging, upload thread tracks for deferred frees
+        // The deferred free logic uses >= comparison so slightly out-of-sync counters are safe
         try self.staging.beginFrame(frame_fence);
     }
 
