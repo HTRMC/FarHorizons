@@ -9,6 +9,7 @@ const DisplayData = shared.DisplayData;
 const GameData = shared.GameData;
 const QuickPlayData = shared.QuickPlayData;
 const CrashReport = shared.CrashReport;
+const profiler = shared.profiler;
 const FarHorizonsClient = @import("FarHorizonsClient.zig").FarHorizonsClient;
 
 pub const Main = struct {
@@ -22,7 +23,10 @@ pub const Main = struct {
     pub fn run(io: Io) !void {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         defer _ = gpa.deinit();
-        const allocator = gpa.allocator();
+
+        // Wrap allocator with Tracy for memory profiling (compiles to no-op when tracy disabled)
+        var tracy_alloc = profiler.TracyAllocator(null).init(gpa.allocator());
+        const allocator = tracy_alloc.allocator();
 
         // Use arena for strings that live for the program's lifetime
         var arena = std.heap.ArenaAllocator.init(allocator);
