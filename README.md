@@ -72,4 +72,4 @@ A voxel-based game/game-engine written in Zig with a Vulkan renderer. Inspired b
 
 ## License
 
-This project is licensed under All Rights Reserved.
+This project is licensed under MIT.
