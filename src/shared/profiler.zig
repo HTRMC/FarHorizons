@@ -193,3 +193,123 @@ pub inline fn isConnected() bool {
     }
     return false;
 }
+
+// =============================================================================
+// Memory Profiling
+// =============================================================================
+
+/// Report a memory allocation to Tracy
+pub inline fn alloc(ptr: ?*anyopaque, size: usize) void {
+    if (enabled) {
+        c.___tracy_emit_memory_alloc(ptr, size, 0);
+    }
+}
+
+/// Report a memory allocation with name to Tracy
+pub inline fn allocNamed(ptr: ?*anyopaque, size: usize, comptime name: [:0]const u8) void {
+    if (enabled) {
+        c.___tracy_emit_memory_alloc_named(ptr, size, 0, name.ptr);
+    }
+}
+
+/// Report a memory free to Tracy
+pub inline fn free(ptr: ?*anyopaque) void {
+    if (enabled) {
+        c.___tracy_emit_memory_free(ptr, 0);
+    }
+}
+
+/// Report a memory free with name to Tracy
+pub inline fn freeNamed(ptr: ?*anyopaque, comptime name: [:0]const u8) void {
+    if (enabled) {
+        c.___tracy_emit_memory_free_named(ptr, 0, name.ptr);
+    }
+}
+
+/// A wrapper allocator that reports all allocations to Tracy
+/// Use this to wrap your main allocator for memory profiling
+pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
+    return struct {
+        parent_allocator: std.mem.Allocator,
+
+        const Self = @This();
+
+        pub fn init(parent: std.mem.Allocator) Self {
+            return .{ .parent_allocator = parent };
+        }
+
+        pub fn allocator(self: *Self) std.mem.Allocator {
+            return .{
+                .ptr = self,
+                .vtable = &.{
+                    .alloc = allocFn,
+                    .resize = resizeFn,
+                    .remap = remapFn,
+                    .free = freeFn,
+                },
+            };
+        }
+
+        fn allocFn(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            const result = self.parent_allocator.rawAlloc(len, alignment, ret_addr);
+            if (enabled and result != null) {
+                if (name) |n| {
+                    c.___tracy_emit_memory_alloc_named(result, len, 0, n.ptr);
+                } else {
+                    c.___tracy_emit_memory_alloc(result, len, 0);
+                }
+            }
+            return result;
+        }
+
+        fn resizeFn(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            if (self.parent_allocator.rawResize(buf, alignment, new_len, ret_addr)) {
+                if (enabled) {
+                    // Tracy doesn't have a resize, so report as free + alloc
+                    if (name) |n| {
+                        c.___tracy_emit_memory_free_named(buf.ptr, 0, n.ptr);
+                        c.___tracy_emit_memory_alloc_named(buf.ptr, new_len, 0, n.ptr);
+                    } else {
+                        c.___tracy_emit_memory_free(buf.ptr, 0);
+                        c.___tracy_emit_memory_alloc(buf.ptr, new_len, 0);
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+
+        fn remapFn(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            const old_ptr = memory.ptr;
+            const result = self.parent_allocator.rawRemap(memory, alignment, new_len, ret_addr);
+            if (enabled) {
+                if (result) |new_ptr| {
+                    // Successful remap - report free of old, alloc of new
+                    if (name) |n| {
+                        c.___tracy_emit_memory_free_named(old_ptr, 0, n.ptr);
+                        c.___tracy_emit_memory_alloc_named(new_ptr, new_len, 0, n.ptr);
+                    } else {
+                        c.___tracy_emit_memory_free(old_ptr, 0);
+                        c.___tracy_emit_memory_alloc(new_ptr, new_len, 0);
+                    }
+                }
+            }
+            return result;
+        }
+
+        fn freeFn(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            if (enabled) {
+                if (name) |n| {
+                    c.___tracy_emit_memory_free_named(buf.ptr, 0, n.ptr);
+                } else {
+                    c.___tracy_emit_memory_free(buf.ptr, 0);
+                }
+            }
+            self.parent_allocator.rawFree(buf, alignment, ret_addr);
+        }
+    };
+}

@@ -9,6 +9,7 @@ const DisplayData = shared.DisplayData;
 const GameData = shared.GameData;
 const QuickPlayData = shared.QuickPlayData;
 const CrashReport = shared.CrashReport;
+const profiler = shared.profiler;
 const FarHorizonsClient = @import("FarHorizonsClient.zig").FarHorizonsClient;
 
 pub const Main = struct {
@@ -22,7 +23,10 @@ pub const Main = struct {
     pub fn run(io: Io) !void {
         var gpa = std.heap.GeneralPurposeAllocator(.{}){};
         defer _ = gpa.deinit();
-        const allocator = gpa.allocator();
+
+        // Wrap allocator with Tracy for memory profiling (compiles to no-op when tracy disabled)
+        var tracy_alloc = profiler.TracyAllocator(null).init(gpa.allocator());
+        const allocator = tracy_alloc.allocator();
 
         // Use arena for strings that live for the program's lifetime
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -73,7 +77,9 @@ pub const Main = struct {
     };
 
     fn parseArgs(allocator: std.mem.Allocator) !ParsedArgs {
-        var args = try std.process.argsWithAllocator(allocator);
+        const cmd_line = std.os.windows.peb().ProcessParameters.CommandLine;
+        const cmd_line_slice = cmd_line.Buffer.?[0 .. cmd_line.Length / 2];
+        var args = try std.process.Args.Iterator.initAllocator(.{ .vector = cmd_line_slice }, allocator);
         defer args.deinit();
 
         // Skip executable name
@@ -147,7 +153,9 @@ pub fn main() void {
     const crash_allocator = std.heap.page_allocator;
 
     // Initialize the I/O subsystem
-    var io_threaded = Io.Threaded.init(crash_allocator, .{});
+    var io_threaded = Io.Threaded.init(crash_allocator, .{
+        .environ = std.process.Environ.empty,
+    });
     defer io_threaded.deinit();
     const io = io_threaded.io();
 

@@ -19,6 +19,14 @@
             "args": ["build", "run"],
             "group": "build",
             "problemMatcher": []
+        },
+        {
+            "label": "Build and Run (Tracy)",
+            "type": "shell",
+            "command": "./compiler/zig/zig.exe",
+            "args": ["build", "run", "-Dtracy=true"],
+            "group": "build",
+            "problemMatcher": []
         }
     ]
 }
