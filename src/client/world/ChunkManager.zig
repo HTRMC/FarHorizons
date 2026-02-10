@@ -20,7 +20,6 @@ const BlockEntry = shared.BlockEntry;
 
 const RenderSystem = renderer.RenderSystem;
 const TextureManager = renderer.TextureManager;
-const Vertex = renderer.Vertex;
 const BlockModelShaper = renderer.block.BlockModelShaper;
 const ModelLoader = renderer.block.ModelLoader;
 const BlockstateLoader = renderer.block.BlockstateLoader;

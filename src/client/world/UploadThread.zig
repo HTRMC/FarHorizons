@@ -14,7 +14,7 @@ const profiler = shared.profiler;
 const ChunkPos = shared.ChunkPos;
 const Chunk = shared.Chunk;
 
-const Vertex = renderer.Vertex;
+const CompactVertex = renderer.CompactVertex;
 const ChunkBufferManager = renderer.buffer.ChunkBufferManager;
 const ChunkBufferAllocation = renderer.buffer.ChunkBufferAllocation;
 const StagingRing = renderer.buffer.StagingRing;
@@ -816,7 +816,7 @@ pub const UploadThread = struct {
         }
 
         // Build ChunkMesh with allocations
-        var layer_vertices: [RENDER_LAYER_COUNT][]const Vertex = undefined;
+        var layer_vertices: [RENDER_LAYER_COUNT][]const CompactVertex = undefined;
         var layer_indices: [RENDER_LAYER_COUNT][]const u32 = undefined;
         for (0..RENDER_LAYER_COUNT) |i| {
             layer_vertices[i] = mesh.layers[i].vertices;

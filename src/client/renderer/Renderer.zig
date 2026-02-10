@@ -2,6 +2,7 @@
 
 pub const RenderSystem = @import("RenderSystem.zig").RenderSystem;
 pub const Vertex = @import("RenderSystem.zig").Vertex;
+pub const CompactVertex = @import("RenderSystem.zig").CompactVertex;
 pub const LineVertex = @import("RenderSystem.zig").LineVertex;
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
 pub const BlockOutlineRenderer = @import("BlockOutlineRenderer.zig").BlockOutlineRenderer;

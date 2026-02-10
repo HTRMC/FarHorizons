@@ -100,6 +100,38 @@ pub const DescriptorSetManager = struct {
         vkUpdateDescriptorSets(device, 1, &descriptor_write, 0, null);
     }
 
+    /// Update a descriptor set with a storage buffer binding
+    pub fn updateStorageBuffer(
+        device: vk.VkDevice,
+        set: vk.VkDescriptorSet,
+        binding: u32,
+        buffer: vk.VkBuffer,
+        size: u64,
+    ) void {
+        const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return;
+
+        const buffer_info = vk.VkDescriptorBufferInfo{
+            .buffer = buffer,
+            .offset = 0,
+            .range = size,
+        };
+
+        const descriptor_write = vk.VkWriteDescriptorSet{
+            .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = null,
+            .dstSet = set,
+            .dstBinding = binding,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pImageInfo = null,
+            .pBufferInfo = &buffer_info,
+            .pTexelBufferView = null,
+        };
+
+        vkUpdateDescriptorSets(device, 1, &descriptor_write, 0, null);
+    }
+
     /// Update a descriptor set with both uniform buffer and sampler in a single call
     /// This is more efficient than calling updateUniformBuffer and updateSampler separately
     pub fn updateUniformBufferAndSampler(

@@ -7,7 +7,7 @@ const vk = volk.c;
 
 const Chunk = shared.Chunk;
 const ChunkPos = shared.ChunkPos;
-const Vertex = renderer.Vertex;
+const CompactVertex = renderer.CompactVertex;
 const Logger = shared.Logger;
 const ChunkBufferAllocation = renderer.buffer.ChunkBufferAllocation;
 const RenderLayer = shared.RenderLayer;
@@ -165,7 +165,7 @@ pub const ChunkFuture = struct {
 
 /// Per-layer mesh data
 pub const LayerMeshData = struct {
-    vertices: []Vertex,
+    vertices: []CompactVertex,
     indices: []u32,
     vertex_count: u32 = 0,
     index_count: u32 = 0,
@@ -173,7 +173,7 @@ pub const LayerMeshData = struct {
     uploaded: bool = false,
 
     pub const EMPTY = LayerMeshData{
-        .vertices = &[_]Vertex{},
+        .vertices = &[_]CompactVertex{},
         .indices = &[_]u32{},
     };
 };
@@ -194,7 +194,7 @@ pub const ChunkMesh = struct {
     /// Create a new ChunkMesh with per-layer vertex/index data
     pub fn init(
         allocator: std.mem.Allocator,
-        layer_vertices: [RENDER_LAYER_COUNT][]const Vertex,
+        layer_vertices: [RENDER_LAYER_COUNT][]const CompactVertex,
         layer_indices: [RENDER_LAYER_COUNT][]const u32,
     ) !Self {
         var layers: [RENDER_LAYER_COUNT]LayerMeshData = undefined;
@@ -205,7 +205,7 @@ pub const ChunkMesh = struct {
 
             if (vertices.len == 0) {
                 layers[i] = .{
-                    .vertices = &[_]Vertex{},
+                    .vertices = &[_]CompactVertex{},
                     .indices = &[_]u32{},
                     .vertex_count = 0,
                     .index_count = 0,
@@ -213,7 +213,7 @@ pub const ChunkMesh = struct {
                 continue;
             }
 
-            const vertex_copy = try allocator.alloc(Vertex, vertices.len);
+            const vertex_copy = try allocator.alloc(CompactVertex, vertices.len);
             errdefer allocator.free(vertex_copy);
             @memcpy(vertex_copy, vertices);
 
@@ -501,11 +501,11 @@ pub const RenderChunk = struct {
 
 /// Per-layer vertex/index data for completed mesh
 pub const CompletedLayerData = struct {
-    vertices: []Vertex,
+    vertices: []CompactVertex,
     indices: []u32,
 
     pub const EMPTY = CompletedLayerData{
-        .vertices = &[_]Vertex{},
+        .vertices = &[_]CompactVertex{},
         .indices = &[_]u32{},
     };
 };

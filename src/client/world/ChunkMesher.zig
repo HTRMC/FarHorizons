@@ -15,7 +15,7 @@ const RenderLayer = shared.RenderLayer;
 const block_registry = shared.block;
 const profiler = shared.profiler;
 
-const Vertex = renderer.Vertex;
+const CompactVertex = renderer.CompactVertex;
 const BlockModel = renderer.block.BlockModel;
 const FaceBakery = renderer.block.FaceBakery;
 const Direction = renderer.block.Direction;
@@ -83,7 +83,7 @@ pub const ChunkMesher = struct {
         }
 
         // Allocate per-layer working buffers
-        var layer_vertices: [RENDER_LAYER_COUNT][]Vertex = undefined;
+        var layer_vertices: [RENDER_LAYER_COUNT][]CompactVertex = undefined;
         var layer_indices: [RENDER_LAYER_COUNT][]u32 = undefined;
         var layer_vertex_idx: [RENDER_LAYER_COUNT]usize = .{ 0, 0, 0 };
         var layer_index_idx: [RENDER_LAYER_COUNT]usize = .{ 0, 0, 0 };
@@ -91,7 +91,7 @@ pub const ChunkMesher = struct {
         for (0..RENDER_LAYER_COUNT) |i| {
             const block_count = layer_block_counts[i];
             if (block_count == 0) {
-                layer_vertices[i] = &[_]Vertex{};
+                layer_vertices[i] = &[_]CompactVertex{};
                 layer_indices[i] = &[_]u32{};
                 continue;
             }
@@ -100,7 +100,7 @@ pub const ChunkMesher = struct {
             const max_vertices = max_faces * 4;
             const max_indices = max_faces * 6;
 
-            layer_vertices[i] = try self.allocator.alloc(Vertex, max_vertices);
+            layer_vertices[i] = try self.allocator.alloc(CompactVertex, max_vertices);
             errdefer self.allocator.free(layer_vertices[i]);
             layer_indices[i] = try self.allocator.alloc(u32, max_indices);
             errdefer self.allocator.free(layer_indices[i]);
@@ -159,7 +159,7 @@ pub const ChunkMesher = struct {
         for (0..RENDER_LAYER_COUNT) |i| {
             if (layer_block_counts[i] == 0 or layer_vertex_idx[i] == 0) {
                 result_layers[i] = .{
-                    .vertices = &[_]Vertex{},
+                    .vertices = &[_]CompactVertex{},
                     .indices = &[_]u32{},
                 };
                 // Free unused buffers
@@ -198,12 +198,16 @@ pub const ChunkMesher = struct {
         model_rotation_x: i16,
         model_rotation_y: i16,
         uvlock: bool,
-        vertices: []Vertex,
+        vertices: []CompactVertex,
         indices: []u32,
         vertex_idx: *usize,
         index_idx: *usize,
     ) !void {
         _ = self;
+        // offset_x/y/z are world offsets - not used for CompactVertex (chunk-local positions only)
+        _ = offset_x;
+        _ = offset_y;
+        _ = offset_z;
 
         const elements = model.elements orelse return;
 
@@ -268,29 +272,28 @@ pub const ChunkMesher = struct {
                     else
                         [4]f32{ 1.0, 1.0, 1.0, 1.0 }; // No AO if shade is false
 
-                    // Local position offset within chunk
+                    // Local position offset within chunk (chunk-local, no world offset)
                     const local_x: f32 = @floatFromInt(x);
                     const local_y: f32 = @floatFromInt(y);
                     const local_z: f32 = @floatFromInt(z);
 
-                    // Add vertices with AO-modified colors
+                    // Add vertices as CompactVertex (chunk-local position, packed AO/UV/tex)
                     const base_vertex: u32 = @intCast(vertex_idx.*);
                     for (0..4) |i| {
                         const pos = quad.position(@intCast(i));
                         const packed_uv = quad.packedUV(@intCast(i));
-                        const u: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
-                        const v: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
+                        const u_coord: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
+                        const v_coord: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
                         const ao = ao_values[i];
-                        vertices[vertex_idx.*] = .{
-                            .pos = .{
-                                pos[0] + local_x + offset_x,
-                                pos[1] + local_y + offset_y,
-                                pos[2] + local_z + offset_z,
-                            },
-                            .color = .{ ao, ao, ao }, // Apply AO as grayscale multiplier
-                            .uv = .{ u, v },
-                            .tex_index = quad.texture_index,
-                        };
+                        vertices[vertex_idx.*] = CompactVertex.pack(
+                            pos[0] + local_x,
+                            pos[1] + local_y,
+                            pos[2] + local_z,
+                            ao,
+                            u_coord,
+                            v_coord,
+                            quad.texture_index,
+                        );
                         vertex_idx.* += 1;
                     }
 
@@ -316,7 +319,7 @@ pub const WorkerMeshContext = struct {
 
     /// Pre-allocated working buffers for each render layer
     /// These are sized for worst-case and reused across all chunks
-    layer_vertices: [RENDER_LAYER_COUNT][]Vertex,
+    layer_vertices: [RENDER_LAYER_COUNT][]CompactVertex,
     layer_indices: [RENDER_LAYER_COUNT][]u32,
 
     /// Allocator used for these buffers (and for final result allocation)
@@ -340,7 +343,7 @@ pub const WorkerMeshContext = struct {
 
         // Pre-allocate all buffers upfront (happens once per worker thread)
         for (0..RENDER_LAYER_COUNT) |i| {
-            self.layer_vertices[i] = try allocator.alloc(Vertex, VERTEX_CAPACITY_PER_LAYER);
+            self.layer_vertices[i] = try allocator.alloc(CompactVertex, VERTEX_CAPACITY_PER_LAYER);
             errdefer {
                 for (0..i) |j| {
                     allocator.free(self.layer_vertices[j]);
@@ -440,12 +443,12 @@ pub const WorkerMeshContext = struct {
 
             if (vertex_count == 0) {
                 result_layers[i] = .{
-                    .vertices = &[_]Vertex{},
+                    .vertices = &[_]CompactVertex{},
                     .indices = &[_]u32{},
                 };
             } else {
                 // Allocate exact-sized buffers for result
-                const result_vertices = try self.allocator.alloc(Vertex, vertex_count);
+                const result_vertices = try self.allocator.alloc(CompactVertex, vertex_count);
                 errdefer self.allocator.free(result_vertices);
                 const result_indices = try self.allocator.alloc(u32, index_count);
 
@@ -483,12 +486,16 @@ pub const WorkerMeshContext = struct {
         model_rotation_x: i16,
         model_rotation_y: i16,
         uvlock: bool,
-        vertices: []Vertex,
+        vertices: []CompactVertex,
         indices: []u32,
         vertex_idx: *usize,
         index_idx: *usize,
     ) void {
         _ = self;
+        // offset_x/y/z are world offsets - not used for CompactVertex (chunk-local positions only)
+        _ = offset_x;
+        _ = offset_y;
+        _ = offset_z;
 
         const elements = model.elements orelse return;
         const directions = [_]Direction{ .down, .up, .north, .south, .west, .east };
@@ -552,19 +559,18 @@ pub const WorkerMeshContext = struct {
                     for (0..4) |i| {
                         const vpos = quad.position(@intCast(i));
                         const packed_uv = quad.packedUV(@intCast(i));
-                        const u: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
-                        const v: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
+                        const u_coord: f32 = @bitCast(@as(u32, @intCast(packed_uv >> 32)));
+                        const v_coord: f32 = @bitCast(@as(u32, @intCast(packed_uv & 0xFFFFFFFF)));
                         const ao = ao_values[i];
-                        vertices[vertex_idx.*] = .{
-                            .pos = .{
-                                vpos[0] + local_x + offset_x,
-                                vpos[1] + local_y + offset_y,
-                                vpos[2] + local_z + offset_z,
-                            },
-                            .color = .{ ao, ao, ao },
-                            .uv = .{ u, v },
-                            .tex_index = quad.texture_index,
-                        };
+                        vertices[vertex_idx.*] = CompactVertex.pack(
+                            vpos[0] + local_x,
+                            vpos[1] + local_y,
+                            vpos[2] + local_z,
+                            ao,
+                            u_coord,
+                            v_coord,
+                            quad.texture_index,
+                        );
                         vertex_idx.* += 1;
                     }
 

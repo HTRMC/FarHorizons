@@ -75,6 +75,95 @@ pub const Vertex = extern struct {
     }
 };
 
+/// Compact vertex format for chunk meshes (12 bytes vs 36 bytes)
+/// Position encoded as A2B10G10R10_UNORM (chunk-local [0,1] via (pos+2)/20)
+/// AO encoded as 2-bit index in alpha bits of position word
+/// UV as R16G16_UNORM, tex_index as low 8 bits of a u32
+pub const CompactVertex = extern struct {
+    /// Packed position (10 bits each XYZ) + AO index (2 bits) as A2B10G10R10_UNORM
+    pos_ao: u32,
+    /// Packed UV coordinates as R16G16_UNORM
+    uv: u32,
+    /// Texture index in low 8 bits, upper 24 bits reserved
+    data: u32,
+
+    /// Position encoding range: chunk-local positions mapped to [0, 1] via (pos + 2.0) / 20.0
+    /// This covers the range [-2, 18] which handles 0..15 block positions plus model overhang
+    const POS_BIAS = 2.0;
+    const POS_RANGE = 20.0;
+
+    /// AO brightness lookup table (must match AmbientOcclusion.AO_BRIGHTNESS)
+    pub const AO_TABLE: [4]f32 = .{ 0.2, 0.5, 0.8, 1.0 };
+
+    /// Convert AO float to 2-bit index
+    pub fn aoToIndex(ao: f32) u2 {
+        // Threshold-based: 0.2->0, 0.5->1, 0.8->2, 1.0->3
+        if (ao > 0.9) return 3;
+        if (ao > 0.65) return 2;
+        if (ao > 0.35) return 1;
+        return 0;
+    }
+
+    /// Pack a vertex from world-space position (chunk-local), AO, UV, and tex_index
+    /// pos_x/y/z should be chunk-local (no world offset added)
+    pub fn pack(pos_x: f32, pos_y: f32, pos_z: f32, ao: f32, u_coord: f32, v_coord: f32, tex_index: u32) CompactVertex {
+        // Quantize position to 10-bit unorm
+        const qx: u32 = @intFromFloat(std.math.clamp((pos_x + POS_BIAS) / POS_RANGE, 0.0, 1.0) * 1023.0 + 0.5);
+        const qy: u32 = @intFromFloat(std.math.clamp((pos_y + POS_BIAS) / POS_RANGE, 0.0, 1.0) * 1023.0 + 0.5);
+        const qz: u32 = @intFromFloat(std.math.clamp((pos_z + POS_BIAS) / POS_RANGE, 0.0, 1.0) * 1023.0 + 0.5);
+        const ao_idx: u32 = @intCast(aoToIndex(ao));
+
+        // A2B10G10R10: bits [0:9]=R(x), [10:19]=G(y), [20:29]=B(z), [30:31]=A(ao)
+        const pos_ao_packed: u32 = qx | (qy << 10) | (qz << 20) | (ao_idx << 30);
+
+        // UV as 16-bit unorm
+        const qu: u32 = @intFromFloat(std.math.clamp(u_coord, 0.0, 1.0) * 65535.0 + 0.5);
+        const qv: u32 = @intFromFloat(std.math.clamp(v_coord, 0.0, 1.0) * 65535.0 + 0.5);
+        const uv_packed: u32 = qu | (qv << 16);
+
+        return .{
+            .pos_ao = pos_ao_packed,
+            .uv = uv_packed,
+            .data = tex_index & 0xFF,
+        };
+    }
+
+    pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
+        return .{
+            .binding = 0,
+            .stride = @sizeOf(CompactVertex),
+            .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [3]vk.VkVertexInputAttributeDescription {
+        return .{
+            .{
+                .binding = 0,
+                .location = 0,
+                .format = vk.VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                .offset = @offsetOf(CompactVertex, "pos_ao"),
+            },
+            .{
+                .binding = 0,
+                .location = 1,
+                .format = vk.VK_FORMAT_R16G16_UNORM,
+                .offset = @offsetOf(CompactVertex, "uv"),
+            },
+            .{
+                .binding = 0,
+                .location = 2,
+                .format = vk.VK_FORMAT_R32_UINT,
+                .offset = @offsetOf(CompactVertex, "data"),
+            },
+        };
+    }
+
+    comptime {
+        std.debug.assert(@sizeOf(CompactVertex) == 12);
+    }
+};
+
 /// Vertex format for hotbar block icons (isometric 3D preview)
 pub const IconVertex = extern struct {
     pos: [3]f32,      // NDC position (pre-transformed)
@@ -2242,9 +2331,11 @@ pub const RenderSystem = struct {
     fn createDescriptorSetLayout(self: *Self) !void {
         // Binding 0: Uniform buffer (MVP matrices)
         // Binding 1: Combined image sampler (texture)
+        // Binding 2: Storage buffer (chunk metadata for vertex shader position decode)
         self.descriptor_set_layout = try DescriptorSetLayoutBuilder.init()
             .withUniformBuffer(0, vk.VK_SHADER_STAGE_VERTEX_BIT)
             .withSampler(1, vk.VK_SHADER_STAGE_FRAGMENT_BIT)
+            .withStorageBuffer(2, vk.VK_SHADER_STAGE_VERTEX_BIT)
             .build(self.device);
 
         logger.info("Descriptor set layout created", .{});
@@ -2303,8 +2394,8 @@ pub const RenderSystem = struct {
             .pDynamicStates = &dynamic_states,
         };
 
-        const binding_description = Vertex.getBindingDescription();
-        const attribute_descriptions = Vertex.getAttributeDescriptions();
+        const binding_description = CompactVertex.getBindingDescription();
+        const attribute_descriptions = CompactVertex.getAttributeDescriptions();
 
         const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -2470,8 +2561,8 @@ pub const RenderSystem = struct {
             .pDynamicStates = &dynamic_states,
         };
 
-        const binding_description = Vertex.getBindingDescription();
-        const attribute_descriptions = Vertex.getAttributeDescriptions();
+        const binding_description = CompactVertex.getBindingDescription();
+        const attribute_descriptions = CompactVertex.getAttributeDescriptions();
 
         const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -3767,7 +3858,7 @@ pub const RenderSystem = struct {
         const cmdgen_push = CmdgenPush{
             .view_proj = view_proj,
             .chunk_count = chunk_count,
-            .vertex_stride = @sizeOf(Vertex),
+            .vertex_stride = @sizeOf(CompactVertex),
         };
         vkCmdPushConstants(
             cmd_buffer,
@@ -3822,6 +3913,7 @@ pub const RenderSystem = struct {
         self.descriptor_pool = try DescriptorPoolBuilder.init()
             .withUniformBuffers(MAX_FRAMES_IN_FLIGHT)
             .withSamplers(MAX_FRAMES_IN_FLIGHT)
+            .withStorageBuffers(MAX_FRAMES_IN_FLIGHT)
             .withMaxSets(MAX_FRAMES_IN_FLIGHT)
             .build(self.device);
 
@@ -3837,7 +3929,7 @@ pub const RenderSystem = struct {
             &self.descriptor_sets,
         );
 
-        // Configure each descriptor set to point to its uniform buffer and texture
+        // Configure each descriptor set to point to its uniform buffer, texture, and chunk metadata
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             DescriptorSetManager.updateUniformBufferAndSampler(
                 self.device,
@@ -3848,6 +3940,15 @@ pub const RenderSystem = struct {
                 1, // sampler binding
                 self.texture_image_view,
                 self.texture_sampler,
+            );
+
+            // Binding 2: chunk metadata SSBO for vertex shader position decode
+            DescriptorSetManager.updateStorageBuffer(
+                self.device,
+                self.descriptor_sets[i],
+                2,
+                self.chunk_metadata_buffer.handle,
+                vk.VK_WHOLE_SIZE,
             );
         }
 
