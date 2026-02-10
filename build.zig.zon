@@ -2,7 +2,7 @@
     .name = .FarHorizons,
     .version = "0.0.0",
     .fingerprint = 0x953f10b5d0f3e503,
-    .minimum_zig_version = "0.16.0-dev.1484+d0ba6642b",
+    .minimum_zig_version = "0.16.0-dev.2535+b5bd49460",
     .dependencies = .{
         // Headers (shared across all platforms)
         .farhorizons_deps_headers = .{

@@ -178,7 +178,7 @@ pub const UploadThread = struct {
         errdefer output_queue.deinit();
 
         // Create free queue (main thread pushes old allocations, upload thread frees them)
-        var free_queue = ThreadSafeQueue(ChunkBufferAllocation).init(allocator);
+        var free_queue = ThreadSafeQueue(ChunkBufferAllocation).init(allocator, io);
         errdefer free_queue.deinit();
 
         // Create prepared batches queue (upload thread writes, main thread reads for submission)
@@ -457,17 +457,14 @@ pub const UploadThread = struct {
             // Advance frame and process deferred frees (AAA: upload thread owns buffer_manager)
             self.buffer_manager.advanceFrameAndProcessFrees();
 
-            var timer = std.time.Timer.start() catch {
-                self.sleepIdle();
-                continue;
-            };
+            const batch_start = Io.Clock.awake.now(self.io);
 
             var uploads_this_batch: u32 = 0;
 
             // Process uploads until time budget exhausted or max count reached
             while (true) {
                 // Check time budget
-                const elapsed_ns = timer.read();
+                const elapsed_ns: u64 = @intCast(batch_start.durationTo(Io.Clock.awake.now(self.io)).nanoseconds);
                 if (elapsed_ns >= self.config.time_budget_ns) {
                     if (uploads_this_batch > 0) {
                         self.stats.budget_exhausted_count += 1;

@@ -68,7 +68,7 @@ pub const ShaderManager = struct {
         var hotbar_icon_frag: ?[]u8 = null;
 
         if (enable_runtime_compilation) {
-            var total_timer = std.time.Timer.start() catch unreachable;
+            const total_start = Io.Clock.awake.now(io);
 
             compiler = try ShaderCompiler.init(allocator, io);
 
@@ -77,17 +77,17 @@ pub const ShaderManager = struct {
 
             // Compile default shaders at startup from assets directory
             logger.info("Compiling default vertex shader...", .{});
-            var vert_timer = std.time.Timer.start() catch unreachable;
+            const vert_start = Io.Clock.awake.now(io);
             var vert_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle.vert");
-            const vert_time_us = vert_timer.read() / std.time.ns_per_us;
+            const vert_time_us = @as(u64, @intCast(@divTrunc(vert_start.durationTo(Io.Clock.awake.now(io)).nanoseconds, std.time.ns_per_us)));
             default_vert = try allocator.dupe(u8, vert_compiled.spv_data);
             vert_compiled.deinit();
             logger.info("Vertex shader compiled in {d}us ({d} bytes SPIR-V)", .{ vert_time_us, default_vert.?.len });
 
             logger.info("Compiling default fragment shader...", .{});
-            var frag_timer = std.time.Timer.start() catch unreachable;
+            const frag_start = Io.Clock.awake.now(io);
             var frag_compiled = try compiler.?.compileFile(default_shader_path ++ "triangle.frag");
-            const frag_time_us = frag_timer.read() / std.time.ns_per_us;
+            const frag_time_us = @as(u64, @intCast(@divTrunc(frag_start.durationTo(Io.Clock.awake.now(io)).nanoseconds, std.time.ns_per_us)));
             default_frag = try allocator.dupe(u8, frag_compiled.spv_data);
             frag_compiled.deinit();
             logger.info("Fragment shader compiled in {d}us ({d} bytes SPIR-V)", .{ frag_time_us, default_frag.?.len });
@@ -155,7 +155,8 @@ pub const ShaderManager = struct {
             hotbar_icon_frag_compiled.deinit();
             logger.info("Hotbar icon shaders compiled", .{});
 
-            const total_time_ms = @as(f64, @floatFromInt(total_timer.read())) / @as(f64, std.time.ns_per_ms);
+            const total_elapsed_ns: i64 = @intCast(total_start.durationTo(Io.Clock.awake.now(io)).nanoseconds);
+            const total_time_ms = @as(f64, @floatFromInt(total_elapsed_ns)) / @as(f64, std.time.ns_per_ms);
             const cache_stats = compiler.?.getCacheStats();
             logger.info("Shader loading complete in {d:.2}ms (cache: {d} hits, {d} misses)", .{
                 total_time_ms,

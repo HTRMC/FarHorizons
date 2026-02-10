@@ -23,6 +23,7 @@
 /// rcu.tryAdvance();          // Call once per frame to advance epoch and free old items
 /// ```
 const std = @import("std");
+const Io = std.Io;
 const Atomic = std.atomic.Value;
 const Logger = @import("Logger.zig").Logger;
 
@@ -58,7 +59,10 @@ pub const Rcu = struct {
     retire_lists: [EPOCH_SLOTS]std.ArrayListUnmanaged(DeferredFree),
 
     /// Mutex for retire list modifications (only touched by main thread, but ensures safety)
-    retire_mutex: std.Thread.Mutex,
+    retire_mutex: Io.Mutex,
+
+    /// I/O subsystem (needed for mutex operations)
+    io: Io,
 
     /// Number of registered threads
     thread_count: u32,
@@ -77,12 +81,13 @@ pub const Rcu = struct {
     };
 
     /// Initialize the RCU system
-    pub fn init(allocator: std.mem.Allocator, thread_count: u32) Self {
+    pub fn init(allocator: std.mem.Allocator, thread_count: u32, io: Io) Self {
         var self = Self{
             .global_epoch = Atomic(u64).init(0),
             .thread_epochs = undefined,
             .retire_lists = undefined,
-            .retire_mutex = .{},
+            .retire_mutex = Io.Mutex.init,
+            .io = io,
             .thread_count = thread_count,
             .allocator = allocator,
             .stats = .{},
@@ -155,8 +160,8 @@ pub const Rcu = struct {
     /// The pointer will be freed once all current readers have exited their critical sections
     /// free_fn will be called with ptr when it's safe to free
     pub fn retire(self: *Self, ptr: *anyopaque, free_fn: *const fn (*anyopaque) void) void {
-        self.retire_mutex.lock();
-        defer self.retire_mutex.unlock();
+        self.retire_mutex.lockUncancelable(self.io);
+        defer self.retire_mutex.unlock(self.io);
 
         const current_epoch = self.global_epoch.load(.acquire);
         const slot = current_epoch % EPOCH_SLOTS;
@@ -256,8 +261,8 @@ pub const Rcu = struct {
 
     /// Free all items in a retire list slot
     fn freeRetireList(self: *Self, slot: u64) void {
-        self.retire_mutex.lock();
-        defer self.retire_mutex.unlock();
+        self.retire_mutex.lockUncancelable(self.io);
+        defer self.retire_mutex.unlock(self.io);
 
         const list = &self.retire_lists[slot];
         const count = list.items.len;
@@ -282,8 +287,8 @@ pub const Rcu = struct {
 
     /// Get number of items pending free across all retire lists
     pub fn getPendingFreeCount(self: *Self) usize {
-        self.retire_mutex.lock();
-        defer self.retire_mutex.unlock();
+        self.retire_mutex.lockUncancelable(self.io);
+        defer self.retire_mutex.unlock(self.io);
 
         var count: usize = 0;
         for (self.retire_lists) |list| {
@@ -316,7 +321,9 @@ pub const RcuReadGuard = struct {
 // Tests
 test "Rcu basic operations" {
     const allocator = std.testing.allocator;
-    var rcu = Rcu.init(allocator, 4);
+    var io_impl = Io.Threaded.init(allocator, .{});
+    defer io_impl.deinit();
+    var rcu = Rcu.init(allocator, 4, io_impl.io());
     defer rcu.deinit();
 
     // Test read lock/unlock
@@ -334,7 +341,9 @@ test "Rcu basic operations" {
 
 test "Rcu deferred free" {
     const allocator = std.testing.allocator;
-    var rcu = Rcu.init(allocator, 2);
+    var io_impl = Io.Threaded.init(allocator, .{});
+    defer io_impl.deinit();
+    var rcu = Rcu.init(allocator, 2, io_impl.io());
     defer rcu.deinit();
 
     // Allocate something to free
@@ -358,7 +367,9 @@ test "Rcu deferred free" {
 
 test "Rcu grace period" {
     const allocator = std.testing.allocator;
-    var rcu = Rcu.init(allocator, 2);
+    var io_impl = Io.Threaded.init(allocator, .{});
+    defer io_impl.deinit();
+    var rcu = Rcu.init(allocator, 2, io_impl.io());
     defer rcu.deinit();
 
     // Thread 0 enters critical section at epoch 0

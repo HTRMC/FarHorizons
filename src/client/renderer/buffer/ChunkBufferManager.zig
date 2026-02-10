@@ -1,6 +1,7 @@
 /// ChunkBufferManager - Coordinates vertex/index arenas for chunk rendering
 /// Uses growable buffer arenas for AAA-quality smooth frame times
 const std = @import("std");
+const Io = std.Io;
 const volk = @import("volk");
 const vk = volk.c;
 const shared = @import("Shared");
@@ -102,6 +103,7 @@ pub const ChunkBufferManager = struct {
         device: vk.VkDevice,
         physical_device: vk.VkPhysicalDevice,
         config: ChunkBufferConfig,
+        io: Io,
     ) !Self {
         logger.info("Initializing ChunkBufferManager (single-buffer mode for GPU-driven rendering)...", .{});
         logger.info("  Vertex buffer: {} MB, Index buffer: {} MB", .{
@@ -123,6 +125,7 @@ pub const ChunkBufferManager = struct {
                 .alignment = config.vertex_size,
                 .expansion_threshold_percent = 100, // Disable expansion threshold
             },
+            io,
         );
         errdefer vertex_arena.deinit();
 
@@ -139,6 +142,7 @@ pub const ChunkBufferManager = struct {
                 .alignment = config.index_size,
                 .expansion_threshold_percent = 100, // Disable expansion threshold
             },
+            io,
         );
         errdefer index_arena.deinit();
 

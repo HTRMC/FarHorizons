@@ -1,32 +1,32 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "Build",
-            "type": "shell",
-            "command": "./compiler/zig/zig.exe",
-            "args": ["build"],
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "Build and Run",
-            "type": "shell",
-            "command": "./compiler/zig/zig.exe",
-            "args": ["build", "run"],
-            "group": "build",
-            "problemMatcher": []
-        },
-        {
-            "label": "Build and Run (Tracy)",
-            "type": "shell",
-            "command": "./compiler/zig/zig.exe",
-            "args": ["build", "run", "-Dtracy=true"],
-            "group": "build",
-            "problemMatcher": []
-        }
-    ]
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build",
+      "type": "shell",
+      "command": "zig",
+      "args": ["build"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Build and Run",
+      "type": "shell",
+      "command": "zig",
+      "args": ["build", "run"],
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build and Run (Tracy)",
+      "type": "shell",
+      "command": "zig",
+      "args": ["build", "run", "-Dtracy=true"],
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
 }

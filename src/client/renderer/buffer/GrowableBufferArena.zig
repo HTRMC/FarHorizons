@@ -6,6 +6,7 @@
 /// - Async background expansion when capacity threshold reached
 /// - Batched rendering support (groups draw calls by buffer)
 const std = @import("std");
+const Io = std.Io;
 const volk = @import("volk");
 const vk = volk.c;
 const shared = @import("Shared");
@@ -66,8 +67,11 @@ pub const GrowableBufferArena = struct {
     /// Async expansion state
     expansion_thread: ?std.Thread = null,
     pending_arena: ?BufferArena = null,
-    expansion_mutex: std.Thread.Mutex = .{},
+    expansion_mutex: Io.Mutex = Io.Mutex.init,
     expansion_failed: bool = false,
+
+    /// I/O subsystem (needed for mutex operations)
+    io: Io,
 
     /// Vulkan handles needed for creating new arenas
     device: vk.VkDevice,
@@ -90,6 +94,7 @@ pub const GrowableBufferArena = struct {
         device: vk.VkDevice,
         physical_device: vk.VkPhysicalDevice,
         config: GrowableBufferConfig,
+        io: Io,
     ) !Self {
         var self = Self{
             .arenas = .{},
@@ -97,6 +102,7 @@ pub const GrowableBufferArena = struct {
             .physical_device = physical_device,
             .config = config,
             .allocator = allocator,
+            .io = io,
         };
 
         // Pre-allocate initial arenas
@@ -137,6 +143,7 @@ pub const GrowableBufferArena = struct {
         usage: vk.VkBufferUsageFlags,
         alignment: u64,
         avg_chunk_size: u64,
+        io: Io,
     ) !Self {
         // Calculate expected chunk count
         const h_chunks = @as(u64, view_distance) * 2 + 1;
@@ -171,7 +178,7 @@ pub const GrowableBufferArena = struct {
             .initial_arena_count = @intCast(initial_arenas),
             .usage = usage,
             .alignment = alignment,
-        });
+        }, io);
     }
 
     pub fn deinit(self: *Self) void {
@@ -335,23 +342,23 @@ pub const GrowableBufferArena = struct {
             self.config.alignment,
         ) catch |err| {
             logger.err("Async arena allocation failed: {}", .{err});
-            self.expansion_mutex.lock();
+            self.expansion_mutex.lockUncancelable(self.io);
             self.expansion_failed = true;
-            self.expansion_mutex.unlock();
+            self.expansion_mutex.unlock(self.io);
             return;
         };
 
-        self.expansion_mutex.lock();
+        self.expansion_mutex.lockUncancelable(self.io);
         self.pending_arena = new_arena;
-        self.expansion_mutex.unlock();
+        self.expansion_mutex.unlock(self.io);
 
         logger.info("Async arena allocation complete", .{});
     }
 
     /// Collect a pending arena if ready
     fn collectPendingArena(self: *Self) void {
-        self.expansion_mutex.lock();
-        defer self.expansion_mutex.unlock();
+        self.expansion_mutex.lockUncancelable(self.io);
+        defer self.expansion_mutex.unlock(self.io);
 
         if (self.pending_arena) |arena| {
             self.arenas.append(self.allocator, arena) catch |err| {

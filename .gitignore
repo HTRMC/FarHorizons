@@ -11,3 +11,4 @@ compiler/
 *.txt
 nul
 /cache
+/zig-pkg

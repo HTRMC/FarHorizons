@@ -300,10 +300,10 @@ pub const ChunkManager = struct {
             .chunk_storage = storage,
             .pending_loads = PosSet.init(allocator),
             .managed_positions = PosSet.init(allocator),
-            .completed_queue = ThreadSafeQueue(CompletedMesh).init(allocator),
-            .completed_terrain = ThreadSafeQueue(TerrainResult).init(allocator),
+            .completed_queue = ThreadSafeQueue(CompletedMesh).init(allocator, io),
+            .completed_terrain = ThreadSafeQueue(TerrainResult).init(allocator, io),
             .pending_mesh = PosSet.init(allocator),
-            .pool = try ThreadPool.init(allocator, config.worker_count, processTask),
+            .pool = try ThreadPool.init(allocator, io, config.worker_count, processTask),
             .player_chunk = ChunkPos{ .x = 0, .z = 0, .section_y = 0 },
             .config = config,
             .render_system = render_system,
@@ -326,6 +326,7 @@ pub const ChunkManager = struct {
                 // Uses single-buffer mode by default (1GB vertex, 512MB index)
                 // Required for GPU-driven rendering where all geometry must be in one buffer
             },
+            self.io,
         );
         self.buffer_manager = buffer_mgr;
 
@@ -352,7 +353,7 @@ pub const ChunkManager = struct {
         logger.info("Model cache pre-warmed", .{});
 
         const rcu_instance = try self.allocator.create(Rcu);
-        rcu_instance.* = Rcu.init(self.allocator, self.config.worker_count);
+        rcu_instance.* = Rcu.init(self.allocator, self.config.worker_count, self.io);
         self.rcu = rcu_instance;
         logger.info("RCU initialized for {} worker threads", .{self.config.worker_count});
 

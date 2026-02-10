@@ -1,5 +1,6 @@
 /// ThreadPool - Worker thread management for async chunk operations
 const std = @import("std");
+const Io = std.Io;
 const shared = @import("Shared");
 const Logger = shared.Logger;
 const ChunkPos = shared.ChunkPos;
@@ -37,14 +38,16 @@ pub fn ThreadSafeQueue(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        mutex: std.Thread.Mutex = .{},
-        condition: std.Thread.Condition = .{},
+        mutex: Io.Mutex = Io.Mutex.init,
+        condition: Io.Condition = Io.Condition.init,
         items: std.ArrayListUnmanaged(T) = .{},
         allocator: std.mem.Allocator,
+        io: Io,
 
-        pub fn init(allocator: std.mem.Allocator) Self {
+        pub fn init(allocator: std.mem.Allocator, io: Io) Self {
             return .{
                 .allocator = allocator,
+                .io = io,
             };
         }
 
@@ -54,19 +57,19 @@ pub fn ThreadSafeQueue(comptime T: type) type {
 
         /// Add an item to the queue
         pub fn push(self: *Self, item: T) !void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             try self.items.append(self.allocator, item);
-            self.condition.signal();
+            self.condition.signal(self.io);
         }
 
         /// Remove and return an item, blocking if empty
         pub fn pop(self: *Self) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             while (self.items.items.len == 0) {
-                self.condition.wait(&self.mutex);
+                self.condition.waitUncancelable(self.io, &self.mutex);
             }
 
             return self.items.pop();
@@ -74,28 +77,28 @@ pub fn ThreadSafeQueue(comptime T: type) type {
 
         /// Try to pop without blocking
         pub fn tryPop(self: *Self) ?T {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             return if (self.items.items.len > 0) self.items.pop() else null;
         }
 
         /// Check if queue is empty (for status only, may change immediately)
         pub fn isEmpty(self: *Self) bool {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             return self.items.items.len == 0;
         }
 
         /// Get current length (for status only)
         pub fn len(self: *Self) usize {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             return self.items.items.len;
         }
 
         /// Wake all waiting threads
         pub fn broadcast(self: *Self) void {
-            self.condition.broadcast();
+            self.condition.broadcast(self.io);
         }
     };
 }
@@ -120,8 +123,9 @@ pub const DynamicPriorityQueue = struct {
     /// Prevents remesh spam from starving new chunk generation
     const MAX_REMESH_PER_CYCLE: u32 = 2;
 
-    mutex: std.Thread.Mutex = .{},
-    condition: std.Thread.Condition = .{},
+    mutex: Io.Mutex = Io.Mutex.init,
+    condition: Io.Condition = Io.Condition.init,
+    io: Io,
 
     /// Fixed-size array of priority buckets (C2ME pattern)
     /// Each bucket is a FIFO queue for tasks at that priority level
@@ -142,9 +146,10 @@ pub const DynamicPriorityQueue = struct {
     /// Remesh tasks processed in current cycle
     remesh_count: u32 = 0,
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator, io: Io) Self {
         var self = Self{
             .allocator = allocator,
+            .io = io,
             .buckets = undefined,
             .bucket_counts = undefined,
         };
@@ -210,23 +215,23 @@ pub const DynamicPriorityQueue = struct {
         else
             self.calculatePriority(task.chunk_pos);
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         try self.buckets[priority].append(self.allocator, task);
         _ = self.bucket_counts[priority].fetchAdd(1, .release);
-        self.condition.signal();
+        self.condition.signal(self.io);
     }
 
     /// Remove and return the highest priority task, blocking if empty
     /// C2ME pattern: O(p) scan where p = number of priority buckets (64)
     /// Uses bucket counts for quick skip-ahead optimization
     pub fn pop(self: *Self) ?Task {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         while (self.isEmptyUnlocked()) {
-            self.condition.wait(&self.mutex);
+            self.condition.waitUncancelable(self.io, &self.mutex);
         }
 
         return self.dequeueFromBuckets();
@@ -234,8 +239,8 @@ pub const DynamicPriorityQueue = struct {
 
     /// Try to pop without blocking
     pub fn tryPop(self: *Self) ?Task {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         if (self.isEmptyUnlocked()) return null;
         return self.dequeueFromBuckets();
     }
@@ -281,15 +286,15 @@ pub const DynamicPriorityQueue = struct {
 
     /// Check if queue is empty
     pub fn isEmpty(self: *Self) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         return self.isEmptyUnlocked();
     }
 
     /// Get current length (sum of all bucket counts)
     pub fn len(self: *Self) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         var total: usize = 0;
         for (0..PRIORITY_BUCKETS) |i| {
@@ -300,7 +305,7 @@ pub const DynamicPriorityQueue = struct {
 
     /// Wake all waiting threads
     pub fn broadcast(self: *Self) void {
-        self.condition.broadcast();
+        self.condition.broadcast(self.io);
     }
 };
 
@@ -321,6 +326,7 @@ pub const ThreadPool = struct {
     const logger = Logger.scoped(Self);
 
     allocator: std.mem.Allocator,
+    io: Io,
     workers: []std.Thread,
     contexts: []WorkerContext,
     task_queue: DynamicPriorityQueue,
@@ -333,6 +339,7 @@ pub const ThreadPool = struct {
     /// Initialize the thread pool with the specified number of workers
     pub fn init(
         allocator: std.mem.Allocator,
+        io: Io,
         num_workers: usize,
         callback: TaskCallback,
     ) !Self {
@@ -345,9 +352,10 @@ pub const ThreadPool = struct {
 
         return Self{
             .allocator = allocator,
+            .io = io,
             .workers = try allocator.alloc(std.Thread, worker_count),
             .contexts = try allocator.alloc(WorkerContext, worker_count),
-            .task_queue = DynamicPriorityQueue.init(allocator),
+            .task_queue = DynamicPriorityQueue.init(allocator, io),
             .running = std.atomic.Value(bool).init(true),
             .callback = callback,
             .active_count = std.atomic.Value(usize).init(0),

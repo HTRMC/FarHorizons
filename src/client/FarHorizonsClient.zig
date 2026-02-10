@@ -224,10 +224,7 @@ pub const FarHorizonsClient = struct {
         self.window.show();
 
         var esc_was_pressed = false;
-        var timer = std.time.Timer.start() catch {
-            logger.err("Failed to start timer", .{});
-            return;
-        };
+        var last_frame_time = Io.Clock.awake.now(self.io);
         var tick_accumulator: f64 = 0;
 
         self.ecs_world = ecs.World.init(self.allocator);
@@ -302,7 +299,9 @@ pub const FarHorizonsClient = struct {
             const frame_zone = profiler.traceNamed("Frame");
             defer frame_zone.end();
 
-            const delta_ns = timer.lap();
+            const now_time = Io.Clock.awake.now(self.io);
+            const delta_ns: u64 = @intCast(last_frame_time.durationTo(now_time).nanoseconds);
+            last_frame_time = now_time;
             const delta_ms: f64 = @as(f64, @floatFromInt(delta_ns)) / 1_000_000.0;
             tick_accumulator += delta_ms;
 
