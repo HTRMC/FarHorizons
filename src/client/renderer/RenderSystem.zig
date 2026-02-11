@@ -2061,14 +2061,20 @@ pub const RenderSystem = struct {
         const window = self.window.?;
 
         var capabilities: vk.VkSurfaceCapabilitiesKHR = undefined;
-        _ = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.physical_device, self.surface, &capabilities);
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(self.physical_device, self.surface, &capabilities) != vk.VK_SUCCESS) {
+            return error.SurfaceCapabilitiesQueryFailed;
+        }
 
         // Choose format
         var format_count: u32 = 0;
-        _ = vkGetPhysicalDeviceSurfaceFormatsKHR(self.physical_device, self.surface, &format_count, null);
+        if (vkGetPhysicalDeviceSurfaceFormatsKHR(self.physical_device, self.surface, &format_count, null) != vk.VK_SUCCESS) {
+            return error.SurfaceFormatsQueryFailed;
+        }
         const formats = try self.allocator.alloc(vk.VkSurfaceFormatKHR, format_count);
         defer self.allocator.free(formats);
-        _ = vkGetPhysicalDeviceSurfaceFormatsKHR(self.physical_device, self.surface, &format_count, formats.ptr);
+        if (vkGetPhysicalDeviceSurfaceFormatsKHR(self.physical_device, self.surface, &format_count, formats.ptr) != vk.VK_SUCCESS) {
+            return error.SurfaceFormatsQueryFailed;
+        }
 
         var chosen_format = formats[0];
         for (formats) |format| {
@@ -2080,10 +2086,14 @@ pub const RenderSystem = struct {
 
         // Choose present mode (prefer mailbox, fallback to FIFO)
         var mode_count: u32 = 0;
-        _ = vkGetPhysicalDeviceSurfacePresentModesKHR(self.physical_device, self.surface, &mode_count, null);
+        if (vkGetPhysicalDeviceSurfacePresentModesKHR(self.physical_device, self.surface, &mode_count, null) != vk.VK_SUCCESS) {
+            return error.PresentModesQueryFailed;
+        }
         const modes = try self.allocator.alloc(vk.VkPresentModeKHR, mode_count);
         defer self.allocator.free(modes);
-        _ = vkGetPhysicalDeviceSurfacePresentModesKHR(self.physical_device, self.surface, &mode_count, modes.ptr);
+        if (vkGetPhysicalDeviceSurfacePresentModesKHR(self.physical_device, self.surface, &mode_count, modes.ptr) != vk.VK_SUCCESS) {
+            return error.PresentModesQueryFailed;
+        }
 
         var chosen_mode: vk.VkPresentModeKHR = vk.VK_PRESENT_MODE_FIFO_KHR;
         for (modes) |mode| {
@@ -2146,9 +2156,13 @@ pub const RenderSystem = struct {
 
         // Get swapchain images
         var actual_image_count: u32 = 0;
-        _ = vkGetSwapchainImagesKHR(self.device, self.swapchain, &actual_image_count, null);
+        if (vkGetSwapchainImagesKHR(self.device, self.swapchain, &actual_image_count, null) != vk.VK_SUCCESS) {
+            return error.SwapchainImagesQueryFailed;
+        }
         self.swapchain_images = try self.allocator.alloc(vk.VkImage, actual_image_count);
-        _ = vkGetSwapchainImagesKHR(self.device, self.swapchain, &actual_image_count, self.swapchain_images.ptr);
+        if (vkGetSwapchainImagesKHR(self.device, self.swapchain, &actual_image_count, self.swapchain_images.ptr) != vk.VK_SUCCESS) {
+            return error.SwapchainImagesQueryFailed;
+        }
 
         logger.info("Swapchain created: {}x{}, {} images", .{ extent.width, extent.height, actual_image_count });
     }
