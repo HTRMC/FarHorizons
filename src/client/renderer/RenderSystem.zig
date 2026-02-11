@@ -2169,6 +2169,8 @@ pub const RenderSystem = struct {
 
     fn createImageViews(self: *Self) !void {
         self.swapchain_image_views = try self.allocator.alloc(vk.VkImageView, self.swapchain_images.len);
+        @memset(self.swapchain_image_views, null);
+        errdefer self.destroyImageViews();
 
         for (self.swapchain_images, 0..) |image, i| {
             self.swapchain_image_views[i] = try ImageViewHelper.createColor2D(
@@ -2214,6 +2216,10 @@ pub const RenderSystem = struct {
         if (vkCreateImage(self.device, &image_info, null, &self.depth_image) != vk.VK_SUCCESS) {
             return error.DepthImageCreationFailed;
         }
+        errdefer {
+            if (vk.vkDestroyImage) |destroy| destroy(self.device, self.depth_image, null);
+            self.depth_image = null;
+        }
 
         var mem_requirements: vk.VkMemoryRequirements = undefined;
         vkGetImageMemoryRequirements(self.device, self.depth_image, &mem_requirements);
@@ -2232,6 +2238,10 @@ pub const RenderSystem = struct {
 
         if (vkAllocateMemory(self.device, &alloc_info, null, &self.depth_image_memory) != vk.VK_SUCCESS) {
             return error.DepthMemoryAllocationFailed;
+        }
+        errdefer {
+            if (vk.vkFreeMemory) |free| free(self.device, self.depth_image_memory, null);
+            self.depth_image_memory = null;
         }
 
         if (vkBindImageMemory(self.device, self.depth_image, self.depth_image_memory, 0) != vk.VK_SUCCESS) {
