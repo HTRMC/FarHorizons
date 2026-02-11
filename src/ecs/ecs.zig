@@ -83,6 +83,9 @@ pub fn initSystems(world: *World) !void {
     try world.addSystem("physics", systems.physics_system.run, .update, 50);
     try world.addSystem("animation", systems.animation_system.run, .update, 60);
 
+    // Post-update phase - cleanup dead entities
+    try world.addSystem("cleanup", systems.cleanup_system.run, .post_update, 0);
+
     // Render prep phase
     try world.addSystem("render_prep", systems.render_prep_system.run, .render_prep, 0);
 }
