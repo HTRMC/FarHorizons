@@ -199,8 +199,8 @@ pub const EntityTextureManager = struct {
         const vkCreateDescriptorSetLayout = vk.vkCreateDescriptorSetLayout orelse return error.VulkanFunctionNotLoaded;
 
         // Binding 0: Uniform buffer (for MVP matrices)
-        // Binding 1: Bindless texture array (sampled images)
-        // Binding 2: Sampler (single sampler for all textures)
+        // Binding 1: Sampler (single sampler for all textures)
+        // Binding 2: Bindless texture array (sampled images) - must be last for VARIABLE_DESCRIPTOR_COUNT
 
         const bindings = [_]vk.VkDescriptorSetLayoutBinding{
             // Binding 0: UBO
@@ -211,31 +211,31 @@ pub const EntityTextureManager = struct {
                 .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
                 .pImmutableSamplers = null,
             },
-            // Binding 1: Bindless texture array
+            // Binding 1: Sampler
             .{
                 .binding = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                .descriptorCount = MAX_ENTITY_TEXTURES,
-                .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
-                .pImmutableSamplers = null,
-            },
-            // Binding 2: Sampler
-            .{
-                .binding = 2,
                 .descriptorType = vk.VK_DESCRIPTOR_TYPE_SAMPLER,
                 .descriptorCount = 1,
                 .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
                 .pImmutableSamplers = null,
             },
+            // Binding 2: Bindless texture array (must be last binding for variable descriptor count)
+            .{
+                .binding = 2,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                .descriptorCount = MAX_ENTITY_TEXTURES,
+                .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = null,
+            },
         };
 
-        // Enable bindless features for binding 1
+        // Enable bindless features for binding 2 (must be last binding)
         const binding_flags = [_]vk.VkDescriptorBindingFlags{
             0, // Binding 0: UBO - no special flags
+            0, // Binding 1: Sampler - no special flags
             vk.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
                 vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT |
-                vk.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT, // Binding 1: Bindless textures
-            0, // Binding 2: Sampler - no special flags
+                vk.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT, // Binding 2: Bindless textures
         };
 
         const binding_flags_info = vk.VkDescriptorSetLayoutBindingFlagsCreateInfo{
@@ -298,7 +298,7 @@ pub const EntityTextureManager = struct {
         const vkAllocateDescriptorSets = vk.vkAllocateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
         const vkUpdateDescriptorSets = vk.vkUpdateDescriptorSets orelse return error.VulkanFunctionNotLoaded;
 
-        // Variable descriptor count for binding 1
+        // Variable descriptor count for binding 2 (last binding)
         const variable_count: u32 = MAX_ENTITY_TEXTURES;
         const variable_count_info = vk.VkDescriptorSetVariableDescriptorCountAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
@@ -331,7 +331,7 @@ pub const EntityTextureManager = struct {
             .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = null,
             .dstSet = self.descriptor_set,
-            .dstBinding = 2,
+            .dstBinding = 1,
             .dstArrayElement = 0,
             .descriptorCount = 1,
             .descriptorType = vk.VK_DESCRIPTOR_TYPE_SAMPLER,
@@ -384,7 +384,7 @@ pub const EntityTextureManager = struct {
             .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = null,
             .dstSet = self.descriptor_set,
-            .dstBinding = 1,
+            .dstBinding = 2,
             .dstArrayElement = index,
             .descriptorCount = 1,
             .descriptorType = vk.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,

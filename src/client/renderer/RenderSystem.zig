@@ -324,7 +324,7 @@ pub const RenderSystem = struct {
     command_buffers: []vk.VkCommandBuffer = &.{},
 
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore = .{null} ** MAX_FRAMES_IN_FLIGHT,
-    render_finished_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore = .{null} ** MAX_FRAMES_IN_FLIGHT,
+    render_finished_semaphores: []vk.VkSemaphore = &.{}, // Per swapchain image, indexed by image_index
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence = .{null} ** MAX_FRAMES_IN_FLIGHT,
     current_frame: u32 = 0,
 
@@ -729,7 +729,7 @@ pub const RenderSystem = struct {
 
         const wait_semaphores = [_]vk.VkSemaphore{self.image_available_semaphores[ctx.current_frame]};
         const wait_stages = [_]vk.VkPipelineStageFlags{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        const signal_semaphores = [_]vk.VkSemaphore{self.render_finished_semaphores[ctx.current_frame]};
+        const signal_semaphores = [_]vk.VkSemaphore{self.render_finished_semaphores[ctx.image_index]};
         const cmd_buffers = [_]vk.VkCommandBuffer{ctx.command_buffer};
 
         const submit_info = vk.VkSubmitInfo{
@@ -1831,6 +1831,9 @@ pub const RenderSystem = struct {
         try self.createDepthResources();
         try self.createFramebuffers();
 
+        // Recreate per-image semaphores if swapchain image count changed
+        try self.recreateRenderFinishedSemaphores();
+
         // Recreate UI buffers with new screen dimensions
         self.crosshair_buffer.destroy(self.device);
         try self.createCrosshairBuffer();
@@ -2108,9 +2111,15 @@ pub const RenderSystem = struct {
 
         const device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
 
+        // Enable Vulkan 1.2 features (drawIndirectCount for GPU-driven rendering)
+        var vulkan12_features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan12Features);
+        vulkan12_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        vulkan12_features.drawIndirectCount = vk.VK_TRUE;
+
         // Enable descriptor indexing features for bindless textures (Vulkan 1.2 core)
         var indexing_features = std.mem.zeroes(vk.VkPhysicalDeviceDescriptorIndexingFeatures);
         indexing_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
+        indexing_features.pNext = &vulkan12_features;
         indexing_features.shaderSampledImageArrayNonUniformIndexing = vk.VK_TRUE;
         indexing_features.runtimeDescriptorArray = vk.VK_TRUE;
         indexing_features.descriptorBindingPartiallyBound = vk.VK_TRUE;
@@ -2120,7 +2129,6 @@ pub const RenderSystem = struct {
         var device_features2 = std.mem.zeroes(vk.VkPhysicalDeviceFeatures2);
         device_features2.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         device_features2.pNext = &indexing_features;
-        // device_features2.features stays zeroed (no extra 1.0 features needed)
 
         const create_info = vk.VkDeviceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -4261,11 +4269,21 @@ pub const RenderSystem = struct {
             .flags = vk.VK_FENCE_CREATE_SIGNALED_BIT,
         };
 
+        // Per-frame-in-flight: image available semaphores and fences
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             if (vkCreateSemaphore(self.device, &semaphore_info, null, &self.image_available_semaphores[i]) != vk.VK_SUCCESS or
-                vkCreateSemaphore(self.device, &semaphore_info, null, &self.render_finished_semaphores[i]) != vk.VK_SUCCESS or
                 vkCreateFence(self.device, &fence_info, null, &self.in_flight_fences[i]) != vk.VK_SUCCESS)
             {
+                return error.SyncObjectCreationFailed;
+            }
+        }
+
+        // Per-swapchain-image: render finished semaphores (indexed by image_index)
+        // Prevents reuse while the presentation engine still holds the semaphore
+        self.render_finished_semaphores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain_images.len);
+        @memset(self.render_finished_semaphores, null);
+        for (0..self.swapchain_images.len) |i| {
+            if (vkCreateSemaphore(self.device, &semaphore_info, null, &self.render_finished_semaphores[i]) != vk.VK_SUCCESS) {
                 return error.SyncObjectCreationFailed;
             }
         }
@@ -4279,8 +4297,42 @@ pub const RenderSystem = struct {
 
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             if (self.image_available_semaphores[i]) |s| vkDestroySemaphore(self.device, s, null);
-            if (self.render_finished_semaphores[i]) |s| vkDestroySemaphore(self.device, s, null);
             if (self.in_flight_fences[i]) |f| vkDestroyFence(self.device, f, null);
+        }
+        for (self.render_finished_semaphores) |s| {
+            if (s) |sem| vkDestroySemaphore(self.device, sem, null);
+        }
+        if (self.render_finished_semaphores.len > 0) {
+            self.allocator.free(self.render_finished_semaphores);
+            self.render_finished_semaphores = &.{};
+        }
+    }
+
+    fn recreateRenderFinishedSemaphores(self: *Self) !void {
+        const vkCreateSemaphore = vk.vkCreateSemaphore orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroySemaphore = vk.vkDestroySemaphore orelse return error.VulkanFunctionNotLoaded;
+
+        // Destroy old semaphores
+        for (self.render_finished_semaphores) |s| {
+            if (s) |sem| vkDestroySemaphore(self.device, sem, null);
+        }
+        if (self.render_finished_semaphores.len != self.swapchain_images.len) {
+            if (self.render_finished_semaphores.len > 0) {
+                self.allocator.free(self.render_finished_semaphores);
+            }
+            self.render_finished_semaphores = try self.allocator.alloc(vk.VkSemaphore, self.swapchain_images.len);
+        }
+        @memset(self.render_finished_semaphores, null);
+
+        const semaphore_info = vk.VkSemaphoreCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+        };
+        for (0..self.swapchain_images.len) |i| {
+            if (vkCreateSemaphore(self.device, &semaphore_info, null, &self.render_finished_semaphores[i]) != vk.VK_SUCCESS) {
+                return error.SyncObjectCreationFailed;
+            }
         }
     }
 
