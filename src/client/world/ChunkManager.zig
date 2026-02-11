@@ -26,7 +26,6 @@ const BlockstateLoader = renderer.block.BlockstateLoader;
 const ChunkBufferManager = renderer.buffer.ChunkBufferManager;
 const ChunkBufferConfig = renderer.buffer.ChunkBufferConfig;
 const ChunkBufferAllocation = renderer.buffer.ChunkBufferAllocation;
-const ChunkDrawCommand = RenderSystem.ChunkDrawCommand;
 const StagingCopy = RenderSystem.StagingCopy;
 const GPUDrivenTypes = renderer.GPUDrivenTypes;
 
@@ -251,8 +250,6 @@ pub const ChunkManager = struct {
 
     /// Dedicated upload thread for GPU staging (AAA pattern)
     upload_thread: ?*UploadThread = null,
-    draw_commands: std.ArrayListUnmanaged(ChunkDrawCommand) = .{},
-
     /// Defers updateLoadQueue to once per frame to prevent cascading slowdowns
     load_queue_dirty: bool = false,
 
@@ -523,7 +520,6 @@ pub const ChunkManager = struct {
         }
         self.completed_queue.deinit();
 
-        self.draw_commands.deinit(self.allocator);
         self.vertex_buffer_cache.deinit(self.allocator);
         self.index_buffer_cache.deinit(self.allocator);
         self.pending_metadata_uploads.deinit(self.allocator);
@@ -834,13 +830,6 @@ pub const ChunkManager = struct {
         }
     }
 
-    pub fn commitUploads(self: *Self, cmd_buffer: vk.VkCommandBuffer) bool {
-        const buf_mgr = self.buffer_manager orelse return false;
-        if (!buf_mgr.hasPendingUploads()) return false;
-        buf_mgr.commitUploads(cmd_buffer);
-        return true;
-    }
-
     /// Commit pending GPU metadata uploads for GPU-driven rendering
     /// Also clears metadata for freed slots (Voxy-style invalidation)
     pub fn commitMetadataUploads(self: *Self, cmd_buffer: vk.VkCommandBuffer) void {
@@ -865,76 +854,6 @@ pub const ChunkManager = struct {
         self.pending_metadata_uploads.clearRetainingCapacity();
     }
 
-    /// Returns commands sorted by render layer for proper draw order
-    pub fn getDrawCommands(self: *Self) []const ChunkDrawCommand {
-        const zone = profiler.trace(@src());
-        defer zone.end();
-
-        self.draw_commands.clearRetainingCapacity();
-
-        const vertex_size: u64 = 36;
-        const index_size: u64 = 4;
-
-        var iter = self.chunk_storage.iterator();
-        while (iter.next()) |entry| {
-            const chunk = entry.value_ptr.*;
-
-            const state = chunk.getState();
-            if (state != .ready and state != .dirty) continue;
-
-            const m = chunk.mesh orelse continue;
-
-            for (0..RENDER_LAYER_COUNT) |layer_idx| {
-                const layer = &m.layers[layer_idx];
-                if (layer.index_count == 0) continue;
-                if (!layer.buffer_allocation.valid or !layer.uploaded) continue;
-
-                const vertex_offset = layer.buffer_allocation.vertex_slice.offset;
-                const index_offset = layer.buffer_allocation.index_slice.offset;
-
-                if (vertex_offset % vertex_size != 0) {
-                    logger.warn("Chunk ({},{},{}) layer {} has unaligned vertex offset: {}", .{
-                        chunk.pos.x,
-                        chunk.pos.z,
-                        chunk.pos.section_y,
-                        layer_idx,
-                        vertex_offset,
-                    });
-                    continue;
-                }
-                if (index_offset % index_size != 0) {
-                    logger.warn("Chunk ({},{},{}) layer {} has unaligned index offset: {}", .{
-                        chunk.pos.x,
-                        chunk.pos.z,
-                        chunk.pos.section_y,
-                        layer_idx,
-                        index_offset,
-                    });
-                    continue;
-                }
-
-                self.draw_commands.append(self.allocator, ChunkDrawCommand{
-                    .vertex_offset = vertex_offset,
-                    .index_offset = index_offset,
-                    .index_count = layer.index_count,
-                    .vertex_arena = layer.buffer_allocation.vertex_slice.arena_index,
-                    .index_arena = layer.buffer_allocation.index_slice.arena_index,
-                    .render_layer = @intCast(layer_idx),
-                }) catch continue;
-            }
-        }
-
-        std.mem.sort(ChunkDrawCommand, self.draw_commands.items, {}, struct {
-            fn lessThan(_: void, a: ChunkDrawCommand, b: ChunkDrawCommand) bool {
-                if (a.render_layer != b.render_layer) return a.render_layer < b.render_layer;
-                if (a.vertex_arena != b.vertex_arena) return a.vertex_arena < b.vertex_arena;
-                return a.index_arena < b.index_arena;
-            }
-        }.lessThan);
-
-        return self.draw_commands.items;
-    }
-
     pub fn getVertexBuffer(self: *const Self) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
         return buf_mgr.getPrimaryVertexBuffer();
@@ -943,16 +862,6 @@ pub const ChunkManager = struct {
     pub fn getIndexBuffer(self: *const Self) ?vk.VkBuffer {
         const buf_mgr = self.buffer_manager orelse return null;
         return buf_mgr.getPrimaryIndexBuffer();
-    }
-
-    pub fn getVertexBufferForArena(self: *const Self, arena_index: u16) ?vk.VkBuffer {
-        const buf_mgr = self.buffer_manager orelse return null;
-        return buf_mgr.getVertexBuffer(arena_index);
-    }
-
-    pub fn getIndexBufferForArena(self: *const Self, arena_index: u16) ?vk.VkBuffer {
-        const buf_mgr = self.buffer_manager orelse return null;
-        return buf_mgr.getIndexBuffer(arena_index);
     }
 
     pub fn getVertexArenaCount(self: *const Self) usize {
@@ -1027,20 +936,6 @@ pub const ChunkManager = struct {
         if (self.buffer_manager) |buf_mgr| {
             buf_mgr.clearPendingCopies();
         }
-    }
-
-    pub fn getVisibleChunks(self: *Self) []*RenderChunk {
-        var result = std.ArrayList(*RenderChunk).init(self.allocator);
-
-        var iter = self.chunk_storage.iterator();
-        while (iter.next()) |entry| {
-            const chunk = entry.value_ptr.*;
-            if (chunk.isReady()) {
-                result.append(chunk) catch continue;
-            }
-        }
-
-        return result.toOwnedSlice() catch &.{};
     }
 
     fn updateLoadQueue(self: *Self) void {
