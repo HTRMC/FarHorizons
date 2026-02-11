@@ -395,7 +395,7 @@ pub const RenderSystem = struct {
         try self.createSurface();
         try self.pickPhysicalDevice();
         try self.createLogicalDevice();
-        try self.createSwapchain();
+        try self.createSwapchain(null);
         try self.createImageViews();
         try self.createDepthResources();
         try self.createRenderPass();
@@ -1806,14 +1806,22 @@ pub const RenderSystem = struct {
 
         _ = vkDeviceWaitIdle(self.device);
 
-        // Cleanup old swapchain resources
+        // Cleanup old swapchain resources (keep old swapchain handle for driver reuse)
         self.destroyFramebuffers();
         self.destroyDepthResources();
         self.destroyImageViews();
-        self.destroySwapchain();
+        const old_swapchain = self.swapchain;
+        if (self.swapchain_images.len > 0) {
+            self.allocator.free(self.swapchain_images);
+            self.swapchain_images = &.{};
+        }
 
-        // Recreate
-        try self.createSwapchain();
+        // Recreate (passing old handle so driver can reuse memory)
+        try self.createSwapchain(old_swapchain);
+        // Old swapchain is retired now that the new one is created
+        if (old_swapchain) |old| {
+            if (vk.vkDestroySwapchainKHR) |destroy| destroy(self.device, old, null);
+        }
         try self.createImageViews();
         try self.createDepthResources();
         try self.createFramebuffers();
@@ -2043,7 +2051,7 @@ pub const RenderSystem = struct {
         logger.info("Logical device created", .{});
     }
 
-    fn createSwapchain(self: *Self) !void {
+    fn createSwapchain(self: *Self, old_swapchain: vk.VkSwapchainKHR) !void {
         const vkGetPhysicalDeviceSurfaceCapabilitiesKHR = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR orelse return error.VulkanFunctionNotLoaded;
         const vkGetPhysicalDeviceSurfaceFormatsKHR = vk.vkGetPhysicalDeviceSurfaceFormatsKHR orelse return error.VulkanFunctionNotLoaded;
         const vkGetPhysicalDeviceSurfacePresentModesKHR = vk.vkGetPhysicalDeviceSurfacePresentModesKHR orelse return error.VulkanFunctionNotLoaded;
@@ -2119,7 +2127,7 @@ pub const RenderSystem = struct {
             .compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
             .presentMode = chosen_mode,
             .clipped = vk.VK_TRUE,
-            .oldSwapchain = null,
+            .oldSwapchain = old_swapchain,
         };
 
         const queue_family_indices = [_]u32{ self.graphics_family, self.present_family };
