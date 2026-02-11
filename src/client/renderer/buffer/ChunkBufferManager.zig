@@ -268,59 +268,6 @@ pub const ChunkBufferManager = struct {
         }
     }
 
-    /// Stage vertex data for upload
-    pub fn stageVertices(
-        self: *Self,
-        allocation: ChunkBufferAllocation,
-        vertex_data: []const u8,
-    ) !void {
-        if (!allocation.valid) return error.InvalidAllocation;
-
-        const buffer = self.vertex_arena.getBuffer(allocation.vertex_slice.arena_index) orelse {
-            return error.InvalidArenaIndex;
-        };
-
-        _ = try self.staging.stage(
-            vertex_data,
-            buffer,
-            allocation.vertex_slice.offset,
-        );
-    }
-
-    /// Stage index data for upload
-    pub fn stageIndices(
-        self: *Self,
-        allocation: ChunkBufferAllocation,
-        index_data: []const u8,
-    ) !void {
-        if (!allocation.valid) return error.InvalidAllocation;
-
-        const buffer = self.index_arena.getBuffer(allocation.index_slice.arena_index) orelse {
-            return error.InvalidArenaIndex;
-        };
-
-        _ = try self.staging.stage(
-            index_data,
-            buffer,
-            allocation.index_slice.offset,
-        );
-    }
-
-    /// Begin a new frame (call before staging)
-    /// NOTE: Does NOT process deferred frees - that's done by upload thread via advanceFrameAndProcessFrees()
-    /// This only advances the frame counter for allocation tracking and begins the staging frame
-    pub fn beginFrame(self: *Self, frame_fence: vk.VkFence) !void {
-        // NOTE: frame_counter is also incremented by upload thread in advanceFrameAndProcessFrees()
-        // This is intentional - main thread tracks its own frame for staging, upload thread tracks for deferred frees
-        // The deferred free logic uses >= comparison so slightly out-of-sync counters are safe
-        try self.staging.beginFrame(frame_fence);
-    }
-
-    /// Commit all staged uploads to a command buffer
-    pub fn commitUploads(self: *Self, cmd_buffer: vk.VkCommandBuffer) void {
-        self.staging.commit(cmd_buffer);
-    }
-
     /// Check if there are pending uploads
     pub fn hasPendingUploads(self: *const Self) bool {
         return self.staging.hasPending();
