@@ -38,43 +38,6 @@ pub const Vertex = extern struct {
     color: [3]f32,
     uv: [2]f32,
     tex_index: u32,
-
-    pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
-        return .{
-            .binding = 0,
-            .stride = @sizeOf(Vertex),
-            .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
-        };
-    }
-
-    pub fn getAttributeDescriptions() [4]vk.VkVertexInputAttributeDescription {
-        return .{
-            .{
-                .binding = 0,
-                .location = 0,
-                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = @offsetOf(Vertex, "pos"),
-            },
-            .{
-                .binding = 0,
-                .location = 1,
-                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = @offsetOf(Vertex, "color"),
-            },
-            .{
-                .binding = 0,
-                .location = 2,
-                .format = vk.VK_FORMAT_R32G32_SFLOAT,
-                .offset = @offsetOf(Vertex, "uv"),
-            },
-            .{
-                .binding = 0,
-                .location = 3,
-                .format = vk.VK_FORMAT_R32_UINT,
-                .offset = @offsetOf(Vertex, "tex_index"),
-            },
-        };
-    }
 };
 
 /// Compact vertex format for chunk meshes (12 bytes vs 36 bytes)
@@ -172,43 +135,6 @@ pub const IconVertex = extern struct {
     uv: [2]f32,       // Texture coordinates
     tex_index: u32,   // Texture array layer
     tint: f32,        // Brightness tint (0.0-1.0)
-
-    pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
-        return .{
-            .binding = 0,
-            .stride = @sizeOf(IconVertex),
-            .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
-        };
-    }
-
-    pub fn getAttributeDescriptions() [4]vk.VkVertexInputAttributeDescription {
-        return .{
-            .{
-                .binding = 0,
-                .location = 0,
-                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = @offsetOf(IconVertex, "pos"),
-            },
-            .{
-                .binding = 0,
-                .location = 1,
-                .format = vk.VK_FORMAT_R32G32_SFLOAT,
-                .offset = @offsetOf(IconVertex, "uv"),
-            },
-            .{
-                .binding = 0,
-                .location = 2,
-                .format = vk.VK_FORMAT_R32_UINT,
-                .offset = @offsetOf(IconVertex, "tex_index"),
-            },
-            .{
-                .binding = 0,
-                .location = 3,
-                .format = vk.VK_FORMAT_R32_SFLOAT,
-                .offset = @offsetOf(IconVertex, "tint"),
-            },
-        };
-    }
 };
 
 pub const RenderSystem = struct {

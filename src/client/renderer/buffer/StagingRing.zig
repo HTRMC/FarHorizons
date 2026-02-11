@@ -19,25 +19,13 @@ pub const PendingCopy = struct {
     size: u64,
 };
 
-/// Frame tracking for fence synchronization
-const FrameAllocation = struct {
-    /// Start offset in ring buffer
-    start: u64,
-    /// End offset (exclusive)
-    end: u64,
-    /// Fence to wait on before reusing this region
-    fence: vk.VkFence,
-};
-
-/// Ring buffer for staging uploads with frame synchronization
+/// Ring buffer for staging uploads
 pub const StagingRing = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
 
     /// Default staging buffer size (64 MB)
     pub const DEFAULT_SIZE: u64 = 64 * 1024 * 1024;
-    /// Maximum frames in flight
-    pub const MAX_FRAMES_IN_FLIGHT: usize = 3;
 
     /// The staging buffer
     buffer: vk.VkBuffer,
@@ -52,11 +40,7 @@ pub const StagingRing = struct {
     /// Current write position in the ring
     write_pos: u64,
 
-    /// Per-frame allocation tracking
-    frame_allocations: [MAX_FRAMES_IN_FLIGHT]?FrameAllocation,
-    current_frame: usize,
-
-    /// Pending copy operations for current frame
+    /// Pending copy operations
     pending_copies: std.ArrayListUnmanaged(PendingCopy),
 
     /// Vulkan device reference
@@ -141,8 +125,6 @@ pub const StagingRing = struct {
             .mapped_ptr = @ptrCast(mapped_ptr),
             .capacity = size,
             .write_pos = 0,
-            .frame_allocations = .{ null, null, null },
-            .current_frame = 0,
             .pending_copies = .{},
             .device = device,
             .allocator = allocator,
@@ -153,19 +135,6 @@ pub const StagingRing = struct {
         const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
         const vkFreeMemory = vk.vkFreeMemory orelse return;
         const vkUnmapMemory = vk.vkUnmapMemory orelse return;
-        const vkWaitForFences = vk.vkWaitForFences orelse return;
-
-        // Wait for any in-flight fences before destroying resources
-        // Note: We don't destroy fences here - they're owned by the renderer
-        for (&self.frame_allocations) |*frame_alloc| {
-            if (frame_alloc.*) |alloc| {
-                if (alloc.fence != null) {
-                    const fences = [_]vk.VkFence{alloc.fence};
-                    _ = vkWaitForFences(self.device, 1, &fences, vk.VK_TRUE, std.math.maxInt(u64));
-                }
-                frame_alloc.* = null;
-            }
-        }
 
         // Unmap memory
         vkUnmapMemory(self.device, self.buffer_memory);
@@ -181,84 +150,6 @@ pub const StagingRing = struct {
         self.pending_copies.deinit(self.allocator);
 
         logger.info("StagingRing destroyed", .{});
-    }
-
-    /// Begin a new frame - wait for old frame's fence if needed
-    pub fn beginFrame(self: *Self, frame_fence: vk.VkFence) !void {
-        const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
-
-        // Move to next frame slot
-        self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
-
-        // If this frame slot has a pending fence, wait for it
-        if (self.frame_allocations[self.current_frame]) |old_alloc| {
-            if (old_alloc.fence != null) {
-                const fences = [_]vk.VkFence{old_alloc.fence};
-                _ = vkWaitForFences(self.device, 1, &fences, vk.VK_TRUE, std.math.maxInt(u64));
-            }
-            self.frame_allocations[self.current_frame] = null;
-        }
-
-        // Record start of this frame's allocations
-        self.frame_allocations[self.current_frame] = FrameAllocation{
-            .start = self.write_pos,
-            .end = self.write_pos,
-            .fence = frame_fence,
-        };
-    }
-
-    /// Non-blocking check if a frame's fence is signaled
-    /// Returns true if fence is signaled (GPU work complete) or no fence exists
-    pub fn isFenceReady(self: *const Self, frame_index: usize) bool {
-        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return true;
-
-        if (frame_index >= MAX_FRAMES_IN_FLIGHT) return true;
-
-        if (self.frame_allocations[frame_index]) |alloc| {
-            if (alloc.fence != null) {
-                return vkGetFenceStatus(self.device, alloc.fence) == vk.VK_SUCCESS;
-            }
-        }
-        return true; // No fence means ready
-    }
-
-    /// Non-blocking check if any fence is signaled
-    pub fn checkFence(self: *const Self, fence: vk.VkFence) bool {
-        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return true;
-        if (fence == null) return true;
-        return vkGetFenceStatus(self.device, fence) == vk.VK_SUCCESS;
-    }
-
-    /// Try to begin a new frame without blocking
-    /// Returns false if previous frame's fence is not ready (caller should skip)
-    /// Returns true and advances frame if ready
-    pub fn tryBeginFrame(self: *Self, frame_fence: vk.VkFence) !bool {
-        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return error.VulkanFunctionNotLoaded;
-
-        const next_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
-
-        // Check if next frame slot's fence is ready (non-blocking)
-        if (self.frame_allocations[next_frame]) |old_alloc| {
-            if (old_alloc.fence != null) {
-                if (vkGetFenceStatus(self.device, old_alloc.fence) != vk.VK_SUCCESS) {
-                    // Fence not ready, caller should skip this frame's staging
-                    return false;
-                }
-            }
-            self.frame_allocations[next_frame] = null;
-        }
-
-        // Fence ready, advance frame
-        self.current_frame = next_frame;
-
-        // Record start of this frame's allocations
-        self.frame_allocations[self.current_frame] = FrameAllocation{
-            .start = self.write_pos,
-            .end = self.write_pos,
-            .fence = frame_fence,
-        };
-
-        return true;
     }
 
     /// Stage data for upload to a destination buffer
@@ -301,49 +192,10 @@ pub const StagingRing = struct {
         // Advance write position
         self.write_pos += aligned_size;
 
-        // Update frame allocation end
-        if (self.frame_allocations[self.current_frame]) |*frame_alloc| {
-            frame_alloc.end = self.write_pos;
-        }
-
         return src_offset;
     }
 
-    /// Commit all pending copies to a command buffer
-    pub fn commit(self: *Self, cmd_buffer: vk.VkCommandBuffer) void {
-        const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return;
-
-        for (self.pending_copies.items) |copy| {
-            const region = vk.VkBufferCopy{
-                .srcOffset = copy.src_offset,
-                .dstOffset = copy.dst_offset,
-                .size = copy.size,
-            };
-            vkCmdCopyBuffer(cmd_buffer, copy.src_buffer, copy.dst_buffer, 1, &region);
-        }
-
-        logger.debug("Committed {} buffer copies", .{self.pending_copies.items.len});
-
-        // Clear pending copies
-        self.pending_copies.clearRetainingCapacity();
-    }
-
-    /// Get number of pending copies
-    pub fn pendingCount(self: *const Self) usize {
-        return self.pending_copies.items.len;
-    }
-
-    /// Check if there are pending copies
-    pub fn hasPending(self: *const Self) bool {
-        return self.pending_copies.items.len > 0;
-    }
-
-    /// Get the staging buffer handle
-    pub fn getBuffer(self: *const Self) vk.VkBuffer {
-        return self.buffer;
-    }
-
-    /// Get pending copies (for building StagingCopy array)
+    /// Get pending copies
     pub fn getPendingCopies(self: *const Self) []const PendingCopy {
         return self.pending_copies.items;
     }

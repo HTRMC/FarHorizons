@@ -25,13 +25,6 @@ pub const ChunkBufferAllocation = struct {
         .index_slice = ExtendedBufferSlice.INVALID,
         .valid = false,
     };
-
-    /// Check if this allocation uses the same buffers as another
-    /// Used for batching draw calls by buffer
-    pub fn sameBuffers(self: ChunkBufferAllocation, other: ChunkBufferAllocation) bool {
-        return self.vertex_slice.arena_index == other.vertex_slice.arena_index and
-            self.index_slice.arena_index == other.index_slice.arena_index;
-    }
 };
 
 /// Configuration for the chunk buffer manager
