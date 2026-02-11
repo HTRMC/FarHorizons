@@ -51,6 +51,8 @@ pub const BufferArena = struct {
         size: u64,
         usage: vk.VkBufferUsageFlags,
         alignment: u64,
+        sharing_mode: vk.VkSharingMode,
+        queue_family_indices: ?[]const u32,
     ) !Self {
         const vkCreateBuffer = vk.vkCreateBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkGetBufferMemoryRequirements = vk.vkGetBufferMemoryRequirements orelse return error.VulkanFunctionNotLoaded;
@@ -64,9 +66,9 @@ pub const BufferArena = struct {
             .flags = 0,
             .size = size,
             .usage = usage | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
+            .sharingMode = sharing_mode,
+            .queueFamilyIndexCount = if (queue_family_indices) |indices| @intCast(indices.len) else 0,
+            .pQueueFamilyIndices = if (queue_family_indices) |indices| indices.ptr else null,
         };
 
         var buffer: vk.VkBuffer = null;

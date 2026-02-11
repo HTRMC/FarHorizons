@@ -54,6 +54,10 @@ pub const GrowableBufferConfig = struct {
     usage: vk.VkBufferUsageFlags = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
     /// Alignment requirement for allocations
     alignment: u64 = 16,
+    /// Buffer sharing mode (EXCLUSIVE or CONCURRENT for multi-queue access)
+    sharing_mode: vk.VkSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+    /// Queue family indices for CONCURRENT sharing (null = exclusive)
+    queue_family_indices: ?[]const u32 = null,
 };
 
 /// Growable buffer arena with async expansion
@@ -120,6 +124,8 @@ pub const GrowableBufferArena = struct {
                 config.arena_size,
                 config.usage,
                 config.alignment,
+                config.sharing_mode,
+                config.queue_family_indices,
             );
             try self.arenas.append(self.allocator, arena);
             logger.info("  Arena {} pre-allocated", .{i});
@@ -340,6 +346,8 @@ pub const GrowableBufferArena = struct {
             self.config.arena_size,
             self.config.usage,
             self.config.alignment,
+            self.config.sharing_mode,
+            self.config.queue_family_indices,
         ) catch |err| {
             logger.err("Async arena allocation failed: {}", .{err});
             self.expansion_mutex.lockUncancelable(self.io);

@@ -315,16 +315,29 @@ pub const ChunkManager = struct {
     }
 
     pub fn start(self: *Self) !void {
+        const rs = self.render_system;
+
+        // Configure buffer sharing mode for dedicated transfer queue
+        const queue_family_indices: ?[]const u32 = if (rs.hasDedicatedTransfer())
+            &[_]u32{ rs.getGraphicsFamily(), rs.getTransferFamily() }
+        else
+            null;
+
         const buffer_mgr = try self.allocator.create(ChunkBufferManager);
         buffer_mgr.* = try ChunkBufferManager.init(
             self.allocator,
-            self.render_system.getDevice(),
-            self.render_system.getPhysicalDevice(),
+            rs.getDevice(),
+            rs.getPhysicalDevice(),
             ChunkBufferConfig{
                 .view_distance = self.config.view_distance,
                 .vertical_view_distance = self.config.vertical_view_distance,
                 // Uses single-buffer mode by default (1GB vertex, 512MB index)
                 // Required for GPU-driven rendering where all geometry must be in one buffer
+                .sharing_mode = if (rs.hasDedicatedTransfer())
+                    vk.VK_SHARING_MODE_CONCURRENT
+                else
+                    vk.VK_SHARING_MODE_EXCLUSIVE,
+                .queue_family_indices = queue_family_indices,
             },
             self.io,
         );
@@ -395,9 +408,9 @@ pub const ChunkManager = struct {
             ut.* = try UploadThread.init(
                 self.allocator,
                 self.io,
-                self.render_system.getDevice(),
-                self.render_system.getPhysicalDevice(),
-                self.render_system.getGraphicsFamily(),
+                rs.getDevice(),
+                rs.getPhysicalDevice(),
+                rs.getTransferFamily(), // Use transfer queue family for upload command pool
                 buf_mgr,
                 &self.completed_queue,
                 self.config.view_distance,
@@ -407,7 +420,15 @@ pub const ChunkManager = struct {
             );
             try ut.start();
             self.upload_thread = ut;
-            logger.info("Upload thread started (0.5ms time budget)", .{});
+
+            // Register upload timeline with RenderSystem for cross-queue synchronization
+            rs.setUploadTimeline(ut.upload_timeline);
+
+            if (rs.hasDedicatedTransfer()) {
+                logger.info("Upload thread started with dedicated transfer queue (family {})", .{rs.getTransferFamily()});
+            } else {
+                logger.info("Upload thread started on graphics queue (0.5ms time budget)", .{});
+            }
         }
 
         self.chunk_load_iterator.reset(self.config.view_distance, self.config.vertical_view_distance);
@@ -706,11 +727,12 @@ pub const ChunkManager = struct {
         self.processCompletedTerrain();
         self.checkMeshDependencies();
 
-        // AAA pattern: main thread submits prepared batches (thread-safe queue access)
+        // AAA pattern: main thread submits prepared batches to transfer queue (thread-safe queue access)
         if (self.upload_thread) |ut| {
-            const submitted = ut.submitPreparedBatches(self.render_system.getGraphicsQueue());
-            if (submitted > 0) {
-                profiler.plotInt("BatchesSubmitted", @intCast(submitted));
+            const result = ut.submitPreparedBatches(self.render_system.getTransferQueue());
+            if (result.count > 0) {
+                self.render_system.setLastUploadTimelineValue(result.max_timeline);
+                profiler.plotInt("BatchesSubmitted", @intCast(result.count));
             }
         }
 

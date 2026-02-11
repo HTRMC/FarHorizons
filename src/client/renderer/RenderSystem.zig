@@ -225,8 +225,16 @@ pub const RenderSystem = struct {
 
     graphics_queue: vk.VkQueue = null,
     present_queue: vk.VkQueue = null,
+    transfer_queue: vk.VkQueue = null,
     graphics_family: u32 = 0,
     present_family: u32 = 0,
+    transfer_family: u32 = 0,
+    has_dedicated_transfer: bool = false,
+
+    /// Upload timeline semaphore reference (set by ChunkManager after UploadThread init)
+    upload_timeline_ref: ?vk.VkSemaphore = null,
+    /// Latest upload timeline value to wait on (set each frame by ChunkManager)
+    last_upload_timeline_value: u64 = 0,
 
     swapchain: vk.VkSwapchainKHR = null,
     swapchain_images: []vk.VkImage = &.{},
@@ -676,6 +684,31 @@ pub const RenderSystem = struct {
         return self.graphics_family;
     }
 
+    /// Get the transfer queue (dedicated DMA or graphics queue fallback)
+    pub fn getTransferQueue(self: *const Self) vk.VkQueue {
+        return self.transfer_queue;
+    }
+
+    /// Get the transfer queue family index
+    pub fn getTransferFamily(self: *const Self) u32 {
+        return self.transfer_family;
+    }
+
+    /// Whether a dedicated transfer queue exists (separate from graphics)
+    pub fn hasDedicatedTransfer(self: *const Self) bool {
+        return self.has_dedicated_transfer;
+    }
+
+    /// Set upload timeline semaphore reference (called after UploadThread init)
+    pub fn setUploadTimeline(self: *Self, sem: vk.VkSemaphore) void {
+        self.upload_timeline_ref = sem;
+    }
+
+    /// Set latest upload timeline value to wait on (called each frame)
+    pub fn setLastUploadTimelineValue(self: *Self, v: u64) void {
+        self.last_upload_timeline_value = v;
+    }
+
     /// Get the GPU device abstraction for resource creation
     pub fn getGpuDevice(self: *Self) ?*GpuDevice {
         if (self.gpu_device) |*dev| {
@@ -743,19 +776,40 @@ pub const RenderSystem = struct {
         const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
         const vkQueuePresentKHR = vk.vkQueuePresentKHR orelse return error.VulkanFunctionNotLoaded;
 
-        const wait_semaphores = [_]vk.VkSemaphore{self.image_available_semaphores[ctx.current_frame]};
-        const wait_stages = [_]vk.VkPipelineStageFlags{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        // Determine if we need to wait on the upload timeline (dedicated transfer queue only)
+        const need_upload_wait = self.has_dedicated_transfer and
+            self.upload_timeline_ref != null and
+            self.last_upload_timeline_value > 0;
+
+        // Build wait semaphore arrays dynamically based on upload timeline
+        var wait_semaphores: [2]vk.VkSemaphore = undefined;
+        var wait_stages: [2]vk.VkPipelineStageFlags = undefined;
+        var wait_values: [2]u64 = undefined;
+        var wait_count: u32 = 1;
+
+        // Always wait on image available (binary semaphore)
+        wait_semaphores[0] = self.image_available_semaphores[ctx.current_frame];
+        wait_stages[0] = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        wait_values[0] = 0; // binary semaphore, value ignored
+
+        if (need_upload_wait) {
+            // Wait on upload timeline at vertex input stage (transfers must complete before vertex reads)
+            wait_semaphores[1] = self.upload_timeline_ref.?;
+            wait_stages[1] = vk.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+            wait_values[1] = self.last_upload_timeline_value;
+            wait_count = 2;
+        }
+
         const signal_semaphores = [_]vk.VkSemaphore{ self.render_finished_semaphores[ctx.image_index], self.gpu_timeline.? };
         const cmd_buffers = [_]vk.VkCommandBuffer{ctx.command_buffer};
 
         // Timeline semaphore: increment before submit so the signaled value tracks this frame
         self.timeline_value += 1;
-        const wait_values = [_]u64{ 0 }; // binary semaphore, ignored
         const signal_values = [_]u64{ 0, self.timeline_value }; // binary (ignored), timeline
         var timeline_info = vk.VkTimelineSemaphoreSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
             .pNext = null,
-            .waitSemaphoreValueCount = 1,
+            .waitSemaphoreValueCount = wait_count,
             .pWaitSemaphoreValues = &wait_values,
             .signalSemaphoreValueCount = 2,
             .pSignalSemaphoreValues = &signal_values,
@@ -764,7 +818,7 @@ pub const RenderSystem = struct {
         const submit_info = vk.VkSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .pNext = &timeline_info,
-            .waitSemaphoreCount = 1,
+            .waitSemaphoreCount = wait_count,
             .pWaitSemaphores = &wait_semaphores,
             .pWaitDstStageMask = &wait_stages,
             .commandBufferCount = 1,
@@ -2088,6 +2142,11 @@ pub const RenderSystem = struct {
         vkGetPhysicalDeviceProperties(self.physical_device, &props);
         const name_slice = std.mem.sliceTo(&props.deviceName, 0);
         logger.info("Selected GPU: {s}", .{name_slice});
+
+        if (!self.has_dedicated_transfer) {
+            logger.warn("GPU '{s}' has no dedicated transfer queue — chunk uploads will share the graphics queue. " ++
+                "Performance may be degraded. A discrete NVIDIA or AMD GPU is recommended.", .{name_slice});
+        }
     }
 
     fn isDeviceSuitable(self: *Self, device: vk.VkPhysicalDevice) !bool {
@@ -2096,6 +2155,8 @@ pub const RenderSystem = struct {
 
         self.graphics_family = families.graphics.?;
         self.present_family = families.present.?;
+        self.transfer_family = families.transfer orelse self.graphics_family;
+        self.has_dedicated_transfer = families.transfer != null;
 
         // Check swapchain support
         const vkEnumerateDeviceExtensionProperties = vk.vkEnumerateDeviceExtensionProperties orelse return error.VulkanFunctionNotLoaded;
@@ -2118,7 +2179,7 @@ pub const RenderSystem = struct {
         return has_swapchain;
     }
 
-    fn findQueueFamilies(self: *Self, device: vk.VkPhysicalDevice) !struct { graphics: ?u32, present: ?u32 } {
+    fn findQueueFamilies(self: *Self, device: vk.VkPhysicalDevice) !struct { graphics: ?u32, present: ?u32, transfer: ?u32 } {
         const vkGetPhysicalDeviceQueueFamilyProperties = vk.vkGetPhysicalDeviceQueueFamilyProperties orelse return error.VulkanFunctionNotLoaded;
         const vkGetPhysicalDeviceSurfaceSupportKHR = vk.vkGetPhysicalDeviceSurfaceSupportKHR orelse return error.VulkanFunctionNotLoaded;
 
@@ -2131,6 +2192,7 @@ pub const RenderSystem = struct {
 
         var graphics: ?u32 = null;
         var present: ?u32 = null;
+        var transfer: ?u32 = null;
 
         for (queue_families, 0..) |family, i| {
             const idx: u32 = @intCast(i);
@@ -2145,10 +2207,15 @@ pub const RenderSystem = struct {
                 present = idx;
             }
 
-            if (graphics != null and present != null) break;
+            // Look for dedicated transfer queue (has TRANSFER but not GRAPHICS)
+            if ((family.queueFlags & vk.VK_QUEUE_TRANSFER_BIT) != 0 and
+                (family.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT) == 0)
+            {
+                transfer = idx;
+            }
         }
 
-        return .{ .graphics = graphics, .present = present };
+        return .{ .graphics = graphics, .present = present, .transfer = transfer };
     }
 
     fn createLogicalDevice(self: *Self) !void {
@@ -2156,7 +2223,7 @@ pub const RenderSystem = struct {
         const vkGetDeviceQueue = vk.vkGetDeviceQueue orelse return error.VulkanFunctionNotLoaded;
 
         const queue_priority: f32 = 1.0;
-        var queue_create_infos: [2]vk.VkDeviceQueueCreateInfo = undefined;
+        var queue_create_infos: [3]vk.VkDeviceQueueCreateInfo = undefined;
         var queue_count: u32 = 1;
 
         queue_create_infos[0] = .{
@@ -2169,7 +2236,7 @@ pub const RenderSystem = struct {
         };
 
         if (self.graphics_family != self.present_family) {
-            queue_create_infos[1] = .{
+            queue_create_infos[queue_count] = .{
                 .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
                 .pNext = null,
                 .flags = 0,
@@ -2177,7 +2244,23 @@ pub const RenderSystem = struct {
                 .queueCount = 1,
                 .pQueuePriorities = &queue_priority,
             };
-            queue_count = 2;
+            queue_count += 1;
+        }
+
+        // Add dedicated transfer queue if it's a unique family
+        if (self.has_dedicated_transfer and
+            self.transfer_family != self.graphics_family and
+            self.transfer_family != self.present_family)
+        {
+            queue_create_infos[queue_count] = .{
+                .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .queueFamilyIndex = self.transfer_family,
+                .queueCount = 1,
+                .pQueuePriorities = &queue_priority,
+            };
+            queue_count += 1;
         }
 
         const device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
@@ -2220,7 +2303,13 @@ pub const RenderSystem = struct {
         vkGetDeviceQueue(self.device, self.graphics_family, 0, &self.graphics_queue);
         vkGetDeviceQueue(self.device, self.present_family, 0, &self.present_queue);
 
-        logger.info("Logical device created", .{});
+        if (self.has_dedicated_transfer) {
+            vkGetDeviceQueue(self.device, self.transfer_family, 0, &self.transfer_queue);
+            logger.info("Logical device created with dedicated transfer queue (family {})", .{self.transfer_family});
+        } else {
+            self.transfer_queue = self.graphics_queue;
+            logger.info("Logical device created (no dedicated transfer queue, using graphics queue)", .{});
+        }
     }
 
     fn createSwapchain(self: *Self, old_swapchain: vk.VkSwapchainKHR) !void {

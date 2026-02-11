@@ -58,6 +58,10 @@ pub const ChunkBufferConfig = struct {
     avg_chunk_index_size: u64 = 32 * 1024, // 32 KB average
     /// Expansion threshold percentage (0-100) - not used in single-buffer mode
     expansion_threshold: u8 = 75,
+    /// Buffer sharing mode (EXCLUSIVE or CONCURRENT for multi-queue access)
+    sharing_mode: vk.VkSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+    /// Queue family indices for CONCURRENT sharing (null = exclusive)
+    queue_family_indices: ?[]const u32 = null,
 };
 
 /// Deferred free entry - allocation to be freed after GPU is done with it
@@ -124,6 +128,8 @@ pub const ChunkBufferManager = struct {
                 .usage = vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
                 .alignment = config.vertex_size,
                 .expansion_threshold_percent = 100, // Disable expansion threshold
+                .sharing_mode = config.sharing_mode,
+                .queue_family_indices = config.queue_family_indices,
             },
             io,
         );
@@ -141,6 +147,8 @@ pub const ChunkBufferManager = struct {
                 .usage = vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 .alignment = config.index_size,
                 .expansion_threshold_percent = 100, // Disable expansion threshold
+                .sharing_mode = config.sharing_mode,
+                .queue_family_indices = config.queue_family_indices,
             },
             io,
         );

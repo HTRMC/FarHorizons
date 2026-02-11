@@ -392,11 +392,14 @@ pub const UploadThread = struct {
         };
     }
 
+    /// Result from submitting prepared batches
+    pub const SubmitResult = struct { count: u32, max_timeline: u64 };
+
     /// Submit all prepared batches to the GPU queue in a single vkQueueSubmit (called from main thread only)
-    /// Returns the number of command buffers submitted
+    /// Returns count of command buffers submitted and the max timeline value signaled
     /// AAA pattern: only main thread touches the queue
-    pub fn submitPreparedBatches(self: *Self, queue: vk.VkQueue) u32 {
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return 0;
+    pub fn submitPreparedBatches(self: *Self, queue: vk.VkQueue) SubmitResult {
+        const vkQueueSubmit = vk.vkQueueSubmit orelse return .{ .count = 0, .max_timeline = 0 };
 
         var cmd_buffers: [UPLOAD_CB_COUNT]vk.VkCommandBuffer = undefined;
         var count: u32 = 0;
@@ -407,7 +410,7 @@ pub const UploadThread = struct {
             max_timeline = @max(max_timeline, batch.timeline_value);
             count += 1;
         }
-        if (count == 0) return 0;
+        if (count == 0) return .{ .count = 0, .max_timeline = 0 };
 
         const signal_values = [_]u64{max_timeline};
         const signal_semaphores = [_]vk.VkSemaphore{self.upload_timeline};
@@ -434,9 +437,9 @@ pub const UploadThread = struct {
         if (vkQueueSubmit(queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
             logger.err("Failed to submit prepared batches", .{});
             self.stats.submit_errors += 1;
-            return 0;
+            return .{ .count = 0, .max_timeline = 0 };
         }
-        return count;
+        return .{ .count = count, .max_timeline = max_timeline };
     }
 
     /// Check if there are prepared batches waiting for submission
