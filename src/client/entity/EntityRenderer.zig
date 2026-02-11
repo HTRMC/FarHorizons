@@ -326,11 +326,11 @@ pub const EntityRenderer = struct {
                 const m = Mat4.multiply(translation, rotation);
 
                 const base_vertex = writer.getBaseVertex();
-                const prev_indices = writer.index_count;
 
                 self.cow_model.generateMeshDirect(walk_anim, walk_speed, head_pitch, head_yaw, &writer);
 
                 // Post-process in-place: world transform, tex_index, hurt color
+                // Note: indices are already absolute (renderDirect writes base_vertex-relative indices)
                 for (writer.vertices[base_vertex..writer.vertex_count]) |*vert| {
                     const x = vert.pos[0];
                     const y = vert.pos[1];
@@ -342,12 +342,6 @@ pub const EntityRenderer = struct {
                     };
                     if (self.use_bindless) vert.tex_index = self.cow_tex_index;
                     if (is_hurt) vert.color = .{ 1.0, 0.4, 0.4 };
-                }
-                // Offset indices by base_vertex
-                if (base_vertex > 0) {
-                    for (writer.indices[prev_indices..writer.index_count]) |*idx| {
-                        idx.* += base_vertex;
-                    }
                 }
             }
         }
@@ -393,11 +387,11 @@ pub const EntityRenderer = struct {
                 const m = Mat4.multiply(translation, rotation);
 
                 const base_vertex = writer.getBaseVertex();
-                const prev_indices = writer.index_count;
 
                 self.baby_cow_model.generateMeshDirect(walk_anim, walk_speed, head_pitch, head_yaw, &writer);
 
                 // Post-process in-place: world transform, tex_index, hurt color
+                // Note: indices are already absolute (renderDirect writes base_vertex-relative indices)
                 for (writer.vertices[base_vertex..writer.vertex_count]) |*vert| {
                     const x = vert.pos[0];
                     const y = vert.pos[1];
@@ -409,11 +403,6 @@ pub const EntityRenderer = struct {
                     };
                     if (self.use_bindless) vert.tex_index = self.baby_cow_tex_index;
                     if (is_hurt) vert.color = .{ 1.0, 0.4, 0.4 };
-                }
-                if (base_vertex > 0) {
-                    for (writer.indices[prev_indices..writer.index_count]) |*idx| {
-                        idx.* += base_vertex;
-                    }
                 }
             }
         }

@@ -538,7 +538,7 @@ pub const UploadThread = struct {
                 // Heuristic flush: finalize CB if copy count threshold reached
                 if (self.active_copy_count >= COPIES_PER_CB) {
                     self.finalizeCB();
-                    _ = self.tryAcquireNextCB();
+                    if (self.active_cb == null) _ = self.tryAcquireNextCB();
                 }
 
                 if (result.valid) {
@@ -552,7 +552,7 @@ pub const UploadThread = struct {
             // Finalize CB at end of work cycle if there's work to push
             if (self.pending_results.items.len > 0 or self.active_copy_count > 0) {
                 self.finalizeCB();
-                _ = self.tryAcquireNextCB();
+                if (self.active_cb == null) _ = self.tryAcquireNextCB();
             }
 
             // Stats
@@ -589,54 +589,69 @@ pub const UploadThread = struct {
         self.staging_ring.clearPendingCopies();
     }
 
-    /// End the active command buffer, assign a timeline value, and push to queues
+    /// End the active command buffer, assign a timeline value, and push to queues.
+    /// When there are no GPU copies, just flushes pending results without consuming the CB.
     fn finalizeCB(self: *Self) void {
-        const cb = self.active_cb orelse return;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return;
-
         // Nothing to finalize if no copies AND no results
         if (self.active_copy_count == 0 and self.pending_results.items.len == 0) return;
-        // Don't finalize if prepared_batches queue is full (main thread hasn't drained)
-        if (self.active_copy_count > 0 and self.prepared_batches.isFull()) return;
 
-        _ = vkEndCommandBuffer(cb);
-
-        // Assign timeline value (0 if no actual GPU work)
-        const tv: u64 = if (self.active_copy_count > 0) blk: {
-            const v = self.next_timeline_value;
-            self.next_timeline_value += 1;
-            self.cb_timeline[self.active_cb_index] = v;
-            break :blk v;
-        } else 0;
-
-        // Push prepared batch (only if there's actual GPU work)
+        // If there are actual GPU copies, end the CB and push to prepared_batches
         if (self.active_copy_count > 0) {
+            const cb = self.active_cb orelse return;
+            const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return;
+
+            // Don't finalize if prepared_batches queue is full (main thread hasn't drained)
+            if (self.prepared_batches.isFull()) return;
+
+            _ = vkEndCommandBuffer(cb);
+
+            const tv = self.next_timeline_value;
+            self.next_timeline_value += 1;
+            self.cb_timeline[self.active_cb_index] = tv;
+
             _ = self.prepared_batches.tryPush(.{
                 .command_buffer = cb,
                 .timeline_value = tv,
                 .result_count = @intCast(self.pending_results.items.len),
             });
-        }
 
-        // Push results with timeline value
-        for (self.pending_results.items) |*result| {
-            result.upload_timeline_value = tv;
-            if (!self.output_queue.tryPush(result.*)) {
-                // Queue full, cleanup this result
-                if (result.valid) {
-                    for (0..RENDER_LAYER_COUNT) |i| {
-                        if (result.mesh.layers[i].buffer_allocation.valid) {
-                            self.buffer_manager.free(result.mesh.layers[i].buffer_allocation);
+            // Push results with this timeline value
+            for (self.pending_results.items) |*result| {
+                result.upload_timeline_value = tv;
+                if (!self.output_queue.tryPush(result.*)) {
+                    if (result.valid) {
+                        for (0..RENDER_LAYER_COUNT) |i| {
+                            if (result.mesh.layers[i].buffer_allocation.valid) {
+                                self.buffer_manager.free(result.mesh.layers[i].buffer_allocation);
+                            }
                         }
+                        result.mesh.deinit();
                     }
-                    result.mesh.deinit();
+                    self.stats.upload_errors += 1;
                 }
-                self.stats.upload_errors += 1;
             }
+            self.pending_results.clearRetainingCapacity();
+            self.active_copy_count = 0;
+            self.active_cb = null; // need new CB
+        } else {
+            // No GPU work — just flush results with timeline_value=0 (always ready)
+            // Keep the active CB open for future copies
+            for (self.pending_results.items) |*result| {
+                result.upload_timeline_value = 0;
+                if (!self.output_queue.tryPush(result.*)) {
+                    if (result.valid) {
+                        for (0..RENDER_LAYER_COUNT) |i| {
+                            if (result.mesh.layers[i].buffer_allocation.valid) {
+                                self.buffer_manager.free(result.mesh.layers[i].buffer_allocation);
+                            }
+                        }
+                        result.mesh.deinit();
+                    }
+                    self.stats.upload_errors += 1;
+                }
+            }
+            self.pending_results.clearRetainingCapacity();
         }
-        self.pending_results.clearRetainingCapacity();
-        self.active_copy_count = 0;
-        self.active_cb = null;
     }
 
     /// Try to acquire the next command buffer in the pool (timeline-based reuse)
