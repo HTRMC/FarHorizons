@@ -1,9 +1,12 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const volk = @import("volk");
 const vk = volk.c;
 const shared = @import("Shared");
 const Logger = shared.Logger;
+
+const enable_validation = builtin.mode == .Debug;
 const platform = @import("Platform");
 const ShaderManager = @import("ShaderManager.zig").ShaderManager;
 const stb_image = @import("stb_image");
@@ -214,6 +217,7 @@ pub const RenderSystem = struct {
     const logger = Logger.scoped(Self);
 
     instance: vk.VkInstance = null,
+    debug_messenger: vk.VkDebugUtilsMessengerEXT = null,
     surface: vk.VkSurfaceKHR = null,
     physical_device: vk.VkPhysicalDevice = null,
     device: vk.VkDevice = null,
@@ -472,6 +476,7 @@ pub const RenderSystem = struct {
         self.destroySwapchain();
         self.destroyDevice();
         self.destroySurface();
+        self.destroyDebugMessenger();
         self.destroyInstance();
 
         logger.info("Render system shut down", .{});
@@ -1842,6 +1847,8 @@ pub const RenderSystem = struct {
         logger.info("Swapchain recreated: {}x{}", .{ self.swapchain_extent.width, self.swapchain_extent.height });
     }
 
+    const validation_layer = "VK_LAYER_KHRONOS_validation";
+
     fn createInstance(self: *Self) !void {
         const ext_info = platform.getRequiredVulkanExtensions() orelse {
             logger.err("Failed to get required Vulkan extensions", .{});
@@ -1849,6 +1856,47 @@ pub const RenderSystem = struct {
         };
 
         logger.info("Required extensions: {}", .{ext_info.count});
+
+        // Check for validation layer support in debug builds
+        const validation_available = if (enable_validation) blk: {
+            const vkEnumerateInstanceLayerProperties = vk.vkEnumerateInstanceLayerProperties orelse break :blk false;
+            var layer_count: u32 = 0;
+            if (vkEnumerateInstanceLayerProperties(&layer_count, null) != vk.VK_SUCCESS) break :blk false;
+
+            const layers = self.allocator.alloc(vk.VkLayerProperties, layer_count) catch break :blk false;
+            defer self.allocator.free(layers);
+            if (vkEnumerateInstanceLayerProperties(&layer_count, layers.ptr) != vk.VK_SUCCESS) break :blk false;
+
+            var found = false;
+            for (layers[0..layer_count]) |layer| {
+                const name: [*:0]const u8 = @ptrCast(&layer.layerName);
+                if (std.mem.orderZ(u8, name, validation_layer) == .eq) {
+                    found = true;
+                    break;
+                }
+            }
+            break :blk found;
+        } else false;
+
+        if (enable_validation and !validation_available) {
+            logger.warn("Validation layer not available - install Vulkan SDK for debug diagnostics", .{});
+        }
+        if (validation_available) {
+            logger.info("Vulkan validation layer enabled", .{});
+        }
+
+        // Build extension list (add VK_EXT_debug_utils if validation is active)
+        const validation_layers = [_][*c]const u8{validation_layer};
+        const debug_utils_ext = vk.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+        var ext_count = ext_info.count;
+        var extensions_buf: [32][*c]const u8 = undefined;
+        for (0..ext_info.count) |i| {
+            extensions_buf[i] = ext_info.extensions[i];
+        }
+        if (validation_available) {
+            extensions_buf[ext_count] = debug_utils_ext;
+            ext_count += 1;
+        }
 
         const app_info = vk.VkApplicationInfo{
             .sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -1865,10 +1913,10 @@ pub const RenderSystem = struct {
             .pNext = null,
             .flags = 0,
             .pApplicationInfo = &app_info,
-            .enabledLayerCount = 0,
-            .ppEnabledLayerNames = null,
-            .enabledExtensionCount = ext_info.count,
-            .ppEnabledExtensionNames = ext_info.extensions,
+            .enabledLayerCount = if (validation_available) 1 else 0,
+            .ppEnabledLayerNames = if (validation_available) &validation_layers else null,
+            .enabledExtensionCount = ext_count,
+            .ppEnabledExtensionNames = &extensions_buf,
         };
 
         const vkCreateInstance = vk.vkCreateInstance orelse return error.VulkanFunctionNotLoaded;
@@ -1877,7 +1925,55 @@ pub const RenderSystem = struct {
         }
 
         volk.loadInstance(self.instance);
+
+        // Set up debug messenger
+        if (validation_available) {
+            self.setupDebugMessenger();
+        }
+
         logger.info("Vulkan instance created", .{});
+    }
+
+    fn vulkanDebugCallback(
+        severity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
+        _: vk.VkDebugUtilsMessageTypeFlagsEXT,
+        callback_data: [*c]const vk.VkDebugUtilsMessengerCallbackDataEXT,
+        _: ?*anyopaque,
+    ) callconv(.c) vk.VkBool32 {
+        const msg: [*:0]const u8 = if (callback_data != null and callback_data.*.pMessage != null)
+            callback_data.*.pMessage
+        else
+            "unknown";
+
+        if (severity >= vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+            logger.err("Validation: {s}", .{msg});
+        } else if (severity >= vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+            logger.warn("Validation: {s}", .{msg});
+        } else {
+            logger.info("Validation: {s}", .{msg});
+        }
+        return vk.VK_FALSE;
+    }
+
+    fn setupDebugMessenger(self: *Self) void {
+        const vkCreateDebugUtilsMessengerEXT = vk.vkCreateDebugUtilsMessengerEXT orelse return;
+
+        const create_info = vk.VkDebugUtilsMessengerCreateInfoEXT{
+            .sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+            .pNext = null,
+            .flags = 0,
+            .messageSeverity = vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+            .messageType = vk.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                vk.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                vk.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+            .pfnUserCallback = &vulkanDebugCallback,
+            .pUserData = null,
+        };
+
+        if (vkCreateDebugUtilsMessengerEXT(self.instance, &create_info, null, &self.debug_messenger) != vk.VK_SUCCESS) {
+            logger.warn("Failed to create debug messenger", .{});
+        }
     }
 
     fn createSurface(self: *Self) !void {
@@ -4450,6 +4546,13 @@ pub const RenderSystem = struct {
         if (self.surface) |s| {
             if (vk.vkDestroySurfaceKHR) |destroy| destroy(self.instance, s, null);
             self.surface = null;
+        }
+    }
+
+    fn destroyDebugMessenger(self: *Self) void {
+        if (self.debug_messenger) |messenger| {
+            if (vk.vkDestroyDebugUtilsMessengerEXT) |destroy| destroy(self.instance, messenger, null);
+            self.debug_messenger = null;
         }
     }
 
