@@ -31,15 +31,16 @@ const ThreadSafeQueue = thread_pool.ThreadSafeQueue;
 
 const SPSCQueue = @import("SPSCQueue.zig").SPSCQueue;
 
-/// Number of fences in the pool (rotating through batches)
-/// Larger pool allows upload thread to stay ahead of main thread consumption
-const FENCE_POOL_SIZE: usize = 8;
+/// Pipeline depth: recording + submitted + GPU-executing
+const UPLOAD_CB_COUNT: usize = 3;
+/// Heuristic flush threshold: finalize CB after this many copy commands
+const COPIES_PER_CB: u32 = 128;
 
 /// Prepared batch ready for main thread to submit
 /// Upload thread prepares, main thread submits (thread-safe queue access)
 pub const PreparedBatch = struct {
     command_buffer: vk.VkCommandBuffer,
-    fence: vk.VkFence,
+    timeline_value: u64,
     result_count: u32,
 };
 
@@ -54,9 +55,9 @@ pub const UploadResult = struct {
     gpu_slot: u32,
     /// Whether this result is valid (false if processing failed/empty)
     valid: bool,
-    /// Fence that signals when GPU copy is complete
-    /// Main thread must check this before using the mesh
-    upload_fence: vk.VkFence,
+    /// Timeline semaphore value that signals when GPU copy is complete
+    /// Main thread compares against completed value (0 = no GPU work, always ready)
+    upload_timeline_value: u64,
 };
 
 /// Upload thread statistics
@@ -132,12 +133,16 @@ pub const UploadThread = struct {
     physical_device: vk.VkPhysicalDevice,
     command_pool: vk.VkCommandPool,
 
-    // Command buffer pool (one per fence slot for pipelining)
-    command_buffers: [FENCE_POOL_SIZE]vk.VkCommandBuffer,
+    // Timeline semaphore for tracking GPU completion
+    upload_timeline: vk.VkSemaphore,
+    next_timeline_value: u64 = 1,
 
-    // Fence pool for tracking GPU completion per batch
-    fence_pool: [FENCE_POOL_SIZE]vk.VkFence,
-    current_fence_index: usize = 0,
+    // Command buffer pool with timeline-based reuse
+    cb_pool: [UPLOAD_CB_COUNT]vk.VkCommandBuffer,
+    cb_timeline: [UPLOAD_CB_COUNT]u64 = .{0} ** UPLOAD_CB_COUNT,
+    active_cb_index: u32 = 0,
+    active_cb: ?vk.VkCommandBuffer = null,
+    active_copy_count: u32 = 0,
 
     // Prepared batches queue (upload thread prepares, main thread submits)
     // This avoids queue access from multiple threads
@@ -182,7 +187,7 @@ pub const UploadThread = struct {
         errdefer free_queue.deinit();
 
         // Create prepared batches queue (upload thread writes, main thread reads for submission)
-        var prepared_batches = try SPSCQueue(PreparedBatch).init(allocator, FENCE_POOL_SIZE);
+        var prepared_batches = try SPSCQueue(PreparedBatch).init(allocator, UPLOAD_CB_COUNT);
         errdefer prepared_batches.deinit();
 
         // Create staging ring buffer (OWNED by upload thread)
@@ -204,47 +209,46 @@ pub const UploadThread = struct {
         }
         errdefer vkDestroyCommandPool(device, command_pool, null);
 
-        // Allocate command buffer pool (one per fence slot for pipelining)
+        // Allocate command buffer pool (timeline-based reuse)
         const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
         const alloc_info = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
             .commandPool = command_pool,
             .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = FENCE_POOL_SIZE,
+            .commandBufferCount = UPLOAD_CB_COUNT,
         };
-        var command_buffers: [FENCE_POOL_SIZE]vk.VkCommandBuffer = undefined;
-        if (vkAllocateCommandBuffers(device, &alloc_info, &command_buffers) != vk.VK_SUCCESS) {
+        var cb_pool: [UPLOAD_CB_COUNT]vk.VkCommandBuffer = undefined;
+        if (vkAllocateCommandBuffers(device, &alloc_info, &cb_pool) != vk.VK_SUCCESS) {
             return error.CommandBufferAllocationFailed;
         }
 
-        // Create fence pool
-        const vkCreateFence = vk.vkCreateFence orelse return error.VulkanFunctionNotLoaded;
-        const vkDestroyFence = vk.vkDestroyFence orelse return error.VulkanFunctionNotLoaded;
-        var fence_pool: [FENCE_POOL_SIZE]vk.VkFence = undefined;
-        var fences_created: usize = 0;
+        // Create timeline semaphore for upload completion tracking
+        const vkCreateSemaphore = vk.vkCreateSemaphore orelse return error.VulkanFunctionNotLoaded;
+        var timeline_type_info = vk.VkSemaphoreTypeCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .pNext = null,
+            .semaphoreType = vk.VK_SEMAPHORE_TYPE_TIMELINE,
+            .initialValue = 0,
+        };
+        const timeline_sem_info = vk.VkSemaphoreCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &timeline_type_info,
+            .flags = 0,
+        };
+        var upload_timeline: vk.VkSemaphore = null;
+        if (vkCreateSemaphore(device, &timeline_sem_info, null, &upload_timeline) != vk.VK_SUCCESS) {
+            return error.SyncObjectCreationFailed;
+        }
         errdefer {
-            for (0..fences_created) |i| {
-                vkDestroyFence(device, fence_pool[i], null);
-            }
+            const vkDestroySemaphore = vk.vkDestroySemaphore orelse {};
+            vkDestroySemaphore(device, upload_timeline, null);
         }
 
-        for (0..FENCE_POOL_SIZE) |i| {
-            const fence_info = vk.VkFenceCreateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-                .pNext = null,
-                .flags = vk.VK_FENCE_CREATE_SIGNALED_BIT, // Start signaled
-            };
-            if (vkCreateFence(device, &fence_info, null, &fence_pool[i]) != vk.VK_SUCCESS) {
-                return error.FenceCreationFailed;
-            }
-            fences_created += 1;
-        }
-
-        logger.info("UploadThread initialized: budget={}us, max_per_batch={}, fence_pool={}", .{
+        logger.info("UploadThread initialized: budget={}us, max_per_batch={}, cb_pool={}, timeline semaphore", .{
             config.time_budget_ns / 1000,
             config.max_uploads_per_batch,
-            FENCE_POOL_SIZE,
+            UPLOAD_CB_COUNT,
         });
 
         logger.info("UploadThread owns staging ring: {} MB", .{StagingRing.DEFAULT_SIZE / (1024 * 1024)});
@@ -262,8 +266,8 @@ pub const UploadThread = struct {
             .device = device,
             .physical_device = physical_device,
             .command_pool = command_pool,
-            .command_buffers = command_buffers,
-            .fence_pool = fence_pool,
+            .upload_timeline = upload_timeline,
+            .cb_pool = cb_pool,
             .prepared_batches = prepared_batches,
             .pending_results = .{},
             .player_chunk_x = std.atomic.Value(i32).init(0),
@@ -279,7 +283,7 @@ pub const UploadThread = struct {
         self.shutdown();
 
         // Destroy Vulkan resources
-        const vkDestroyFence = vk.vkDestroyFence orelse return;
+        const vkDestroySemaphore = vk.vkDestroySemaphore orelse return;
         const vkDestroyCommandPool = vk.vkDestroyCommandPool orelse return;
         const vkDeviceWaitIdle = vk.vkDeviceWaitIdle orelse return;
 
@@ -291,9 +295,7 @@ pub const UploadThread = struct {
             self.buffer_manager.free(alloc);
         }
 
-        for (self.fence_pool) |fence| {
-            vkDestroyFence(self.device, fence, null);
-        }
+        vkDestroySemaphore(self.device, self.upload_timeline, null);
         vkDestroyCommandPool(self.device, self.command_pool, null);
 
         // Clean up owned staging ring
@@ -390,43 +392,51 @@ pub const UploadThread = struct {
         };
     }
 
-    /// Submit all prepared batches to the GPU queue (called from main thread only)
-    /// Returns the number of batches submitted
+    /// Submit all prepared batches to the GPU queue in a single vkQueueSubmit (called from main thread only)
+    /// Returns the number of command buffers submitted
     /// AAA pattern: only main thread touches the queue
     pub fn submitPreparedBatches(self: *Self, queue: vk.VkQueue) u32 {
         const vkQueueSubmit = vk.vkQueueSubmit orelse return 0;
-        const vkResetFences = vk.vkResetFences orelse return 0;
 
-        var submitted: u32 = 0;
+        var cmd_buffers: [UPLOAD_CB_COUNT]vk.VkCommandBuffer = undefined;
+        var count: u32 = 0;
+        var max_timeline: u64 = 0;
 
         while (self.prepared_batches.tryPop()) |batch| {
-            // Reset the fence before submission
-            const fences = [_]vk.VkFence{batch.fence};
-            _ = vkResetFences(self.device, 1, &fences);
-
-            // Submit to queue
-            const cmd_buffers = [_]vk.VkCommandBuffer{batch.command_buffer};
-            const submit_info = vk.VkSubmitInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                .pNext = null,
-                .waitSemaphoreCount = 0,
-                .pWaitSemaphores = null,
-                .pWaitDstStageMask = null,
-                .commandBufferCount = 1,
-                .pCommandBuffers = &cmd_buffers,
-                .signalSemaphoreCount = 0,
-                .pSignalSemaphores = null,
-            };
-
-            if (vkQueueSubmit(queue, 1, &submit_info, batch.fence) != vk.VK_SUCCESS) {
-                logger.err("Failed to submit prepared batch", .{});
-                self.stats.submit_errors += 1;
-            } else {
-                submitted += 1;
-            }
+            cmd_buffers[count] = batch.command_buffer;
+            max_timeline = @max(max_timeline, batch.timeline_value);
+            count += 1;
         }
+        if (count == 0) return 0;
 
-        return submitted;
+        const signal_values = [_]u64{max_timeline};
+        const signal_semaphores = [_]vk.VkSemaphore{self.upload_timeline};
+        var timeline_info = vk.VkTimelineSemaphoreSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreValueCount = 0,
+            .pWaitSemaphoreValues = null,
+            .signalSemaphoreValueCount = 1,
+            .pSignalSemaphoreValues = &signal_values,
+        };
+        const submit_info = vk.VkSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = &timeline_info,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = count,
+            .pCommandBuffers = &cmd_buffers,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &signal_semaphores,
+        };
+
+        if (vkQueueSubmit(queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+            logger.err("Failed to submit prepared batches", .{});
+            self.stats.submit_errors += 1;
+            return 0;
+        }
+        return count;
     }
 
     /// Check if there are prepared batches waiting for submission
@@ -447,6 +457,9 @@ pub const UploadThread = struct {
         profiler.setThreadName("UploadThread");
         logger.debug("Upload thread started", .{});
 
+        // Begin first command buffer
+        _ = self.tryAcquireNextCB();
+
         while (self.running.load(.acquire)) {
             const zone = profiler.traceNamed("UploadBatch");
             defer zone.end();
@@ -459,21 +472,21 @@ pub const UploadThread = struct {
 
             const batch_start = Io.Clock.awake.now(self.io);
 
-            var uploads_this_batch: u32 = 0;
+            var uploads_this_cycle: u32 = 0;
 
             // Process uploads until time budget exhausted or max count reached
             while (true) {
                 // Check time budget
                 const elapsed_ns: u64 = @intCast(batch_start.durationTo(Io.Clock.awake.now(self.io)).nanoseconds);
                 if (elapsed_ns >= self.config.time_budget_ns) {
-                    if (uploads_this_batch > 0) {
+                    if (uploads_this_cycle > 0) {
                         self.stats.budget_exhausted_count += 1;
                     }
                     break;
                 }
 
                 // Check max count
-                if (uploads_this_batch >= self.config.max_uploads_per_batch) {
+                if (uploads_this_cycle >= self.config.max_uploads_per_batch) {
                     self.stats.max_count_reached += 1;
                     break;
                 }
@@ -489,7 +502,7 @@ pub const UploadThread = struct {
                 const mesh_opt = self.input_queue.tryPop();
                 if (mesh_opt == null) {
                     // No work available
-                    if (uploads_this_batch == 0) {
+                    if (uploads_this_cycle == 0) {
                         // No work at all, sleep briefly
                         self.sleepIdle();
                     }
@@ -518,126 +531,139 @@ pub const UploadThread = struct {
                     self.stats.upload_errors += 1;
                     continue;
                 };
+
+                // Record staged copies into active CB (if available)
+                self.recordPendingCopies();
+
+                // Heuristic flush: finalize CB if copy count threshold reached
+                if (self.active_copy_count >= COPIES_PER_CB) {
+                    self.finalizeCB();
+                    _ = self.tryAcquireNextCB();
+                }
+
                 if (result.valid) {
-                    uploads_this_batch += 1;
+                    uploads_this_cycle += 1;
                 }
             }
 
-            // Submit batch if we have pending results (includes results from previous cycles)
-            if (self.pending_results.items.len > 0) {
-                if (self.submitBatch()) {
-                    // Batch was prepared successfully
-                    self.stats.total_uploads += uploads_this_batch;
-                    self.stats.batches_submitted += 1;
-                    profiler.plotInt("UploadBatchSize", @intCast(uploads_this_batch));
-                }
-                // If submitBatch returned false, pending_results are kept for next cycle
+            // Record any remaining pending copies
+            self.recordPendingCopies();
+
+            // Finalize CB at end of work cycle if there's work to push
+            if (self.pending_results.items.len > 0 or self.active_copy_count > 0) {
+                self.finalizeCB();
+                _ = self.tryAcquireNextCB();
             }
+
+            // Stats
+            if (uploads_this_cycle > 0) {
+                self.stats.total_uploads += uploads_this_cycle;
+                self.stats.batches_submitted += 1;
+                profiler.plotInt("UploadBatchSize", @intCast(uploads_this_cycle));
+            }
+        }
+
+        // Shutdown: finalize any remaining work
+        self.recordPendingCopies();
+        if (self.active_copy_count > 0 or self.pending_results.items.len > 0) {
+            self.finalizeCB();
         }
 
         logger.debug("Upload thread exiting", .{});
     }
 
-    /// Prepare the current batch of uploads (records commands, does NOT submit)
-    /// Main thread will call getPreparedBatch() to get and submit
-    /// Returns true if batch was prepared, false if we need to wait (fence not ready)
-    fn submitBatch(self: *Self) bool {
-        const zone = profiler.traceNamed("PrepareBatch");
-        defer zone.end();
+    /// Drain staging ring pending copies into the active command buffer
+    fn recordPendingCopies(self: *Self) void {
+        const cb = self.active_cb orelse return;
+        const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return;
+        const copies = self.staging_ring.getPendingCopies();
+        for (copies) |copy| {
+            const region = vk.VkBufferCopy{
+                .srcOffset = copy.src_offset,
+                .dstOffset = copy.dst_offset,
+                .size = copy.size,
+            };
+            vkCmdCopyBuffer(cb, copy.src_buffer, copy.dst_buffer, 1, &region);
+        }
+        self.active_copy_count += @intCast(copies.len);
+        self.staging_ring.clearPendingCopies();
+    }
 
-        // Check if prepared_batches queue has space (avoid recording commands we can't push)
-        if (self.prepared_batches.isFull()) {
-            // Queue full - main thread hasn't consumed batches yet, hold results for next cycle
-            return false;
+    /// End the active command buffer, assign a timeline value, and push to queues
+    fn finalizeCB(self: *Self) void {
+        const cb = self.active_cb orelse return;
+        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return;
+
+        // Nothing to finalize if no copies AND no results
+        if (self.active_copy_count == 0 and self.pending_results.items.len == 0) return;
+        // Don't finalize if prepared_batches queue is full (main thread hasn't drained)
+        if (self.active_copy_count > 0 and self.prepared_batches.isFull()) return;
+
+        _ = vkEndCommandBuffer(cb);
+
+        // Assign timeline value (0 if no actual GPU work)
+        const tv: u64 = if (self.active_copy_count > 0) blk: {
+            const v = self.next_timeline_value;
+            self.next_timeline_value += 1;
+            self.cb_timeline[self.active_cb_index] = v;
+            break :blk v;
+        } else 0;
+
+        // Push prepared batch (only if there's actual GPU work)
+        if (self.active_copy_count > 0) {
+            _ = self.prepared_batches.tryPush(.{
+                .command_buffer = cb,
+                .timeline_value = tv,
+                .result_count = @intCast(self.pending_results.items.len),
+            });
         }
 
-        // Get resources for this batch slot
-        const batch_fence = self.fence_pool[self.current_fence_index];
-        const command_buffer = self.command_buffers[self.current_fence_index];
+        // Push results with timeline value
+        for (self.pending_results.items) |*result| {
+            result.upload_timeline_value = tv;
+            if (!self.output_queue.tryPush(result.*)) {
+                // Queue full, cleanup this result
+                if (result.valid) {
+                    for (0..RENDER_LAYER_COUNT) |i| {
+                        if (result.mesh.layers[i].buffer_allocation.valid) {
+                            self.buffer_manager.free(result.mesh.layers[i].buffer_allocation);
+                        }
+                    }
+                    result.mesh.deinit();
+                }
+                self.stats.upload_errors += 1;
+            }
+        }
+        self.pending_results.clearRetainingCapacity();
+        self.active_copy_count = 0;
+        self.active_cb = null;
+    }
 
-        // Non-blocking fence check - if not signaled, command buffer still in use
-        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return false;
+    /// Try to acquire the next command buffer in the pool (timeline-based reuse)
+    fn tryAcquireNextCB(self: *Self) bool {
         const vkResetCommandBuffer = vk.vkResetCommandBuffer orelse return false;
         const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return false;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return false;
-        const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return false;
 
-        // Check if fence is signaled (non-blocking)
-        if (vkGetFenceStatus(self.device, batch_fence) != vk.VK_SUCCESS) {
-            // Fence not signaled - command buffer still in GPU use, wait for next cycle
-            return false;
+        const next = (self.active_cb_index + 1) % UPLOAD_CB_COUNT;
+        // Check if this CB's GPU work is done
+        if (self.cb_timeline[next] > 0) {
+            var completed: u64 = 0;
+            const vkGetSemaphoreCounterValue = vk.vkGetSemaphoreCounterValue orelse return false;
+            if (vkGetSemaphoreCounterValue(self.device, self.upload_timeline, &completed) != vk.VK_SUCCESS) return false;
+            if (completed < self.cb_timeline[next]) return false; // GPU still using this CB
         }
-
-        // Reset and begin command buffer
-        _ = vkResetCommandBuffer(command_buffer, 0);
-
+        // CB is available — reset and begin
+        _ = vkResetCommandBuffer(self.cb_pool[next], 0);
         const begin_info = vk.VkCommandBufferBeginInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .pNext = null,
             .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
             .pInheritanceInfo = null,
         };
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            self.stats.submit_errors += 1;
-            self.clearPendingResults();
-            return false;
-        }
-
-        // Record copy commands from our owned staging ring
-        const pending_copies = self.staging_ring.getPendingCopies();
-        for (pending_copies) |copy| {
-            const region = vk.VkBufferCopy{
-                .srcOffset = copy.src_offset,
-                .dstOffset = copy.dst_offset,
-                .size = copy.size,
-            };
-            vkCmdCopyBuffer(command_buffer, copy.src_buffer, copy.dst_buffer, 1, &region);
-        }
-        self.staging_ring.clearPendingCopies();
-
-        // End command buffer
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            self.stats.submit_errors += 1;
-            self.clearPendingResults();
-            return false;
-        }
-
-        // Push prepared batch to queue for main thread to submit
-        // (No vkQueueSubmit here - main thread does all queue work)
-        // We already checked isFull() at the start, so this should succeed
-        const result_count: u32 = @intCast(self.pending_results.items.len);
-        if (!self.prepared_batches.tryPush(PreparedBatch{
-            .command_buffer = command_buffer,
-            .fence = batch_fence,
-            .result_count = result_count,
-        })) {
-            // Should not happen since we checked isFull() at start
-            logger.err("Prepared batches queue unexpectedly full", .{});
-            self.stats.submit_errors += 1;
-            self.clearPendingResults();
-            return false;
-        }
-
-        // Push results to output queue with this batch's fence
-        for (self.pending_results.items) |*result| {
-            result.upload_fence = batch_fence;
-            if (!self.output_queue.tryPush(result.*)) {
-                // Queue full, cleanup this result
-                // Free GPU allocations first to prevent memory leak
-                for (0..RENDER_LAYER_COUNT) |i| {
-                    if (result.mesh.layers[i].buffer_allocation.valid) {
-                        self.buffer_manager.free(result.mesh.layers[i].buffer_allocation);
-                    }
-                }
-                result.mesh.deinit();
-                self.stats.upload_errors += 1;
-            }
-        }
-        self.pending_results.clearRetainingCapacity();
-
-        // Advance to next fence
-        self.current_fence_index = (self.current_fence_index + 1) % FENCE_POOL_SIZE;
-
+        if (vkBeginCommandBuffer(self.cb_pool[next], &begin_info) != vk.VK_SUCCESS) return false;
+        self.active_cb_index = @intCast(next);
+        self.active_cb = self.cb_pool[next];
+        self.active_copy_count = 0;
         return true;
     }
 
@@ -683,7 +709,7 @@ pub const UploadThread = struct {
             .generated_chunk = mesh.generated_chunk,
             .gpu_slot = 0,
             .valid = false,
-            .upload_fence = null,
+            .upload_timeline_value = 0,
         };
 
         // Check staleness (chunk moved out of view while queued)
@@ -704,7 +730,7 @@ pub const UploadThread = struct {
                 .generated_chunk = mesh.generated_chunk,
                 .gpu_slot = 0,
                 .valid = false, // Mark as invalid so main thread knows to skip
-                .upload_fence = null,
+                .upload_timeline_value = 0,
             };
         }
 
@@ -850,7 +876,7 @@ pub const UploadThread = struct {
             .generated_chunk = mesh.generated_chunk,
             .gpu_slot = 0, // Will be allocated by main thread
             .valid = true,
-            .upload_fence = null, // Will be set when batch is submitted
+            .upload_timeline_value = 0, // Will be set when batch is submitted
         };
     }
 

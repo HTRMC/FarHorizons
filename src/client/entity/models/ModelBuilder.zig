@@ -256,6 +256,31 @@ pub const ModelPart = struct {
         }
     }
 
+    /// Render this part and all children directly into a MeshWriter (zero allocations)
+    pub fn renderDirect(self: *Self, writer: *MeshWriter, parent_transform: [16]f32) void {
+        const local_transform = self.buildTransform();
+        const world_transform = multiplyMatrices(parent_transform, local_transform);
+
+        for (self.cubes) |cube| {
+            cube.renderDirect(writer, world_transform);
+        }
+
+        var iter = self.children.valueIterator();
+        while (iter.next()) |child| {
+            child.*.renderDirect(writer, world_transform);
+        }
+    }
+
+    /// Count total cubes recursively (for pre-sizing MeshWriter buffers)
+    pub fn countCubes(self: *const Self) u32 {
+        var count: u32 = @intCast(self.cubes.len);
+        var iter = self.children.valueIterator();
+        while (iter.next()) |child| {
+            count += child.*.countCubes();
+        }
+        return count;
+    }
+
     fn buildTransform(self: *Self) [16]f32 {
         // Translation
         const tx = self.pose.x / 16.0;
@@ -279,6 +304,30 @@ pub const BakedCube = struct {
     /// 6 faces, 4 vertices each = 24 vertices
     vertices: [24]CubeVertex,
     mirror: bool,
+
+    /// Render directly into a MeshWriter (zero allocations)
+    pub fn renderDirect(self: *const BakedCube, writer: *MeshWriter, transform: [16]f32) void {
+        const base_idx = writer.getBaseVertex();
+
+        for (self.vertices) |v| {
+            writer.addVertex(.{
+                .pos = transformPoint(transform, v.x, v.y, v.z),
+                .color = .{ 1.0, 1.0, 1.0 },
+                .uv = .{ v.u, v.v },
+                .tex_index = 0,
+            });
+        }
+
+        for (0..6) |face| {
+            const fi: u32 = @intCast(face * 4);
+            writer.addIndex(base_idx + fi + 0);
+            writer.addIndex(base_idx + fi + 1);
+            writer.addIndex(base_idx + fi + 2);
+            writer.addIndex(base_idx + fi + 0);
+            writer.addIndex(base_idx + fi + 2);
+            writer.addIndex(base_idx + fi + 3);
+        }
+    }
 
     pub fn render(self: *const BakedCube, allocator: std.mem.Allocator, vertices: *std.ArrayList(Vertex), indices: *std.ArrayList(u32), transform: [16]f32) !void {
         const base_idx: u32 = @intCast(vertices.items.len);
@@ -553,4 +602,27 @@ pub const IDENTITY_MATRIX: [16]f32 = .{
     0, 1, 0, 0,
     0, 0, 1, 0,
     0, 0, 0, 1,
+};
+
+/// MeshWriter - writes vertices/indices directly into pre-allocated GPU memory
+/// Zero allocations, zero intermediate copies
+pub const MeshWriter = struct {
+    vertices: [*]Vertex,
+    indices: [*]u32,
+    vertex_count: u32 = 0,
+    index_count: u32 = 0,
+
+    pub fn addVertex(self: *MeshWriter, v: Vertex) void {
+        self.vertices[self.vertex_count] = v;
+        self.vertex_count += 1;
+    }
+
+    pub fn addIndex(self: *MeshWriter, idx: u32) void {
+        self.indices[self.index_count] = idx;
+        self.index_count += 1;
+    }
+
+    pub fn getBaseVertex(self: *const MeshWriter) u32 {
+        return self.vertex_count;
+    }
 };

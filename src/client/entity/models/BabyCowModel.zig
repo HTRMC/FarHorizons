@@ -22,6 +22,7 @@ pub const BabyCowModel = struct {
 
     allocator: std.mem.Allocator,
     root: ?*ModelPart = null,
+    total_cubes: u32 = 0,
 
     // Named part references for animation
     head: ?*ModelPart = null,
@@ -58,7 +59,16 @@ pub const BabyCowModel = struct {
             self.left_hind_leg = root.getChild("left_hind_leg");
             self.right_front_leg = root.getChild("right_front_leg");
             self.left_front_leg = root.getChild("left_front_leg");
+            self.total_cubes = root.countCubes();
         }
+    }
+
+    pub fn getVertexCount(self: *const Self) u32 {
+        return self.total_cubes * 24;
+    }
+
+    pub fn getIndexCount(self: *const Self) u32 {
+        return self.total_cubes * 36;
     }
 
     /// Create the body layer definition - matches BabyCowModel.createBodyLayer()
@@ -119,34 +129,32 @@ pub const BabyCowModel = struct {
         return LayerDefinition.create(mesh, 64, 64);
     }
 
+    /// Generate baby cow mesh directly into a MeshWriter (zero allocations)
+    pub fn generateMeshDirect(self: *Self, walk_animation: f32, walk_speed: f32, head_pitch: f32, head_yaw: f32, writer: *mb.MeshWriter) void {
+        self.applyAnimation(walk_animation, walk_speed, head_pitch, head_yaw);
+        if (self.root) |root| root.renderDirect(writer, mb.IDENTITY_MATRIX);
+    }
+
+    fn applyAnimation(self: *Self, walk_animation: f32, walk_speed: f32, head_pitch: f32, head_yaw: f32) void {
+        const right_hind_rot = @cos(walk_animation * 0.6662) * 1.4 * walk_speed;
+        const left_hind_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * walk_speed;
+        const right_front_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * walk_speed;
+        const left_front_rot = @cos(walk_animation * 0.6662) * 1.4 * walk_speed;
+
+        if (self.head) |head| head.setRotation(head_pitch, head_yaw, 0);
+        if (self.right_hind_leg) |leg| leg.setRotation(right_hind_rot, 0, 0);
+        if (self.left_hind_leg) |leg| leg.setRotation(left_hind_rot, 0, 0);
+        if (self.right_front_leg) |leg| leg.setRotation(right_front_rot, 0, 0);
+        if (self.left_front_leg) |leg| leg.setRotation(left_front_rot, 0, 0);
+    }
+
     /// Generate baby cow mesh with animation
     /// walk_animation: position in walk cycle (increases while walking)
     /// walk_speed: amplitude of leg swing (0=stationary, 1=full swing)
     /// head_pitch: vertical head rotation (positive = look down)
     /// head_yaw: horizontal head rotation (positive = look right)
     pub fn generateMesh(self: *Self, walk_animation: f32, walk_speed: f32, head_pitch: f32, head_yaw: f32) !struct { vertices: []Vertex, indices: []u32 } {
-        // Apply animation - same as adult but with shorter legs
-        const right_hind_rot = @cos(walk_animation * 0.6662) * 1.4 * walk_speed;
-        const left_hind_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * walk_speed;
-        const right_front_rot = @cos(walk_animation * 0.6662 + std.math.pi) * 1.4 * walk_speed;
-        const left_front_rot = @cos(walk_animation * 0.6662) * 1.4 * walk_speed;
-
-        // Set part rotations
-        if (self.head) |head| {
-            head.setRotation(head_pitch, head_yaw, 0);
-        }
-        if (self.right_hind_leg) |leg| {
-            leg.setRotation(right_hind_rot, 0, 0);
-        }
-        if (self.left_hind_leg) |leg| {
-            leg.setRotation(left_hind_rot, 0, 0);
-        }
-        if (self.right_front_leg) |leg| {
-            leg.setRotation(right_front_rot, 0, 0);
-        }
-        if (self.left_front_leg) |leg| {
-            leg.setRotation(left_front_rot, 0, 0);
-        }
+        self.applyAnimation(walk_animation, walk_speed, head_pitch, head_yaw);
 
         // Render to vertex/index buffers
         var vertices: std.ArrayList(Vertex) = .empty;

@@ -7,6 +7,8 @@ const ecs = @import("ecs");
 
 const CowModel = @import("models/CowModel.zig").CowModel;
 const BabyCowModel = @import("models/BabyCowModel.zig").BabyCowModel;
+const mb = @import("models/ModelBuilder.zig");
+const MeshWriter = mb.MeshWriter;
 const Vertex = renderer.Vertex;
 const GpuDevice = renderer.GpuDevice;
 const TextureLoader = renderer.TextureLoader;
@@ -67,10 +69,6 @@ pub const EntityRenderer = struct {
     baby_index_start: u32 = 0,
     baby_index_count: u32 = 0,
 
-    // Cached mesh data
-    cached_vertices: ?[]Vertex = null,
-    cached_indices: ?[]u32 = null,
-
     /// Legacy init that loads textures directly (non-bindless)
     pub fn init(allocator: std.mem.Allocator, gpu_device: *GpuDevice, asset_directory: []const u8) !Self {
         var self = Self{
@@ -114,14 +112,6 @@ pub const EntityRenderer = struct {
         }
         self.cow_model.deinit();
         self.baby_cow_model.deinit();
-
-        if (self.cached_vertices) |verts| {
-            self.allocator.free(verts);
-        }
-
-        if (self.cached_indices) |inds| {
-            self.allocator.free(inds);
-        }
     }
 
     fn destroyBuffers(self: *Self) void {
@@ -252,160 +242,33 @@ pub const EntityRenderer = struct {
         logger.info("Baby cow texture loaded successfully ({}x{})", .{ texture.width, texture.height });
     }
 
-    /// Update entity meshes from ECS World and upload to GPU
-    /// ECS version - uses Transform, Animation, HeadRotation, RenderData, Health components
+    /// Update entity meshes from ECS World and write directly to GPU buffers
+    /// Three-pass zero-allocation design: count, ensure capacity, generate directly into mapped GPU memory
     pub fn updateFromECS(self: *Self, world: *ecs.World, partial_tick: f32) !void {
         // Advance to next buffer slot (triple-buffered to avoid write-before-fence-wait race)
         self.current_slot = (self.current_slot + 1) % ENTITY_BUFFER_SLOTS;
 
-        var all_vertices: std.ArrayList(Vertex) = .empty;
-        defer all_vertices.deinit(self.allocator);
-        var all_indices: std.ArrayList(u32) = .empty;
-        defer all_indices.deinit(self.allocator);
-
-        // First pass: adult cows
-        var entity_iter = world.entities.iterator();
-        while (entity_iter.next()) |id| {
-            const render_data = world.getComponent(ecs.RenderData, id) orelse continue;
-            if (render_data.entity_type != .cow and render_data.entity_type != .mooshroom) continue;
-            if (render_data.is_baby) continue;
-
-            const transform = world.getComponent(ecs.Transform, id) orelse continue;
-
-            // Get animation data
-            var walk_anim: f32 = 0;
-            var walk_speed: f32 = 0;
-            if (world.getComponent(ecs.Animation, id)) |anim| {
-                walk_anim = anim.getInterpolatedWalkAnimation(partial_tick);
-                walk_speed = anim.getInterpolatedWalkSpeed(partial_tick);
-            }
-
-            // Get head rotation
-            var head_pitch: f32 = 0;
-            var head_yaw: f32 = 0;
-            if (world.getComponent(ecs.HeadRotation, id)) |head| {
-                head_pitch = head.getInterpolatedPitch(partial_tick);
-                head_yaw = head.getInterpolatedYaw(partial_tick);
-            }
-
-            // Get hurt state
-            var is_hurt = false;
-            if (world.getComponent(ecs.Health, id)) |health| {
-                is_hurt = health.isHurt();
-            }
-
-            // Build model matrix
-            const pos = transform.getInterpolatedPosition(partial_tick);
-            const yaw = transform.getInterpolatedYaw(partial_tick);
-            const yaw_rad = yaw * std.math.pi / 180.0;
-            const rotation = Mat4.rotationY(yaw_rad);
-            const translation = Mat4.translation(pos);
-            const m = Mat4.multiply(translation, rotation);
-
-            const base_vertex: u32 = @intCast(all_vertices.items.len);
-
-            const mesh = try self.cow_model.generateMesh(walk_anim, walk_speed, head_pitch, head_yaw);
-            defer self.allocator.free(mesh.vertices);
-            defer self.allocator.free(mesh.indices);
-
-            for (mesh.vertices) |vert| {
-                var transformed = vert;
-                const x = vert.pos[0];
-                const y = vert.pos[1];
-                const z = vert.pos[2];
-                transformed.pos = .{
-                    m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
-                    m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
-                    m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
-                };
-                if (self.use_bindless) {
-                    transformed.tex_index = self.cow_tex_index;
+        // Pass 1: Count entities
+        var adult_count: u32 = 0;
+        var baby_count: u32 = 0;
+        {
+            var entity_iter = world.entities.iterator();
+            while (entity_iter.next()) |id| {
+                const render_data = world.getComponent(ecs.RenderData, id) orelse continue;
+                if (render_data.entity_type != .cow and render_data.entity_type != .mooshroom) continue;
+                if (world.getComponent(ecs.Transform, id) == null) continue;
+                if (render_data.is_baby) {
+                    baby_count += 1;
+                } else {
+                    adult_count += 1;
                 }
-                if (is_hurt) {
-                    transformed.color = .{ 1.0, 0.4, 0.4 };
-                }
-                try all_vertices.append(self.allocator, transformed);
-            }
-
-            for (mesh.indices) |idx| {
-                try all_indices.append(self.allocator, base_vertex + idx);
             }
         }
 
-        // Record where adult indices end
-        self.adult_index_count = @intCast(all_indices.items.len);
-        self.baby_index_start = self.adult_index_count;
+        const total_verts = adult_count * self.cow_model.getVertexCount() + baby_count * self.baby_cow_model.getVertexCount();
+        const total_indices = adult_count * self.cow_model.getIndexCount() + baby_count * self.baby_cow_model.getIndexCount();
 
-        // Second pass: baby cows
-        entity_iter = world.entities.iterator();
-        while (entity_iter.next()) |id| {
-            const render_data = world.getComponent(ecs.RenderData, id) orelse continue;
-            if (render_data.entity_type != .cow and render_data.entity_type != .mooshroom) continue;
-            if (!render_data.is_baby) continue;
-
-            const transform = world.getComponent(ecs.Transform, id) orelse continue;
-
-            var walk_anim: f32 = 0;
-            var walk_speed: f32 = 0;
-            if (world.getComponent(ecs.Animation, id)) |anim| {
-                walk_anim = anim.getInterpolatedWalkAnimation(partial_tick);
-                walk_speed = anim.getInterpolatedWalkSpeed(partial_tick);
-            }
-
-            var head_pitch: f32 = 0;
-            var head_yaw: f32 = 0;
-            if (world.getComponent(ecs.HeadRotation, id)) |head| {
-                head_pitch = head.getInterpolatedPitch(partial_tick);
-                head_yaw = head.getInterpolatedYaw(partial_tick);
-            }
-
-            var is_hurt = false;
-            if (world.getComponent(ecs.Health, id)) |health| {
-                is_hurt = health.isHurt();
-            }
-
-            const pos = transform.getInterpolatedPosition(partial_tick);
-            const yaw = transform.getInterpolatedYaw(partial_tick);
-            const yaw_rad = yaw * std.math.pi / 180.0;
-            const rotation = Mat4.rotationY(yaw_rad);
-            const translation = Mat4.translation(pos);
-            const m = Mat4.multiply(translation, rotation);
-
-            const base_vertex: u32 = @intCast(all_vertices.items.len);
-
-            const mesh = try self.baby_cow_model.generateMesh(walk_anim, walk_speed, head_pitch, head_yaw);
-            defer self.allocator.free(mesh.vertices);
-            defer self.allocator.free(mesh.indices);
-
-            for (mesh.vertices) |vert| {
-                var transformed = vert;
-                const x = vert.pos[0];
-                const y = vert.pos[1];
-                const z = vert.pos[2];
-                transformed.pos = .{
-                    m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
-                    m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
-                    m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
-                };
-                if (self.use_bindless) {
-                    transformed.tex_index = self.baby_cow_tex_index;
-                }
-                if (is_hurt) {
-                    transformed.color = .{ 1.0, 0.4, 0.4 };
-                }
-                try all_vertices.append(self.allocator, transformed);
-            }
-
-            for (mesh.indices) |idx| {
-                try all_indices.append(self.allocator, base_vertex + idx);
-            }
-        }
-
-        // Calculate baby index count
-        const total_indices: u32 = @intCast(all_indices.items.len);
-        self.baby_index_count = total_indices - self.baby_index_start;
-
-        if (all_vertices.items.len == 0) {
+        if (total_verts == 0) {
             self.vertex_count = 0;
             self.index_count = 0;
             self.adult_index_count = 0;
@@ -414,22 +277,150 @@ pub const EntityRenderer = struct {
             return;
         }
 
-        const vert_count: u32 = @intCast(all_vertices.items.len);
-        const idx_count: u32 = @intCast(all_indices.items.len);
         const slot = self.current_slot;
 
-        // Grow persistent buffers if needed
-        try self.ensureBufferCapacity(slot, vert_count, idx_count);
+        // Pass 2: Ensure GPU buffer capacity + create MeshWriter pointing to mapped memory
+        try self.ensureBufferCapacity(slot, total_verts, total_indices);
 
-        // Copy data into persistently-mapped buffers (HOST_COHERENT, no flush needed)
-        const vert_dst = self.vertex_buffer_mapped[slot].?;
-        @memcpy(vert_dst[0..vert_count], all_vertices.items);
+        var writer = MeshWriter{
+            .vertices = self.vertex_buffer_mapped[slot].?,
+            .indices = self.index_buffer_mapped[slot].?,
+        };
 
-        const idx_dst = self.index_buffer_mapped[slot].?;
-        @memcpy(idx_dst[0..idx_count], all_indices.items);
+        // Pass 3: Generate meshes directly into GPU memory
 
-        self.vertex_count = vert_count;
-        self.index_count = idx_count;
+        // Adult cows first
+        {
+            var entity_iter = world.entities.iterator();
+            while (entity_iter.next()) |id| {
+                const render_data = world.getComponent(ecs.RenderData, id) orelse continue;
+                if (render_data.entity_type != .cow and render_data.entity_type != .mooshroom) continue;
+                if (render_data.is_baby) continue;
+
+                const transform = world.getComponent(ecs.Transform, id) orelse continue;
+
+                var walk_anim: f32 = 0;
+                var walk_speed: f32 = 0;
+                if (world.getComponent(ecs.Animation, id)) |anim| {
+                    walk_anim = anim.getInterpolatedWalkAnimation(partial_tick);
+                    walk_speed = anim.getInterpolatedWalkSpeed(partial_tick);
+                }
+
+                var head_pitch: f32 = 0;
+                var head_yaw: f32 = 0;
+                if (world.getComponent(ecs.HeadRotation, id)) |head| {
+                    head_pitch = head.getInterpolatedPitch(partial_tick);
+                    head_yaw = head.getInterpolatedYaw(partial_tick);
+                }
+
+                var is_hurt = false;
+                if (world.getComponent(ecs.Health, id)) |health| {
+                    is_hurt = health.isHurt();
+                }
+
+                const pos = transform.getInterpolatedPosition(partial_tick);
+                const yaw = transform.getInterpolatedYaw(partial_tick);
+                const yaw_rad = yaw * std.math.pi / 180.0;
+                const rotation = Mat4.rotationY(yaw_rad);
+                const translation = Mat4.translation(pos);
+                const m = Mat4.multiply(translation, rotation);
+
+                const base_vertex = writer.getBaseVertex();
+                const prev_indices = writer.index_count;
+
+                self.cow_model.generateMeshDirect(walk_anim, walk_speed, head_pitch, head_yaw, &writer);
+
+                // Post-process in-place: world transform, tex_index, hurt color
+                for (writer.vertices[base_vertex..writer.vertex_count]) |*vert| {
+                    const x = vert.pos[0];
+                    const y = vert.pos[1];
+                    const z = vert.pos[2];
+                    vert.pos = .{
+                        m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
+                        m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
+                        m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
+                    };
+                    if (self.use_bindless) vert.tex_index = self.cow_tex_index;
+                    if (is_hurt) vert.color = .{ 1.0, 0.4, 0.4 };
+                }
+                // Offset indices by base_vertex
+                if (base_vertex > 0) {
+                    for (writer.indices[prev_indices..writer.index_count]) |*idx| {
+                        idx.* += base_vertex;
+                    }
+                }
+            }
+        }
+
+        // Record where adult indices end
+        self.adult_index_count = writer.index_count;
+        self.baby_index_start = self.adult_index_count;
+
+        // Baby cows
+        {
+            var entity_iter = world.entities.iterator();
+            while (entity_iter.next()) |id| {
+                const render_data = world.getComponent(ecs.RenderData, id) orelse continue;
+                if (render_data.entity_type != .cow and render_data.entity_type != .mooshroom) continue;
+                if (!render_data.is_baby) continue;
+
+                const transform = world.getComponent(ecs.Transform, id) orelse continue;
+
+                var walk_anim: f32 = 0;
+                var walk_speed: f32 = 0;
+                if (world.getComponent(ecs.Animation, id)) |anim| {
+                    walk_anim = anim.getInterpolatedWalkAnimation(partial_tick);
+                    walk_speed = anim.getInterpolatedWalkSpeed(partial_tick);
+                }
+
+                var head_pitch: f32 = 0;
+                var head_yaw: f32 = 0;
+                if (world.getComponent(ecs.HeadRotation, id)) |head| {
+                    head_pitch = head.getInterpolatedPitch(partial_tick);
+                    head_yaw = head.getInterpolatedYaw(partial_tick);
+                }
+
+                var is_hurt = false;
+                if (world.getComponent(ecs.Health, id)) |health| {
+                    is_hurt = health.isHurt();
+                }
+
+                const pos = transform.getInterpolatedPosition(partial_tick);
+                const yaw = transform.getInterpolatedYaw(partial_tick);
+                const yaw_rad = yaw * std.math.pi / 180.0;
+                const rotation = Mat4.rotationY(yaw_rad);
+                const translation = Mat4.translation(pos);
+                const m = Mat4.multiply(translation, rotation);
+
+                const base_vertex = writer.getBaseVertex();
+                const prev_indices = writer.index_count;
+
+                self.baby_cow_model.generateMeshDirect(walk_anim, walk_speed, head_pitch, head_yaw, &writer);
+
+                // Post-process in-place: world transform, tex_index, hurt color
+                for (writer.vertices[base_vertex..writer.vertex_count]) |*vert| {
+                    const x = vert.pos[0];
+                    const y = vert.pos[1];
+                    const z = vert.pos[2];
+                    vert.pos = .{
+                        m.data[0] * x + m.data[4] * y + m.data[8] * z + m.data[12],
+                        m.data[1] * x + m.data[5] * y + m.data[9] * z + m.data[13],
+                        m.data[2] * x + m.data[6] * y + m.data[10] * z + m.data[14],
+                    };
+                    if (self.use_bindless) vert.tex_index = self.baby_cow_tex_index;
+                    if (is_hurt) vert.color = .{ 1.0, 0.4, 0.4 };
+                }
+                if (base_vertex > 0) {
+                    for (writer.indices[prev_indices..writer.index_count]) |*idx| {
+                        idx.* += base_vertex;
+                    }
+                }
+            }
+        }
+
+        self.baby_index_count = writer.index_count - self.baby_index_start;
+        self.vertex_count = writer.vertex_count;
+        self.index_count = writer.index_count;
     }
 
     /// Ensure buffer slot has enough capacity, creating or growing if needed

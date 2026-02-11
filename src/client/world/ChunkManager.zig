@@ -725,31 +725,30 @@ pub const ChunkManager = struct {
 
     /// Process ready uploads from the upload thread (non-blocking)
     /// Only applies uploads that are ready - no waiting, no allocations
-    /// AAA pattern: uses vkGetFenceStatus (never waits) to check GPU completion
+    /// AAA pattern: uses vkGetSemaphoreCounterValue (never waits) to check GPU completion
     /// AAA pattern: queues frees to upload thread instead of freeing directly
     fn processReadyUploads(self: *Self) void {
         const zone = profiler.traceNamed("ProcessReadyUploads");
         defer zone.end();
 
         const ut = self.upload_thread orelse return;
-        const vkGetFenceStatus = vk.vkGetFenceStatus orelse return;
+        if (ut.output_queue.isEmpty()) return; // no work, skip syscall
+
         const device = self.render_system.getDevice();
+        const vkGetSemaphoreCounterValue = vk.vkGetSemaphoreCounterValue orelse return;
+
+        // Single timeline query per frame
+        var completed: u64 = 0;
+        if (vkGetSemaphoreCounterValue(device, ut.upload_timeline, &completed) != vk.VK_SUCCESS) return;
 
         var processed: u32 = 0;
 
-        // Process uploads with ready fences (AAA pattern: never wait)
-        // Peek first, check fence, only pop if ready
+        // Process uploads with completed timeline values (AAA pattern: never wait)
         while (ut.output_queue.peek()) |result_ptr| {
-            // Check if GPU copy is complete (non-blocking)
-            if (result_ptr.upload_fence != null) {
-                if (vkGetFenceStatus(device, result_ptr.upload_fence) != vk.VK_SUCCESS) {
-                    // Fence not signaled - GPU still copying
-                    // Since batches are ordered, later items won't be ready either
-                    break;
-                }
-            }
+            // timeline_value 0 = no GPU work, always ready
+            if (result_ptr.upload_timeline_value > completed) break;
 
-            // Fence is ready, pop and process
+            // Timeline value is reached, pop and process
             const result = ut.output_queue.tryPop() orelse break;
             // Check if chunk still exists (might have been unloaded while uploading)
             const render_chunk_ptr = self.chunk_storage.get(result.pos) orelse {
