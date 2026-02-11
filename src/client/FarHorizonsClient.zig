@@ -566,6 +566,9 @@ pub const FarHorizonsClient = struct {
             profiler.frameMark();
         }
 
+        // Wait for GPU to finish all submitted work before destroying any resources
+        self.render_system.waitIdle();
+
         if (self.entity_renderer) |*er| {
             er.deinit();
         }

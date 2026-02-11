@@ -444,13 +444,18 @@ pub const RenderSystem = struct {
         logger.info("Vulkan renderer initialized", .{});
     }
 
-    pub fn shutdown(self: *Self) void {
-        // Wait for device to finish
+    /// Wait for the GPU to finish all submitted work.
+    /// Call before destroying any Vulkan resources outside of RenderSystem.
+    pub fn waitIdle(self: *Self) void {
         if (self.device) |device| {
             if (vk.vkDeviceWaitIdle) |wait| {
                 _ = wait(device);
             }
         }
+    }
+
+    pub fn shutdown(self: *Self) void {
+        self.waitIdle();
 
         // Shutdown shader manager
         if (self.shader_manager) |*sm| {
@@ -1073,7 +1078,7 @@ pub const RenderSystem = struct {
         const line_offsets = [_]vk.VkDeviceSize{0};
         vkCmdBindVertexBuffers(command_buffer, 0, 1, &line_vertex_buffers, &line_offsets);
 
-        vkCmdSetLineWidth(command_buffer, 2.0);
+        vkCmdSetLineWidth(command_buffer, 1.0);
         vkCmdDraw(command_buffer, self.line_vertex_count, 1, 0, 0);
     }
 
@@ -2111,24 +2116,20 @@ pub const RenderSystem = struct {
 
         const device_extensions = [_][*:0]const u8{"VK_KHR_swapchain"};
 
-        // Enable Vulkan 1.2 features (drawIndirectCount for GPU-driven rendering)
+        // Enable Vulkan 1.2 features (includes promoted descriptor indexing features)
+        // Cannot use VkPhysicalDeviceDescriptorIndexingFeatures alongside this - they conflict
         var vulkan12_features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan12Features);
         vulkan12_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         vulkan12_features.drawIndirectCount = vk.VK_TRUE;
-
-        // Enable descriptor indexing features for bindless textures (Vulkan 1.2 core)
-        var indexing_features = std.mem.zeroes(vk.VkPhysicalDeviceDescriptorIndexingFeatures);
-        indexing_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES;
-        indexing_features.pNext = &vulkan12_features;
-        indexing_features.shaderSampledImageArrayNonUniformIndexing = vk.VK_TRUE;
-        indexing_features.runtimeDescriptorArray = vk.VK_TRUE;
-        indexing_features.descriptorBindingPartiallyBound = vk.VK_TRUE;
-        indexing_features.descriptorBindingVariableDescriptorCount = vk.VK_TRUE;
-        indexing_features.descriptorBindingSampledImageUpdateAfterBind = vk.VK_TRUE;
+        vulkan12_features.shaderSampledImageArrayNonUniformIndexing = vk.VK_TRUE;
+        vulkan12_features.runtimeDescriptorArray = vk.VK_TRUE;
+        vulkan12_features.descriptorBindingPartiallyBound = vk.VK_TRUE;
+        vulkan12_features.descriptorBindingVariableDescriptorCount = vk.VK_TRUE;
+        vulkan12_features.descriptorBindingSampledImageUpdateAfterBind = vk.VK_TRUE;
 
         var device_features2 = std.mem.zeroes(vk.VkPhysicalDeviceFeatures2);
         device_features2.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-        device_features2.pNext = &indexing_features;
+        device_features2.pNext = &vulkan12_features;
 
         const create_info = vk.VkDeviceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
