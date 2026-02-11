@@ -26,7 +26,6 @@ const BlockstateLoader = renderer.block.BlockstateLoader;
 const ChunkBufferManager = renderer.buffer.ChunkBufferManager;
 const ChunkBufferConfig = renderer.buffer.ChunkBufferConfig;
 const ChunkBufferAllocation = renderer.buffer.ChunkBufferAllocation;
-const StagingCopy = RenderSystem.StagingCopy;
 const GPUDrivenTypes = renderer.GPUDrivenTypes;
 
 const render_chunk = @import("RenderChunk.zig");
@@ -914,18 +913,6 @@ pub const ChunkManager = struct {
     /// iterates over all slots (freed slots have zeroed metadata and are skipped)
     pub fn getActiveChunkCount(self: *const Self) u32 {
         return self.render_system.getChunkSlotHighWaterMark();
-    }
-
-    /// Returns pending staging copies directly from buffer manager
-    pub fn getStagingCopies(self: *Self) []const StagingCopy {
-        const buf_mgr = self.buffer_manager orelse return &.{};
-        return buf_mgr.getPendingCopies();
-    }
-
-    pub fn clearStagingCopies(self: *Self) void {
-        if (self.buffer_manager) |buf_mgr| {
-            buf_mgr.clearPendingCopies();
-        }
     }
 
     fn updateLoadQueue(self: *Self) void {

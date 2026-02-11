@@ -501,7 +501,6 @@ pub const FarHorizonsClient = struct {
                     if (self.chunk_manager) |*cm| {
                         const vertex_buffers = cm.getAllVertexBuffers();
                         const index_buffers = cm.getAllIndexBuffers();
-                        const staging_copies = cm.getStagingCopies();
 
                         const entity_vb = if (self.entity_renderer) |*er| er.getVertexBuffer() else null;
                         const entity_ib = if (self.entity_renderer) |*er| er.getIndexBuffer() else null;
@@ -511,8 +510,6 @@ pub const FarHorizonsClient = struct {
                         const chunk_count = cm.getActiveChunkCount();
 
                         if (vertex_buffers.len > 0 and index_buffers.len > 0 and chunk_count > 0) {
-                            // Compute proj*view matrix for GPU frustum culling
-                            // This transforms world space to clip space, required for frustum extraction
                             const view_proj = Mat4.multiply(proj, view);
 
                             self.render_system.drawFrameGPUDriven(
@@ -520,7 +517,6 @@ pub const FarHorizonsClient = struct {
                                 view_proj.data,
                                 vertex_buffers,
                                 index_buffers,
-                                staging_copies,
                                 entity_vb,
                                 entity_ib,
                                 adult_ic,
@@ -528,24 +524,6 @@ pub const FarHorizonsClient = struct {
                             ) catch |err| {
                                 logger.err("Failed to draw GPU-driven frame: {}", .{err});
                             };
-                            cm.clearStagingCopies();
-                        } else if (staging_copies.len > 0 and vertex_buffers.len > 0 and index_buffers.len > 0) {
-                            // No chunks ready yet, just process staging copies
-                            const view_proj = Mat4.multiply(proj, view);
-                            self.render_system.drawFrameGPUDriven(
-                                0,
-                                view_proj.data,
-                                vertex_buffers,
-                                index_buffers,
-                                staging_copies,
-                                entity_vb,
-                                entity_ib,
-                                adult_ic,
-                                baby_ic,
-                            ) catch |err| {
-                                logger.err("Failed to draw frame with staging: {}", .{err});
-                            };
-                            cm.clearStagingCopies();
                         } else {
                             self.render_system.drawFrame() catch |err| {
                                 logger.err("Failed to draw frame: {}", .{err});

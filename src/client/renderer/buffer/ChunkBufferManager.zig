@@ -10,9 +10,6 @@ const ChunkPos = shared.ChunkPos;
 
 const GrowableBufferArena = @import("GrowableBufferArena.zig").GrowableBufferArena;
 const ExtendedBufferSlice = @import("GrowableBufferArena.zig").ExtendedBufferSlice;
-const staging_ring_module = @import("StagingRing.zig");
-const StagingRing = staging_ring_module.StagingRing;
-const PendingCopy = staging_ring_module.PendingCopy;
 
 /// Allocation handle for a chunk's GPU buffers
 pub const ChunkBufferAllocation = struct {
@@ -43,8 +40,6 @@ pub const ChunkBufferConfig = struct {
     vertex_arena_size: u64 = 1024 * 1024 * 1024, // 1 GB default for GPU-driven
     /// Size of index buffer (single buffer for GPU-driven rendering)
     index_arena_size: u64 = 512 * 1024 * 1024, // 512 MB default for GPU-driven
-    /// Size of the staging ring buffer (default 64 MB)
-    staging_size: u64 = 64 * 1024 * 1024,
     /// Vertex size in bytes (should match Vertex struct)
     vertex_size: u64 = 36,
     /// Index size in bytes
@@ -82,8 +77,6 @@ pub const ChunkBufferManager = struct {
     vertex_arena: GrowableBufferArena,
     /// Growable index buffer arena
     index_arena: GrowableBufferArena,
-    /// Staging ring for uploads
-    staging: StagingRing,
 
     /// Vulkan device
     device: vk.VkDevice,
@@ -154,27 +147,18 @@ pub const ChunkBufferManager = struct {
         );
         errdefer index_arena.deinit();
 
-        const staging = try StagingRing.init(
-            allocator,
-            device,
-            physical_device,
-            config.staging_size,
-        );
-
         const vertex_stats = vertex_arena.getStats();
         const index_stats = index_arena.getStats();
-        logger.info("ChunkBufferManager initialized: vertex={} MB ({} arenas), index={} MB ({} arenas), staging={} MB", .{
+        logger.info("ChunkBufferManager initialized: vertex={} MB ({} arenas), index={} MB ({} arenas)", .{
             vertex_stats.total_capacity / (1024 * 1024),
             vertex_stats.arena_count,
             index_stats.total_capacity / (1024 * 1024),
             index_stats.arena_count,
-            config.staging_size / (1024 * 1024),
         });
 
         return Self{
             .vertex_arena = vertex_arena,
             .index_arena = index_arena,
-            .staging = staging,
             .device = device,
             .physical_device = physical_device,
             .config = config,
@@ -192,7 +176,6 @@ pub const ChunkBufferManager = struct {
         }
         self.pending_frees.deinit(self.allocator);
 
-        self.staging.deinit();
         self.index_arena.deinit();
         self.vertex_arena.deinit();
 
@@ -268,11 +251,6 @@ pub const ChunkBufferManager = struct {
         }
     }
 
-    /// Check if there are pending uploads
-    pub fn hasPendingUploads(self: *const Self) bool {
-        return self.staging.hasPending();
-    }
-
     /// Get the vertex buffer for a specific arena
     pub fn getVertexBuffer(self: *const Self, arena_index: u16) ?vk.VkBuffer {
         return self.vertex_arena.getBuffer(arena_index);
@@ -312,21 +290,6 @@ pub const ChunkBufferManager = struct {
         const vertex_version: u32 = self.vertex_arena.getExpansionCount();
         const index_version: u32 = self.index_arena.getExpansionCount();
         return (vertex_version << 16) | index_version;
-    }
-
-    /// Get the staging buffer for copy commands
-    pub fn getStagingBuffer(self: *const Self) vk.VkBuffer {
-        return self.staging.getBuffer();
-    }
-
-    /// Get pending staging copies
-    pub fn getPendingCopies(self: *const Self) []const PendingCopy {
-        return self.staging.getPendingCopies();
-    }
-
-    /// Clear pending copies after they've been committed
-    pub fn clearPendingCopies(self: *Self) void {
-        self.staging.clearPendingCopies();
     }
 
     /// Get usage statistics

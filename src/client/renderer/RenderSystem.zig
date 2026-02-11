@@ -24,7 +24,6 @@ const ImageViewHelper = @import("resource/ImageViewHelper.zig").ImageViewHelper;
 const TextureLoader = @import("resource/TextureLoader.zig").TextureLoader;
 const GPUDrivenTypes = @import("GPUDrivenTypes.zig");
 const ComputePipeline = @import("ComputePipeline.zig");
-const StagingRing = @import("buffer/StagingRing.zig");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -911,8 +910,6 @@ pub const RenderSystem = struct {
     pub const DrawParams = struct {
         /// Multi-chunk draw commands
         draw_commands: ?[]const ChunkDrawCommand = null,
-        /// Staging copies to execute before rendering
-        staging_copies: []const StagingCopy = &.{},
         /// Entity vertex buffer (for mob rendering)
         entity_vertex_buffer: ?vk.VkBuffer = null,
         /// Entity index buffer
@@ -957,11 +954,6 @@ pub const RenderSystem = struct {
 
         if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
             return error.CommandBufferBeginFailed;
-        }
-
-        // Record staging buffer copies before render pass
-        if (params.staging_copies.len > 0) {
-            try self.recordStagingCopies(command_buffer, params.staging_copies);
         }
 
         // Pre-render callback for additional GPU uploads (e.g., chunk metadata)
@@ -1152,43 +1144,6 @@ pub const RenderSystem = struct {
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
             return error.CommandBufferEndFailed;
         }
-    }
-
-    /// Record staging buffer copy commands
-    fn recordStagingCopies(self: *Self, command_buffer: vk.VkCommandBuffer, staging_copies: []const StagingCopy) !void {
-        const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
-
-        _ = self;
-
-        for (staging_copies) |copy| {
-            const region = vk.VkBufferCopy{
-                .srcOffset = copy.src_offset,
-                .dstOffset = copy.dst_offset,
-                .size = copy.size,
-            };
-            vkCmdCopyBuffer(command_buffer, copy.src_buffer, copy.dst_buffer, 1, &region);
-        }
-
-        // Memory barrier: transfer writes must complete before vertex/index reads
-        const barrier = vk.VkMemoryBarrier{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .pNext = null,
-            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
-            .dstAccessMask = vk.VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | vk.VK_ACCESS_INDEX_READ_BIT,
-        };
-        vkCmdPipelineBarrier(
-            command_buffer,
-            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
-            vk.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
-            0,
-            1,
-            &barrier,
-            0,
-            null,
-            0,
-            null,
-        );
     }
 
     /// Draw block outline (lines) - extracted for DRY
@@ -1626,10 +1581,6 @@ pub const RenderSystem = struct {
         render_layer: u8 = 0,
     };
 
-    /// Staging copy info for buffer uploads
-    /// Aliased from StagingRing.PendingCopy to ensure single source of truth
-    pub const StagingCopy = StagingRing.PendingCopy;
-
     /// Indirect draw command matching VkDrawIndexedIndirectCommand layout
     pub const IndirectDrawCommand = extern struct {
         index_count: u32,
@@ -1653,69 +1604,6 @@ pub const RenderSystem = struct {
         index_arena: u16,
     };
 
-    /// Draw frame with multiple chunks from arena buffers
-    /// staging_copies: optional slice of pending staging copies to commit before rendering
-    pub fn drawFrameMultiChunk(
-        self: *Self,
-        vertex_buffer: vk.VkBuffer,
-        index_buffer: vk.VkBuffer,
-        draw_commands: []const ChunkDrawCommand,
-        staging_buffer: ?vk.VkBuffer,
-        staging_copies: []const StagingCopy,
-        entity_vertex_buffer: ?vk.VkBuffer,
-        entity_index_buffer: ?vk.VkBuffer,
-        entity_index_count: u32,
-        adult_index_count: u32,
-        baby_index_start: u32,
-        baby_index_count: u32,
-    ) !void {
-        _ = staging_buffer;
-        _ = vertex_buffer;
-        _ = index_buffer;
-
-        const ctx = try self.beginFrame() orelse return;
-        try self.recordRenderCommands(ctx.command_buffer, ctx.image_index, .{
-            .draw_commands = draw_commands,
-            .staging_copies = staging_copies,
-            .entity_vertex_buffer = entity_vertex_buffer,
-            .entity_index_buffer = entity_index_buffer,
-            .entity_index_count = entity_index_count,
-            .adult_index_count = adult_index_count,
-            .baby_index_start = baby_index_start,
-            .baby_index_count = baby_index_count,
-        });
-        try self.endFrame(ctx);
-    }
-
-    /// Draw frame with multiple chunks from multiple arena buffers
-    pub fn drawFrameMultiArena(
-        self: *Self,
-        vertex_buffers: []const vk.VkBuffer,
-        index_buffers: []const vk.VkBuffer,
-        draw_commands: []const ChunkDrawCommand,
-        staging_copies: []const StagingCopy,
-        entity_vertex_buffer: ?vk.VkBuffer,
-        entity_index_buffer: ?vk.VkBuffer,
-        entity_index_count: u32,
-        adult_index_count: u32,
-        baby_index_start: u32,
-        baby_index_count: u32,
-    ) !void {
-        const ctx = try self.beginFrame() orelse return;
-        try self.recordRenderCommands(ctx.command_buffer, ctx.image_index, .{
-            .draw_commands = draw_commands,
-            .staging_copies = staging_copies,
-            .entity_vertex_buffer = entity_vertex_buffer,
-            .entity_index_buffer = entity_index_buffer,
-            .entity_index_count = entity_index_count,
-            .adult_index_count = adult_index_count,
-            .baby_index_start = baby_index_start,
-            .baby_index_count = baby_index_count,
-            .vertex_buffers = vertex_buffers,
-            .index_buffers = index_buffers,
-        });
-        try self.endFrame(ctx);
-    }
 
     /// Draw a frame using GPU-driven rendering (compute cull + indirect draws)
     /// This is the new rendering path that uses GPU frustum culling
@@ -1725,7 +1613,6 @@ pub const RenderSystem = struct {
         view_proj: [16]f32,
         vertex_buffers: []const vk.VkBuffer,
         index_buffers: []const vk.VkBuffer,
-        staging_copies: []const StagingCopy,
         entity_vb: ?vk.VkBuffer,
         entity_ib: ?vk.VkBuffer,
         adult_index_count: u32,
@@ -1758,11 +1645,6 @@ pub const RenderSystem = struct {
         };
         if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
             return error.CommandBufferBeginFailed;
-        }
-
-        // Record staging buffer copies
-        if (staging_copies.len > 0) {
-            try self.recordStagingCopies(command_buffer, staging_copies);
         }
 
         // Pre-render callback (metadata uploads)
