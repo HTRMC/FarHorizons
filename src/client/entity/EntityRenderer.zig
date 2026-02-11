@@ -392,8 +392,7 @@ pub const EntityRenderer = struct {
             return;
         }
 
-        // Recreate buffers if size changed
-        self.destroyBuffers();
+        // Old buffers are retired by the caller (FarHorizonsClient) before calling updateFromECS
 
         const vertex_result = try self.gpu_device.createBufferWithDataRaw(
             Vertex,

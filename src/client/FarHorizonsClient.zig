@@ -449,6 +449,17 @@ pub const FarHorizonsClient = struct {
 
             if (self.entity_renderer) |*er| {
                 if (self.ecs_world) |*ecs_world| {
+                    // Retire old entity buffers before updateFromECS creates new ones
+                    if (er.vertex_buffer != null) {
+                        self.render_system.retireBuffer(er.vertex_buffer, er.vertex_buffer_memory);
+                        er.vertex_buffer = null;
+                        er.vertex_buffer_memory = null;
+                    }
+                    if (er.index_buffer != null) {
+                        self.render_system.retireBuffer(er.index_buffer, er.index_buffer_memory);
+                        er.index_buffer = null;
+                        er.index_buffer_memory = null;
+                    }
                     er.updateFromECS(ecs_world, partial_tick) catch |err| {
                         logger.err("Failed to update entity meshes: {}", .{err});
                     };

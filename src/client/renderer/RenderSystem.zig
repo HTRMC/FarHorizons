@@ -215,6 +215,8 @@ pub const IconVertex = extern struct {
 pub const RenderSystem = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
+    const DeferredBuffer = struct { handle: vk.VkBuffer, memory: vk.VkDeviceMemory, ready_at: u64 };
+    const MAX_GC_ENTRIES = 32;
 
     instance: vk.VkInstance = null,
     debug_messenger: vk.VkDebugUtilsMessengerEXT = null,
@@ -327,6 +329,14 @@ pub const RenderSystem = struct {
     render_finished_semaphores: []vk.VkSemaphore = &.{}, // Per swapchain image, indexed by image_index
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence = .{null} ** MAX_FRAMES_IN_FLIGHT,
     current_frame: u32 = 0,
+
+    // Timeline semaphore GC
+    gpu_timeline: vk.VkSemaphore = null,
+    timeline_value: u64 = 0,
+    last_submitted_value: u64 = 0,
+
+    gc_queue: [MAX_GC_ENTRIES]DeferredBuffer = @splat(.{ .handle = null, .memory = null, .ready_at = 0 }),
+    gc_count: u32 = 0,
 
     allocator: std.mem.Allocator = undefined,
     io: Io = undefined,
@@ -456,6 +466,7 @@ pub const RenderSystem = struct {
 
     pub fn shutdown(self: *Self) void {
         self.waitIdle();
+        self.flushAllGarbage();
 
         // Shutdown shader manager
         if (self.shader_manager) |*sm| {
@@ -697,6 +708,8 @@ pub const RenderSystem = struct {
         const fence = self.in_flight_fences[self.current_frame];
         _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
 
+        self.collectGarbage();
+
         // Reset metadata staging offset for new frame
         self.metadata_staging_offset = 0;
 
@@ -734,32 +747,47 @@ pub const RenderSystem = struct {
 
         const wait_semaphores = [_]vk.VkSemaphore{self.image_available_semaphores[ctx.current_frame]};
         const wait_stages = [_]vk.VkPipelineStageFlags{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-        const signal_semaphores = [_]vk.VkSemaphore{self.render_finished_semaphores[ctx.image_index]};
+        const signal_semaphores = [_]vk.VkSemaphore{ self.render_finished_semaphores[ctx.image_index], self.gpu_timeline.? };
         const cmd_buffers = [_]vk.VkCommandBuffer{ctx.command_buffer};
+
+        // Timeline semaphore: increment before submit so the signaled value tracks this frame
+        self.timeline_value += 1;
+        const wait_values = [_]u64{ 0 }; // binary semaphore, ignored
+        const signal_values = [_]u64{ 0, self.timeline_value }; // binary (ignored), timeline
+        var timeline_info = vk.VkTimelineSemaphoreSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreValueCount = 1,
+            .pWaitSemaphoreValues = &wait_values,
+            .signalSemaphoreValueCount = 2,
+            .pSignalSemaphoreValues = &signal_values,
+        };
 
         const submit_info = vk.VkSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
+            .pNext = &timeline_info,
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = &wait_semaphores,
             .pWaitDstStageMask = &wait_stages,
             .commandBufferCount = 1,
             .pCommandBuffers = &cmd_buffers,
-            .signalSemaphoreCount = 1,
+            .signalSemaphoreCount = 2,
             .pSignalSemaphores = &signal_semaphores,
         };
 
         if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, ctx.fence) != vk.VK_SUCCESS) {
             return error.QueueSubmitFailed;
         }
+        self.last_submitted_value = self.timeline_value;
 
         const swapchains = [_]vk.VkSwapchainKHR{self.swapchain};
         var image_index = ctx.image_index;
+        const present_semaphores = [_]vk.VkSemaphore{self.render_finished_semaphores[ctx.image_index]};
         const present_info = vk.VkPresentInfoKHR{
             .sType = vk.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
             .pNext = null,
             .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &signal_semaphores,
+            .pWaitSemaphores = &present_semaphores,
             .swapchainCount = 1,
             .pSwapchains = &swapchains,
             .pImageIndices = &image_index,
@@ -775,6 +803,64 @@ pub const RenderSystem = struct {
         }
 
         self.current_frame = (self.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    /// Poll the timeline semaphore and destroy buffers the GPU has finished with
+    fn collectGarbage(self: *Self) void {
+        const vkGetSemaphoreCounterValue = vk.vkGetSemaphoreCounterValue orelse return;
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
+        const vkFreeMemory = vk.vkFreeMemory orelse return;
+
+        const timeline = self.gpu_timeline orelse return;
+        var completed: u64 = 0;
+        if (vkGetSemaphoreCounterValue(self.device, timeline, &completed) != vk.VK_SUCCESS) return;
+
+        var i: u32 = 0;
+        while (i < self.gc_count) {
+            if (self.gc_queue[i].ready_at <= completed) {
+                if (self.gc_queue[i].handle) |h| vkDestroyBuffer(self.device, h, null);
+                if (self.gc_queue[i].memory) |m| vkFreeMemory(self.device, m, null);
+                // Swap-remove
+                self.gc_count -= 1;
+                if (i < self.gc_count) {
+                    self.gc_queue[i] = self.gc_queue[self.gc_count];
+                }
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Schedule a buffer+memory pair for deferred destruction after the GPU finishes the current frame
+    pub fn retireBuffer(self: *Self, handle: vk.VkBuffer, memory: vk.VkDeviceMemory) void {
+        if (handle == null and memory == null) return;
+
+        if (self.gc_count < MAX_GC_ENTRIES) {
+            self.gc_queue[self.gc_count] = .{
+                .handle = handle,
+                .memory = memory,
+                .ready_at = self.last_submitted_value,
+            };
+            self.gc_count += 1;
+        } else {
+            // Queue full - fallback: wait for GPU idle and destroy immediately
+            logger.warn("GC queue full, falling back to vkDeviceWaitIdle", .{});
+            if (vk.vkDeviceWaitIdle) |wait| _ = wait(self.device);
+            if (vk.vkDestroyBuffer) |destroy| if (handle) |h| destroy(self.device, h, null);
+            if (vk.vkFreeMemory) |free| if (memory) |m| free(self.device, m, null);
+        }
+    }
+
+    /// Destroy all remaining GC entries unconditionally (call after vkDeviceWaitIdle)
+    fn flushAllGarbage(self: *Self) void {
+        const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
+        const vkFreeMemory = vk.vkFreeMemory orelse return;
+
+        for (0..self.gc_count) |i| {
+            if (self.gc_queue[i].handle) |h| vkDestroyBuffer(self.device, h, null);
+            if (self.gc_queue[i].memory) |m| vkFreeMemory(self.device, m, null);
+        }
+        self.gc_count = 0;
     }
 
     /// Draw parameters for unified command recording
@@ -1369,12 +1455,9 @@ pub const RenderSystem = struct {
             }
         }
 
-        // Destroy old buffer if exists
+        // Retire old buffer (deferred destruction after GPU finishes)
         if (self.hotbar_icon_buffer.isValid()) {
-            gpu.destroyBufferRaw(.{
-                .handle = self.hotbar_icon_buffer.handle,
-                .memory = self.hotbar_icon_buffer.memory,
-            });
+            self.retireBuffer(self.hotbar_icon_buffer.handle, self.hotbar_icon_buffer.memory);
             self.hotbar_icon_buffer = .{};
         }
 
@@ -1438,12 +1521,9 @@ pub const RenderSystem = struct {
 
         var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
-        // Destroy old buffer if exists
+        // Retire old buffer (deferred destruction after GPU finishes)
         if (self.line_buffer.isValid()) {
-            gpu.destroyBufferRaw(.{
-                .handle = self.line_buffer.handle,
-                .memory = self.line_buffer.memory,
-            });
+            self.retireBuffer(self.line_buffer.handle, self.line_buffer.memory);
             self.line_buffer = .{};
         }
 
@@ -2126,6 +2206,7 @@ pub const RenderSystem = struct {
         vulkan12_features.descriptorBindingPartiallyBound = vk.VK_TRUE;
         vulkan12_features.descriptorBindingVariableDescriptorCount = vk.VK_TRUE;
         vulkan12_features.descriptorBindingSampledImageUpdateAfterBind = vk.VK_TRUE;
+        vulkan12_features.timelineSemaphore = vk.VK_TRUE;
 
         var device_features2 = std.mem.zeroes(vk.VkPhysicalDeviceFeatures2);
         device_features2.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -3127,7 +3208,10 @@ pub const RenderSystem = struct {
         });
 
         self.hotbar_pipeline = hotbar_result.pipeline;
-        // Reuse the same layout since it's identical
+        // Destroy the duplicate layout - identical to ui_pipeline_layout which is already stored
+        if (vk.vkDestroyPipelineLayout) |destroy| {
+            destroy(self.device, hotbar_result.layout, null);
+        }
 
         logger.info("Hotbar pipeline created", .{});
     }
@@ -4289,12 +4373,33 @@ pub const RenderSystem = struct {
             }
         }
 
+        // Timeline semaphore for GC tracking
+        var timeline_type_info = vk.VkSemaphoreTypeCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
+            .pNext = null,
+            .semaphoreType = vk.VK_SEMAPHORE_TYPE_TIMELINE,
+            .initialValue = 0,
+        };
+        const timeline_sem_info = vk.VkSemaphoreCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &timeline_type_info,
+            .flags = 0,
+        };
+        if (vkCreateSemaphore(self.device, &timeline_sem_info, null, &self.gpu_timeline) != vk.VK_SUCCESS) {
+            return error.SyncObjectCreationFailed;
+        }
+        self.timeline_value = 0;
+        self.last_submitted_value = 0;
+
         logger.info("Sync objects created", .{});
     }
 
     fn destroySyncObjects(self: *Self) void {
         const vkDestroySemaphore = vk.vkDestroySemaphore orelse return;
         const vkDestroyFence = vk.vkDestroyFence orelse return;
+
+        if (self.gpu_timeline) |t| vkDestroySemaphore(self.device, t, null);
+        self.gpu_timeline = null;
 
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             if (self.image_available_semaphores[i]) |s| vkDestroySemaphore(self.device, s, null);
