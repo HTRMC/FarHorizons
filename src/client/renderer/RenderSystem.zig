@@ -908,8 +908,6 @@ pub const RenderSystem = struct {
 
     /// Draw parameters for unified command recording
     pub const DrawParams = struct {
-        /// Multi-chunk draw commands
-        draw_commands: ?[]const ChunkDrawCommand = null,
         /// Entity vertex buffer (for mob rendering)
         entity_vertex_buffer: ?vk.VkBuffer = null,
         /// Entity index buffer
@@ -922,10 +920,6 @@ pub const RenderSystem = struct {
         baby_index_start: u32 = 0,
         /// Baby cow index count (drawn with baby texture)
         baby_index_count: u32 = 0,
-        /// Array of vertex buffers for multi-arena rendering (index = arena)
-        vertex_buffers: ?[]const vk.VkBuffer = null,
-        /// Array of index buffers for multi-arena rendering (index = arena)
-        index_buffers: ?[]const vk.VkBuffer = null,
     };
 
     /// Unified command buffer recording
@@ -1001,92 +995,6 @@ pub const RenderSystem = struct {
         // Bind descriptor set
         const descriptor_sets = [_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]};
         vkCmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &descriptor_sets, 0, null);
-
-        // Draw geometry using indirect drawing with layer-specific pipelines
-        if (params.draw_commands) |commands| {
-            if (commands.len > 0) {
-                if (params.vertex_buffers) |vb_array| {
-                    if (params.index_buffers) |ib_array| {
-                        const vkCmdDrawIndexedIndirect = vk.vkCmdDrawIndexedIndirect orelse return error.VulkanFunctionNotLoaded;
-
-                        // Write all commands to indirect buffer
-                        const indirect_cmds: [*]IndirectDrawCommand = @ptrCast(@alignCast(self.indirect_buffer.mapped.?));
-                        for (commands, 0..) |cmd, i| {
-                            indirect_cmds[i] = IndirectDrawCommand{
-                                .index_count = cmd.index_count,
-                                .instance_count = 1,
-                                .first_index = @intCast(cmd.index_offset / 4),
-                                .vertex_offset = @intCast(cmd.vertex_offset / @sizeOf(Vertex)),
-                                .first_instance = 0,
-                            };
-                        }
-
-                        // Issue batched indirect draws
-                        var batch_start: u32 = 0;
-                        var current_vertex_arena: u16 = 0xFFFF;
-                        var current_index_arena: u16 = 0xFFFF;
-                        var current_layer: u8 = 0xFF;
-
-                        for (commands, 0..) |cmd, i| {
-                            const need_state_change = cmd.render_layer != current_layer or
-                                cmd.vertex_arena != current_vertex_arena or
-                                cmd.index_arena != current_index_arena;
-
-                            if (need_state_change) {
-                                // Flush previous batch if any
-                                const batch_count = @as(u32, @intCast(i)) - batch_start;
-                                if (batch_count > 0 and current_layer != 0xFF) {
-                                    const indirect_offset = @as(u64, batch_start) * @sizeOf(IndirectDrawCommand);
-                                    vkCmdDrawIndexedIndirect(
-                                        command_buffer,
-                                        self.indirect_buffer.handle,
-                                        indirect_offset,
-                                        batch_count,
-                                        @sizeOf(IndirectDrawCommand),
-                                    );
-                                }
-
-                                // Update state for new batch
-                                batch_start = @intCast(i);
-
-                                // Bind pipeline if layer changed
-                                if (cmd.render_layer != current_layer) {
-                                    current_layer = cmd.render_layer;
-                                    const pipeline = self.layer_pipelines[current_layer];
-                                    vkCmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-                                }
-
-                                // Bind buffers if arena changed
-                                if (cmd.vertex_arena != current_vertex_arena or cmd.index_arena != current_index_arena) {
-                                    current_vertex_arena = cmd.vertex_arena;
-                                    current_index_arena = cmd.index_arena;
-
-                                    if (current_vertex_arena < vb_array.len and current_index_arena < ib_array.len) {
-                                        const arena_vb = [_]vk.VkBuffer{vb_array[current_vertex_arena]};
-                                        const offsets = [_]vk.VkDeviceSize{0};
-                                        vkCmdBindVertexBuffers(command_buffer, 0, 1, &arena_vb, &offsets);
-                                        vkCmdBindIndexBuffer(command_buffer, ib_array[current_index_arena], 0, vk.VK_INDEX_TYPE_UINT32);
-                                    }
-                                }
-                            }
-                        }
-
-                        // Flush final batch
-                        const final_batch_count = @as(u32, @intCast(commands.len)) - batch_start;
-                        if (final_batch_count > 0 and current_layer != 0xFF) {
-                            const indirect_offset = @as(u64, batch_start) * @sizeOf(IndirectDrawCommand);
-                            vkCmdDrawIndexedIndirect(
-                                command_buffer,
-                                self.indirect_buffer.handle,
-                                indirect_offset,
-                                final_batch_count,
-                                @sizeOf(IndirectDrawCommand),
-                            );
-                        }
-                    }
-                }
-            }
-        }
 
         // Draw entities (mobs) using bindless textures
         if (params.entity_vertex_buffer != null and params.entity_index_buffer != null and params.entity_index_count > 0) {
@@ -1564,47 +1472,6 @@ pub const RenderSystem = struct {
     }
 
     /// Draw command for multi-chunk rendering
-    pub const ChunkDrawCommand = struct {
-        /// Offset into the vertex buffer (in bytes)
-        vertex_offset: u64,
-        /// Offset into the index buffer (in bytes)
-        index_offset: u64,
-        /// Number of indices to draw
-        index_count: u32,
-        /// Base vertex offset (added to each index)
-        vertex_base: i32 = 0,
-        /// Vertex buffer arena index (for multi-buffer rendering)
-        vertex_arena: u16 = 0,
-        /// Index buffer arena index (for multi-buffer rendering)
-        index_arena: u16 = 0,
-        /// Render layer (0=solid, 1=cutout, 2=translucent)
-        render_layer: u8 = 0,
-    };
-
-    /// Indirect draw command matching VkDrawIndexedIndirectCommand layout
-    pub const IndirectDrawCommand = extern struct {
-        index_count: u32,
-        instance_count: u32,
-        first_index: u32,
-        vertex_offset: i32,
-        first_instance: u32,
-    };
-
-    /// Batch of indirect draw commands sharing the same pipeline and buffers
-    pub const IndirectDrawBatch = struct {
-        /// Index into indirect buffer where this batch starts
-        offset: u32,
-        /// Number of draw commands in this batch
-        count: u32,
-        /// Render layer (determines pipeline)
-        render_layer: u8,
-        /// Vertex buffer arena for this batch
-        vertex_arena: u16,
-        /// Index buffer arena for this batch
-        index_arena: u16,
-    };
-
-
     /// Draw a frame using GPU-driven rendering (compute cull + indirect draws)
     /// This is the new rendering path that uses GPU frustum culling
     pub fn drawFrameGPUDriven(
@@ -3638,7 +3505,7 @@ pub const RenderSystem = struct {
         // Initial capacity for draw commands (need enough for large view distances)
         // With view_distance=16, vertical=8: ~18,500 chunks, potentially multiple commands each
         const initial_capacity: u32 = 65536;
-        const buffer_size: u64 = @as(u64, initial_capacity) * @sizeOf(IndirectDrawCommand);
+        const buffer_size: u64 = @as(u64, initial_capacity) * @sizeOf(GPUDrivenTypes.IndirectDrawCommand);
 
         const result = try gpu.createMappedBufferRaw(buffer_size, vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
         self.indirect_buffer = ManagedBuffer.fromMapped(result.handle, result.memory, result.mapped.?);
