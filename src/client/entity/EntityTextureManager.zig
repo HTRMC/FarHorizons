@@ -516,10 +516,8 @@ pub const EntityTextureManager = struct {
             return error.ImageBindFailed;
         }
 
-        // Transition and copy
-        try self.transitionImageLayout(tex_image, vk.VK_IMAGE_LAYOUT_UNDEFINED, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        try self.copyBufferToImage(staging_buffer, tex_image, width, height);
-        try self.transitionImageLayout(tex_image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        // Batch transition→copy→transition into a single command buffer (no queue stalls)
+        try self.uploadImageBatched(staging_buffer, tex_image, width, height);
 
         // Clean up staging buffer
         vkDestroyBuffer(self.device, staging_buffer, null);
@@ -581,14 +579,19 @@ pub const EntityTextureManager = struct {
         return error.NoSuitableMemoryType;
     }
 
-    fn transitionImageLayout(self: *Self, image: vk.VkImage, old_layout: vk.VkImageLayout, new_layout: vk.VkImageLayout) !void {
+    /// Batch transition→copy→transition into a single command buffer with one fence wait.
+    /// Replaces the old 3-submit pattern that called vkQueueWaitIdle after each step.
+    fn uploadImageBatched(self: *Self, buffer: vk.VkBuffer, image: vk.VkImage, width: u32, height: u32) !void {
         const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
         const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdCopyBufferToImage = vk.vkCmdCopyBufferToImage orelse return error.VulkanFunctionNotLoaded;
         const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
         const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateFence = vk.vkCreateFence orelse return error.VulkanFunctionNotLoaded;
+        const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyFence = vk.vkDestroyFence orelse return error.VulkanFunctionNotLoaded;
 
         const alloc_info = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -602,7 +605,6 @@ pub const EntityTextureManager = struct {
         if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
             return error.CommandBufferAllocationFailed;
         }
-        defer vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
 
         const begin_info = vk.VkCommandBufferBeginInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -615,139 +617,83 @@ pub const EntityTextureManager = struct {
             return error.CommandBufferBeginFailed;
         }
 
-        var src_stage: vk.VkPipelineStageFlags = undefined;
-        var dst_stage: vk.VkPipelineStageFlags = undefined;
-        var src_access: vk.VkAccessFlags = 0;
-        var dst_access: vk.VkAccessFlags = 0;
-
-        if (old_layout == vk.VK_IMAGE_LAYOUT_UNDEFINED and new_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-            src_access = 0;
-            dst_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            src_stage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            dst_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-        } else if (old_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and new_layout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            src_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            dst_access = vk.VK_ACCESS_SHADER_READ_BIT;
-            src_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-            dst_stage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        } else {
-            return error.UnsupportedLayoutTransition;
-        }
-
-        const barrier = vk.VkImageMemoryBarrier{
+        // 1) UNDEFINED → TRANSFER_DST
+        const to_transfer = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
-            .srcAccessMask = src_access,
-            .dstAccessMask = dst_access,
-            .oldLayout = old_layout,
-            .newLayout = new_layout,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
             .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
             .image = image,
             .subresourceRange = .{
                 .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
+                .baseMipLevel = 0, .levelCount = 1,
+                .baseArrayLayer = 0, .layerCount = 1,
             },
         };
+        vkCmdPipelineBarrier(command_buffer, vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &to_transfer);
 
-        vkCmdPipelineBarrier(command_buffer, src_stage, dst_stage, 0, 0, null, 0, null, 1, &barrier);
-
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferEndFailed;
-        }
-
-        const submit_info = vk.VkSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = null,
-        };
-
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
-            return error.QueueSubmitFailed;
-        }
-
-        _ = vkQueueWaitIdle(self.graphics_queue);
-    }
-
-    fn copyBufferToImage(self: *Self, buffer: vk.VkBuffer, image: vk.VkImage, width: u32, height: u32) !void {
-        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdCopyBufferToImage = vk.vkCmdCopyBufferToImage orelse return error.VulkanFunctionNotLoaded;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-
-        const alloc_info = vk.VkCommandBufferAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = null,
-            .commandPool = self.command_pool,
-            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-
-        var command_buffer: vk.VkCommandBuffer = undefined;
-        if (vkAllocateCommandBuffers(self.device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferAllocationFailed;
-        }
-        defer vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
-
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = null,
-        };
-
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            return error.CommandBufferBeginFailed;
-        }
-
+        // 2) Copy buffer → image
         const region = vk.VkBufferImageCopy{
             .bufferOffset = 0,
             .bufferRowLength = 0,
             .bufferImageHeight = 0,
             .imageSubresource = .{
                 .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
+                .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1,
             },
             .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
             .imageExtent = .{ .width = width, .height = height, .depth = 1 },
         };
-
         vkCmdCopyBufferToImage(command_buffer, buffer, image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+        // 3) TRANSFER_DST → SHADER_READ_ONLY
+        const to_shader = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0, .levelCount = 1,
+                .baseArrayLayer = 0, .layerCount = 1,
+            },
+        };
+        vkCmdPipelineBarrier(command_buffer, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &to_shader);
 
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
             return error.CommandBufferEndFailed;
         }
 
+        // Single submit with fence
+        var fence: vk.VkFence = null;
+        const fence_info = vk.VkFenceCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .pNext = null, .flags = 0 };
+        if (vkCreateFence(self.device, &fence_info, null, &fence) != vk.VK_SUCCESS) {
+            return error.FenceCreationFailed;
+        }
+        defer vkDestroyFence(self.device, fence, null);
+
         const submit_info = vk.VkSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .pNext = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = null,
+            .waitSemaphoreCount = 0, .pWaitSemaphores = null, .pWaitDstStageMask = null,
+            .commandBufferCount = 1, .pCommandBuffers = &command_buffer,
+            .signalSemaphoreCount = 0, .pSignalSemaphores = null,
         };
 
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, fence) != vk.VK_SUCCESS) {
             return error.QueueSubmitFailed;
         }
 
-        _ = vkQueueWaitIdle(self.graphics_queue);
+        _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
+        vkFreeCommandBuffers(self.device, self.command_pool, 1, &command_buffer);
     }
 };

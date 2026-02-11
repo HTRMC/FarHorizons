@@ -158,10 +158,8 @@ pub const TextureLoader = struct {
             return error.ImageBindFailed;
         }
 
-        // Transition image and copy from staging buffer
-        try transitionImageLayout(gpu, tex_image, vk.VK_IMAGE_LAYOUT_UNDEFINED, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-        try copyBufferToImage(gpu, staging.handle, tex_image, width, height);
-        try transitionImageLayout(gpu, tex_image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        // Upload: transition → copy → transition in a single command buffer with fence sync
+        try uploadImageBatched(gpu, staging.handle, tex_image, width, height);
 
         // Create image view
         const view_info = vk.VkImageViewCreateInfo{
@@ -276,131 +274,31 @@ pub const TextureLoader = struct {
         return error.NoSuitableMemoryType;
     }
 
-    fn transitionImageLayout(
+    /// Batched upload: transition → copy → transition in a single command buffer with fence sync.
+    /// Replaces the old 3-submit pattern that called vkQueueWaitIdle after each step.
+    fn uploadImageBatched(
         gpu: *GpuDevice,
-        image: vk.VkImage,
-        old_layout: vk.VkImageLayout,
-        new_layout: vk.VkImageLayout,
-    ) !void {
-        const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-        const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
-        const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
-        const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
-
-        const device = gpu.getDevice();
-        const command_pool = gpu.getCommandPool();
-        const graphics_queue = gpu.getGraphicsQueue();
-
-        const alloc_info = vk.VkCommandBufferAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-            .pNext = null,
-            .commandPool = command_pool,
-            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-            .commandBufferCount = 1,
-        };
-
-        var command_buffer: vk.VkCommandBuffer = undefined;
-        if (vkAllocateCommandBuffers(device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferAllocationFailed;
-        }
-        defer vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
-
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = null,
-        };
-
-        if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
-            return error.CommandBufferBeginFailed;
-        }
-
-        var src_stage: vk.VkPipelineStageFlags = undefined;
-        var dst_stage: vk.VkPipelineStageFlags = undefined;
-        var src_access: vk.VkAccessFlags = 0;
-        var dst_access: vk.VkAccessFlags = 0;
-
-        if (old_layout == vk.VK_IMAGE_LAYOUT_UNDEFINED and new_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-            src_access = 0;
-            dst_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            src_stage = vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-            dst_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-        } else if (old_layout == vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL and new_layout == vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            src_access = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
-            dst_access = vk.VK_ACCESS_SHADER_READ_BIT;
-            src_stage = vk.VK_PIPELINE_STAGE_TRANSFER_BIT;
-            dst_stage = vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        } else {
-            return error.UnsupportedLayoutTransition;
-        }
-
-        const barrier = vk.VkImageMemoryBarrier{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-            .pNext = null,
-            .srcAccessMask = src_access,
-            .dstAccessMask = dst_access,
-            .oldLayout = old_layout,
-            .newLayout = new_layout,
-            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .image = image,
-            .subresourceRange = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-        };
-
-        vkCmdPipelineBarrier(command_buffer, src_stage, dst_stage, 0, 0, null, 0, null, 1, &barrier);
-
-        if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
-            return error.CommandBufferEndFailed;
-        }
-
-        const submit_info = vk.VkSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &command_buffer,
-            .signalSemaphoreCount = 0,
-            .pSignalSemaphores = null,
-        };
-
-        if (vkQueueSubmit(graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
-            return error.QueueSubmitFailed;
-        }
-
-        _ = vkQueueWaitIdle(graphics_queue);
-    }
-
-    fn copyBufferToImage(
-        gpu: *GpuDevice,
-        buffer: vk.VkBuffer,
+        staging_buffer: vk.VkBuffer,
         image: vk.VkImage,
         width: u32,
         height: u32,
     ) !void {
         const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
         const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
+        const vkCmdPipelineBarrier = vk.vkCmdPipelineBarrier orelse return error.VulkanFunctionNotLoaded;
         const vkCmdCopyBufferToImage = vk.vkCmdCopyBufferToImage orelse return error.VulkanFunctionNotLoaded;
         const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateFence = vk.vkCreateFence orelse return error.VulkanFunctionNotLoaded;
+        const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyFence = vk.vkDestroyFence orelse return error.VulkanFunctionNotLoaded;
         const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
 
         const device = gpu.getDevice();
         const command_pool = gpu.getCommandPool();
         const graphics_queue = gpu.getGraphicsQueue();
 
+        var command_buffer: vk.VkCommandBuffer = undefined;
         const alloc_info = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
@@ -408,8 +306,6 @@ pub const TextureLoader = struct {
             .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1,
         };
-
-        var command_buffer: vk.VkCommandBuffer = undefined;
         if (vkAllocateCommandBuffers(device, &alloc_info, &command_buffer) != vk.VK_SUCCESS) {
             return error.CommandBufferAllocationFailed;
         }
@@ -421,11 +317,34 @@ pub const TextureLoader = struct {
             .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
             .pInheritanceInfo = null,
         };
-
         if (vkBeginCommandBuffer(command_buffer, &begin_info) != vk.VK_SUCCESS) {
             return error.CommandBufferBeginFailed;
         }
 
+        const subresource_range = vk.VkImageSubresourceRange{
+            .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+
+        // 1) UNDEFINED → TRANSFER_DST
+        const to_transfer = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = subresource_range,
+        };
+        vkCmdPipelineBarrier(command_buffer, vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &to_transfer);
+
+        // 2) Copy staging buffer → image
         const region = vk.VkBufferImageCopy{
             .bufferOffset = 0,
             .bufferRowLength = 0,
@@ -437,18 +356,40 @@ pub const TextureLoader = struct {
                 .layerCount = 1,
             },
             .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
-            .imageExtent = .{
-                .width = width,
-                .height = height,
-                .depth = 1,
-            },
+            .imageExtent = .{ .width = width, .height = height, .depth = 1 },
         };
+        vkCmdCopyBufferToImage(command_buffer, staging_buffer, image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-        vkCmdCopyBufferToImage(command_buffer, buffer, image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        // 3) TRANSFER_DST → SHADER_READ_ONLY
+        const to_shader = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = subresource_range,
+        };
+        vkCmdPipelineBarrier(command_buffer, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &to_shader);
 
         if (vkEndCommandBuffer(command_buffer) != vk.VK_SUCCESS) {
             return error.CommandBufferEndFailed;
         }
+
+        // Submit with fence (no queue stall)
+        var fence: vk.VkFence = null;
+        const fence_info = vk.VkFenceCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+        };
+        if (vkCreateFence(device, &fence_info, null, &fence) != vk.VK_SUCCESS) {
+            return error.FenceCreationFailed;
+        }
+        defer vkDestroyFence(device, fence, null);
 
         const submit_info = vk.VkSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -461,11 +402,9 @@ pub const TextureLoader = struct {
             .signalSemaphoreCount = 0,
             .pSignalSemaphores = null,
         };
-
-        if (vkQueueSubmit(graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+        if (vkQueueSubmit(graphics_queue, 1, &submit_info, fence) != vk.VK_SUCCESS) {
             return error.QueueSubmitFailed;
         }
-
-        _ = vkQueueWaitIdle(graphics_queue);
+        _ = vkWaitForFences(device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
     }
 };

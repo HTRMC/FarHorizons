@@ -303,13 +303,15 @@ pub const GpuDevice = struct {
         self.destroyBufferRaw(.{ .handle = buffer.handle, .memory = buffer.memory });
     }
 
-    /// Execute a one-time command buffer
+    /// Execute a one-time command buffer with fence-based sync (no queue stall)
     pub fn executeOneTimeCommands(self: *Self, record_fn: *const fn (vk.VkCommandBuffer) anyerror!void) !void {
         const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
         const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateFence = vk.vkCreateFence orelse return error.VulkanFunctionNotLoaded;
+        const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyFence = vk.vkDestroyFence orelse return error.VulkanFunctionNotLoaded;
         const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
 
         const alloc_info = vk.VkCommandBufferAllocateInfo{
@@ -343,6 +345,17 @@ pub const GpuDevice = struct {
             return error.CommandBufferEndFailed;
         }
 
+        var fence: vk.VkFence = null;
+        const fence_info = vk.VkFenceCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+        };
+        if (vkCreateFence(self.device, &fence_info, null, &fence) != vk.VK_SUCCESS) {
+            return error.FenceCreationFailed;
+        }
+        defer vkDestroyFence(self.device, fence, null);
+
         const submit_info = vk.VkSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .pNext = null,
@@ -355,50 +368,11 @@ pub const GpuDevice = struct {
             .pSignalSemaphores = null,
         };
 
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, fence) != vk.VK_SUCCESS) {
             return error.QueueSubmitFailed;
         }
 
-        _ = vkQueueWaitIdle(self.graphics_queue);
-    }
-
-    /// Copy data from one buffer to another
-    pub fn copyBuffer(
-        self: *Self,
-        src: *GpuBuffer.GpuBuffer,
-        dst: *GpuBuffer.GpuBuffer,
-        size: u64,
-    ) !void {
-        const Context = struct {
-            src_handle: vk.VkBuffer,
-            dst_handle: vk.VkBuffer,
-            copy_size: u64,
-
-            fn record(ctx: @This(), cmd: vk.VkCommandBuffer) !void {
-                const vkCmdCopyBuffer = vk.vkCmdCopyBuffer orelse return error.VulkanFunctionNotLoaded;
-                const region = vk.VkBufferCopy{
-                    .srcOffset = 0,
-                    .dstOffset = 0,
-                    .size = ctx.copy_size,
-                };
-                vkCmdCopyBuffer(cmd, ctx.src_handle, ctx.dst_handle, 1, &region);
-            }
-        };
-
-        const ctx = Context{
-            .src_handle = src.handle,
-            .dst_handle = dst.handle,
-            .copy_size = size,
-        };
-        _ = ctx;
-
-        // Since we can't easily pass context, we'll do it inline
-        try self.executeOneTimeCommands(struct {
-            fn record(cmd: vk.VkCommandBuffer) !void {
-                _ = cmd;
-                // This is a limitation - we need a different approach for context
-            }
-        }.record);
+        _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
     }
 
     fn findMemoryType(self: *Self, type_filter: u32, properties: vk.VkMemoryPropertyFlags) !u32 {

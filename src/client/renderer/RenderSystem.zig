@@ -216,7 +216,6 @@ pub const RenderSystem = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
     const DeferredBuffer = struct { handle: vk.VkBuffer, memory: vk.VkDeviceMemory, ready_at: u64 };
-    const MAX_GC_ENTRIES = 32;
 
     instance: vk.VkInstance = null,
     debug_messenger: vk.VkDebugUtilsMessengerEXT = null,
@@ -335,8 +334,7 @@ pub const RenderSystem = struct {
     timeline_value: u64 = 0,
     last_submitted_value: u64 = 0,
 
-    gc_queue: [MAX_GC_ENTRIES]DeferredBuffer = @splat(.{ .handle = null, .memory = null, .ready_at = 0 }),
-    gc_count: u32 = 0,
+    gc_queue: std.ArrayListUnmanaged(DeferredBuffer) = .{},
 
     allocator: std.mem.Allocator = undefined,
     io: Io = undefined,
@@ -815,16 +813,12 @@ pub const RenderSystem = struct {
         var completed: u64 = 0;
         if (vkGetSemaphoreCounterValue(self.device, timeline, &completed) != vk.VK_SUCCESS) return;
 
-        var i: u32 = 0;
-        while (i < self.gc_count) {
-            if (self.gc_queue[i].ready_at <= completed) {
-                if (self.gc_queue[i].handle) |h| vkDestroyBuffer(self.device, h, null);
-                if (self.gc_queue[i].memory) |m| vkFreeMemory(self.device, m, null);
-                // Swap-remove
-                self.gc_count -= 1;
-                if (i < self.gc_count) {
-                    self.gc_queue[i] = self.gc_queue[self.gc_count];
-                }
+        var i: usize = 0;
+        while (i < self.gc_queue.items.len) {
+            if (self.gc_queue.items[i].ready_at <= completed) {
+                if (self.gc_queue.items[i].handle) |h| vkDestroyBuffer(self.device, h, null);
+                if (self.gc_queue.items[i].memory) |m| vkFreeMemory(self.device, m, null);
+                _ = self.gc_queue.swapRemove(i);
             } else {
                 i += 1;
             }
@@ -835,20 +829,16 @@ pub const RenderSystem = struct {
     pub fn retireBuffer(self: *Self, handle: vk.VkBuffer, memory: vk.VkDeviceMemory) void {
         if (handle == null and memory == null) return;
 
-        if (self.gc_count < MAX_GC_ENTRIES) {
-            self.gc_queue[self.gc_count] = .{
-                .handle = handle,
-                .memory = memory,
-                .ready_at = self.last_submitted_value,
-            };
-            self.gc_count += 1;
-        } else {
-            // Queue full - fallback: wait for GPU idle and destroy immediately
-            logger.warn("GC queue full, falling back to vkDeviceWaitIdle", .{});
-            if (vk.vkDeviceWaitIdle) |wait| _ = wait(self.device);
+        self.gc_queue.append(self.allocator, .{
+            .handle = handle,
+            .memory = memory,
+            .ready_at = self.last_submitted_value,
+        }) catch {
+            // Allocation failed - destroy immediately as last resort
+            logger.warn("GC queue append failed, destroying immediately", .{});
             if (vk.vkDestroyBuffer) |destroy| if (handle) |h| destroy(self.device, h, null);
             if (vk.vkFreeMemory) |free| if (memory) |m| free(self.device, m, null);
-        }
+        };
     }
 
     /// Destroy all remaining GC entries unconditionally (call after vkDeviceWaitIdle)
@@ -856,11 +846,11 @@ pub const RenderSystem = struct {
         const vkDestroyBuffer = vk.vkDestroyBuffer orelse return;
         const vkFreeMemory = vk.vkFreeMemory orelse return;
 
-        for (0..self.gc_count) |i| {
-            if (self.gc_queue[i].handle) |h| vkDestroyBuffer(self.device, h, null);
-            if (self.gc_queue[i].memory) |m| vkFreeMemory(self.device, m, null);
+        for (self.gc_queue.items) |entry| {
+            if (entry.handle) |h| vkDestroyBuffer(self.device, h, null);
+            if (entry.memory) |m| vkFreeMemory(self.device, m, null);
         }
-        self.gc_count = 0;
+        self.gc_queue.clearAndFree(self.allocator);
     }
 
     /// Draw parameters for unified command recording
@@ -1855,31 +1845,27 @@ pub const RenderSystem = struct {
     }
 
     /// Upload new mesh data (vertices and indices)
+    /// Retires old buffers via timeline semaphore GC instead of stalling the GPU.
     pub fn uploadMesh(self: *Self, vertices: []const Vertex, indices: []const u16) !void {
-        const vkDeviceWaitIdle = vk.vkDeviceWaitIdle orelse return error.VulkanFunctionNotLoaded;
         var gpu = self.gpu_device orelse return error.GpuDeviceNotInitialized;
 
-        // Wait for device to be idle before modifying buffers
-        _ = vkDeviceWaitIdle(self.device);
-
-        // Destroy old buffers
+        // Retire old buffers via timeline semaphore GC (non-blocking)
         if (self.vertex_buffer != null or self.vertex_buffer_memory != null) {
-            gpu.destroyBufferRaw(.{ .handle = self.vertex_buffer, .memory = self.vertex_buffer_memory });
+            self.retireBuffer(self.vertex_buffer, self.vertex_buffer_memory);
             self.vertex_buffer = null;
             self.vertex_buffer_memory = null;
         }
         if (self.index_buffer != null or self.index_buffer_memory != null) {
-            gpu.destroyBufferRaw(.{ .handle = self.index_buffer, .memory = self.index_buffer_memory });
+            self.retireBuffer(self.index_buffer, self.index_buffer_memory);
             self.index_buffer = null;
             self.index_buffer_memory = null;
         }
 
-        // Create vertex buffer
+        // Create new buffers (HOST_VISIBLE, no GPU stall needed)
         const vertex_result = try gpu.createBufferWithDataRaw(Vertex, vertices, vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         self.vertex_buffer = vertex_result.handle;
         self.vertex_buffer_memory = vertex_result.memory;
 
-        // Create index buffer
         const index_result = try gpu.createBufferWithDataRaw(u16, indices, vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
         self.index_buffer = index_result.handle;
         self.index_buffer_memory = index_result.memory;
@@ -4257,14 +4243,16 @@ pub const RenderSystem = struct {
         return error.NoSuitableMemoryType;
     }
 
-    /// Zero a GPU buffer using vkCmdFillBuffer (one-time command submission)
+    /// Zero a GPU buffer using vkCmdFillBuffer (one-time command with fence sync)
     fn zeroBuffer(self: *Self, buffer: vk.VkBuffer, size: u64) !void {
         const vkAllocateCommandBuffers = vk.vkAllocateCommandBuffers orelse return error.VulkanFunctionNotLoaded;
         const vkBeginCommandBuffer = vk.vkBeginCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkCmdFillBuffer = vk.vkCmdFillBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkEndCommandBuffer = vk.vkEndCommandBuffer orelse return error.VulkanFunctionNotLoaded;
         const vkQueueSubmit = vk.vkQueueSubmit orelse return error.VulkanFunctionNotLoaded;
-        const vkQueueWaitIdle = vk.vkQueueWaitIdle orelse return error.VulkanFunctionNotLoaded;
+        const vkCreateFence = vk.vkCreateFence orelse return error.VulkanFunctionNotLoaded;
+        const vkWaitForFences = vk.vkWaitForFences orelse return error.VulkanFunctionNotLoaded;
+        const vkDestroyFence = vk.vkDestroyFence orelse return error.VulkanFunctionNotLoaded;
         const vkFreeCommandBuffers = vk.vkFreeCommandBuffers orelse return error.VulkanFunctionNotLoaded;
 
         // Allocate one-time command buffer
@@ -4300,7 +4288,18 @@ pub const RenderSystem = struct {
             return error.CommandBufferEndFailed;
         }
 
-        // Submit and wait
+        // Submit with fence (no queue stall)
+        var fence: vk.VkFence = null;
+        const fence_info = vk.VkFenceCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+        };
+        if (vkCreateFence(self.device, &fence_info, null, &fence) != vk.VK_SUCCESS) {
+            return error.FenceCreationFailed;
+        }
+        defer vkDestroyFence(self.device, fence, null);
+
         const submit_info = vk.VkSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
             .pNext = null,
@@ -4312,10 +4311,10 @@ pub const RenderSystem = struct {
             .signalSemaphoreCount = 0,
             .pSignalSemaphores = null,
         };
-        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, null) != vk.VK_SUCCESS) {
+        if (vkQueueSubmit(self.graphics_queue, 1, &submit_info, fence) != vk.VK_SUCCESS) {
             return error.QueueSubmitFailed;
         }
-        _ = vkQueueWaitIdle(self.graphics_queue);
+        _ = vkWaitForFences(self.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
     }
 
     fn createCommandBuffers(self: *Self) !void {
