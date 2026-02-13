@@ -332,6 +332,10 @@ pub const RenderChunk = struct {
     /// GPU slot index for GPU-driven rendering metadata buffer
     gpu_slot: u32 = GPUDrivenTypes.SlotAllocator.INVALID_SLOT,
 
+    /// Generation counter: incremented each time a mesh task is scheduled for this chunk.
+    /// Used to discard stale mesh results when multiple meshes are in-flight concurrently.
+    mesh_generation: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
     /// Backwards-compatible state getter (reads from future)
     pub fn getState(self: *const Self) ChunkState {
         return self.future.getStatus();
@@ -519,6 +523,8 @@ pub const CompletedMesh = struct {
     /// Generated chunk data (for generation tasks, null for remesh tasks)
     /// Main thread will copy this to RenderChunk.chunk
     generated_chunk: ?Chunk = null,
+    /// Mesh generation counter (matches RenderChunk.mesh_generation at scheduling time)
+    mesh_generation: u32 = 0,
 
     pub fn deinit(self: *CompletedMesh) void {
         for (&self.layers) |*layer| {

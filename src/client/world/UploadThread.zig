@@ -58,6 +58,8 @@ pub const UploadResult = struct {
     /// Timeline semaphore value that signals when GPU copy is complete
     /// Main thread compares against completed value (0 = no GPU work, always ready)
     upload_timeline_value: u64,
+    /// Mesh generation counter (matches RenderChunk.mesh_generation at scheduling time)
+    mesh_generation: u32 = 0,
 };
 
 /// Upload thread statistics
@@ -728,6 +730,7 @@ pub const UploadThread = struct {
             .gpu_slot = 0,
             .valid = false,
             .upload_timeline_value = 0,
+            .mesh_generation = mesh.mesh_generation,
         };
 
         // Check staleness (chunk moved out of view while queued)
@@ -749,6 +752,7 @@ pub const UploadThread = struct {
                 .gpu_slot = 0,
                 .valid = false, // Mark as invalid so main thread knows to skip
                 .upload_timeline_value = 0,
+                .mesh_generation = mesh.mesh_generation,
             };
         }
 
@@ -895,6 +899,7 @@ pub const UploadThread = struct {
             .gpu_slot = 0, // Will be allocated by main thread
             .valid = true,
             .upload_timeline_value = 0, // Will be set when batch is submitted
+            .mesh_generation = mesh.mesh_generation,
         };
     }
 

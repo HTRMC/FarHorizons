@@ -13,3 +13,6 @@ pub const ChunkMesher = chunk_mesher.ChunkMesher;
 
 pub const chunk_manager = @import("ChunkManager.zig");
 pub const ChunkManager = chunk_manager.ChunkManager;
+
+pub const mesh_scheduler_thread = @import("MeshSchedulerThread.zig");
+pub const MeshSchedulerThread = mesh_scheduler_thread.MeshSchedulerThread;

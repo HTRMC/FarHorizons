@@ -197,11 +197,8 @@ pub const FarHorizonsClient = struct {
                     .max_uploads_per_tick = 64,
                 },
             );
-            try self.chunk_manager.?.start();
-            // Update chunk manager with initial player position from ECS
-            if (self.getPlayerTransform()) |t| {
-                self.chunk_manager.?.updatePlayerPosition(t.position);
-            }
+            // NOTE: start() deferred until after ECS world + player entity are created.
+            // ChunkLoadThread waits for first position update (player_gen > 0) before loading.
             self.block_interaction = BlockInteraction.init(&self.chunk_manager.?);
 
             // Set up pre-render callback for GPU-driven chunk metadata uploads
@@ -238,6 +235,16 @@ pub const FarHorizonsClient = struct {
             // Set initial facing direction
             if (ecs_world.getComponentMut(ecs.Transform, self.player_entity_id.?)) |t| {
                 t.yaw = 180; // Face towards -Z (towards the chunk)
+            }
+        }
+
+        // Start chunk loading AFTER player entity exists so initial position is correct.
+        // start() creates the load thread (which waits for player_gen > 0),
+        // then updatePlayerPosition sets gen=1 so loading begins immediately.
+        if (self.chunk_manager) |*cm| {
+            try cm.start();
+            if (self.getPlayerTransform()) |t| {
+                cm.updatePlayerPosition(t.position);
             }
         }
 
@@ -440,9 +447,7 @@ pub const FarHorizonsClient = struct {
             // tick() only processes ready uploads from upload thread (non-blocking)
             if (self.chunk_manager) |*cm| {
                 cm.beginFrame();
-                // C2ME-style: flush load queue once per frame, not per tick
-                cm.flushLoadQueue();
-                cm.tick(); // Now minimal: just applies ready uploads
+                cm.tick();
             }
 
             const partial_tick: f32 = @floatCast(tick_accumulator / MS_PER_TICK);

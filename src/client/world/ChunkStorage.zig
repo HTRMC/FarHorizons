@@ -1,5 +1,11 @@
 /// ChunkStorage - Ring buffer-based chunk storage following Minecraft's ClientChunkCache.Storage pattern
 /// Uses 3D floor modulo indexing for O(1) guaranteed access with no hash collisions
+///
+/// Thread safety:
+/// - get() is for main-thread-only callers (non-atomic reads)
+/// - getAtomic() uses acquire loads for safe cross-thread reads (MeshSchedulerThread, workers)
+/// - put() and remove() use release atomic stores so concurrent readers see consistent pointers
+/// - Only the main thread calls put()/remove() (single writer)
 const std = @import("std");
 const shared = @import("Shared");
 const ChunkPos = shared.ChunkPos;
@@ -79,7 +85,7 @@ pub const ChunkStorage = struct {
             @as(usize, x);
     }
 
-    /// Get a chunk at the given position
+    /// Get a chunk at the given position (main-thread-only, non-atomic)
     /// Returns null if the slot is empty OR if the stored chunk's position doesn't match
     /// (position mismatch happens when player moves far and index wraps)
     pub fn get(self: *const Self, pos: ChunkPos) ?*RenderChunk {
@@ -95,6 +101,24 @@ pub const ChunkStorage = struct {
         return chunk;
     }
 
+    /// Get a chunk at the given position with acquire semantics (safe for cross-thread reads)
+    /// Used by MeshSchedulerThread and worker threads to read storage without locks.
+    /// Paired with release stores in put()/remove() for consistent pointer visibility.
+    pub fn getAtomic(self: *const Self, pos: ChunkPos) ?*RenderChunk {
+        const index = self.getIndex(pos);
+
+        // Atomic acquire load of the pointer slot
+        const slot_ptr: *const std.atomic.Value(?*RenderChunk) = @ptrCast(&self.chunks[index]);
+        const chunk = slot_ptr.load(.acquire) orelse return null;
+
+        // Validate position (pos is set before the pointer is published via release store)
+        if (!chunk.pos.eql(pos)) {
+            return null;
+        }
+
+        return chunk;
+    }
+
     /// Check if a chunk exists at the given position
     pub fn contains(self: *const Self, pos: ChunkPos) bool {
         return self.get(pos) != null;
@@ -103,11 +127,14 @@ pub const ChunkStorage = struct {
     /// Store a chunk at the given position
     /// Returns the previous occupant if the slot was occupied (for cleanup)
     /// The caller is responsible for freeing the returned chunk if not null
+    /// Uses release atomic store so concurrent getAtomic() readers see the new pointer
     pub fn put(self: *Self, pos: ChunkPos, chunk: *RenderChunk) !?*RenderChunk {
         const index = self.getIndex(pos);
         const previous = self.chunks[index];
 
-        self.chunks[index] = chunk;
+        // Release store ensures chunk data (pos, state, etc.) is visible before pointer
+        const slot_ptr: *std.atomic.Value(?*RenderChunk) = @ptrCast(&self.chunks[index]);
+        slot_ptr.store(chunk, .release);
 
         // Update count
         if (previous == null) {
@@ -119,6 +146,7 @@ pub const ChunkStorage = struct {
 
     /// Remove a chunk at the given position
     /// Returns the removed chunk (for cleanup) or null if not found
+    /// Uses release atomic store so concurrent getAtomic() readers see null
     pub fn remove(self: *Self, pos: ChunkPos) ?*RenderChunk {
         const index = self.getIndex(pos);
         const chunk = self.chunks[index] orelse return null;
@@ -128,7 +156,9 @@ pub const ChunkStorage = struct {
             return null;
         }
 
-        self.chunks[index] = null;
+        // Release store ensures null is visible to concurrent readers
+        const slot_ptr: *std.atomic.Value(?*RenderChunk) = @ptrCast(&self.chunks[index]);
+        slot_ptr.store(null, .release);
         self.count -= 1;
 
         return chunk;

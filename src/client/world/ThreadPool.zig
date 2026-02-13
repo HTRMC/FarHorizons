@@ -12,10 +12,12 @@ pub const TaskType = enum {
     shutdown,
 };
 
-/// Whether this is a new chunk generation or a remesh of existing chunk
+/// Whether this is a new chunk generation, remesh, or mesh-only task
 pub const ChunkTaskKind = enum {
     generate,
     remesh,
+    /// Lightweight mesh task: workers capture neighbors via RCU + getAtomic
+    mesh,
 };
 
 /// A task for the worker threads
@@ -31,6 +33,9 @@ pub const Task = struct {
     /// Shutdown tasks always have priority 0
     /// NOTE: This is now only used for shutdown tasks
     priority: i32 = 0,
+    /// Generation counter for mesh tasks (matches RenderChunk.mesh_generation)
+    /// Used to discard stale mesh results when multiple meshes are in-flight
+    mesh_generation: u32 = 0,
 };
 
 /// Thread-safe task queue (FIFO, used for completed results)
@@ -248,6 +253,8 @@ pub const DynamicPriorityQueue = struct {
     /// Dequeue task from highest priority non-empty bucket (must hold mutex)
     /// C2ME pattern: Scan buckets from 0 (highest priority) to MAX_PRIORITY
     /// Skip empty buckets using atomic counts for optimization
+    /// Uses swapRemove for O(1) dequeue — within-bucket FIFO order is not important
+    /// since priority is determined by the bucket level, not insertion order.
     fn dequeueFromBuckets(self: *Self) ?Task {
         const zone = profiler.trace(@src());
         defer zone.end();
@@ -258,17 +265,8 @@ pub const DynamicPriorityQueue = struct {
             }
 
             if (self.buckets[priority].items.len > 0) {
-                const task = self.buckets[priority].orderedRemove(0);
+                const task = self.buckets[priority].swapRemove(0);
                 _ = self.bucket_counts[priority].fetchSub(1, .release);
-
-                if (task.chunk_task_kind == .remesh) {
-                    self.remesh_count += 1;
-                } else {
-                    if (self.remesh_count >= MAX_REMESH_PER_CYCLE) {
-                        self.remesh_count = 0;
-                    }
-                }
-
                 return task;
             }
         }

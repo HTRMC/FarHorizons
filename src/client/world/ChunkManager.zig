@@ -1,5 +1,9 @@
 /// ChunkManager - Manages chunk loading, unloading, and meshing
 /// Coordinates between main thread and worker threads
+///
+/// Main thread (minimal): processCompletedTerrain, drainUnloadRequests, processReadyUploads
+/// MeshSchedulerThread: owns pending_mesh state, CAS transitions, submits mesh tasks
+/// Workers: terrain generation + mesh generation (RCU-protected neighbor capture)
 const std = @import("std");
 const Io = std.Io;
 const shared = @import("Shared");
@@ -33,6 +37,7 @@ const RenderChunk = render_chunk.RenderChunk;
 const ChunkMesh = render_chunk.ChunkMesh;
 const ChunkState = render_chunk.ChunkState;
 const CompletedMesh = render_chunk.CompletedMesh;
+const CompletedLayerData = render_chunk.CompletedLayerData;
 const RENDER_LAYER_COUNT = render_chunk.RENDER_LAYER_COUNT;
 
 const thread_pool = @import("ThreadPool.zig");
@@ -52,48 +57,16 @@ const upload_thread = @import("UploadThread.zig");
 const UploadThread = upload_thread.UploadThread;
 const UploadResult = upload_thread.UploadResult;
 
-/// Task type for chunk operations (C2ME-style two-phase loading)
-pub const ChunkTaskType = enum {
-    /// Phase 1: Generate terrain only (no dependencies needed)
-    generate_terrain,
-    /// Phase 2: Generate mesh (requires neighbors to be generated/ready)
-    generate_mesh,
-    /// Remesh existing chunk (for block updates)
-    remesh,
-};
+const chunk_load_thread = @import("ChunkLoadThread.zig");
+const ChunkLoadThread = chunk_load_thread.ChunkLoadThread;
 
-/// Task data for terrain generation (Phase 1 - no neighbors needed)
-pub const TerrainTask = struct {
-    pos: ChunkPos,
-    render_chunk: *RenderChunk,
-};
-
-/// Task data for mesh generation (Phase 2 - neighbors captured on main thread when deps satisfied)
-pub const MeshTask = struct {
-    pos: ChunkPos,
-    /// Chunk data to mesh (copied from RenderChunk on main thread)
-    chunk: Chunk,
-    /// Neighbor chunk data COPIES captured on main thread when dependencies were satisfied
-    /// Using copies instead of pointers ensures data is valid even if original chunks are unloaded
-    neighbors: [6]?Chunk,
-    render_chunk: *RenderChunk,
-    /// Whether this is a remesh (existing chunk) or initial mesh (newly generated)
-    is_remesh: bool,
-};
-
-pub const ChunkTask = struct {
-    pos: ChunkPos,
-    task_type: ChunkTaskType,
-    data: union {
-        terrain: TerrainTask,
-        mesh: MeshTask,
-    },
-};
+const mesh_scheduler_thread = @import("MeshSchedulerThread.zig");
+const MeshSchedulerThread = mesh_scheduler_thread.MeshSchedulerThread;
+const MeshRequest = mesh_scheduler_thread.MeshRequest;
 
 pub const TerrainResult = struct {
     pos: ChunkPos,
     chunk: Chunk,
-    render_chunk: *RenderChunk,
 };
 
 pub const ChunkConfig = struct {
@@ -103,8 +76,6 @@ pub const ChunkConfig = struct {
     unload_distance: u32 = 6,
     worker_count: u8 = 4,
     max_uploads_per_tick: u8 = 4,
-    /// C2ME-style rate limiting: prevents frame spikes when entering new areas
-    max_chunks_per_update: u16 = 32,
 };
 
 /// C2ME-style stateful spiral iterator for chunk positions
@@ -217,18 +188,10 @@ pub const ChunkManager = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
 
-    const PosSet = std.HashMap(ChunkPos, void, ChunkPosContext, std.hash_map.default_max_load_percentage);
-
     allocator: std.mem.Allocator,
     io: Io,
 
     chunk_storage: ChunkStorage,
-
-    /// Prevents duplicate load tasks for the same position
-    pending_loads: PosSet,
-
-    /// O(1) skip check in updateLoadQueue - tracks loaded + pending positions
-    managed_positions: PosSet,
 
     completed_queue: ThreadSafeQueue(CompletedMesh),
     pool: ThreadPool,
@@ -249,11 +212,16 @@ pub const ChunkManager = struct {
 
     /// Dedicated upload thread for GPU staging (AAA pattern)
     upload_thread: ?*UploadThread = null,
-    /// Defers updateLoadQueue to once per frame to prevent cascading slowdowns
-    load_queue_dirty: bool = false,
 
-    /// Remembers position between frames; reset when player moves to new chunk
-    chunk_load_iterator: SpiralIterator = .{},
+    /// Dedicated thread for chunk load/unload decisions (C2ME-style)
+    load_thread: ?*ChunkLoadThread = null,
+
+    /// Dedicated thread for mesh scheduling (decoupled from render thread)
+    mesh_scheduler: ?*MeshSchedulerThread = null,
+
+    /// Backpressure counter for terrain tasks submitted by ChunkLoadThread
+    /// Incremented by load thread, decremented by worker threads after terrain generation
+    in_flight_terrain: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     vertex_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
     index_buffer_cache: std.ArrayListUnmanaged(vk.VkBuffer) = .{},
@@ -268,9 +236,6 @@ pub const ChunkManager = struct {
 
     /// Completed terrain waiting for main thread to copy to RenderChunk
     completed_terrain: ThreadSafeQueue(TerrainResult) = undefined,
-
-    /// Chunks with terrain generated, waiting for neighbors before meshing
-    pending_mesh: PosSet = undefined,
 
     /// Chunks needing GPU metadata upload (GPU-driven rendering)
     pending_metadata_uploads: std.ArrayListUnmanaged(*RenderChunk) = .{},
@@ -294,11 +259,8 @@ pub const ChunkManager = struct {
             .allocator = allocator,
             .io = io,
             .chunk_storage = storage,
-            .pending_loads = PosSet.init(allocator),
-            .managed_positions = PosSet.init(allocator),
             .completed_queue = ThreadSafeQueue(CompletedMesh).init(allocator, io),
             .completed_terrain = ThreadSafeQueue(TerrainResult).init(allocator, io),
-            .pending_mesh = PosSet.init(allocator),
             .pool = try ThreadPool.init(allocator, io, config.worker_count, processTask),
             .player_chunk = ChunkPos{ .x = 0, .z = 0, .section_y = 0 },
             .config = config,
@@ -427,14 +389,58 @@ pub const ChunkManager = struct {
             }
         }
 
-        self.chunk_load_iterator.reset(self.config.view_distance, self.config.vertical_view_distance);
-        self.load_queue_dirty = true;
+        // Initialize and start the mesh scheduler thread
+        // Owns pending_mesh state, CAS transitions, and pool submission for mesh tasks
+        {
+            const ms = try self.allocator.create(MeshSchedulerThread);
+            ms.* = try MeshSchedulerThread.init(
+                self.allocator,
+                self.io,
+                &self.pool,
+                &self.chunk_storage,
+                self.config.view_distance,
+                self.config.vertical_view_distance,
+            );
+            try ms.start();
+            self.mesh_scheduler = ms;
+        }
+
+        // Initialize and start the chunk load thread (C2ME-style)
+        // Load thread submits terrain tasks directly to the pool (no SPSC intermediary)
+        {
+            const lt = try self.allocator.create(ChunkLoadThread);
+            lt.* = try ChunkLoadThread.init(
+                self.allocator,
+                self.io,
+                &self.pool,
+                &self.in_flight_terrain,
+                self.config.view_distance,
+                self.config.vertical_view_distance,
+                self.config.unload_distance,
+            );
+            try lt.start();
+            self.load_thread = lt;
+        }
     }
 
     pub fn deinit(self: *Self) void {
         logger.info("Shutting down ChunkManager...", .{});
 
-        // Shutdown upload thread first (it reads from completed_queue)
+        // Shutdown load thread first (it writes to load/unload request queues)
+        if (self.load_thread) |lt| {
+            lt.deinit();
+            self.allocator.destroy(lt);
+            self.load_thread = null;
+        }
+
+        // Shutdown mesh scheduler (it reads storage and submits to pool)
+        if (self.mesh_scheduler) |ms| {
+            ms.deinit();
+            self.allocator.destroy(ms);
+            self.mesh_scheduler = null;
+        }
+
+        // Shutdown upload thread (it reads from completed_queue)
         if (self.upload_thread) |ut| {
             ut.deinit();
             self.allocator.destroy(ut);
@@ -443,14 +449,8 @@ pub const ChunkManager = struct {
 
         self.pool.shutdown();
 
-        // Drain any remaining tasks that weren't processed before shutdown
-        // These contain ChunkTask allocations that would otherwise leak
-        while (self.pool.task_queue.tryPop()) |task| {
-            if (task.data) |data_ptr| {
-                const task_data: *ChunkTask = @ptrCast(@alignCast(data_ptr));
-                self.allocator.destroy(task_data);
-            }
-        }
+        // All tasks now use data=null (terrain and mesh), no ChunkTask allocations to drain
+        while (self.pool.task_queue.tryPop()) |_| {}
 
         self.pool.deinit();
 
@@ -506,10 +506,6 @@ pub const ChunkManager = struct {
         }
         self.chunk_storage.deinit();
 
-        self.pending_loads.deinit();
-        self.managed_positions.deinit();
-        self.pending_mesh.deinit();
-
         while (self.completed_terrain.tryPop()) |_| {}
         self.completed_terrain.deinit();
 
@@ -555,18 +551,15 @@ pub const ChunkManager = struct {
             ut.updatePlayerPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
         }
 
-        // Rescan from center (closest chunks first)
-        self.chunk_load_iterator.reset(self.config.view_distance, self.config.vertical_view_distance);
+        // Notify background load thread of new player position (C2ME-style)
+        if (self.load_thread) |lt| {
+            lt.updatePlayerPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
+        }
 
-        // Actual updateLoadQueue called once per frame in flushLoadQueue()
-        self.load_queue_dirty = true;
-    }
-
-    /// Call once per frame after all ticks, not per tick
-    pub fn flushLoadQueue(self: *Self) void {
-        if (!self.load_queue_dirty) return;
-        self.load_queue_dirty = false;
-        self.updateLoadQueue();
+        // Notify mesh scheduler of new player position (for neighbor dependency checks)
+        if (self.mesh_scheduler) |ms| {
+            ms.updatePlayerPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
+        }
     }
 
     pub fn beginFrame(self: *Self) void {
@@ -574,132 +567,108 @@ pub const ChunkManager = struct {
         self.render_system.advanceSlotAllocatorFrame();
     }
 
+    /// Capped per tick to avoid frame spikes when workers produce terrain results faster than
+    /// the main thread can create RenderChunks (~5μs each × 512 = ~2.5ms budget)
+    const MAX_TERRAIN_PER_TICK: u32 = 512;
+
     fn processCompletedTerrain(self: *Self) void {
         const zone = profiler.traceNamed("ProcessCompletedTerrain");
         defer zone.end();
 
+        const ms = self.mesh_scheduler orelse return;
+
         var processed: u32 = 0;
-        while (self.completed_terrain.tryPop()) |result| {
+        var discarded: u32 = 0;
+        while (processed < MAX_TERRAIN_PER_TICK) {
+            const result = self.completed_terrain.tryPop() orelse break;
+
+            // Discard stale terrain results for positions outside unload range.
+            // This prevents orphaned chunks: if the load thread already removed this position
+            // from its managed set (via scanForUnloads), creating it here would leave it
+            // with no owner — never unloaded, never re-loaded.
+            {
+                const horizontally_distant = !result.pos.isWithinDistance(self.player_chunk, self.config.unload_distance);
+                const dy = @abs(result.pos.section_y - self.player_chunk.section_y);
+                const vertically_distant = dy > self.config.vertical_view_distance + 2;
+                if (horizontally_distant or vertically_distant) {
+                    discarded += 1;
+                    continue;
+                }
+            }
+
+            // If chunk already exists in storage (e.g. rapid unload/reload), update terrain data
             if (self.chunk_storage.get(result.pos)) |render_chunk_ptr| {
                 render_chunk_ptr.chunk = result.chunk;
                 render_chunk_ptr.setState(.generated);
-                self.pending_mesh.put(result.pos, {}) catch |err| {
-                    logger.warn("Failed to queue chunk ({},{},{}) for mesh: {}", .{
-                        result.pos.x, result.pos.z, result.pos.section_y, err,
-                    });
-                    continue;
-                };
+                // Push to mesh scheduler (SPSC: main thread → scheduler thread)
+                _ = ms.mesh_ready_queue.tryPush(MeshRequest{
+                    .pos = result.pos,
+                    .is_remesh = false,
+                });
+                // Remesh neighbors that were meshed without this chunk's data
+                self.queueNeighborRemeshes(result.pos);
                 processed += 1;
+                continue;
             }
-            _ = self.pending_loads.remove(result.pos);
+
+            // Chunk not in storage yet — create RenderChunk lazily
+            // Stale results were already filtered above; remaining results are in range.
+            const render_chunk_ptr = self.allocator.create(RenderChunk) catch continue;
+            render_chunk_ptr.* = RenderChunk.init(self.allocator, result.pos);
+            render_chunk_ptr.chunk = result.chunk;
+            render_chunk_ptr.setState(.generated);
+
+            const previous = self.chunk_storage.put(result.pos, render_chunk_ptr) catch {
+                render_chunk_ptr.deinit();
+                self.allocator.destroy(render_chunk_ptr);
+                continue;
+            };
+
+            // Handle ring buffer collision (different position mapped to same slot)
+            if (previous) |old_chunk| {
+                // Scheduler handles stale entries via getAtomic → null (no pending_mesh cleanup needed)
+
+                if (self.upload_thread) |ut| {
+                    const allocations = old_chunk.getBufferAllocations();
+                    for (allocations) |alloc_opt| {
+                        if (alloc_opt) |alloc| {
+                            ut.queueFree(alloc);
+                        }
+                    }
+                }
+                if (old_chunk.hasGPUSlot()) {
+                    self.pending_slot_clears.append(self.allocator, old_chunk.gpu_slot) catch {};
+                    self.render_system.freeChunkSlot(old_chunk.gpu_slot);
+                }
+                old_chunk.deinit();
+                self.allocator.destroy(old_chunk);
+            }
+
+            // Push to mesh scheduler (SPSC: main thread → scheduler thread)
+            _ = ms.mesh_ready_queue.tryPush(MeshRequest{
+                .pos = result.pos,
+                .is_remesh = false,
+            });
+            // Remesh neighbors that were meshed without this chunk's data
+            self.queueNeighborRemeshes(result.pos);
+            processed += 1;
+        }
+        if (discarded > 0) {
+            profiler.plotInt("TerrainDiscarded", @intCast(discarded));
         }
         zone.setValue(processed);
     }
 
-    /// Queue mesh tasks for chunks whose neighbors are generated/ready
-    fn checkMeshDependencies(self: *Self) void {
-        const zone = profiler.traceNamed("CheckMeshDependencies");
-        defer zone.end();
-
-        var ready_to_mesh: std.ArrayListUnmanaged(ChunkPos) = .{};
-        defer ready_to_mesh.deinit(self.allocator);
-
-        var iter = self.pending_mesh.iterator();
-        while (iter.next()) |entry| {
-            const pos = entry.key_ptr.*;
-            if (self.canMesh(pos)) {
-                ready_to_mesh.append(self.allocator, pos) catch continue;
-            }
-        }
-
-        var queued: u32 = 0;
-        for (ready_to_mesh.items) |pos| {
-            _ = self.pending_mesh.remove(pos);
-            self.queueMeshTask(pos);
-            queued += 1;
-        }
-        zone.setValue(queued);
-    }
-
-    /// Neighbors must be generated/ready to have valid terrain data
-    fn canMesh(self: *Self, pos: ChunkPos) bool {
-        const offsets = [6]ChunkPos{
-            .{ .x = 0, .z = 0, .section_y = -1 }, // down
-            .{ .x = 0, .z = 0, .section_y = 1 }, // up
-            .{ .x = 0, .z = -1, .section_y = 0 }, // north
-            .{ .x = 0, .z = 1, .section_y = 0 }, // south
-            .{ .x = -1, .z = 0, .section_y = 0 }, // west
-            .{ .x = 1, .z = 0, .section_y = 0 }, // east
-        };
-
-        for (offsets) |offset| {
-            const neighbor_pos = ChunkPos{
-                .x = pos.x + offset.x,
-                .z = pos.z + offset.z,
-                .section_y = pos.section_y + offset.section_y,
-            };
-
-            if (self.chunk_storage.get(neighbor_pos)) |neighbor| {
-                const state = neighbor.getState();
-                if (state == .loading) {
-                    return false;
-                }
-            }
-            // Missing neighbors OK - mesh without them (edge chunks)
-        }
-        return true;
-    }
-
-    /// Called from main thread - captures neighbors when dependencies are satisfied
-    fn queueMeshTask(self: *Self, pos: ChunkPos) void {
-        const zone = profiler.traceNamed("QueueMeshTask");
-        defer zone.end();
-
-        const render_chunk_ptr = self.chunk_storage.get(pos) orelse return;
-
-        render_chunk_ptr.setState(.meshing);
-
-        const neighbors = self.getNeighborChunks(pos);
-
-        const task_data = self.allocator.create(ChunkTask) catch return;
-        task_data.* = ChunkTask{
-            .pos = pos,
-            .task_type = .generate_mesh,
-            .data = .{ .mesh = MeshTask{
-                .pos = pos,
-                .chunk = render_chunk_ptr.chunk,
-                .neighbors = neighbors,
-                .render_chunk = render_chunk_ptr,
-                .is_remesh = false,
-            } },
-        };
-
-        self.pool.submit(Task{
-            .task_type = .generate_and_mesh,
-            .data = @ptrCast(task_data),
-            .chunk_pos = pos,
-            .chunk_task_kind = .generate,
-        }) catch |submit_err| {
-            self.allocator.destroy(task_data);
-            render_chunk_ptr.setState(.generated);
-            self.pending_mesh.put(pos, {}) catch |requeue_err| {
-                logger.err("Double failure requeueing chunk ({},{},{}) after submit fail: submit={}, requeue={}", .{
-                    pos.x, pos.z, pos.section_y, submit_err, requeue_err,
-                });
-            };
-        };
-    }
-
     /// Call once per frame from main thread after beginFrame
     /// AAA pattern: minimal work - no allocations, no uploads, no waits
+    /// Mesh scheduling is fully off-thread (MeshSchedulerThread)
     pub fn tick(self: *Self) void {
         const zone = profiler.trace(@src());
         defer zone.end();
 
         // Tracy plots for monitoring chunk system health
         profiler.plotInt("LoadedChunks", @intCast(self.chunk_storage.count));
-        profiler.plotInt("PendingLoads", @intCast(self.pending_loads.count()));
-        profiler.plotInt("PendingMesh", @intCast(self.pending_mesh.count()));
+        profiler.plotInt("InFlightTerrain", @intCast(self.in_flight_terrain.load(.acquire)));
         profiler.plotInt("TaskQueueLen", @intCast(self.pool.pendingTasks()));
         profiler.plotInt("CompletedTerrain", @intCast(self.completed_terrain.len()));
         profiler.plotInt("CompletedMesh", @intCast(self.completed_queue.len()));
@@ -709,8 +678,16 @@ pub const ChunkManager = struct {
             profiler.plotInt("UploadQueueDepth", @intCast(ut.getOutputQueueDepth()));
         }
 
+        // Process terrain results BEFORE unloads to prevent orphaned chunks:
+        // If we unload first, a terrain result for that position could re-create the chunk
+        // after unload, leaving it orphaned (not in load thread's managed set → never unloaded again).
         self.processCompletedTerrain();
-        self.checkMeshDependencies();
+
+        // C2ME-style: apply unload decisions from background thread
+        // Runs after terrain so newly-created chunks that are out of range get unloaded immediately.
+        self.drainUnloadRequests();
+
+        // Mesh scheduling is now handled by MeshSchedulerThread (no checkMeshDependencies)
 
         // AAA pattern: main thread submits prepared batches to transfer queue (thread-safe queue access)
         if (self.upload_thread) |ut| {
@@ -734,6 +711,9 @@ pub const ChunkManager = struct {
     /// Only applies uploads that are ready - no waiting, no allocations
     /// AAA pattern: uses vkGetSemaphoreCounterValue (never waits) to check GPU completion
     /// AAA pattern: queues frees to upload thread instead of freeing directly
+    /// Capped per tick to prevent frame spikes when many uploads complete at once
+    const MAX_UPLOADS_PER_TICK: u32 = 256;
+
     fn processReadyUploads(self: *Self) void {
         const zone = profiler.traceNamed("ProcessReadyUploads");
         defer zone.end();
@@ -749,9 +729,11 @@ pub const ChunkManager = struct {
         if (vkGetSemaphoreCounterValue(device, ut.upload_timeline, &completed) != vk.VK_SUCCESS) return;
 
         var processed: u32 = 0;
+        var stale_discarded: u32 = 0;
 
         // Process uploads with completed timeline values (AAA pattern: never wait)
-        while (ut.output_queue.peek()) |result_ptr| {
+        while (processed < MAX_UPLOADS_PER_TICK) {
+            const result_ptr = ut.output_queue.peek() orelse break;
             // timeline_value 0 = no GPU work, always ready
             if (result_ptr.upload_timeline_value > completed) break;
 
@@ -770,25 +752,46 @@ pub const ChunkManager = struct {
                     }
                     mesh.deinit();
                 }
-                _ = self.pending_loads.remove(result.pos);
-                _ = self.managed_positions.remove(result.pos);
                 continue;
             };
 
-            // Handle invalid/empty results (empty meshes)
-            if (!result.valid) {
-                // Copy generated chunk data if present
-                if (result.generated_chunk) |gen_chunk| {
-                    render_chunk_ptr.chunk = gen_chunk;
+            // State guard: only apply mesh to chunks still in .meshing state
+            // Prevents stale mesh from being applied to a chunk that was recycled or re-queued
+            const current_state = render_chunk_ptr.getState();
+            if (current_state != .meshing) {
+                if (result.valid) {
+                    var mesh = result.mesh;
+                    for (0..RENDER_LAYER_COUNT) |i| {
+                        if (mesh.layers[i].buffer_allocation.valid) {
+                            ut.queueFree(mesh.layers[i].buffer_allocation);
+                        }
+                    }
+                    mesh.deinit();
                 }
-                render_chunk_ptr.setState(.ready);
-                _ = self.pending_loads.remove(result.pos);
+                stale_discarded += 1;
                 continue;
             }
 
-            // Copy generated chunk data if present
-            if (result.generated_chunk) |gen_chunk| {
-                render_chunk_ptr.chunk = gen_chunk;
+            // Generation guard: only apply if this result matches the current mesh generation
+            // Prevents stale mesh from an earlier scheduling being applied over a newer one
+            if (result.mesh_generation != render_chunk_ptr.mesh_generation.load(.acquire)) {
+                if (result.valid) {
+                    var mesh = result.mesh;
+                    for (0..RENDER_LAYER_COUNT) |i| {
+                        if (mesh.layers[i].buffer_allocation.valid) {
+                            ut.queueFree(mesh.layers[i].buffer_allocation);
+                        }
+                    }
+                    mesh.deinit();
+                }
+                stale_discarded += 1;
+                continue;
+            }
+
+            // Handle invalid/empty results (empty meshes)
+            if (!result.valid) {
+                render_chunk_ptr.setState(.ready);
+                continue;
             }
 
             // Queue old mesh allocations for freeing (AAA: never touch buffer_manager from main thread)
@@ -801,7 +804,6 @@ pub const ChunkManager = struct {
 
             // Apply the new mesh
             render_chunk_ptr.setMesh(result.mesh);
-            _ = self.pending_loads.remove(result.pos);
 
             // GPU-driven rendering: allocate slot if needed and queue metadata upload
             if (!render_chunk_ptr.hasGPUSlot()) {
@@ -816,6 +818,9 @@ pub const ChunkManager = struct {
 
         if (processed > 0) {
             profiler.plotInt("UploadsApplied", @intCast(processed));
+        }
+        if (stale_discarded > 0) {
+            profiler.plotInt("StaleUploadsDiscarded", @intCast(stale_discarded));
         }
     }
 
@@ -915,173 +920,27 @@ pub const ChunkManager = struct {
         return self.render_system.getChunkSlotHighWaterMark();
     }
 
-    fn updateLoadQueue(self: *Self) void {
-        const zone = profiler.trace(@src());
+    /// Drain unload requests from the background ChunkLoadThread
+    /// Capped per tick to avoid frame spikes on boundary crossings (~900+ unloads at once)
+    const MAX_UNLOADS_PER_TICK: u32 = 128;
+
+    fn drainUnloadRequests(self: *Self) void {
+        const zone = profiler.traceNamed("DrainUnloadRequests");
         defer zone.end();
 
-        const max_per_update: u32 = @intCast(self.config.max_chunks_per_update);
+        const lt = self.load_thread orelse return;
+        var unloaded: u32 = 0;
 
-        var chunks_queued: u32 = 0;
-        var chunks_skipped: u32 = 0;
-        var positions_scanned: u32 = 0;
-        {
-            const scan_zone = profiler.traceNamed("ScanForNewChunks");
-            defer scan_zone.end();
-
-            while (self.chunk_load_iterator.next()) |offset| {
-                positions_scanned += 1;
-
-                const pos = ChunkPos{
-                    .x = self.player_chunk.x + offset.dx,
-                    .z = self.player_chunk.z + offset.dz,
-                    .section_y = self.player_chunk.section_y + offset.dy,
-                };
-
-                const gop = self.managed_positions.getOrPut(pos) catch continue;
-                if (gop.found_existing) {
-                    // Check if this position is actually tracked somewhere
-                    const in_storage = self.chunk_storage.contains(pos);
-                    const in_pending = self.pending_loads.contains(pos);
-                    const in_pending_mesh = self.pending_mesh.contains(pos);
-                    if (!in_storage and !in_pending and !in_pending_mesh) {
-                        // Orphan entry - remove it and allow re-loading
-                        _ = self.managed_positions.remove(pos);
-                        // Re-add it fresh so this iteration processes it
-                        _ = self.managed_positions.getOrPut(pos) catch continue;
-                    } else {
-                        chunks_skipped += 1;
-                        continue;
-                    }
-                }
-
-                if (!pos.isWithinDistance(self.player_chunk, self.config.view_distance)) {
-                    _ = self.managed_positions.remove(pos);
-                    continue;
-                }
-
-                if (!self.queueChunkLoad(pos)) {
-                    // Failed to queue, remove from managed_positions so it can be retried
-                    _ = self.managed_positions.remove(pos);
-                    continue;
-                }
-                chunks_queued += 1;
-
-                if (chunks_queued >= max_per_update) {
-                    self.load_queue_dirty = true;
-                    break;
-                }
-            }
+        while (unloaded < MAX_UNLOADS_PER_TICK) {
+            const pos = lt.unload_requests.tryPop() orelse break;
+            self.unloadChunk(pos);
+            unloaded += 1;
         }
 
-        profiler.plotInt("ChunksQueued", @intCast(chunks_queued));
-        profiler.plotInt("ChunksSkipped", @intCast(chunks_skipped));
-        profiler.plotInt("PositionsScanned", @intCast(positions_scanned));
-        zone.setValue(chunks_queued);
-
-        self.unloadDistantChunks();
-    }
-
-    fn queueChunkLoad(self: *Self, pos: ChunkPos) bool {
-        const zone = profiler.trace(@src());
-        defer zone.end();
-
-        self.pending_loads.put(pos, {}) catch return false;
-
-        const render_chunk_ptr = self.allocator.create(RenderChunk) catch {
-            _ = self.pending_loads.remove(pos);
-            return false;
-        };
-        render_chunk_ptr.* = RenderChunk.init(self.allocator, pos);
-
-        const previous = self.chunk_storage.put(pos, render_chunk_ptr) catch {
-            self.allocator.destroy(render_chunk_ptr);
-            _ = self.pending_loads.remove(pos);
-            return false;
-        };
-        if (previous) |old_chunk| {
-            // Queue allocations for freeing (AAA: never touch buffer_manager from main thread)
-            if (self.upload_thread) |ut| {
-                const allocations = old_chunk.getBufferAllocations();
-                for (allocations) |alloc_opt| {
-                    if (alloc_opt) |alloc| {
-                        ut.queueFree(alloc);
-                    }
-                }
-            }
-            // GPU-driven rendering: queue slot for clearing, then free it
-            if (old_chunk.hasGPUSlot()) {
-                self.pending_slot_clears.append(self.allocator, old_chunk.gpu_slot) catch {};
-                self.render_system.freeChunkSlot(old_chunk.gpu_slot);
-            }
-            old_chunk.deinit();
-            self.allocator.destroy(old_chunk);
+        if (unloaded > 0) {
+            profiler.plotInt("ChunksUnloaded", @intCast(unloaded));
         }
-
-        const task_data = self.allocator.create(ChunkTask) catch {
-            _ = self.chunk_storage.remove(pos);
-            render_chunk_ptr.deinit();
-            self.allocator.destroy(render_chunk_ptr);
-            _ = self.pending_loads.remove(pos);
-            return false;
-        };
-        task_data.* = ChunkTask{
-            .pos = pos,
-            .task_type = .generate_terrain,
-            .data = .{ .terrain = TerrainTask{
-                .pos = pos,
-                .render_chunk = render_chunk_ptr,
-            } },
-        };
-
-        self.pool.submit(Task{
-            .task_type = .generate_and_mesh,
-            .data = @ptrCast(task_data),
-            .chunk_pos = pos,
-            .chunk_task_kind = .generate,
-        }) catch {
-            self.allocator.destroy(task_data);
-            _ = self.chunk_storage.remove(pos);
-            render_chunk_ptr.deinit();
-            self.allocator.destroy(render_chunk_ptr);
-            _ = self.pending_loads.remove(pos);
-            return false;
-        };
-
-        return true;
-    }
-
-    /// Returns copies to ensure data remains valid during async mesh generation
-    fn getNeighborChunks(self: *Self, pos: ChunkPos) [6]?Chunk {
-        const zone = profiler.trace(@src());
-        defer zone.end();
-
-        var neighbors: [6]?Chunk = .{ null, null, null, null, null, null };
-
-        const offsets = [6]ChunkPos{
-            .{ .x = 0, .z = 0, .section_y = -1 }, // down
-            .{ .x = 0, .z = 0, .section_y = 1 }, // up
-            .{ .x = 0, .z = -1, .section_y = 0 }, // north
-            .{ .x = 0, .z = 1, .section_y = 0 }, // south
-            .{ .x = -1, .z = 0, .section_y = 0 }, // west
-            .{ .x = 1, .z = 0, .section_y = 0 }, // east
-        };
-
-        for (0..6) |i| {
-            const neighbor_pos = ChunkPos{
-                .x = pos.x + offsets[i].x,
-                .z = pos.z + offsets[i].z,
-                .section_y = pos.section_y + offsets[i].section_y,
-            };
-
-            if (self.chunk_storage.get(neighbor_pos)) |neighbor| {
-                const state = neighbor.getState();
-                if (state == .generated or state == .meshing or state == .ready or state == .dirty) {
-                    neighbors[i] = neighbor.chunk;
-                }
-            }
-        }
-
-        return neighbors;
+        zone.setValue(unloaded);
     }
 
     pub fn getBlockAt(self: *Self, world_x: i32, world_y: i32, world_z: i32) ?shared.BlockEntry {
@@ -1122,7 +981,7 @@ pub const ChunkManager = struct {
 
         rchunk.chunk.setBlockEntry(local_x, local_y, local_z, entry);
 
-        self.queueChunkRemesh(chunk_pos, rchunk);
+        self.queueChunkRemesh(chunk_pos);
 
         if (local_x == 0) self.remeshNeighborIfLoaded(chunk_pos.x - 1, chunk_pos.z, chunk_pos.section_y);
         if (local_x == CHUNK_SIZE - 1) self.remeshNeighborIfLoaded(chunk_pos.x + 1, chunk_pos.z, chunk_pos.section_y);
@@ -1147,74 +1006,35 @@ pub const ChunkManager = struct {
 
     fn remeshNeighborIfLoaded(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
         const neighbor_pos = ChunkPos{ .x = chunk_x, .z = chunk_z, .section_y = section_y };
-        if (self.chunk_storage.get(neighbor_pos)) |neighbor_chunk| {
-            if (neighbor_chunk.getState() == .ready) {
-                self.queueChunkRemesh(neighbor_pos, neighbor_chunk);
-            }
+        const neighbor_chunk = self.chunk_storage.get(neighbor_pos) orelse return;
+        if (neighbor_chunk.getState() == .ready) {
+            self.queueChunkRemesh(neighbor_pos);
         }
     }
 
-    fn queueChunkRemesh(self: *Self, pos: ChunkPos, render_chunk_ptr: *RenderChunk) void {
+    /// When a chunk's terrain data arrives, remesh all 6 neighbors already in .ready state.
+    /// They may have been meshed without this chunk's data, causing uncculled boundary faces.
+    fn queueNeighborRemeshes(self: *Self, pos: ChunkPos) void {
+        self.remeshNeighborIfLoaded(pos.x, pos.z, pos.section_y - 1); // down
+        self.remeshNeighborIfLoaded(pos.x, pos.z, pos.section_y + 1); // up
+        self.remeshNeighborIfLoaded(pos.x, pos.z - 1, pos.section_y); // north
+        self.remeshNeighborIfLoaded(pos.x, pos.z + 1, pos.section_y); // south
+        self.remeshNeighborIfLoaded(pos.x - 1, pos.z, pos.section_y); // west
+        self.remeshNeighborIfLoaded(pos.x + 1, pos.z, pos.section_y); // east
+    }
+
+    /// Queue a chunk for remeshing via the mesh scheduler thread.
+    /// Sets state to .dirty and pushes a MeshRequest to the scheduler's SPSC queue.
+    /// Zero allocations on the main thread — scheduler + workers handle everything.
+    fn queueChunkRemesh(self: *Self, pos: ChunkPos) void {
+        const render_chunk_ptr = self.chunk_storage.get(pos) orelse return;
         render_chunk_ptr.setState(.dirty);
 
-        const neighbors = self.getNeighborChunks(pos);
-
-        const task_data = self.allocator.create(ChunkTask) catch return;
-        task_data.* = ChunkTask{
-            .pos = pos,
-            .task_type = .remesh,
-            .data = .{ .mesh = MeshTask{
+        if (self.mesh_scheduler) |ms| {
+            _ = ms.mesh_ready_queue.tryPush(MeshRequest{
                 .pos = pos,
-                .chunk = render_chunk_ptr.chunk,
-                .neighbors = neighbors,
-                .render_chunk = render_chunk_ptr,
                 .is_remesh = true,
-            } },
-        };
-
-        self.pool.submit(Task{
-            .task_type = .generate_and_mesh,
-            .data = @ptrCast(task_data),
-            .chunk_pos = pos,
-            .chunk_task_kind = .remesh,
-        }) catch {
-            self.allocator.destroy(task_data);
-            return;
-        };
-    }
-
-    fn unloadDistantChunks(self: *Self) void {
-        const zone = profiler.trace(@src());
-        defer zone.end();
-
-        var to_unload: std.ArrayListUnmanaged(ChunkPos) = .{};
-        defer to_unload.deinit(self.allocator);
-
-        {
-            const scan_zone = profiler.traceNamed("ScanDistantChunks");
-            defer scan_zone.end();
-
-            var iter = self.chunk_storage.iterator();
-            while (iter.next()) |entry| {
-                const pos = entry.key_ptr.*;
-                // Check both horizontal and vertical distance
-                const horizontally_distant = !pos.isWithinDistance(self.player_chunk, self.config.unload_distance);
-                const dy = @abs(pos.section_y - self.player_chunk.section_y);
-                const vertically_distant = dy > self.config.vertical_view_distance + 2;
-                if (horizontally_distant or vertically_distant) {
-                    to_unload.append(self.allocator, pos) catch continue;
-                }
-            }
-        }
-
-        {
-            const unload_zone = profiler.traceNamed("UnloadChunks");
-            defer unload_zone.end();
-            unload_zone.setValue(to_unload.items.len);
-
-            for (to_unload.items) |pos| {
-                self.unloadChunk(pos);
-            }
+            });
         }
     }
 
@@ -1268,9 +1088,7 @@ pub const ChunkManager = struct {
 
             rcu_instance.retire(@ptrCast(deferred), DeferredChunkFree.free);
         }
-        _ = self.pending_loads.remove(pos);
-        _ = self.managed_positions.remove(pos);
-        _ = self.pending_mesh.remove(pos);
+        // No pending_mesh cleanup needed — scheduler handles stale entries via getAtomic → null
     }
 
     fn processTask(ctx: *WorkerContext, task: Task) void {
@@ -1279,69 +1097,140 @@ pub const ChunkManager = struct {
 
         if (task.task_type != .generate_and_mesh) return;
 
-        const task_data_ptr = task.data orelse return;
-        const task_data: *ChunkTask = @ptrCast(@alignCast(task_data_ptr));
-
         const worker_data: *WorkerData = @ptrCast(@alignCast(ctx.user_data orelse return));
         const self = worker_data.manager;
-        const mesh_ctx = worker_data.mesh_context;
 
-        defer self.allocator.destroy(task_data);
+        if (task.data != null) return; // No legacy ChunkTask data expected
 
-        switch (task_data.task_type) {
-            .generate_terrain => {
-                const terrain_task = task_data.data.terrain;
-
-                var chunk: Chunk = undefined;
-                if (self.terrain_generator) |terrain_gen| {
-                    chunk = terrain_gen.generateChunk(
-                        terrain_task.pos.x,
-                        terrain_task.pos.section_y,
-                        terrain_task.pos.z,
-                    );
-                } else {
-                    chunk = Chunk.generateTestChunk();
-                }
-
-                self.completed_terrain.push(TerrainResult{
-                    .pos = terrain_task.pos,
-                    .chunk = chunk,
-                    .render_chunk = terrain_task.render_chunk,
-                }) catch |err| {
-                    logger.warn("Failed to push completed terrain: {}", .{err});
-                };
-            },
-
-            .generate_mesh, .remesh => {
-                var mesh_task = task_data.data.mesh;
-
-                const shaper = self.shared_model_shaper orelse return;
-
-                var neighbor_ptrs: [6]?*const Chunk = .{ null, null, null, null, null, null };
-                for (0..6) |i| {
-                    if (mesh_task.neighbors[i] != null) {
-                        neighbor_ptrs[i] = &(mesh_task.neighbors[i].?);
-                    }
-                }
-
-                var mesh = mesh_ctx.generateMesh(
-                    &mesh_task.chunk,
-                    mesh_task.pos,
-                    neighbor_ptrs,
-                    shaper,
-                    self.texture_manager,
-                ) catch |err| {
-                    logger.warn("Failed to generate mesh for chunk: {}", .{err});
-                    return;
-                };
-
-                mesh.generated_chunk = null;
-
-                self.completed_queue.push(mesh) catch |err| {
-                    logger.warn("Failed to push completed mesh: {}", .{err});
-                    mesh.deinit();
-                };
-            },
+        // Mesh task — capture neighbors via RCU + getAtomic (zero-alloc on main thread)
+        if (task.chunk_task_kind == .mesh) {
+            self.processMeshTask(ctx, task);
+            return;
         }
+
+        // Terrain task — position embedded in Task struct, zero heap allocation
+        var chunk: Chunk = undefined;
+        if (self.terrain_generator) |terrain_gen| {
+            chunk = terrain_gen.generateChunk(
+                task.chunk_pos.x,
+                task.chunk_pos.section_y,
+                task.chunk_pos.z,
+            );
+        } else {
+            chunk = Chunk.generateTestChunk();
+        }
+
+        self.completed_terrain.push(TerrainResult{
+            .pos = task.chunk_pos,
+            .chunk = chunk,
+        }) catch |err| {
+            logger.warn("Failed to push completed terrain: {}", .{err});
+        };
+
+        // Release backpressure so load thread can submit more tasks
+        _ = self.in_flight_terrain.fetchSub(1, .release);
+    }
+
+    /// Worker-side mesh task processing: captures chunk + neighbors via RCU + getAtomic
+    /// No main-thread allocation needed — the 57KB neighbor copies happen on the worker thread
+    fn processMeshTask(self: *Self, ctx: *WorkerContext, task: Task) void {
+        const mesh_zone = profiler.traceNamed("ProcessMeshTask");
+        defer mesh_zone.end();
+
+        const worker_data: *WorkerData = @ptrCast(@alignCast(ctx.user_data orelse return));
+        const mesh_ctx = worker_data.mesh_context;
+        const shaper = self.shared_model_shaper orelse return;
+        const rcu_instance = self.rcu orelse return;
+        const pos = task.chunk_pos;
+        const gen = task.mesh_generation;
+
+        // RCU read-side critical section protects against chunk being freed during copy
+        _ = rcu_instance.readLock(@intCast(ctx.id));
+
+        // Get the chunk via atomic read
+        const render_chunk_ptr = self.chunk_storage.getAtomic(pos) orelse {
+            rcu_instance.readUnlock(@intCast(ctx.id));
+            // Chunk was unloaded — push empty result so state machine isn't stuck
+            self.pushEmptyMeshResult(pos, gen);
+            return;
+        };
+
+        // Verify chunk is still in .meshing state (could have been recycled)
+        if (render_chunk_ptr.getState() != .meshing) {
+            rcu_instance.readUnlock(@intCast(ctx.id));
+            self.pushEmptyMeshResult(pos, gen);
+            return;
+        }
+
+        // Copy chunk data (8KB) under RCU protection
+        const chunk_copy = render_chunk_ptr.chunk;
+
+        // Copy neighbor data (up to 48KB total) via getAtomic
+        var neighbors: [6]?Chunk = .{ null, null, null, null, null, null };
+        const offsets = [6]ChunkPos{
+            .{ .x = 0, .z = 0, .section_y = -1 }, // down
+            .{ .x = 0, .z = 0, .section_y = 1 }, // up
+            .{ .x = 0, .z = -1, .section_y = 0 }, // north
+            .{ .x = 0, .z = 1, .section_y = 0 }, // south
+            .{ .x = -1, .z = 0, .section_y = 0 }, // west
+            .{ .x = 1, .z = 0, .section_y = 0 }, // east
+        };
+
+        for (0..6) |i| {
+            const neighbor_pos = ChunkPos{
+                .x = pos.x + offsets[i].x,
+                .z = pos.z + offsets[i].z,
+                .section_y = pos.section_y + offsets[i].section_y,
+            };
+
+            if (self.chunk_storage.getAtomic(neighbor_pos)) |neighbor| {
+                const state = neighbor.getState();
+                if (state == .generated or state == .meshing or state == .ready or state == .dirty) {
+                    neighbors[i] = neighbor.chunk;
+                }
+            }
+        }
+
+        // Exit RCU critical section — all data has been copied to stack
+        rcu_instance.readUnlock(@intCast(ctx.id));
+
+        // Generate mesh from local copies (outside RCU section)
+        var neighbor_ptrs: [6]?*const Chunk = .{ null, null, null, null, null, null };
+        for (0..6) |i| {
+            if (neighbors[i] != null) {
+                neighbor_ptrs[i] = &(neighbors[i].?);
+            }
+        }
+
+        var mesh = mesh_ctx.generateMesh(
+            &chunk_copy,
+            pos,
+            neighbor_ptrs,
+            shaper,
+            self.texture_manager,
+        ) catch |err| {
+            logger.warn("Failed to generate mesh for chunk ({},{},{}): {}", .{ pos.x, pos.z, pos.section_y, err });
+            self.pushEmptyMeshResult(pos, gen);
+            return;
+        };
+
+        mesh.generated_chunk = null;
+        mesh.mesh_generation = gen;
+
+        self.completed_queue.push(mesh) catch |err| {
+            logger.warn("Failed to push completed mesh: {}", .{err});
+            mesh.deinit();
+            self.pushEmptyMeshResult(pos, gen);
+        };
+    }
+
+    /// Push an empty CompletedMesh so the chunk transitions out of .meshing
+    fn pushEmptyMeshResult(self: *Self, pos: ChunkPos, gen: u32) void {
+        self.completed_queue.push(CompletedMesh{
+            .pos = pos,
+            .layers = .{ CompletedLayerData.EMPTY, CompletedLayerData.EMPTY, CompletedLayerData.EMPTY },
+            .allocator = self.allocator,
+            .mesh_generation = gen,
+        }) catch {};
     }
 };
