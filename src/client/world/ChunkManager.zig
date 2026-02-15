@@ -1007,7 +1007,11 @@ pub const ChunkManager = struct {
     fn remeshNeighborIfLoaded(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
         const neighbor_pos = ChunkPos{ .x = chunk_x, .z = chunk_z, .section_y = section_y };
         const neighbor_chunk = self.chunk_storage.get(neighbor_pos) orelse return;
-        if (neighbor_chunk.getState() == .ready) {
+        const state = neighbor_chunk.getState();
+        // Also remesh .meshing chunks: the in-flight worker may have already captured
+        // neighbors before this chunk was in storage. Setting .dirty causes the stale
+        // result to be discarded (state/generation guards) and a fresh mesh scheduled.
+        if (state == .ready or state == .meshing) {
             self.queueChunkRemesh(neighbor_pos);
         }
     }
