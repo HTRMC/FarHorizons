@@ -398,8 +398,6 @@ pub const ChunkManager = struct {
                 self.io,
                 &self.pool,
                 &self.chunk_storage,
-                self.config.view_distance,
-                self.config.vertical_view_distance,
             );
             try ms.start();
             self.mesh_scheduler = ms;
@@ -554,11 +552,6 @@ pub const ChunkManager = struct {
         // Notify background load thread of new player position (C2ME-style)
         if (self.load_thread) |lt| {
             lt.updatePlayerPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
-        }
-
-        // Notify mesh scheduler of new player position (for neighbor dependency checks)
-        if (self.mesh_scheduler) |ms| {
-            ms.updatePlayerPos(new_chunk.x, new_chunk.z, new_chunk.section_y);
         }
     }
 

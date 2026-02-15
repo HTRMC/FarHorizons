@@ -1,7 +1,7 @@
 /// MeshSchedulerThread - Dedicated background thread for mesh scheduling
 /// Decouples mesh dependency checking and task submission from the main thread.
 /// The main thread only pushes positions to a lock-free queue; this thread does all
-/// the work of checking chunk state, neighbor dependencies, CAS transitions, and pool submission.
+/// the work of checking chunk state, CAS transitions, and pool submission.
 ///
 /// Owns (thread-local, no synchronization needed):
 /// - pending_mesh: PosSet for dedup
@@ -13,7 +13,6 @@
 /// - ChunkStorage.getAtomic() for safe cross-thread chunk reads
 /// - RenderChunk.future.tryTransition() for atomic state CAS
 /// - pool.submit() for task submission (mutex-protected)
-/// - Atomic player position — main thread writes, this thread reads
 const std = @import("std");
 const Io = std.Io;
 const shared = @import("Shared");
@@ -39,16 +38,6 @@ pub const MeshRequest = struct {
     is_remesh: bool,
 };
 
-/// Neighbor offsets: down, up, north, south, west, east
-const NEIGHBOR_OFFSETS = [6]ChunkPos{
-    .{ .x = 0, .z = 0, .section_y = -1 }, // down
-    .{ .x = 0, .z = 0, .section_y = 1 }, // up
-    .{ .x = 0, .z = -1, .section_y = 0 }, // north
-    .{ .x = 0, .z = 1, .section_y = 0 }, // south
-    .{ .x = -1, .z = 0, .section_y = 0 }, // west
-    .{ .x = 1, .z = 0, .section_y = 0 }, // east
-};
-
 pub const MeshSchedulerThread = struct {
     const Self = @This();
     const logger = Logger.scoped(Self);
@@ -71,15 +60,6 @@ pub const MeshSchedulerThread = struct {
     // Read-only reference to chunk storage (uses getAtomic for safe reads)
     storage: *ChunkStorage,
 
-    // Atomic player position (main thread writes, this thread reads)
-    player_chunk_x: std.atomic.Value(i32),
-    player_chunk_z: std.atomic.Value(i32),
-    player_chunk_y: std.atomic.Value(i32),
-
-    // View distance config (for neighbor dependency checks)
-    view_distance: u32,
-    vertical_view_distance: u32,
-
     // Thread-local state (only accessed by background thread)
     pending_mesh: PosSet,
     pending_mesh_queue: std.ArrayListUnmanaged(ChunkPos),
@@ -90,8 +70,6 @@ pub const MeshSchedulerThread = struct {
         io: Io,
         pool: *ThreadPool,
         storage: *ChunkStorage,
-        view_distance: u32,
-        vertical_view_distance: u32,
     ) !Self {
         var mesh_ready_queue = try SPSCQueue(MeshRequest).init(allocator, 8192);
         errdefer mesh_ready_queue.deinit();
@@ -103,11 +81,6 @@ pub const MeshSchedulerThread = struct {
             .mesh_ready_queue = mesh_ready_queue,
             .pool = pool,
             .storage = storage,
-            .player_chunk_x = std.atomic.Value(i32).init(0),
-            .player_chunk_z = std.atomic.Value(i32).init(0),
-            .player_chunk_y = std.atomic.Value(i32).init(0),
-            .view_distance = view_distance,
-            .vertical_view_distance = vertical_view_distance,
             .pending_mesh = PosSet.init(allocator),
             .pending_mesh_queue = .{},
             .pending_mesh_head = 0,
@@ -120,21 +93,6 @@ pub const MeshSchedulerThread = struct {
         self.pending_mesh_queue.deinit(self.allocator);
         self.mesh_ready_queue.deinit();
         logger.info("MeshSchedulerThread destroyed", .{});
-    }
-
-    /// Update player position (called from main thread)
-    pub fn updatePlayerPos(self: *Self, chunk_x: i32, chunk_z: i32, section_y: i32) void {
-        self.player_chunk_x.store(chunk_x, .release);
-        self.player_chunk_z.store(chunk_z, .release);
-        self.player_chunk_y.store(section_y, .release);
-    }
-
-    fn readPlayerPos(self: *Self) ChunkPos {
-        return ChunkPos{
-            .x = self.player_chunk_x.load(.acquire),
-            .z = self.player_chunk_z.load(.acquire),
-            .section_y = self.player_chunk_y.load(.acquire),
-        };
     }
 
     pub fn start(self: *Self) !void {
@@ -173,9 +131,6 @@ pub const MeshSchedulerThread = struct {
             // 2. Process pending_mesh_queue (FIFO, no per-tick cap — not on render thread)
             const submitted = self.processPendingQueue();
 
-            // 3. Rebuild queue if orphans exist (catches entries waiting for neighbors + silent append failures)
-            self.rebuildQueueIfNeeded();
-
             // Sleep when idle
             if (drained == 0 and submitted == 0) {
                 Io.Clock.Duration.sleep(.{
@@ -200,47 +155,21 @@ pub const MeshSchedulerThread = struct {
                 });
                 continue;
             };
-            self.pending_mesh_queue.append(self.allocator, request.pos) catch {
-                // Silent append failure — rebuildQueueIfNeeded will catch orphans
-            };
+            self.pending_mesh_queue.append(self.allocator, request.pos) catch {};
             drained += 1;
         }
 
         return drained;
     }
 
-    /// Check if all required neighbors are available in storage.
-    /// A neighbor is "required" if it's within the player's view distance
-    /// (neighbors outside view distance will never be loaded, so we don't wait for them).
-    fn hasRequiredNeighbors(self: *Self, pos: ChunkPos, player: ChunkPos) bool {
-        for (NEIGHBOR_OFFSETS) |offset| {
-            const neighbor_pos = ChunkPos{
-                .x = pos.x + offset.x,
-                .z = pos.z + offset.z,
-                .section_y = pos.section_y + offset.section_y,
-            };
-
-            // Skip neighbors outside view distance — they'll never be loaded
-            if (!neighbor_pos.isWithinDistance(player, self.view_distance)) continue;
-
-            // Skip neighbors outside vertical view distance
-            const dy = @abs(neighbor_pos.section_y - player.section_y);
-            if (dy > self.vertical_view_distance) continue;
-
-            // Neighbor is within load range — check if it exists in storage
-            if (self.storage.getAtomic(neighbor_pos) == null) return false;
-        }
-        return true;
-    }
-
-    /// Process the FIFO queue: check neighbors, chunk state, CAS, submit to pool
+    /// Process the FIFO queue: check chunk state, CAS, submit to pool.
+    /// No neighbor dependency checks — chunks are meshed immediately when terrain
+    /// completes. Boundary artifacts are fixed by queueNeighborRemeshes on the main thread.
     fn processPendingQueue(self: *Self) u32 {
         const zone = profiler.traceNamed("MeshScheduleProcess");
         defer zone.end();
 
-        const player = self.readPlayerPos();
         var submitted: u32 = 0;
-        var deferred: u32 = 0;
 
         while (self.pending_mesh_head < self.pending_mesh_queue.items.len) {
             const pos = self.pending_mesh_queue.items[self.pending_mesh_head];
@@ -258,16 +187,7 @@ pub const MeshSchedulerThread = struct {
                 continue;
             };
 
-            // Check neighbor dependencies: wait for all in-range neighbors to be loaded
-            // This prevents meshing without neighbor data (causes uncculled boundary faces).
-            // Entries left in pending_mesh will be retried via rebuildQueueIfNeeded.
-            if (!self.hasRequiredNeighbors(pos, player)) {
-                // Leave in pending_mesh — rebuildQueueIfNeeded picks it up after queue drains
-                deferred += 1;
-                continue;
-            }
-
-            // All neighbors available — remove from dedup set and proceed
+            // Remove from dedup set and proceed
             _ = self.pending_mesh.remove(pos);
 
             // Try state transition via CAS
@@ -324,30 +244,8 @@ pub const MeshSchedulerThread = struct {
         if (submitted > 0) {
             profiler.plotInt("MeshTasksSubmitted", @intCast(submitted));
         }
-        if (deferred > 0) {
-            profiler.plotInt("MeshDeferred", @intCast(deferred));
-        }
         zone.setValue(submitted);
 
         return submitted;
-    }
-
-    /// Rebuild queue when entries are waiting for neighbors or from silent append failures.
-    /// When the FIFO drains but pending_mesh has entries (waiting for neighbors or orphaned),
-    /// rebuild the queue from the HashMap so they get retried.
-    fn rebuildQueueIfNeeded(self: *Self) void {
-        // Only rebuild when queue is fully drained but entries remain in pending_mesh
-        if (self.pending_mesh_head < self.pending_mesh_queue.items.len) return;
-        if (self.pending_mesh.count() == 0) return;
-
-        self.pending_mesh_queue.clearRetainingCapacity();
-        self.pending_mesh_head = 0;
-
-        var iter = self.pending_mesh.iterator();
-        while (iter.next()) |entry| {
-            self.pending_mesh_queue.append(self.allocator, entry.key_ptr.*) catch {};
-        }
-
-        profiler.plotInt("MeshQueueRebuilt", @intCast(self.pending_mesh.count()));
     }
 };
