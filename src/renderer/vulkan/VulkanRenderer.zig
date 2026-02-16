@@ -114,8 +114,8 @@ pub const VulkanRenderer = struct {
             .pApplicationInfo = &app_info,
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = null,
-            .enabledExtensionCount = 2,
-            .ppEnabledExtensionNames = extensions,
+            .enabledExtensionCount = extensions.count,
+            .ppEnabledExtensionNames = extensions.names,
         };
 
         return try vk.createInstance(&create_info, null);

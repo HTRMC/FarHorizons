@@ -70,9 +70,14 @@ pub const Window = struct {
         return surface;
     }
 
-    pub fn getRequiredExtensions() [*]const [*:0]const u8 {
+    pub const Extensions = struct {
+        names: [*]const [*:0]const u8,
+        count: u32,
+    };
+
+    pub fn getRequiredExtensions() Extensions {
         var count: u32 = 0;
-        // Safe: called after GLFW init in VulkanRenderer
-        return glfw.getRequiredInstanceExtensions(&count) orelse unreachable;
+        const names = glfw.getRequiredInstanceExtensions(&count) orelse unreachable;
+        return .{ .names = names, .count = count };
     }
 };
