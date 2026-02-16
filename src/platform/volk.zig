@@ -781,18 +781,6 @@ pub fn cmdBindPipeline(
     }
 }
 
-pub fn cmdDrawIndirect(
-    command_buffer: VkCommandBuffer,
-    buffer: VkBuffer,
-    offset: VkDeviceSize,
-    draw_count: u32,
-    stride: u32,
-) void {
-    if (c.vkCmdDrawIndirect) |fn_ptr| {
-        fn_ptr(command_buffer, buffer, offset, draw_count, stride);
-    }
-}
-
 pub fn cmdDrawIndirectCount(
     command_buffer: VkCommandBuffer,
     buffer: VkBuffer,
