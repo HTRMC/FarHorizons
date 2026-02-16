@@ -10,6 +10,7 @@ pub const VkSurfaceKHR = c.VkSurfaceKHR;
 pub const VkSwapchainKHR = c.VkSwapchainKHR;
 pub const VkImage = c.VkImage;
 pub const VkImageView = c.VkImageView;
+pub const VkImageCreateInfo = c.VkImageCreateInfo;
 pub const VkFormat = c.VkFormat;
 pub const VkExtent2D = c.VkExtent2D;
 pub const VkResult = c.VkResult;
@@ -72,6 +73,13 @@ pub const VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO = c.VK_STRUCTURE_TYPE_DEVICE_CREA
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 pub const VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 pub const VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+pub const VK_IMAGE_TYPE_2D = c.VK_IMAGE_TYPE_2D;
+pub const VK_IMAGE_TILING_OPTIMAL = c.VK_IMAGE_TILING_OPTIMAL;
+pub const VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT = c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+pub const VK_IMAGE_USAGE_SAMPLED_BIT = c.VK_IMAGE_USAGE_SAMPLED_BIT;
+pub const VK_FORMAT_D32_SFLOAT = c.VK_FORMAT_D32_SFLOAT;
+pub const VK_IMAGE_ASPECT_DEPTH_BIT = c.VK_IMAGE_ASPECT_DEPTH_BIT;
 pub const VK_QUEUE_GRAPHICS_BIT = c.VK_QUEUE_GRAPHICS_BIT;
 pub const VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 pub const VK_SHARING_MODE_EXCLUSIVE = c.VK_SHARING_MODE_EXCLUSIVE;
@@ -92,11 +100,15 @@ pub const VK_ATTACHMENT_STORE_OP_STORE = c.VK_ATTACHMENT_STORE_OP_STORE;
 pub const VK_ATTACHMENT_STORE_OP_DONT_CARE = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
 pub const VK_IMAGE_LAYOUT_UNDEFINED = c.VK_IMAGE_LAYOUT_UNDEFINED;
 pub const VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+pub const VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 pub const VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 pub const VK_PIPELINE_BIND_POINT_GRAPHICS = c.VK_PIPELINE_BIND_POINT_GRAPHICS;
 pub const VK_SUBPASS_EXTERNAL = c.VK_SUBPASS_EXTERNAL;
 pub const VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+pub const VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
 pub const VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+pub const VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+pub const VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 pub const VK_SAMPLE_COUNT_1_BIT = c.VK_SAMPLE_COUNT_1_BIT;
 pub const VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -138,6 +150,7 @@ pub const VkPipelineRasterizationStateCreateInfo = c.VkPipelineRasterizationStat
 pub const VkPipelineMultisampleStateCreateInfo = c.VkPipelineMultisampleStateCreateInfo;
 pub const VkPipelineColorBlendAttachmentState = c.VkPipelineColorBlendAttachmentState;
 pub const VkPipelineColorBlendStateCreateInfo = c.VkPipelineColorBlendStateCreateInfo;
+pub const VkPipelineDepthStencilStateCreateInfo = c.VkPipelineDepthStencilStateCreateInfo;
 pub const VkPipelineLayoutCreateInfo = c.VkPipelineLayoutCreateInfo;
 pub const VkPushConstantRange = c.VkPushConstantRange;
 pub const VkGraphicsPipelineCreateInfo = c.VkGraphicsPipelineCreateInfo;
@@ -161,6 +174,7 @@ pub const VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO = c.VK_STRUCTURE
 pub const VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO = c.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -180,6 +194,7 @@ pub const VK_FRONT_FACE_CLOCKWISE = c.VK_FRONT_FACE_CLOCKWISE;
 pub const VK_BLEND_FACTOR_ONE = c.VK_BLEND_FACTOR_ONE;
 pub const VK_BLEND_FACTOR_ZERO = c.VK_BLEND_FACTOR_ZERO;
 pub const VK_BLEND_OP_ADD = c.VK_BLEND_OP_ADD;
+pub const VK_COMPARE_OP_LESS = c.VK_COMPARE_OP_LESS;
 pub const VK_COLOR_COMPONENT_R_BIT = c.VK_COLOR_COMPONENT_R_BIT;
 pub const VK_COLOR_COMPONENT_G_BIT = c.VK_COLOR_COMPONENT_G_BIT;
 pub const VK_COLOR_COMPONENT_B_BIT = c.VK_COLOR_COMPONENT_B_BIT;
@@ -1014,6 +1029,49 @@ pub fn cmdDispatch(
     if (c.vkCmdDispatch) |fn_ptr| {
         fn_ptr(command_buffer, group_count_x, group_count_y, group_count_z);
     }
+}
+
+pub fn createImage(
+    device: VkDevice,
+    create_info: *const VkImageCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkImage {
+    const fn_ptr = c.vkCreateImage orelse return error.FunctionNotLoaded;
+    var image: VkImage = undefined;
+    const result = fn_ptr(device, create_info, allocator, &image);
+    try vkResultToError(result);
+    return image;
+}
+
+pub fn destroyImage(
+    device: VkDevice,
+    image: VkImage,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyImage) |fn_ptr| {
+        fn_ptr(device, image, allocator);
+    }
+}
+
+pub fn getImageMemoryRequirements(
+    device: VkDevice,
+    image: VkImage,
+    memory_requirements: *VkMemoryRequirements,
+) void {
+    if (c.vkGetImageMemoryRequirements) |fn_ptr| {
+        fn_ptr(device, image, memory_requirements);
+    }
+}
+
+pub fn bindImageMemory(
+    device: VkDevice,
+    image: VkImage,
+    memory: VkDeviceMemory,
+    memory_offset: VkDeviceSize,
+) VulkanError!void {
+    const fn_ptr = c.vkBindImageMemory orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, image, memory, memory_offset);
+    try vkResultToError(result);
 }
 
 pub fn cmdPushConstants(
