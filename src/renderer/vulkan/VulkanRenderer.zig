@@ -534,6 +534,12 @@ pub const VulkanRenderer = struct {
         var vulkan12_features: vk.VkPhysicalDeviceVulkan12Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan12Features);
         vulkan12_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         vulkan12_features.drawIndirectCount = vk.VK_TRUE;
+        vulkan12_features.descriptorIndexing = vk.VK_TRUE;
+        vulkan12_features.runtimeDescriptorArray = vk.VK_TRUE;
+        vulkan12_features.descriptorBindingPartiallyBound = vk.VK_TRUE;
+        vulkan12_features.descriptorBindingVariableDescriptorCount = vk.VK_TRUE;
+        vulkan12_features.shaderSampledImageArrayNonUniformIndexing = vk.VK_TRUE;
+        vulkan12_features.shaderStorageBufferArrayNonUniformIndexing = vk.VK_TRUE;
 
         const create_info = vk.VkDeviceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
