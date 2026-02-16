@@ -43,8 +43,8 @@ pub const VulkanRenderer = struct {
         var graphics_queue: vk.VkQueue = undefined;
         vk.vkGetDeviceQueue.?(device, device_info.queue_family_index, 0, &graphics_queue);
 
-        const swapchain_images: std.ArrayList(vk.VkImage) = .empty;
-        const swapchain_image_views: std.ArrayList(vk.VkImageView) = .empty;
+        var swapchain_images: std.ArrayList(vk.VkImage) = .empty;
+        var swapchain_image_views: std.ArrayList(vk.VkImageView) = .empty;
 
         self.* = .{
             .allocator = allocator,
