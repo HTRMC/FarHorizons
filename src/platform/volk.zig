@@ -38,6 +38,9 @@ pub const VkCommandPool = c.VkCommandPool;
 pub const VkCommandBuffer = c.VkCommandBuffer;
 pub const VkSemaphore = c.VkSemaphore;
 pub const VkFence = c.VkFence;
+pub const VkBuffer = c.VkBuffer;
+pub const VkDeviceMemory = c.VkDeviceMemory;
+pub const VkDeviceSize = c.VkDeviceSize;
 pub const VkCommandPoolCreateInfo = c.VkCommandPoolCreateInfo;
 pub const VkCommandBufferAllocateInfo = c.VkCommandBufferAllocateInfo;
 pub const VkSemaphoreCreateInfo = c.VkSemaphoreCreateInfo;
@@ -50,6 +53,11 @@ pub const VkClearValue = c.VkClearValue;
 pub const VkClearColorValue = c.VkClearColorValue;
 pub const VkRect2D = c.VkRect2D;
 pub const VkOffset2D = c.VkOffset2D;
+pub const VkBufferCreateInfo = c.VkBufferCreateInfo;
+pub const VkMemoryAllocateInfo = c.VkMemoryAllocateInfo;
+pub const VkMemoryRequirements = c.VkMemoryRequirements;
+pub const VkPhysicalDeviceMemoryProperties = c.VkPhysicalDeviceMemoryProperties;
+pub const VkDrawIndirectCommand = c.VkDrawIndirectCommand;
 
 // Re-export constants
 pub const VK_SUCCESS = c.VK_SUCCESS;
@@ -101,6 +109,16 @@ pub const VK_COMMAND_BUFFER_LEVEL_PRIMARY = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 pub const VK_FENCE_CREATE_SIGNALED_BIT = c.VK_FENCE_CREATE_SIGNALED_BIT;
 pub const VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 pub const VK_SUBPASS_CONTENTS_INLINE = c.VK_SUBPASS_CONTENTS_INLINE;
+
+// Buffer and memory constants
+pub const VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+pub const VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT = c.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+pub const VK_BUFFER_USAGE_STORAGE_BUFFER_BIT = c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+pub const VK_BUFFER_USAGE_TRANSFER_DST_BIT = c.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+pub const VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT = c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+pub const VK_MEMORY_PROPERTY_HOST_COHERENT_BIT = c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+pub const VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
 // Shader and pipeline types
 pub const VkShaderModule = c.VkShaderModule;
@@ -758,5 +776,113 @@ pub fn cmdBindPipeline(
 ) void {
     if (c.vkCmdBindPipeline) |fn_ptr| {
         fn_ptr(command_buffer, pipeline_bind_point, pipeline);
+    }
+}
+
+pub fn cmdDrawIndirect(
+    command_buffer: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: VkDeviceSize,
+    draw_count: u32,
+    stride: u32,
+) void {
+    if (c.vkCmdDrawIndirect) |fn_ptr| {
+        fn_ptr(command_buffer, buffer, offset, draw_count, stride);
+    }
+}
+
+pub fn createBuffer(
+    device: VkDevice,
+    create_info: *const VkBufferCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkBuffer {
+    const fn_ptr = c.vkCreateBuffer orelse return error.FunctionNotLoaded;
+    var buffer: VkBuffer = undefined;
+    const result = fn_ptr(device, create_info, allocator, &buffer);
+    try vkResultToError(result);
+    return buffer;
+}
+
+pub fn destroyBuffer(
+    device: VkDevice,
+    buffer: VkBuffer,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyBuffer) |fn_ptr| {
+        fn_ptr(device, buffer, allocator);
+    }
+}
+
+pub fn getBufferMemoryRequirements(
+    device: VkDevice,
+    buffer: VkBuffer,
+    memory_requirements: *VkMemoryRequirements,
+) void {
+    if (c.vkGetBufferMemoryRequirements) |fn_ptr| {
+        fn_ptr(device, buffer, memory_requirements);
+    }
+}
+
+pub fn getPhysicalDeviceMemoryProperties(
+    physical_device: VkPhysicalDevice,
+    memory_properties: *VkPhysicalDeviceMemoryProperties,
+) void {
+    if (c.vkGetPhysicalDeviceMemoryProperties) |fn_ptr| {
+        fn_ptr(physical_device, memory_properties);
+    }
+}
+
+pub fn allocateMemory(
+    device: VkDevice,
+    allocate_info: *const VkMemoryAllocateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkDeviceMemory {
+    const fn_ptr = c.vkAllocateMemory orelse return error.FunctionNotLoaded;
+    var memory: VkDeviceMemory = undefined;
+    const result = fn_ptr(device, allocate_info, allocator, &memory);
+    try vkResultToError(result);
+    return memory;
+}
+
+pub fn freeMemory(
+    device: VkDevice,
+    memory: VkDeviceMemory,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkFreeMemory) |fn_ptr| {
+        fn_ptr(device, memory, allocator);
+    }
+}
+
+pub fn bindBufferMemory(
+    device: VkDevice,
+    buffer: VkBuffer,
+    memory: VkDeviceMemory,
+    memory_offset: VkDeviceSize,
+) VulkanError!void {
+    const fn_ptr = c.vkBindBufferMemory orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, buffer, memory, memory_offset);
+    try vkResultToError(result);
+}
+
+pub fn mapMemory(
+    device: VkDevice,
+    memory: VkDeviceMemory,
+    offset: VkDeviceSize,
+    size: VkDeviceSize,
+    flags: c.VkMemoryMapFlags,
+    data: *?*anyopaque,
+) VulkanError!void {
+    const fn_ptr = c.vkMapMemory orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, memory, offset, size, flags, data);
+    try vkResultToError(result);
+}
+
+pub fn unmapMemory(
+    device: VkDevice,
+    memory: VkDeviceMemory,
+) void {
+    if (c.vkUnmapMemory) |fn_ptr| {
+        fn_ptr(device, memory);
     }
 }
