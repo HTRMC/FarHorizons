@@ -1,6 +1,6 @@
 const std = @import("std");
 const Renderer = @import("../Renderer.zig").Renderer;
-const vk = @import("../../platform/volk.zig").c;
+const vk = @import("../../platform/volk.zig");
 const Window = @import("../../platform/Window.zig").Window;
 
 pub const VulkanRenderer = struct {
@@ -22,29 +22,27 @@ pub const VulkanRenderer = struct {
         const self = try allocator.create(VulkanRenderer);
         errdefer allocator.destroy(self);
 
-        if (vk.volkInitialize() != vk.VK_SUCCESS) {
-            return error.VulkanInitFailed;
-        }
+        try vk.initialize();
 
         const instance = try createInstance();
-        errdefer vk.vkDestroyInstance.?(instance, null);
+        errdefer vk.destroyInstance(instance, null);
 
-        vk.volkLoadInstance(instance);
+        vk.loadInstance(instance);
 
         const surface = try window.createSurface(instance, null);
-        errdefer vk.vkDestroySurfaceKHR.?(instance, surface, null);
+        errdefer vk.destroySurfaceKHR(instance, surface, null);
 
         const device_info = try selectPhysicalDevice(allocator, instance, surface);
         const device = try createDevice(device_info.physical_device, device_info.queue_family_index);
-        errdefer vk.vkDestroyDevice.?(device, null);
+        errdefer vk.destroyDevice(device, null);
 
-        vk.volkLoadDevice(device);
+        vk.loadDevice(device);
 
         var graphics_queue: vk.VkQueue = undefined;
-        vk.vkGetDeviceQueue.?(device, device_info.queue_family_index, 0, &graphics_queue);
+        vk.getDeviceQueue(device, device_info.queue_family_index, 0, &graphics_queue);
 
-        var swapchain_images: std.ArrayList(vk.VkImage) = .empty;
-        var swapchain_image_views: std.ArrayList(vk.VkImageView) = .empty;
+        const swapchain_images: std.ArrayList(vk.VkImage) = .empty;
+        const swapchain_image_views: std.ArrayList(vk.VkImageView) = .empty;
 
         self.* = .{
             .allocator = allocator,
@@ -69,18 +67,17 @@ pub const VulkanRenderer = struct {
     }
 
     pub fn deinit(self: *VulkanRenderer) void {
-        const wait_result = vk.vkDeviceWaitIdle.?(self.device);
-        if (wait_result != vk.VK_SUCCESS) {
-            std.log.err("vkDeviceWaitIdle failed: {}", .{wait_result});
-        }
+        vk.deviceWaitIdle(self.device) catch |err| {
+            std.log.err("vkDeviceWaitIdle failed: {}", .{err});
+        };
 
         self.cleanupSwapchain();
         self.swapchain_images.deinit(self.allocator);
         self.swapchain_image_views.deinit(self.allocator);
 
-        vk.vkDestroySurfaceKHR.?(self.instance, self.surface, null);
-        vk.vkDestroyDevice.?(self.device, null);
-        vk.vkDestroyInstance.?(self.instance, null);
+        vk.destroySurfaceKHR(self.instance, self.surface, null);
+        vk.destroyDevice(self.device, null);
+        vk.destroyInstance(self.instance, null);
         std.log.info("VulkanRenderer destroyed", .{});
         self.allocator.destroy(self);
     }
@@ -121,13 +118,7 @@ pub const VulkanRenderer = struct {
             .ppEnabledExtensionNames = extensions,
         };
 
-        var instance: vk.VkInstance = undefined;
-        const result = vk.vkCreateInstance.?(&create_info, null, &instance);
-        if (result != vk.VK_SUCCESS) {
-            return error.InstanceCreationFailed;
-        }
-
-        return instance;
+        return try vk.createInstance(&create_info, null);
     }
 
     const DeviceInfo = struct {
@@ -137,22 +128,18 @@ pub const VulkanRenderer = struct {
 
     fn selectPhysicalDevice(allocator: std.mem.Allocator, instance: vk.VkInstance, surface: vk.VkSurfaceKHR) !DeviceInfo {
         var device_count: u32 = 0;
-        if (vk.vkEnumeratePhysicalDevices.?(instance, &device_count, null) != vk.VK_SUCCESS) {
-            return error.EnumeratePhysicalDevicesFailed;
-        }
+        try vk.enumeratePhysicalDevices(instance, &device_count, null);
 
         if (device_count == 0) {
             return error.NoVulkanDevices;
         }
 
         var devices: [16]vk.VkPhysicalDevice = undefined;
-        if (vk.vkEnumeratePhysicalDevices.?(instance, &device_count, &devices) != vk.VK_SUCCESS) {
-            return error.EnumeratePhysicalDevicesFailed;
-        }
+        try vk.enumeratePhysicalDevices(instance, &device_count, &devices);
 
         for (devices[0..device_count]) |device| {
             var props: vk.VkPhysicalDeviceProperties = undefined;
-            vk.vkGetPhysicalDeviceProperties.?(device, &props);
+            try vk.getPhysicalDeviceProperties(device, &props);
             std.log.info("Found GPU: {s}", .{props.deviceName});
 
             if (try findQueueFamily(allocator, device, surface)) |queue_family| {
@@ -168,20 +155,18 @@ pub const VulkanRenderer = struct {
 
     fn findQueueFamily(allocator: std.mem.Allocator, device: vk.VkPhysicalDevice, surface: vk.VkSurfaceKHR) !?u32 {
         var queue_family_count: u32 = 0;
-        vk.vkGetPhysicalDeviceQueueFamilyProperties.?(device, &queue_family_count, null);
+        try vk.getPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, null);
 
         var queue_families = try allocator.alloc(vk.VkQueueFamilyProperties, queue_family_count);
         defer allocator.free(queue_families);
 
-        vk.vkGetPhysicalDeviceQueueFamilyProperties.?(device, &queue_family_count, queue_families.ptr);
+        try vk.getPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, queue_families.ptr);
 
         for (queue_families, 0..) |family, i| {
             const supports_graphics = (family.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT) != 0;
 
             var present_support: vk.VkBool32 = vk.VK_FALSE;
-            if (vk.vkGetPhysicalDeviceSurfaceSupportKHR.?(device, @intCast(i), surface, &present_support) != vk.VK_SUCCESS) {
-                return error.GetSurfaceSupportFailed;
-            }
+            try vk.getPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), surface, &present_support);
 
             if (supports_graphics and present_support == vk.VK_TRUE) {
                 return @intCast(i);
@@ -217,30 +202,18 @@ pub const VulkanRenderer = struct {
             .pEnabledFeatures = null,
         };
 
-        var device: vk.VkDevice = undefined;
-        const result = vk.vkCreateDevice.?(physical_device, &create_info, null, &device);
-        if (result != vk.VK_SUCCESS) {
-            return error.DeviceCreationFailed;
-        }
-
-        return device;
+        return try vk.createDevice(physical_device, &create_info, null);
     }
 
     fn createSwapchain(self: *VulkanRenderer) !void {
         var capabilities: vk.VkSurfaceCapabilitiesKHR = undefined;
-        if (vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR.?(self.physical_device, self.surface, &capabilities) != vk.VK_SUCCESS) {
-            return error.GetSurfaceCapabilitiesFailed;
-        }
+        try vk.getPhysicalDeviceSurfaceCapabilitiesKHR(self.physical_device, self.surface, &capabilities);
 
         var format_count: u32 = 0;
-        if (vk.vkGetPhysicalDeviceSurfaceFormatsKHR.?(self.physical_device, self.surface, &format_count, null) != vk.VK_SUCCESS) {
-            return error.GetSurfaceFormatsFailed;
-        }
+        try vk.getPhysicalDeviceSurfaceFormatsKHR(self.physical_device, self.surface, &format_count, null);
         var formats = try self.allocator.alloc(vk.VkSurfaceFormatKHR, format_count);
         defer self.allocator.free(formats);
-        if (vk.vkGetPhysicalDeviceSurfaceFormatsKHR.?(self.physical_device, self.surface, &format_count, formats.ptr) != vk.VK_SUCCESS) {
-            return error.GetSurfaceFormatsFailed;
-        }
+        try vk.getPhysicalDeviceSurfaceFormatsKHR(self.physical_device, self.surface, &format_count, formats.ptr);
 
         const format = formats[0];
         self.swapchain_format = format.format;
@@ -277,18 +250,12 @@ pub const VulkanRenderer = struct {
             .oldSwapchain = null,
         };
 
-        if (vk.vkCreateSwapchainKHR.?(self.device, &create_info, null, &self.swapchain) != vk.VK_SUCCESS) {
-            return error.SwapchainCreationFailed;
-        }
+        self.swapchain = try vk.createSwapchainKHR(self.device, &create_info, null);
 
         var swapchain_image_count: u32 = 0;
-        if (vk.vkGetSwapchainImagesKHR.?(self.device, self.swapchain, &swapchain_image_count, null) != vk.VK_SUCCESS) {
-            return error.GetSwapchainImagesFailed;
-        }
+        try vk.getSwapchainImagesKHR(self.device, self.swapchain, &swapchain_image_count, null);
         try self.swapchain_images.resize(self.allocator, swapchain_image_count);
-        if (vk.vkGetSwapchainImagesKHR.?(self.device, self.swapchain, &swapchain_image_count, self.swapchain_images.items.ptr) != vk.VK_SUCCESS) {
-            return error.GetSwapchainImagesFailed;
-        }
+        try vk.getSwapchainImagesKHR(self.device, self.swapchain, &swapchain_image_count, self.swapchain_images.items.ptr);
 
         try self.swapchain_image_views.resize(self.allocator, swapchain_image_count);
         for (self.swapchain_images.items, 0..) |image, i| {
@@ -314,9 +281,7 @@ pub const VulkanRenderer = struct {
                 },
             };
 
-            if (vk.vkCreateImageView.?(self.device, &view_info, null, &self.swapchain_image_views.items[i]) != vk.VK_SUCCESS) {
-                return error.ImageViewCreationFailed;
-            }
+            self.swapchain_image_views.items[i] = try vk.createImageView(self.device, &view_info, null);
         }
 
         std.log.info("Swapchain created: {}x{} ({} images)", .{ self.swapchain_extent.width, self.swapchain_extent.height, swapchain_image_count });
@@ -324,13 +289,13 @@ pub const VulkanRenderer = struct {
 
     fn cleanupSwapchain(self: *VulkanRenderer) void {
         for (self.swapchain_image_views.items) |view| {
-            vk.vkDestroyImageView.?(self.device, view, null);
+            vk.destroyImageView(self.device, view, null);
         }
         self.swapchain_image_views.clearRetainingCapacity();
         self.swapchain_images.clearRetainingCapacity();
 
         if (self.swapchain != null) {
-            vk.vkDestroySwapchainKHR.?(self.device, self.swapchain, null);
+            vk.destroySwapchainKHR(self.device, self.swapchain, null);
         }
     }
 

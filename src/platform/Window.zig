@@ -1,5 +1,6 @@
 const std = @import("std");
 const glfw = @import("glfw.zig");
+const vk = @import("volk.zig");
 
 var glfw_init_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
@@ -17,22 +18,20 @@ pub const Window = struct {
         errdefer _ = glfw_init_count.fetchSub(1, .monotonic);
 
         if (prev_count == 0) {
-            if (glfw.init() == glfw.GLFW_FALSE) {
-                return error.GLFWInitFailed;
-            }
+            try glfw.init();
             std.log.info("GLFW initialized", .{});
         }
 
         glfw.windowHint(glfw.GLFW_CLIENT_API, glfw.GLFW_NO_API);
         glfw.windowHint(glfw.GLFW_RESIZABLE, glfw.GLFW_TRUE);
 
-        const handle = glfw.createWindow(
+        const handle = try glfw.createWindow(
             @intCast(config.width),
             @intCast(config.height),
             config.title.ptr,
             null,
             null,
-        ) orelse return error.WindowCreationFailed;
+        );
 
         std.log.info("Window created: {s} ({}x{})", .{ config.title, config.width, config.height });
 
@@ -65,23 +64,15 @@ pub const Window = struct {
         return .{ .width = @intCast(width), .height = @intCast(height) };
     }
 
-    pub fn createSurface(self: *const Window, instance: anytype, allocator: ?*const anyopaque) !@import("c.zig").c.VkSurfaceKHR {
-        const c = @import("c.zig").c;
-        var surface: c.VkSurfaceKHR = null;
-        const result = glfw.createWindowSurface(
-            instance,
-            self.handle,
-            @ptrCast(@alignCast(allocator)),
-            &surface,
-        );
-        if (result != 0) {
-            return error.SurfaceCreationFailed;
-        }
+    pub fn createSurface(self: *const Window, instance: anytype, allocator: ?*const anyopaque) !vk.VkSurfaceKHR {
+        var surface: vk.VkSurfaceKHR = null;
+        try glfw.createWindowSurface(instance, self.handle, allocator, &surface);
         return surface;
     }
 
     pub fn getRequiredExtensions() [*]const [*:0]const u8 {
         var count: u32 = 0;
-        return @ptrCast(glfw.getRequiredInstanceExtensions(&count));
+        // Safe: called after GLFW init in VulkanRenderer
+        return glfw.getRequiredInstanceExtensions(&count) orelse unreachable;
     }
 };

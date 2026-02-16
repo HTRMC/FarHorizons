@@ -13,3 +13,5 @@ zig-out/
 # OS
 .DS_Store
 Thumbs.db
+/zig-pkg
+/.claude
