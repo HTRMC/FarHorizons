@@ -21,6 +21,7 @@ pub const VkPhysicalDeviceProperties = c.VkPhysicalDeviceProperties;
 pub const VkQueueFamilyProperties = c.VkQueueFamilyProperties;
 pub const VkDeviceCreateInfo = c.VkDeviceCreateInfo;
 pub const VkDeviceQueueCreateInfo = c.VkDeviceQueueCreateInfo;
+pub const VkPhysicalDeviceVulkan12Features = c.VkPhysicalDeviceVulkan12Features;
 pub const VkSurfaceCapabilitiesKHR = c.VkSurfaceCapabilitiesKHR;
 pub const VkSurfaceFormatKHR = c.VkSurfaceFormatKHR;
 pub const VkSwapchainCreateInfoKHR = c.VkSwapchainCreateInfoKHR;
@@ -68,6 +69,7 @@ pub const VK_STRUCTURE_TYPE_APPLICATION_INFO = c.VK_STRUCTURE_TYPE_APPLICATION_I
 pub const VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
 pub const VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 pub const VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 pub const VK_QUEUE_GRAPHICS_BIT = c.VK_QUEUE_GRAPHICS_BIT;
@@ -788,6 +790,20 @@ pub fn cmdDrawIndirect(
 ) void {
     if (c.vkCmdDrawIndirect) |fn_ptr| {
         fn_ptr(command_buffer, buffer, offset, draw_count, stride);
+    }
+}
+
+pub fn cmdDrawIndirectCount(
+    command_buffer: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: VkDeviceSize,
+    count_buffer: VkBuffer,
+    count_buffer_offset: VkDeviceSize,
+    max_draw_count: u32,
+    stride: u32,
+) void {
+    if (c.vkCmdDrawIndirectCount) |fn_ptr| {
+        fn_ptr(command_buffer, buffer, offset, count_buffer, count_buffer_offset, max_draw_count, stride);
     }
 }
 

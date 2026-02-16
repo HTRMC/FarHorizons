@@ -55,6 +55,8 @@ pub const VulkanRenderer = struct {
     graphics_pipeline: vk.VkPipeline,
     indirect_buffer: vk.VkBuffer,
     indirect_buffer_memory: vk.VkDeviceMemory,
+    indirect_count_buffer: vk.VkBuffer,
+    indirect_count_buffer_memory: vk.VkDeviceMemory,
     command_pool: vk.VkCommandPool,
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
@@ -122,6 +124,8 @@ pub const VulkanRenderer = struct {
             .graphics_pipeline = undefined,
             .indirect_buffer = undefined,
             .indirect_buffer_memory = undefined,
+            .indirect_count_buffer = undefined,
+            .indirect_count_buffer_memory = undefined,
             .command_pool = undefined,
             .command_buffers = undefined,
             .image_available_semaphores = undefined,
@@ -161,6 +165,8 @@ pub const VulkanRenderer = struct {
 
         vk.destroyBuffer(self.device, self.indirect_buffer, null);
         vk.freeMemory(self.device, self.indirect_buffer_memory, null);
+        vk.destroyBuffer(self.device, self.indirect_count_buffer, null);
+        vk.freeMemory(self.device, self.indirect_count_buffer_memory, null);
 
         vk.destroyPipeline(self.device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(self.device, self.pipeline_layout, null);
@@ -282,7 +288,15 @@ pub const VulkanRenderer = struct {
         vk.cmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
 
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
-        vk.cmdDrawIndirect(command_buffer, self.indirect_buffer, 0, 1, @sizeOf(vk.VkDrawIndirectCommand));
+        vk.cmdDrawIndirectCount(
+            command_buffer,
+            self.indirect_buffer,
+            0,
+            self.indirect_count_buffer,
+            0,
+            1,
+            @sizeOf(vk.VkDrawIndirectCommand),
+        );
 
         vk.cmdEndRenderPass(command_buffer);
 
@@ -471,9 +485,13 @@ pub const VulkanRenderer = struct {
 
         const device_extensions = [_][*:0]const u8{vk.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
+        var vulkan12_features: vk.VkPhysicalDeviceVulkan12Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan12Features);
+        vulkan12_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+        vulkan12_features.drawIndirectCount = vk.VK_TRUE;
+
         const create_info = vk.VkDeviceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pNext = null,
+            .pNext = &vulkan12_features,
             .flags = 0,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queue_create_info,
@@ -927,7 +945,47 @@ pub const VulkanRenderer = struct {
 
         vk.unmapMemory(self.device, self.indirect_buffer_memory);
 
-        std.log.info("Indirect draw buffer created", .{});
+        const count_buffer_size = @sizeOf(u32);
+        const count_buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = count_buffer_size,
+            .usage = vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        self.indirect_count_buffer = try vk.createBuffer(self.device, &count_buffer_info, null);
+
+        var count_mem_requirements: vk.VkMemoryRequirements = undefined;
+        vk.getBufferMemoryRequirements(self.device, self.indirect_count_buffer, &count_mem_requirements);
+
+        const count_memory_type_index = try self.findMemoryType(
+            count_mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        );
+
+        const count_alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = count_mem_requirements.size,
+            .memoryTypeIndex = count_memory_type_index,
+        };
+
+        self.indirect_count_buffer_memory = try vk.allocateMemory(self.device, &count_alloc_info, null);
+        try vk.bindBufferMemory(self.device, self.indirect_count_buffer, self.indirect_count_buffer_memory, 0);
+
+        var count_data: ?*anyopaque = null;
+        try vk.mapMemory(self.device, self.indirect_count_buffer_memory, 0, count_buffer_size, 0, &count_data);
+
+        const count_ptr: *u32 = @ptrCast(@alignCast(count_data));
+        count_ptr.* = 1;
+
+        vk.unmapMemory(self.device, self.indirect_count_buffer_memory);
+
+        std.log.info("Indirect draw buffers created (count buffer for GPU-driven rendering)", .{});
     }
 
     fn findMemoryType(self: *VulkanRenderer, type_filter: u32, properties: c_uint) !u32 {
