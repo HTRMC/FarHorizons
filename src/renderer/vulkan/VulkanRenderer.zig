@@ -56,7 +56,7 @@ pub const VulkanRenderer = struct {
 
         try vk.initialize();
 
-        const instance_result = try createInstance();
+        const instance_result = try createInstance(allocator);
         const instance = instance_result.instance;
         const validation_enabled = instance_result.validation_enabled;
         errdefer vk.destroyInstance(instance, null);
@@ -151,7 +151,7 @@ pub const VulkanRenderer = struct {
         validation_enabled: bool,
     };
 
-    fn createInstance() !InstanceResult {
+    fn createInstance(allocator: std.mem.Allocator) !InstanceResult {
         const app_info = vk.VkApplicationInfo{
             .sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
             .pNext = null,
@@ -164,18 +164,14 @@ pub const VulkanRenderer = struct {
 
         const window_extensions = Window.getRequiredExtensions();
 
-        // Add debug utils extension in debug builds
-        var extensions: [16][*:0]const u8 = undefined;
-        var extension_count: u32 = 0;
+        // Collect all required extensions
+        var extensions: std.ArrayList([*:0]const u8) = .empty;
+        defer extensions.deinit(allocator);
 
-        for (window_extensions.names[0..window_extensions.count]) |ext| {
-            extensions[extension_count] = ext;
-            extension_count += 1;
-        }
+        try extensions.appendSlice(allocator, window_extensions.names[0..window_extensions.count]);
 
         if (enable_validation_layers) {
-            extensions[extension_count] = vk.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-            extension_count += 1;
+            try extensions.append(allocator, vk.VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
         }
 
         const create_info = vk.VkInstanceCreateInfo{
@@ -185,8 +181,8 @@ pub const VulkanRenderer = struct {
             .pApplicationInfo = &app_info,
             .enabledLayerCount = if (enable_validation_layers) validation_layers.len else 0,
             .ppEnabledLayerNames = if (enable_validation_layers) &validation_layers else null,
-            .enabledExtensionCount = extension_count,
-            .ppEnabledExtensionNames = &extensions,
+            .enabledExtensionCount = @intCast(extensions.items.len),
+            .ppEnabledExtensionNames = extensions.items.ptr,
         };
 
         // Try to create instance with validation layers
