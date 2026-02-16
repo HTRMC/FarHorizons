@@ -126,6 +126,9 @@ pub const VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT = c.VK_MEMORY_PROPERTY_DEVICE_LOCA
 pub const VkShaderModule = c.VkShaderModule;
 pub const VkPipeline = c.VkPipeline;
 pub const VkPipelineLayout = c.VkPipelineLayout;
+pub const VkDescriptorSetLayout = c.VkDescriptorSetLayout;
+pub const VkDescriptorPool = c.VkDescriptorPool;
+pub const VkDescriptorSet = c.VkDescriptorSet;
 pub const VkShaderModuleCreateInfo = c.VkShaderModuleCreateInfo;
 pub const VkPipelineShaderStageCreateInfo = c.VkPipelineShaderStageCreateInfo;
 pub const VkPipelineVertexInputStateCreateInfo = c.VkPipelineVertexInputStateCreateInfo;
@@ -136,7 +139,16 @@ pub const VkPipelineMultisampleStateCreateInfo = c.VkPipelineMultisampleStateCre
 pub const VkPipelineColorBlendAttachmentState = c.VkPipelineColorBlendAttachmentState;
 pub const VkPipelineColorBlendStateCreateInfo = c.VkPipelineColorBlendStateCreateInfo;
 pub const VkPipelineLayoutCreateInfo = c.VkPipelineLayoutCreateInfo;
+pub const VkPushConstantRange = c.VkPushConstantRange;
 pub const VkGraphicsPipelineCreateInfo = c.VkGraphicsPipelineCreateInfo;
+pub const VkComputePipelineCreateInfo = c.VkComputePipelineCreateInfo;
+pub const VkDescriptorSetLayoutBinding = c.VkDescriptorSetLayoutBinding;
+pub const VkDescriptorSetLayoutCreateInfo = c.VkDescriptorSetLayoutCreateInfo;
+pub const VkDescriptorPoolSize = c.VkDescriptorPoolSize;
+pub const VkDescriptorPoolCreateInfo = c.VkDescriptorPoolCreateInfo;
+pub const VkDescriptorSetAllocateInfo = c.VkDescriptorSetAllocateInfo;
+pub const VkWriteDescriptorSet = c.VkWriteDescriptorSet;
+pub const VkDescriptorBufferInfo = c.VkDescriptorBufferInfo;
 pub const VkViewport = c.VkViewport;
 pub const VkShaderStageFlagBits = c.VkShaderStageFlagBits;
 
@@ -151,8 +163,16 @@ pub const VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO = c.VK_STRUCT
 pub const VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO = c.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+pub const VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
 pub const VK_SHADER_STAGE_VERTEX_BIT = c.VK_SHADER_STAGE_VERTEX_BIT;
 pub const VK_SHADER_STAGE_FRAGMENT_BIT = c.VK_SHADER_STAGE_FRAGMENT_BIT;
+pub const VK_SHADER_STAGE_COMPUTE_BIT = c.VK_SHADER_STAGE_COMPUTE_BIT;
+pub const VK_DESCRIPTOR_TYPE_STORAGE_BUFFER = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+pub const VK_PIPELINE_BIND_POINT_COMPUTE = c.VK_PIPELINE_BIND_POINT_COMPUTE;
 pub const VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 pub const VK_POLYGON_MODE_FILL = c.VK_POLYGON_MODE_FILL;
 pub const VK_CULL_MODE_BACK_BIT = c.VK_CULL_MODE_BACK_BIT;
@@ -888,5 +908,123 @@ pub fn unmapMemory(
 ) void {
     if (c.vkUnmapMemory) |fn_ptr| {
         fn_ptr(device, memory);
+    }
+}
+
+pub fn createDescriptorSetLayout(
+    device: VkDevice,
+    create_info: *const VkDescriptorSetLayoutCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkDescriptorSetLayout {
+    const fn_ptr = c.vkCreateDescriptorSetLayout orelse return error.FunctionNotLoaded;
+    var descriptor_set_layout: VkDescriptorSetLayout = undefined;
+    const result = fn_ptr(device, create_info, allocator, &descriptor_set_layout);
+    try vkResultToError(result);
+    return descriptor_set_layout;
+}
+
+pub fn destroyDescriptorSetLayout(
+    device: VkDevice,
+    descriptor_set_layout: VkDescriptorSetLayout,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyDescriptorSetLayout) |fn_ptr| {
+        fn_ptr(device, descriptor_set_layout, allocator);
+    }
+}
+
+pub fn createDescriptorPool(
+    device: VkDevice,
+    create_info: *const VkDescriptorPoolCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkDescriptorPool {
+    const fn_ptr = c.vkCreateDescriptorPool orelse return error.FunctionNotLoaded;
+    var descriptor_pool: VkDescriptorPool = undefined;
+    const result = fn_ptr(device, create_info, allocator, &descriptor_pool);
+    try vkResultToError(result);
+    return descriptor_pool;
+}
+
+pub fn destroyDescriptorPool(
+    device: VkDevice,
+    descriptor_pool: VkDescriptorPool,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyDescriptorPool) |fn_ptr| {
+        fn_ptr(device, descriptor_pool, allocator);
+    }
+}
+
+pub fn allocateDescriptorSets(
+    device: VkDevice,
+    allocate_info: *const VkDescriptorSetAllocateInfo,
+    descriptor_sets: [*]VkDescriptorSet,
+) VulkanError!void {
+    const fn_ptr = c.vkAllocateDescriptorSets orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, allocate_info, descriptor_sets);
+    try vkResultToError(result);
+}
+
+pub fn updateDescriptorSets(
+    device: VkDevice,
+    descriptor_write_count: u32,
+    descriptor_writes: [*]const VkWriteDescriptorSet,
+    descriptor_copy_count: u32,
+    descriptor_copies: ?[*]const c.VkCopyDescriptorSet,
+) void {
+    if (c.vkUpdateDescriptorSets) |fn_ptr| {
+        fn_ptr(device, descriptor_write_count, descriptor_writes, descriptor_copy_count, descriptor_copies);
+    }
+}
+
+pub fn createComputePipelines(
+    device: VkDevice,
+    pipeline_cache: c.VkPipelineCache,
+    create_info_count: u32,
+    create_infos: [*]const VkComputePipelineCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+    pipelines: [*]VkPipeline,
+) VulkanError!void {
+    const fn_ptr = c.vkCreateComputePipelines orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, pipeline_cache, create_info_count, create_infos, allocator, pipelines);
+    try vkResultToError(result);
+}
+
+pub fn cmdBindDescriptorSets(
+    command_buffer: VkCommandBuffer,
+    pipeline_bind_point: c.VkPipelineBindPoint,
+    layout: VkPipelineLayout,
+    first_set: u32,
+    descriptor_set_count: u32,
+    descriptor_sets: [*]const VkDescriptorSet,
+    dynamic_offset_count: u32,
+    dynamic_offsets: ?[*]const u32,
+) void {
+    if (c.vkCmdBindDescriptorSets) |fn_ptr| {
+        fn_ptr(command_buffer, pipeline_bind_point, layout, first_set, descriptor_set_count, descriptor_sets, dynamic_offset_count, dynamic_offsets);
+    }
+}
+
+pub fn cmdDispatch(
+    command_buffer: VkCommandBuffer,
+    group_count_x: u32,
+    group_count_y: u32,
+    group_count_z: u32,
+) void {
+    if (c.vkCmdDispatch) |fn_ptr| {
+        fn_ptr(command_buffer, group_count_x, group_count_y, group_count_z);
+    }
+}
+
+pub fn cmdPushConstants(
+    command_buffer: VkCommandBuffer,
+    layout: VkPipelineLayout,
+    stage_flags: c.VkShaderStageFlags,
+    offset: u32,
+    size: u32,
+    values: *const anyopaque,
+) void {
+    if (c.vkCmdPushConstants) |fn_ptr| {
+        fn_ptr(command_buffer, layout, stage_flags, offset, size, values);
     }
 }

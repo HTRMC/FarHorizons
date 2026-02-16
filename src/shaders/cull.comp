@@ -1,0 +1,37 @@
+#version 450
+
+layout(local_size_x = 64) in;
+
+struct DrawCommand {
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+};
+
+layout(set = 0, binding = 0) buffer DrawCommands {
+    DrawCommand commands[];
+} drawCommands;
+
+layout(set = 0, binding = 1) buffer DrawCount {
+    uint count;
+} drawCount;
+
+layout(push_constant) uniform PushConstants {
+    uint objectCount;
+} pc;
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+
+    if (index >= pc.objectCount) {
+        return;
+    }
+
+    uint outIndex = atomicAdd(drawCount.count, 1);
+
+    drawCommands.commands[outIndex].vertexCount = 3;
+    drawCommands.commands[outIndex].instanceCount = 1;
+    drawCommands.commands[outIndex].firstVertex = 0;
+    drawCommands.commands[outIndex].firstInstance = 0;
+}
