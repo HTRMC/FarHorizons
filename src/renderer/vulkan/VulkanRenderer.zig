@@ -35,7 +35,7 @@ pub const VulkanRenderer = struct {
     allocator: std.mem.Allocator,
     window: *const Window,
     instance: vk.VkInstance,
-    debug_messenger: vk.VkDebugUtilsMessengerEXT,
+    debug_messenger: ?vk.VkDebugUtilsMessengerEXT,
     validation_enabled: bool,
     physical_device: vk.VkPhysicalDevice,
     device: vk.VkDevice,
@@ -89,7 +89,7 @@ pub const VulkanRenderer = struct {
             .allocator = allocator,
             .window = window,
             .instance = instance,
-            .debug_messenger = debug_messenger orelse undefined,
+            .debug_messenger = debug_messenger,
             .validation_enabled = validation_enabled,
             .physical_device = device_info.physical_device,
             .device = device,
@@ -125,8 +125,8 @@ pub const VulkanRenderer = struct {
         vk.destroySurfaceKHR(self.instance, self.surface, null);
         vk.destroyDevice(self.device, null);
 
-        if (self.validation_enabled) {
-            vk.destroyDebugUtilsMessengerEXT(self.instance, self.debug_messenger, null);
+        if (self.debug_messenger) |messenger| {
+            vk.destroyDebugUtilsMessengerEXT(self.instance, messenger, null);
         }
 
         vk.destroyInstance(self.instance, null);
