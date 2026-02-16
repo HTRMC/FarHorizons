@@ -102,6 +102,49 @@ pub const VK_FENCE_CREATE_SIGNALED_BIT = c.VK_FENCE_CREATE_SIGNALED_BIT;
 pub const VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 pub const VK_SUBPASS_CONTENTS_INLINE = c.VK_SUBPASS_CONTENTS_INLINE;
 
+// Shader and pipeline types
+pub const VkShaderModule = c.VkShaderModule;
+pub const VkPipeline = c.VkPipeline;
+pub const VkPipelineLayout = c.VkPipelineLayout;
+pub const VkShaderModuleCreateInfo = c.VkShaderModuleCreateInfo;
+pub const VkPipelineShaderStageCreateInfo = c.VkPipelineShaderStageCreateInfo;
+pub const VkPipelineVertexInputStateCreateInfo = c.VkPipelineVertexInputStateCreateInfo;
+pub const VkPipelineInputAssemblyStateCreateInfo = c.VkPipelineInputAssemblyStateCreateInfo;
+pub const VkPipelineViewportStateCreateInfo = c.VkPipelineViewportStateCreateInfo;
+pub const VkPipelineRasterizationStateCreateInfo = c.VkPipelineRasterizationStateCreateInfo;
+pub const VkPipelineMultisampleStateCreateInfo = c.VkPipelineMultisampleStateCreateInfo;
+pub const VkPipelineColorBlendAttachmentState = c.VkPipelineColorBlendAttachmentState;
+pub const VkPipelineColorBlendStateCreateInfo = c.VkPipelineColorBlendStateCreateInfo;
+pub const VkPipelineLayoutCreateInfo = c.VkPipelineLayoutCreateInfo;
+pub const VkGraphicsPipelineCreateInfo = c.VkGraphicsPipelineCreateInfo;
+pub const VkViewport = c.VkViewport;
+pub const VkShaderStageFlagBits = c.VkShaderStageFlagBits;
+
+// Shader and pipeline constants
+pub const VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+pub const VK_SHADER_STAGE_VERTEX_BIT = c.VK_SHADER_STAGE_VERTEX_BIT;
+pub const VK_SHADER_STAGE_FRAGMENT_BIT = c.VK_SHADER_STAGE_FRAGMENT_BIT;
+pub const VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+pub const VK_POLYGON_MODE_FILL = c.VK_POLYGON_MODE_FILL;
+pub const VK_CULL_MODE_BACK_BIT = c.VK_CULL_MODE_BACK_BIT;
+pub const VK_FRONT_FACE_CLOCKWISE = c.VK_FRONT_FACE_CLOCKWISE;
+pub const VK_BLEND_FACTOR_ONE = c.VK_BLEND_FACTOR_ONE;
+pub const VK_BLEND_FACTOR_ZERO = c.VK_BLEND_FACTOR_ZERO;
+pub const VK_BLEND_OP_ADD = c.VK_BLEND_OP_ADD;
+pub const VK_COLOR_COMPONENT_R_BIT = c.VK_COLOR_COMPONENT_R_BIT;
+pub const VK_COLOR_COMPONENT_G_BIT = c.VK_COLOR_COMPONENT_G_BIT;
+pub const VK_COLOR_COMPONENT_B_BIT = c.VK_COLOR_COMPONENT_B_BIT;
+pub const VK_COLOR_COMPONENT_A_BIT = c.VK_COLOR_COMPONENT_A_BIT;
+
 // Debug utils types
 pub const VkDebugUtilsMessengerEXT = c.VkDebugUtilsMessengerEXT;
 pub const VkDebugUtilsMessengerCreateInfoEXT = c.VkDebugUtilsMessengerCreateInfoEXT;
@@ -626,5 +669,94 @@ pub fn cmdEndRenderPass(
 ) void {
     if (c.vkCmdEndRenderPass) |fn_ptr| {
         fn_ptr(command_buffer);
+    }
+}
+
+pub fn cmdDraw(
+    command_buffer: VkCommandBuffer,
+    vertex_count: u32,
+    instance_count: u32,
+    first_vertex: u32,
+    first_instance: u32,
+) void {
+    if (c.vkCmdDraw) |fn_ptr| {
+        fn_ptr(command_buffer, vertex_count, instance_count, first_vertex, first_instance);
+    }
+}
+
+pub fn createShaderModule(
+    device: VkDevice,
+    create_info: *const VkShaderModuleCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkShaderModule {
+    const fn_ptr = c.vkCreateShaderModule orelse return error.FunctionNotLoaded;
+    var shader_module: VkShaderModule = undefined;
+    const result = fn_ptr(device, create_info, allocator, &shader_module);
+    try vkResultToError(result);
+    return shader_module;
+}
+
+pub fn destroyShaderModule(
+    device: VkDevice,
+    shader_module: VkShaderModule,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyShaderModule) |fn_ptr| {
+        fn_ptr(device, shader_module, allocator);
+    }
+}
+
+pub fn createPipelineLayout(
+    device: VkDevice,
+    create_info: *const VkPipelineLayoutCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkPipelineLayout {
+    const fn_ptr = c.vkCreatePipelineLayout orelse return error.FunctionNotLoaded;
+    var pipeline_layout: VkPipelineLayout = undefined;
+    const result = fn_ptr(device, create_info, allocator, &pipeline_layout);
+    try vkResultToError(result);
+    return pipeline_layout;
+}
+
+pub fn destroyPipelineLayout(
+    device: VkDevice,
+    pipeline_layout: VkPipelineLayout,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyPipelineLayout) |fn_ptr| {
+        fn_ptr(device, pipeline_layout, allocator);
+    }
+}
+
+pub fn createGraphicsPipelines(
+    device: VkDevice,
+    pipeline_cache: c.VkPipelineCache,
+    create_info_count: u32,
+    create_infos: [*]const VkGraphicsPipelineCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+    pipelines: [*]VkPipeline,
+) VulkanError!void {
+    const fn_ptr = c.vkCreateGraphicsPipelines orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, pipeline_cache, create_info_count, create_infos, allocator, pipelines);
+    try vkResultToError(result);
+}
+
+pub fn destroyPipeline(
+    device: VkDevice,
+    pipeline: VkPipeline,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyPipeline) |fn_ptr| {
+        fn_ptr(device, pipeline, allocator);
+    }
+}
+
+pub fn cmdBindPipeline(
+    command_buffer: VkCommandBuffer,
+    pipeline_bind_point: c.VkPipelineBindPoint,
+    pipeline: VkPipeline,
+) void {
+    if (c.vkCmdBindPipeline) |fn_ptr| {
+        fn_ptr(command_buffer, pipeline_bind_point, pipeline);
     }
 }

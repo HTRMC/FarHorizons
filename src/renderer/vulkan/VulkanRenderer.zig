@@ -2,6 +2,7 @@ const std = @import("std");
 const Renderer = @import("../Renderer.zig").Renderer;
 const vk = @import("../../platform/volk.zig");
 const Window = @import("../../platform/Window.zig").Window;
+const ShaderCompiler = @import("ShaderCompiler.zig");
 
 const enable_validation_layers = @import("builtin").mode == .Debug;
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
@@ -50,6 +51,8 @@ pub const VulkanRenderer = struct {
     swapchain_extent: vk.VkExtent2D,
     render_pass: vk.VkRenderPass,
     framebuffers: std.ArrayList(vk.VkFramebuffer),
+    pipeline_layout: vk.VkPipelineLayout,
+    graphics_pipeline: vk.VkPipeline,
     command_pool: vk.VkCommandPool,
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
@@ -113,6 +116,8 @@ pub const VulkanRenderer = struct {
             .swapchain_extent = .{ .width = 0, .height = 0 },
             .render_pass = null,
             .framebuffers = framebuffers,
+            .pipeline_layout = undefined,
+            .graphics_pipeline = undefined,
             .command_pool = undefined,
             .command_buffers = undefined,
             .image_available_semaphores = undefined,
@@ -123,6 +128,7 @@ pub const VulkanRenderer = struct {
         };
 
         try self.createSwapchain();
+        try self.createGraphicsPipeline();
         try self.createCommandPool();
         try self.createCommandBuffers();
         try self.createSyncObjects();
@@ -147,6 +153,9 @@ pub const VulkanRenderer = struct {
         self.render_finished_semaphores.deinit(self.allocator);
 
         vk.destroyCommandPool(self.device, self.command_pool, null);
+
+        vk.destroyPipeline(self.device, self.graphics_pipeline, null);
+        vk.destroyPipelineLayout(self.device, self.pipeline_layout, null);
 
         self.cleanupSwapchain();
         self.swapchain_images.deinit(self.allocator);
@@ -264,7 +273,8 @@ pub const VulkanRenderer = struct {
 
         vk.cmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
 
-        // Draw commands will go here
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+        vk.cmdDraw(command_buffer, 3, 1, 0, 0);
 
         vk.cmdEndRenderPass(command_buffer);
 
@@ -670,6 +680,194 @@ pub const VulkanRenderer = struct {
         if (self.swapchain != null) {
             vk.destroySwapchainKHR(self.device, self.swapchain, null);
         }
+    }
+
+    fn createGraphicsPipeline(self: *VulkanRenderer) !void {
+        const vert_src = @embedFile("../../shaders/test.vert");
+        const frag_src = @embedFile("../../shaders/test.frag");
+
+        const vert_spirv = try ShaderCompiler.compile(self.allocator, vert_src, "test.vert", .vertex);
+        defer self.allocator.free(vert_spirv);
+
+        const frag_spirv = try ShaderCompiler.compile(self.allocator, frag_src, "test.frag", .fragment);
+        defer self.allocator.free(frag_spirv);
+
+        const vert_module_info = vk.VkShaderModuleCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = vert_spirv.len,
+            .pCode = @ptrCast(@alignCast(vert_spirv.ptr)),
+        };
+
+        const frag_module_info = vk.VkShaderModuleCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = frag_spirv.len,
+            .pCode = @ptrCast(@alignCast(frag_spirv.ptr)),
+        };
+
+        const vert_module = try vk.createShaderModule(self.device, &vert_module_info, null);
+        defer vk.destroyShaderModule(self.device, vert_module, null);
+
+        const frag_module = try vk.createShaderModule(self.device, &frag_module_info, null);
+        defer vk.destroyShaderModule(self.device, frag_module, null);
+
+        const vert_stage_info = vk.VkPipelineShaderStageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = vk.VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vert_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        };
+
+        const frag_stage_info = vk.VkPipelineShaderStageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = frag_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        };
+
+        const shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{ vert_stage_info, frag_stage_info };
+
+        const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .vertexBindingDescriptionCount = 0,
+            .pVertexBindingDescriptions = null,
+            .vertexAttributeDescriptionCount = 0,
+            .pVertexAttributeDescriptions = null,
+        };
+
+        const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .topology = vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+            .primitiveRestartEnable = vk.VK_FALSE,
+        };
+
+        const viewport = vk.VkViewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapchain_extent.width),
+            .height = @floatFromInt(self.swapchain_extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        };
+
+        const scissor = vk.VkRect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        };
+
+        const viewport_state = vk.VkPipelineViewportStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = &viewport,
+            .scissorCount = 1,
+            .pScissors = &scissor,
+        };
+
+        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthClampEnable = vk.VK_FALSE,
+            .rasterizerDiscardEnable = vk.VK_FALSE,
+            .polygonMode = vk.VK_POLYGON_MODE_FILL,
+            .cullMode = vk.VK_CULL_MODE_BACK_BIT,
+            .frontFace = vk.VK_FRONT_FACE_CLOCKWISE,
+            .depthBiasEnable = vk.VK_FALSE,
+            .depthBiasConstantFactor = 0.0,
+            .depthBiasClamp = 0.0,
+            .depthBiasSlopeFactor = 0.0,
+            .lineWidth = 1.0,
+        };
+
+        const multisampling = vk.VkPipelineMultisampleStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = vk.VK_FALSE,
+            .minSampleShading = 1.0,
+            .pSampleMask = null,
+            .alphaToCoverageEnable = vk.VK_FALSE,
+            .alphaToOneEnable = vk.VK_FALSE,
+        };
+
+        const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_FALSE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        const color_blending = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = 0,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 0,
+            .pSetLayouts = null,
+            .pushConstantRangeCount = 0,
+            .pPushConstantRanges = null,
+        };
+
+        self.pipeline_layout = try vk.createPipelineLayout(self.device, &pipeline_layout_info, null);
+
+        const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = null,
+            .pColorBlendState = &color_blending,
+            .pDynamicState = null,
+            .layout = self.pipeline_layout,
+            .renderPass = self.render_pass,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        const pipeline_infos = &[_]vk.VkGraphicsPipelineCreateInfo{pipeline_info};
+        var pipelines: [1]vk.VkPipeline = undefined;
+        try vk.createGraphicsPipelines(self.device, null, 1, pipeline_infos, null, &pipelines);
+        self.graphics_pipeline = pipelines[0];
+
+        std.log.info("Graphics pipeline created", .{});
     }
 
     fn createDebugMessenger(instance: vk.VkInstance) !vk.VkDebugUtilsMessengerEXT {

@@ -35,9 +35,12 @@ pub fn compile(
     const filename_z = try allocator.dupeZ(u8, filename);
     defer allocator.free(filename_z);
 
+    const source_z = try allocator.dupeZ(u8, source);
+    defer allocator.free(source_z);
+
     const result = shaderc.compile_into_spv(
         compiler,
-        source.ptr,
+        source_z.ptr,
         source.len,
         kind.toShaderc(),
         filename_z.ptr,
