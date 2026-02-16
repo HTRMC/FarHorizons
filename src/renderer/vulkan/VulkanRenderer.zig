@@ -53,6 +53,11 @@ pub const VulkanRenderer = struct {
     framebuffers: std.ArrayList(vk.VkFramebuffer),
     pipeline_layout: vk.VkPipelineLayout,
     graphics_pipeline: vk.VkPipeline,
+    descriptor_set_layout: vk.VkDescriptorSetLayout,
+    descriptor_pool: vk.VkDescriptorPool,
+    descriptor_set: vk.VkDescriptorSet,
+    compute_pipeline_layout: vk.VkPipelineLayout,
+    compute_pipeline: vk.VkPipeline,
     indirect_buffer: vk.VkBuffer,
     indirect_buffer_memory: vk.VkDeviceMemory,
     indirect_count_buffer: vk.VkBuffer,
@@ -122,6 +127,11 @@ pub const VulkanRenderer = struct {
             .framebuffers = framebuffers,
             .pipeline_layout = undefined,
             .graphics_pipeline = undefined,
+            .descriptor_set_layout = undefined,
+            .descriptor_pool = undefined,
+            .descriptor_set = undefined,
+            .compute_pipeline_layout = undefined,
+            .compute_pipeline = undefined,
             .indirect_buffer = undefined,
             .indirect_buffer_memory = undefined,
             .indirect_count_buffer = undefined,
@@ -138,6 +148,7 @@ pub const VulkanRenderer = struct {
         try self.createSwapchain();
         try self.createGraphicsPipeline();
         try self.createIndirectBuffer();
+        try self.createComputePipeline();
         try self.createCommandPool();
         try self.createCommandBuffers();
         try self.createSyncObjects();
@@ -162,6 +173,11 @@ pub const VulkanRenderer = struct {
         self.render_finished_semaphores.deinit(self.allocator);
 
         vk.destroyCommandPool(self.device, self.command_pool, null);
+
+        vk.destroyPipeline(self.device, self.compute_pipeline, null);
+        vk.destroyPipelineLayout(self.device, self.compute_pipeline_layout, null);
+        vk.destroyDescriptorPool(self.device, self.descriptor_pool, null);
+        vk.destroyDescriptorSetLayout(self.device, self.descriptor_set_layout, null);
 
         vk.destroyBuffer(self.device, self.indirect_buffer, null);
         vk.freeMemory(self.device, self.indirect_buffer_memory, null);
@@ -265,6 +281,36 @@ pub const VulkanRenderer = struct {
         };
 
         try vk.beginCommandBuffer(command_buffer, &begin_info);
+
+        var data: ?*anyopaque = null;
+        try vk.mapMemory(self.device, self.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
+        const count_ptr: *u32 = @ptrCast(@alignCast(data));
+        count_ptr.* = 0;
+        vk.unmapMemory(self.device, self.indirect_count_buffer_memory);
+
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.compute_pipeline);
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+            self.compute_pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.descriptor_set},
+            0,
+            null,
+        );
+
+        const object_count: u32 = 1;
+        vk.cmdPushConstants(
+            command_buffer,
+            self.compute_pipeline_layout,
+            vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            @sizeOf(u32),
+            &object_count,
+        );
+
+        vk.cmdDispatch(command_buffer, 1, 1, 1);
 
         const clear_color = vk.VkClearValue{
             .color = .{
@@ -904,7 +950,7 @@ pub const VulkanRenderer = struct {
             .pNext = null,
             .flags = 0,
             .size = buffer_size,
-            .usage = vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+            .usage = vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
             .queueFamilyIndexCount = 0,
             .pQueueFamilyIndices = null,
@@ -986,6 +1032,164 @@ pub const VulkanRenderer = struct {
         vk.unmapMemory(self.device, self.indirect_count_buffer_memory);
 
         std.log.info("Indirect draw buffers created (count buffer for GPU-driven rendering)", .{});
+    }
+
+    fn createComputePipeline(self: *VulkanRenderer) !void {
+        const bindings = [_]vk.VkDescriptorSetLayoutBinding{
+            .{
+                .binding = 0,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = null,
+            },
+        };
+
+        const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .bindingCount = bindings.len,
+            .pBindings = &bindings,
+        };
+
+        self.descriptor_set_layout = try vk.createDescriptorSetLayout(self.device, &layout_info, null);
+
+        const pool_size = vk.VkDescriptorPoolSize{
+            .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 2,
+        };
+
+        const pool_info = vk.VkDescriptorPoolCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .maxSets = 1,
+            .poolSizeCount = 1,
+            .pPoolSizes = &pool_size,
+        };
+
+        self.descriptor_pool = try vk.createDescriptorPool(self.device, &pool_info, null);
+
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &self.descriptor_set_layout,
+        };
+
+        var descriptor_sets: [1]vk.VkDescriptorSet = undefined;
+        try vk.allocateDescriptorSets(self.device, &alloc_info, &descriptor_sets);
+        self.descriptor_set = descriptor_sets[0];
+
+        const draw_buffer_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.indirect_buffer,
+            .offset = 0,
+            .range = @sizeOf(vk.VkDrawIndirectCommand),
+        };
+
+        const count_buffer_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.indirect_count_buffer,
+            .offset = 0,
+            .range = @sizeOf(u32),
+        };
+
+        const descriptor_writes = [_]vk.VkWriteDescriptorSet{
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &draw_buffer_info,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &count_buffer_info,
+                .pTexelBufferView = null,
+            },
+        };
+
+        vk.updateDescriptorSets(self.device, descriptor_writes.len, &descriptor_writes, 0, null);
+
+        const comp_src = @embedFile("../../shaders/cull.comp");
+        const comp_spirv = try ShaderCompiler.compile(self.allocator, comp_src, "cull.comp", .compute);
+        defer self.allocator.free(comp_spirv);
+
+        const comp_module_info = vk.VkShaderModuleCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = comp_spirv.len,
+            .pCode = @ptrCast(@alignCast(comp_spirv.ptr)),
+        };
+
+        const comp_module = try vk.createShaderModule(self.device, &comp_module_info, null);
+        defer vk.destroyShaderModule(self.device, comp_module, null);
+
+        const push_constant_range = vk.VkPushConstantRange{
+            .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = @sizeOf(u32),
+        };
+
+        const compute_layout_info = vk.VkPipelineLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &self.descriptor_set_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constant_range,
+        };
+
+        self.compute_pipeline_layout = try vk.createPipelineLayout(self.device, &compute_layout_info, null);
+
+        const compute_stage_info = vk.VkPipelineShaderStageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = comp_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        };
+
+        const compute_pipeline_info = vk.VkComputePipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = compute_stage_info,
+            .layout = self.compute_pipeline_layout,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        const pipeline_infos = &[_]vk.VkComputePipelineCreateInfo{compute_pipeline_info};
+        var pipelines: [1]vk.VkPipeline = undefined;
+        try vk.createComputePipelines(self.device, null, 1, pipeline_infos, null, &pipelines);
+        self.compute_pipeline = pipelines[0];
+
+        std.log.info("Compute pipeline created", .{});
     }
 
     fn findMemoryType(self: *VulkanRenderer, type_filter: u32, properties: c_uint) !u32 {

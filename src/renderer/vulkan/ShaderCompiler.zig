@@ -10,7 +10,7 @@ pub const ShaderKind = enum {
         return switch (self) {
             .vertex => shaderc.shaderc_vertex_shader,
             .fragment => shaderc.shaderc_fragment_shader,
-            .compute => @panic("Compute shaders not yet supported"),
+            .compute => shaderc.shaderc_compute_shader,
         };
     }
 };

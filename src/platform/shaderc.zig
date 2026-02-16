@@ -8,6 +8,7 @@ pub const shaderc_compilation_status = c.shaderc_compilation_status;
 
 pub const shaderc_vertex_shader = c.shaderc_vertex_shader;
 pub const shaderc_fragment_shader = c.shaderc_fragment_shader;
+pub const shaderc_compute_shader = c.shaderc_compute_shader;
 pub const shaderc_compilation_status_success = c.shaderc_compilation_status_success;
 
 pub fn compiler_initialize() shaderc_compiler_t {
