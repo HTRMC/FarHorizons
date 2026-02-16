@@ -34,6 +34,22 @@ pub const VkAttachmentDescription = c.VkAttachmentDescription;
 pub const VkAttachmentReference = c.VkAttachmentReference;
 pub const VkSubpassDescription = c.VkSubpassDescription;
 pub const VkSubpassDependency = c.VkSubpassDependency;
+pub const VkCommandPool = c.VkCommandPool;
+pub const VkCommandBuffer = c.VkCommandBuffer;
+pub const VkSemaphore = c.VkSemaphore;
+pub const VkFence = c.VkFence;
+pub const VkCommandPoolCreateInfo = c.VkCommandPoolCreateInfo;
+pub const VkCommandBufferAllocateInfo = c.VkCommandBufferAllocateInfo;
+pub const VkSemaphoreCreateInfo = c.VkSemaphoreCreateInfo;
+pub const VkFenceCreateInfo = c.VkFenceCreateInfo;
+pub const VkSubmitInfo = c.VkSubmitInfo;
+pub const VkPresentInfoKHR = c.VkPresentInfoKHR;
+pub const VkCommandBufferBeginInfo = c.VkCommandBufferBeginInfo;
+pub const VkRenderPassBeginInfo = c.VkRenderPassBeginInfo;
+pub const VkClearValue = c.VkClearValue;
+pub const VkClearColorValue = c.VkClearColorValue;
+pub const VkRect2D = c.VkRect2D;
+pub const VkOffset2D = c.VkOffset2D;
 
 // Re-export constants
 pub const VK_SUCCESS = c.VK_SUCCESS;
@@ -72,6 +88,19 @@ pub const VK_SUBPASS_EXTERNAL = c.VK_SUBPASS_EXTERNAL;
 pub const VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 pub const VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 pub const VK_SAMPLE_COUNT_1_BIT = c.VK_SAMPLE_COUNT_1_BIT;
+pub const VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+pub const VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_FENCE_CREATE_INFO = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_SUBMIT_INFO = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+pub const VK_STRUCTURE_TYPE_PRESENT_INFO_KHR = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+pub const VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+pub const VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+pub const VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+pub const VK_COMMAND_BUFFER_LEVEL_PRIMARY = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+pub const VK_FENCE_CREATE_SIGNALED_BIT = c.VK_FENCE_CREATE_SIGNALED_BIT;
+pub const VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+pub const VK_SUBPASS_CONTENTS_INLINE = c.VK_SUBPASS_CONTENTS_INLINE;
 
 // Debug utils types
 pub const VkDebugUtilsMessengerEXT = c.VkDebugUtilsMessengerEXT;
@@ -431,5 +460,171 @@ pub fn destroyFramebuffer(
 ) void {
     if (c.vkDestroyFramebuffer) |fn_ptr| {
         fn_ptr(device, framebuffer, allocator);
+    }
+}
+
+pub fn createCommandPool(
+    device: VkDevice,
+    create_info: *const VkCommandPoolCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkCommandPool {
+    const fn_ptr = c.vkCreateCommandPool orelse return error.FunctionNotLoaded;
+    var command_pool: VkCommandPool = undefined;
+    const result = fn_ptr(device, create_info, allocator, &command_pool);
+    try vkResultToError(result);
+    return command_pool;
+}
+
+pub fn destroyCommandPool(
+    device: VkDevice,
+    command_pool: VkCommandPool,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyCommandPool) |fn_ptr| {
+        fn_ptr(device, command_pool, allocator);
+    }
+}
+
+pub fn allocateCommandBuffers(
+    device: VkDevice,
+    allocate_info: *const VkCommandBufferAllocateInfo,
+    command_buffers: [*]VkCommandBuffer,
+) VulkanError!void {
+    const fn_ptr = c.vkAllocateCommandBuffers orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, allocate_info, command_buffers);
+    try vkResultToError(result);
+}
+
+pub fn createSemaphore(
+    device: VkDevice,
+    create_info: *const VkSemaphoreCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkSemaphore {
+    const fn_ptr = c.vkCreateSemaphore orelse return error.FunctionNotLoaded;
+    var semaphore: VkSemaphore = undefined;
+    const result = fn_ptr(device, create_info, allocator, &semaphore);
+    try vkResultToError(result);
+    return semaphore;
+}
+
+pub fn destroySemaphore(
+    device: VkDevice,
+    semaphore: VkSemaphore,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroySemaphore) |fn_ptr| {
+        fn_ptr(device, semaphore, allocator);
+    }
+}
+
+pub fn createFence(
+    device: VkDevice,
+    create_info: *const VkFenceCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkFence {
+    const fn_ptr = c.vkCreateFence orelse return error.FunctionNotLoaded;
+    var fence: VkFence = undefined;
+    const result = fn_ptr(device, create_info, allocator, &fence);
+    try vkResultToError(result);
+    return fence;
+}
+
+pub fn destroyFence(
+    device: VkDevice,
+    fence: VkFence,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyFence) |fn_ptr| {
+        fn_ptr(device, fence, allocator);
+    }
+}
+
+pub fn waitForFences(
+    device: VkDevice,
+    fence_count: u32,
+    fences: [*]const VkFence,
+    wait_all: VkBool32,
+    timeout: u64,
+) VulkanError!void {
+    const fn_ptr = c.vkWaitForFences orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, fence_count, fences, wait_all, timeout);
+    try vkResultToError(result);
+}
+
+pub fn resetFences(
+    device: VkDevice,
+    fence_count: u32,
+    fences: [*]const VkFence,
+) VulkanError!void {
+    const fn_ptr = c.vkResetFences orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, fence_count, fences);
+    try vkResultToError(result);
+}
+
+pub fn acquireNextImageKHR(
+    device: VkDevice,
+    swapchain: VkSwapchainKHR,
+    timeout: u64,
+    semaphore: VkSemaphore,
+    fence: VkFence,
+    image_index: *u32,
+) VulkanError!void {
+    const fn_ptr = c.vkAcquireNextImageKHR orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, swapchain, timeout, semaphore, fence, image_index);
+    try vkResultToError(result);
+}
+
+pub fn queueSubmit(
+    queue: VkQueue,
+    submit_count: u32,
+    submits: ?[*]const VkSubmitInfo,
+    fence: VkFence,
+) VulkanError!void {
+    const fn_ptr = c.vkQueueSubmit orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(queue, submit_count, submits, fence);
+    try vkResultToError(result);
+}
+
+pub fn queuePresentKHR(
+    queue: VkQueue,
+    present_info: *const VkPresentInfoKHR,
+) VulkanError!void {
+    const fn_ptr = c.vkQueuePresentKHR orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(queue, present_info);
+    try vkResultToError(result);
+}
+
+pub fn beginCommandBuffer(
+    command_buffer: VkCommandBuffer,
+    begin_info: *const VkCommandBufferBeginInfo,
+) VulkanError!void {
+    const fn_ptr = c.vkBeginCommandBuffer orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(command_buffer, begin_info);
+    try vkResultToError(result);
+}
+
+pub fn endCommandBuffer(
+    command_buffer: VkCommandBuffer,
+) VulkanError!void {
+    const fn_ptr = c.vkEndCommandBuffer orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(command_buffer);
+    try vkResultToError(result);
+}
+
+pub fn cmdBeginRenderPass(
+    command_buffer: VkCommandBuffer,
+    render_pass_info: *const VkRenderPassBeginInfo,
+    contents: c.VkSubpassContents,
+) void {
+    if (c.vkCmdBeginRenderPass) |fn_ptr| {
+        fn_ptr(command_buffer, render_pass_info, contents);
+    }
+}
+
+pub fn cmdEndRenderPass(
+    command_buffer: VkCommandBuffer,
+) void {
+    if (c.vkCmdEndRenderPass) |fn_ptr| {
+        fn_ptr(command_buffer);
     }
 }
