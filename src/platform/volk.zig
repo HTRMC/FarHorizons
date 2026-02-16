@@ -47,8 +47,26 @@ pub const VK_IMAGE_VIEW_TYPE_2D = c.VK_IMAGE_VIEW_TYPE_2D;
 pub const VK_COMPONENT_SWIZZLE_IDENTITY = c.VK_COMPONENT_SWIZZLE_IDENTITY;
 pub const VK_IMAGE_ASPECT_COLOR_BIT = c.VK_IMAGE_ASPECT_COLOR_BIT;
 pub const VK_KHR_SWAPCHAIN_EXTENSION_NAME = c.VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+pub const VK_EXT_DEBUG_UTILS_EXTENSION_NAME = c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 pub const VK_MAKE_VERSION = c.VK_MAKE_VERSION;
 pub const VK_API_VERSION_1_2 = c.VK_API_VERSION_1_2;
+
+// Debug utils types
+pub const VkDebugUtilsMessengerEXT = c.VkDebugUtilsMessengerEXT;
+pub const VkDebugUtilsMessengerCreateInfoEXT = c.VkDebugUtilsMessengerCreateInfoEXT;
+pub const VkDebugUtilsMessageSeverityFlagBitsEXT = c.VkDebugUtilsMessageSeverityFlagBitsEXT;
+pub const VkDebugUtilsMessageTypeFlagsEXT = c.VkDebugUtilsMessageTypeFlagsEXT;
+pub const VkDebugUtilsMessengerCallbackDataEXT = c.VkDebugUtilsMessengerCallbackDataEXT;
+
+// Debug utils constants
+pub const VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+pub const VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT;
+pub const VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+pub const VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
+pub const VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+pub const VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
+pub const VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+pub const VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 
 // Error types
 pub const VulkanError = error{
@@ -324,5 +342,28 @@ pub fn destroyImageView(
 ) void {
     if (c.vkDestroyImageView) |fn_ptr| {
         fn_ptr(device, image_view, allocator);
+    }
+}
+
+// Debug utils functions
+pub fn createDebugUtilsMessengerEXT(
+    instance: VkInstance,
+    create_info: *const VkDebugUtilsMessengerCreateInfoEXT,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkDebugUtilsMessengerEXT {
+    const fn_ptr = c.vkCreateDebugUtilsMessengerEXT orelse return error.FunctionNotLoaded;
+    var messenger: VkDebugUtilsMessengerEXT = undefined;
+    const result = fn_ptr(instance, create_info, allocator, &messenger);
+    try vkResultToError(result);
+    return messenger;
+}
+
+pub fn destroyDebugUtilsMessengerEXT(
+    instance: VkInstance,
+    messenger: VkDebugUtilsMessengerEXT,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyDebugUtilsMessengerEXT) |fn_ptr| {
+        fn_ptr(instance, messenger, allocator);
     }
 }

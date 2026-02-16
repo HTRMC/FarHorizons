@@ -3,10 +3,40 @@ const Renderer = @import("../Renderer.zig").Renderer;
 const vk = @import("../../platform/volk.zig");
 const Window = @import("../../platform/Window.zig").Window;
 
+const enable_validation_layers = @import("builtin").mode == .Debug;
+const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
+
+fn debugCallback(
+    message_severity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
+    message_type: vk.VkDebugUtilsMessageTypeFlagsEXT,
+    callback_data: ?*const vk.VkDebugUtilsMessengerCallbackDataEXT,
+    user_data: ?*anyopaque,
+) callconv(.c) vk.VkBool32 {
+    _ = message_type;
+    _ = user_data;
+
+    const data = callback_data orelse return vk.VK_FALSE;
+    const message = std.mem.span(data.pMessage);
+
+    if (message_severity >= vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        std.log.err("[Vulkan] {s}", .{message});
+    } else if (message_severity >= vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        std.log.warn("[Vulkan] {s}", .{message});
+    } else if (message_severity >= vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
+        std.log.info("[Vulkan] {s}", .{message});
+    } else {
+        std.log.debug("[Vulkan] {s}", .{message});
+    }
+
+    return vk.VK_FALSE;
+}
+
 pub const VulkanRenderer = struct {
     allocator: std.mem.Allocator,
     window: *const Window,
     instance: vk.VkInstance,
+    debug_messenger: vk.VkDebugUtilsMessengerEXT,
+    validation_enabled: bool,
     physical_device: vk.VkPhysicalDevice,
     device: vk.VkDevice,
     graphics_queue: vk.VkQueue,
@@ -24,10 +54,18 @@ pub const VulkanRenderer = struct {
 
         try vk.initialize();
 
-        const instance = try createInstance();
+        const instance_result = try createInstance();
+        const instance = instance_result.instance;
+        const validation_enabled = instance_result.validation_enabled;
         errdefer vk.destroyInstance(instance, null);
 
         vk.loadInstance(instance);
+
+        const debug_messenger = if (validation_enabled)
+            try createDebugMessenger(instance)
+        else
+            null;
+        errdefer if (validation_enabled) vk.destroyDebugUtilsMessengerEXT(instance, debug_messenger.?, null);
 
         const surface = try window.createSurface(instance, null);
         errdefer vk.destroySurfaceKHR(instance, surface, null);
@@ -48,6 +86,8 @@ pub const VulkanRenderer = struct {
             .allocator = allocator,
             .window = window,
             .instance = instance,
+            .debug_messenger = debug_messenger orelse undefined,
+            .validation_enabled = validation_enabled,
             .physical_device = device_info.physical_device,
             .device = device,
             .graphics_queue = graphics_queue,
@@ -77,6 +117,11 @@ pub const VulkanRenderer = struct {
 
         vk.destroySurfaceKHR(self.instance, self.surface, null);
         vk.destroyDevice(self.device, null);
+
+        if (self.validation_enabled) {
+            vk.destroyDebugUtilsMessengerEXT(self.instance, self.debug_messenger, null);
+        }
+
         vk.destroyInstance(self.instance, null);
         std.log.info("VulkanRenderer destroyed", .{});
         self.allocator.destroy(self);
@@ -94,7 +139,12 @@ pub const VulkanRenderer = struct {
         _ = self;
     }
 
-    fn createInstance() !vk.VkInstance {
+    const InstanceResult = struct {
+        instance: vk.VkInstance,
+        validation_enabled: bool,
+    };
+
+    fn createInstance() !InstanceResult {
         const app_info = vk.VkApplicationInfo{
             .sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
             .pNext = null,
@@ -105,20 +155,60 @@ pub const VulkanRenderer = struct {
             .apiVersion = vk.VK_API_VERSION_1_2,
         };
 
-        const extensions = Window.getRequiredExtensions();
+        const window_extensions = Window.getRequiredExtensions();
+
+        // Add debug utils extension in debug builds
+        var extensions: [16][*:0]const u8 = undefined;
+        var extension_count: u32 = 0;
+
+        for (window_extensions.names[0..window_extensions.count]) |ext| {
+            extensions[extension_count] = ext;
+            extension_count += 1;
+        }
+
+        if (enable_validation_layers) {
+            extensions[extension_count] = vk.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+            extension_count += 1;
+        }
 
         const create_info = vk.VkInstanceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .pApplicationInfo = &app_info,
-            .enabledLayerCount = 0,
-            .ppEnabledLayerNames = null,
-            .enabledExtensionCount = extensions.count,
-            .ppEnabledExtensionNames = extensions.names,
+            .enabledLayerCount = if (enable_validation_layers) validation_layers.len else 0,
+            .ppEnabledLayerNames = if (enable_validation_layers) &validation_layers else null,
+            .enabledExtensionCount = extension_count,
+            .ppEnabledExtensionNames = &extensions,
         };
 
-        return try vk.createInstance(&create_info, null);
+        // Try to create instance with validation layers
+        if (enable_validation_layers) {
+            if (vk.createInstance(&create_info, null)) |instance| {
+                return .{ .instance = instance, .validation_enabled = true };
+            } else |err| {
+                if (err == error.LayerNotPresent) {
+                    std.log.warn("Validation layers requested but not available, continuing without them", .{});
+                    // Retry without validation layers
+                    const create_info_no_validation = vk.VkInstanceCreateInfo{
+                        .sType = vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                        .pNext = null,
+                        .flags = 0,
+                        .pApplicationInfo = &app_info,
+                        .enabledLayerCount = 0,
+                        .ppEnabledLayerNames = null,
+                        .enabledExtensionCount = window_extensions.count,
+                        .ppEnabledExtensionNames = window_extensions.names,
+                    };
+                    const instance = try vk.createInstance(&create_info_no_validation, null);
+                    return .{ .instance = instance, .validation_enabled = false };
+                }
+                return err;
+            }
+        }
+
+        const instance = try vk.createInstance(&create_info, null);
+        return .{ .instance = instance, .validation_enabled = false };
     }
 
     const DeviceInfo = struct {
@@ -297,6 +387,25 @@ pub const VulkanRenderer = struct {
         if (self.swapchain != null) {
             vk.destroySwapchainKHR(self.device, self.swapchain, null);
         }
+    }
+
+    fn createDebugMessenger(instance: vk.VkInstance) !vk.VkDebugUtilsMessengerEXT {
+        const create_info = vk.VkDebugUtilsMessengerCreateInfoEXT{
+            .sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+            .pNext = null,
+            .flags = 0,
+            .messageSeverity = vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
+                vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+                vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+            .messageType = vk.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                vk.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                vk.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+            .pfnUserCallback = debugCallback,
+            .pUserData = null,
+        };
+
+        return try vk.createDebugUtilsMessengerEXT(instance, &create_info, null);
     }
 
     fn initVTable(allocator: std.mem.Allocator, window: *const Window) anyerror!*anyopaque {
