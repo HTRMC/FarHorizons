@@ -67,7 +67,10 @@ pub const VulkanRenderer = struct {
     }
 
     pub fn deinit(self: *VulkanRenderer) void {
-        _ = vk.vkDeviceWaitIdle.?(self.device);
+        const wait_result = vk.vkDeviceWaitIdle.?(self.device);
+        if (wait_result != vk.VK_SUCCESS) {
+            std.log.err("vkDeviceWaitIdle failed: {}", .{wait_result});
+        }
 
         self.cleanupSwapchain();
         self.swapchain_images.deinit(self.allocator);
@@ -128,14 +131,18 @@ pub const VulkanRenderer = struct {
     fn selectPhysicalDevice(instance: vk.VkInstance, surface: vk.VkSurfaceKHR) !vk.VkPhysicalDevice {
         _ = surface;
         var device_count: u32 = 0;
-        _ = vk.vkEnumeratePhysicalDevices.?(instance, &device_count, null);
+        if (vk.vkEnumeratePhysicalDevices.?(instance, &device_count, null) != vk.VK_SUCCESS) {
+            return error.EnumeratePhysicalDevicesFailed;
+        }
 
         if (device_count == 0) {
             return error.NoVulkanDevices;
         }
 
         var devices: [16]vk.VkPhysicalDevice = undefined;
-        _ = vk.vkEnumeratePhysicalDevices.?(instance, &device_count, &devices);
+        if (vk.vkEnumeratePhysicalDevices.?(instance, &device_count, &devices) != vk.VK_SUCCESS) {
+            return error.EnumeratePhysicalDevicesFailed;
+        }
 
         for (devices[0..device_count]) |device| {
             var props: vk.VkPhysicalDeviceProperties = undefined;
@@ -184,13 +191,19 @@ pub const VulkanRenderer = struct {
 
     fn createSwapchain(self: *VulkanRenderer) !void {
         var capabilities: vk.VkSurfaceCapabilitiesKHR = undefined;
-        _ = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR.?(self.physical_device, self.surface, &capabilities);
+        if (vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR.?(self.physical_device, self.surface, &capabilities) != vk.VK_SUCCESS) {
+            return error.GetSurfaceCapabilitiesFailed;
+        }
 
         var format_count: u32 = 0;
-        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR.?(self.physical_device, self.surface, &format_count, null);
+        if (vk.vkGetPhysicalDeviceSurfaceFormatsKHR.?(self.physical_device, self.surface, &format_count, null) != vk.VK_SUCCESS) {
+            return error.GetSurfaceFormatsFailed;
+        }
         var formats = try self.allocator.alloc(vk.VkSurfaceFormatKHR, format_count);
         defer self.allocator.free(formats);
-        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR.?(self.physical_device, self.surface, &format_count, formats.ptr);
+        if (vk.vkGetPhysicalDeviceSurfaceFormatsKHR.?(self.physical_device, self.surface, &format_count, formats.ptr) != vk.VK_SUCCESS) {
+            return error.GetSurfaceFormatsFailed;
+        }
 
         const format = formats[0];
         self.swapchain_format = format.format;
@@ -232,9 +245,13 @@ pub const VulkanRenderer = struct {
         }
 
         var swapchain_image_count: u32 = 0;
-        _ = vk.vkGetSwapchainImagesKHR.?(self.device, self.swapchain, &swapchain_image_count, null);
+        if (vk.vkGetSwapchainImagesKHR.?(self.device, self.swapchain, &swapchain_image_count, null) != vk.VK_SUCCESS) {
+            return error.GetSwapchainImagesFailed;
+        }
         try self.swapchain_images.resize(self.allocator, swapchain_image_count);
-        _ = vk.vkGetSwapchainImagesKHR.?(self.device, self.swapchain, &swapchain_image_count, self.swapchain_images.items.ptr);
+        if (vk.vkGetSwapchainImagesKHR.?(self.device, self.swapchain, &swapchain_image_count, self.swapchain_images.items.ptr) != vk.VK_SUCCESS) {
+            return error.GetSwapchainImagesFailed;
+        }
 
         try self.swapchain_image_views.resize(self.allocator, swapchain_image_count);
         for (self.swapchain_images.items, 0..) |image, i| {
