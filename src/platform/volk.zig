@@ -53,6 +53,7 @@ pub const VK_API_VERSION_1_2 = c.VK_API_VERSION_1_2;
 // Error types
 pub const VulkanError = error{
     FunctionNotLoaded,
+    // Core errors
     OutOfHostMemory,
     OutOfDeviceMemory,
     InitializationFailed,
@@ -69,21 +70,37 @@ pub const VulkanError = error{
     InvalidExternalHandle,
     Fragmentation,
     InvalidOpaqueCaptureAddress,
+    // Surface/Swapchain errors (KHR)
     SurfaceLostKHR,
     NativeWindowInUseKHR,
     OutOfDateKHR,
     IncompatibleDisplayKHR,
+    FullScreenExclusiveModeLostEXT,
+    // Validation and shader errors
     ValidationFailedEXT,
     InvalidShaderNV,
+    IncompatibleShaderBinaryEXT,
+    // Pipeline and rendering errors
+    PipelineCompileRequiredEXT,
     InvalidDrmFormatModifierPlaneLayoutEXT,
     NotPermittedEXT,
-    FullScreenExclusiveModeLostEXT,
+    // Compression errors
+    CompressionExhaustedEXT,
+    // Video errors
+    ImageUsageNotSupportedKHR,
+    VideoPictureLayoutNotSupportedKHR,
+    VideoProfileOperationNotSupportedKHR,
+    VideoProfileFormatNotSupportedKHR,
+    VideoProfileCodecNotSupportedKHR,
+    VideoStdVersionNotSupportedKHR,
+    // Unknown fallback
     Unknown,
 };
 
 fn vkResultToError(result: VkResult) VulkanError!void {
     return switch (result) {
         c.VK_SUCCESS => {},
+        // Core errors
         c.VK_ERROR_OUT_OF_HOST_MEMORY => error.OutOfHostMemory,
         c.VK_ERROR_OUT_OF_DEVICE_MEMORY => error.OutOfDeviceMemory,
         c.VK_ERROR_INITIALIZATION_FAILED => error.InitializationFailed,
@@ -97,9 +114,21 @@ fn vkResultToError(result: VkResult) VulkanError!void {
         c.VK_ERROR_FORMAT_NOT_SUPPORTED => error.FormatNotSupported,
         c.VK_ERROR_FRAGMENTED_POOL => error.FragmentedPool,
         c.VK_ERROR_OUT_OF_POOL_MEMORY => error.OutOfPoolMemory,
+        c.VK_ERROR_INVALID_EXTERNAL_HANDLE => error.InvalidExternalHandle,
+        c.VK_ERROR_FRAGMENTATION => error.Fragmentation,
+        c.VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS => error.InvalidOpaqueCaptureAddress,
+        // Surface/Swapchain errors
         c.VK_ERROR_SURFACE_LOST_KHR => error.SurfaceLostKHR,
         c.VK_ERROR_NATIVE_WINDOW_IN_USE_KHR => error.NativeWindowInUseKHR,
         c.VK_ERROR_OUT_OF_DATE_KHR => error.OutOfDateKHR,
+        c.VK_ERROR_INCOMPATIBLE_DISPLAY_KHR => error.IncompatibleDisplayKHR,
+        c.VK_ERROR_VALIDATION_FAILED_EXT => error.ValidationFailedEXT,
+        c.VK_ERROR_INVALID_SHADER_NV => error.InvalidShaderNV,
+        c.VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT => error.InvalidDrmFormatModifierPlaneLayoutEXT,
+        c.VK_ERROR_NOT_PERMITTED_KHR => error.NotPermittedEXT,
+        c.VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT => error.FullScreenExclusiveModeLostEXT,
+        c.VK_ERROR_COMPRESSION_EXHAUSTED_EXT => error.CompressionExhaustedEXT,
+        c.VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT => error.IncompatibleShaderBinaryEXT,
         else => {
             std.log.err("Unhandled VkResult: {} (0x{x})", .{ result, @as(u32, @bitCast(result)) });
             return error.Unknown;
