@@ -10,6 +10,7 @@ pub const VulkanRenderer = struct {
     physical_device: vk.VkPhysicalDevice,
     device: vk.VkDevice,
     graphics_queue: vk.VkQueue,
+    queue_family_index: u32,
     surface: vk.VkSurfaceKHR,
     swapchain: vk.VkSwapchainKHR,
     swapchain_images: std.ArrayList(vk.VkImage),
@@ -33,14 +34,14 @@ pub const VulkanRenderer = struct {
         const surface = try window.createSurface(instance, null);
         errdefer vk.vkDestroySurfaceKHR.?(instance, surface, null);
 
-        const physical_device = try selectPhysicalDevice(instance, surface);
-        const device = try createDevice(physical_device);
+        const device_info = try selectPhysicalDevice(allocator, instance, surface);
+        const device = try createDevice(device_info.physical_device, device_info.queue_family_index);
         errdefer vk.vkDestroyDevice.?(device, null);
 
         vk.volkLoadDevice(device);
 
         var graphics_queue: vk.VkQueue = undefined;
-        vk.vkGetDeviceQueue.?(device, 0, 0, &graphics_queue);
+        vk.vkGetDeviceQueue.?(device, device_info.queue_family_index, 0, &graphics_queue);
 
         const swapchain_images: std.ArrayList(vk.VkImage) = .empty;
         const swapchain_image_views: std.ArrayList(vk.VkImageView) = .empty;
@@ -49,9 +50,10 @@ pub const VulkanRenderer = struct {
             .allocator = allocator,
             .window = window,
             .instance = instance,
-            .physical_device = physical_device,
+            .physical_device = device_info.physical_device,
             .device = device,
             .graphics_queue = graphics_queue,
+            .queue_family_index = device_info.queue_family_index,
             .surface = surface,
             .swapchain = null,
             .swapchain_images = swapchain_images,
@@ -128,8 +130,12 @@ pub const VulkanRenderer = struct {
         return instance;
     }
 
-    fn selectPhysicalDevice(instance: vk.VkInstance, surface: vk.VkSurfaceKHR) !vk.VkPhysicalDevice {
-        _ = surface;
+    const DeviceInfo = struct {
+        physical_device: vk.VkPhysicalDevice,
+        queue_family_index: u32,
+    };
+
+    fn selectPhysicalDevice(allocator: std.mem.Allocator, instance: vk.VkInstance, surface: vk.VkSurfaceKHR) !DeviceInfo {
         var device_count: u32 = 0;
         if (vk.vkEnumeratePhysicalDevices.?(instance, &device_count, null) != vk.VK_SUCCESS) {
             return error.EnumeratePhysicalDevicesFailed;
@@ -148,19 +154,50 @@ pub const VulkanRenderer = struct {
             var props: vk.VkPhysicalDeviceProperties = undefined;
             vk.vkGetPhysicalDeviceProperties.?(device, &props);
             std.log.info("Found GPU: {s}", .{props.deviceName});
-            return device;
+
+            if (try findQueueFamily(allocator, device, surface)) |queue_family| {
+                return .{
+                    .physical_device = device,
+                    .queue_family_index = queue_family,
+                };
+            }
         }
 
         return error.NoSuitableDevice;
     }
 
-    fn createDevice(physical_device: vk.VkPhysicalDevice) !vk.VkDevice {
+    fn findQueueFamily(allocator: std.mem.Allocator, device: vk.VkPhysicalDevice, surface: vk.VkSurfaceKHR) !?u32 {
+        var queue_family_count: u32 = 0;
+        vk.vkGetPhysicalDeviceQueueFamilyProperties.?(device, &queue_family_count, null);
+
+        var queue_families = try allocator.alloc(vk.VkQueueFamilyProperties, queue_family_count);
+        defer allocator.free(queue_families);
+
+        vk.vkGetPhysicalDeviceQueueFamilyProperties.?(device, &queue_family_count, queue_families.ptr);
+
+        for (queue_families, 0..) |family, i| {
+            const supports_graphics = (family.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT) != 0;
+
+            var present_support: vk.VkBool32 = vk.VK_FALSE;
+            if (vk.vkGetPhysicalDeviceSurfaceSupportKHR.?(device, @intCast(i), surface, &present_support) != vk.VK_SUCCESS) {
+                return error.GetSurfaceSupportFailed;
+            }
+
+            if (supports_graphics and present_support == vk.VK_TRUE) {
+                return @intCast(i);
+            }
+        }
+
+        return null;
+    }
+
+    fn createDevice(physical_device: vk.VkPhysicalDevice, queue_family_index: u32) !vk.VkDevice {
         const queue_priority: f32 = 1.0;
         const queue_create_info = vk.VkDeviceQueueCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .queueFamilyIndex = 0,
+            .queueFamilyIndex = queue_family_index,
             .queueCount = 1,
             .pQueuePriorities = &queue_priority,
         };
