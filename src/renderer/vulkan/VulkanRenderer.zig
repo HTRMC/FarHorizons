@@ -47,6 +47,8 @@ pub const VulkanRenderer = struct {
     swapchain_image_views: std.ArrayList(vk.VkImageView),
     swapchain_format: vk.VkFormat,
     swapchain_extent: vk.VkExtent2D,
+    render_pass: vk.VkRenderPass,
+    framebuffers: std.ArrayList(vk.VkFramebuffer),
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window) !*VulkanRenderer {
         const self = try allocator.create(VulkanRenderer);
@@ -81,6 +83,7 @@ pub const VulkanRenderer = struct {
 
         const swapchain_images: std.ArrayList(vk.VkImage) = .empty;
         const swapchain_image_views: std.ArrayList(vk.VkImageView) = .empty;
+        const framebuffers: std.ArrayList(vk.VkFramebuffer) = .empty;
 
         self.* = .{
             .allocator = allocator,
@@ -98,6 +101,8 @@ pub const VulkanRenderer = struct {
             .swapchain_image_views = swapchain_image_views,
             .swapchain_format = vk.VK_FORMAT_UNDEFINED,
             .swapchain_extent = .{ .width = 0, .height = 0 },
+            .render_pass = null,
+            .framebuffers = framebuffers,
         };
 
         try self.createSwapchain();
@@ -114,7 +119,9 @@ pub const VulkanRenderer = struct {
         self.cleanupSwapchain();
         self.swapchain_images.deinit(self.allocator);
         self.swapchain_image_views.deinit(self.allocator);
+        self.framebuffers.deinit(self.allocator);
 
+        vk.destroyRenderPass(self.device, self.render_pass, null);
         vk.destroySurfaceKHR(self.instance, self.surface, null);
         vk.destroyDevice(self.device, null);
 
@@ -295,6 +302,63 @@ pub const VulkanRenderer = struct {
         return try vk.createDevice(physical_device, &create_info, null);
     }
 
+    fn createRenderPass(self: *VulkanRenderer) !void {
+        const color_attachment = vk.VkAttachmentDescription{
+            .flags = 0,
+            .format = self.swapchain_format,
+            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .finalLayout = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        };
+
+        const color_attachment_ref = vk.VkAttachmentReference{
+            .attachment = 0,
+            .layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        };
+
+        const subpass = vk.VkSubpassDescription{
+            .flags = 0,
+            .pipelineBindPoint = vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            .inputAttachmentCount = 0,
+            .pInputAttachments = null,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &color_attachment_ref,
+            .pResolveAttachments = null,
+            .pDepthStencilAttachment = null,
+            .preserveAttachmentCount = 0,
+            .pPreserveAttachments = null,
+        };
+
+        const dependency = vk.VkSubpassDependency{
+            .srcSubpass = vk.VK_SUBPASS_EXTERNAL,
+            .dstSubpass = 0,
+            .srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dependencyFlags = 0,
+        };
+
+        const render_pass_info = vk.VkRenderPassCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .attachmentCount = 1,
+            .pAttachments = &color_attachment,
+            .subpassCount = 1,
+            .pSubpasses = &subpass,
+            .dependencyCount = 1,
+            .pDependencies = &dependency,
+        };
+
+        self.render_pass = try vk.createRenderPass(self.device, &render_pass_info, null);
+        std.log.info("Render pass created", .{});
+    }
+
     fn createSwapchain(self: *VulkanRenderer) !void {
         var capabilities: vk.VkSurfaceCapabilitiesKHR = undefined;
         try vk.getPhysicalDeviceSurfaceCapabilitiesKHR(self.physical_device, self.surface, &capabilities);
@@ -307,6 +371,11 @@ pub const VulkanRenderer = struct {
 
         const format = formats[0];
         self.swapchain_format = format.format;
+
+        // Create render pass first now that we know the format
+        if (self.render_pass == null) {
+            try self.createRenderPass();
+        }
 
         const fb_size = self.window.getFramebufferSize();
         self.swapchain_extent = .{
@@ -374,10 +443,35 @@ pub const VulkanRenderer = struct {
             self.swapchain_image_views.items[i] = try vk.createImageView(self.device, &view_info, null);
         }
 
+        // Create framebuffers
+        try self.framebuffers.resize(self.allocator, swapchain_image_count);
+        for (self.swapchain_image_views.items, 0..) |image_view, i| {
+            const attachments = [_]vk.VkImageView{image_view};
+
+            const framebuffer_info = vk.VkFramebufferCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .renderPass = self.render_pass,
+                .attachmentCount = attachments.len,
+                .pAttachments = &attachments,
+                .width = self.swapchain_extent.width,
+                .height = self.swapchain_extent.height,
+                .layers = 1,
+            };
+
+            self.framebuffers.items[i] = try vk.createFramebuffer(self.device, &framebuffer_info, null);
+        }
+
         std.log.info("Swapchain created: {}x{} ({} images)", .{ self.swapchain_extent.width, self.swapchain_extent.height, swapchain_image_count });
     }
 
     fn cleanupSwapchain(self: *VulkanRenderer) void {
+        for (self.framebuffers.items) |framebuffer| {
+            vk.destroyFramebuffer(self.device, framebuffer, null);
+        }
+        self.framebuffers.clearRetainingCapacity();
+
         for (self.swapchain_image_views.items) |view| {
             vk.destroyImageView(self.device, view, null);
         }

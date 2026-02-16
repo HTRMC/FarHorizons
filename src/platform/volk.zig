@@ -26,6 +26,14 @@ pub const VkSurfaceFormatKHR = c.VkSurfaceFormatKHR;
 pub const VkSwapchainCreateInfoKHR = c.VkSwapchainCreateInfoKHR;
 pub const VkImageViewCreateInfo = c.VkImageViewCreateInfo;
 pub const VkAllocationCallbacks = c.VkAllocationCallbacks;
+pub const VkRenderPass = c.VkRenderPass;
+pub const VkFramebuffer = c.VkFramebuffer;
+pub const VkRenderPassCreateInfo = c.VkRenderPassCreateInfo;
+pub const VkFramebufferCreateInfo = c.VkFramebufferCreateInfo;
+pub const VkAttachmentDescription = c.VkAttachmentDescription;
+pub const VkAttachmentReference = c.VkAttachmentReference;
+pub const VkSubpassDescription = c.VkSubpassDescription;
+pub const VkSubpassDependency = c.VkSubpassDependency;
 
 // Re-export constants
 pub const VK_SUCCESS = c.VK_SUCCESS;
@@ -50,6 +58,20 @@ pub const VK_KHR_SWAPCHAIN_EXTENSION_NAME = c.VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 pub const VK_EXT_DEBUG_UTILS_EXTENSION_NAME = c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 pub const VK_MAKE_VERSION = c.VK_MAKE_VERSION;
 pub const VK_API_VERSION_1_2 = c.VK_API_VERSION_1_2;
+pub const VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+pub const VK_ATTACHMENT_LOAD_OP_CLEAR = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
+pub const VK_ATTACHMENT_LOAD_OP_DONT_CARE = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+pub const VK_ATTACHMENT_STORE_OP_STORE = c.VK_ATTACHMENT_STORE_OP_STORE;
+pub const VK_ATTACHMENT_STORE_OP_DONT_CARE = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+pub const VK_IMAGE_LAYOUT_UNDEFINED = c.VK_IMAGE_LAYOUT_UNDEFINED;
+pub const VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+pub const VK_IMAGE_LAYOUT_PRESENT_SRC_KHR = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+pub const VK_PIPELINE_BIND_POINT_GRAPHICS = c.VK_PIPELINE_BIND_POINT_GRAPHICS;
+pub const VK_SUBPASS_EXTERNAL = c.VK_SUBPASS_EXTERNAL;
+pub const VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+pub const VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+pub const VK_SAMPLE_COUNT_1_BIT = c.VK_SAMPLE_COUNT_1_BIT;
 
 // Debug utils types
 pub const VkDebugUtilsMessengerEXT = c.VkDebugUtilsMessengerEXT;
@@ -365,5 +387,49 @@ pub fn destroyDebugUtilsMessengerEXT(
 ) void {
     if (c.vkDestroyDebugUtilsMessengerEXT) |fn_ptr| {
         fn_ptr(instance, messenger, allocator);
+    }
+}
+
+pub fn createRenderPass(
+    device: VkDevice,
+    create_info: *const VkRenderPassCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkRenderPass {
+    const fn_ptr = c.vkCreateRenderPass orelse return error.FunctionNotLoaded;
+    var render_pass: VkRenderPass = undefined;
+    const result = fn_ptr(device, create_info, allocator, &render_pass);
+    try vkResultToError(result);
+    return render_pass;
+}
+
+pub fn destroyRenderPass(
+    device: VkDevice,
+    render_pass: VkRenderPass,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyRenderPass) |fn_ptr| {
+        fn_ptr(device, render_pass, allocator);
+    }
+}
+
+pub fn createFramebuffer(
+    device: VkDevice,
+    create_info: *const VkFramebufferCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkFramebuffer {
+    const fn_ptr = c.vkCreateFramebuffer orelse return error.FunctionNotLoaded;
+    var framebuffer: VkFramebuffer = undefined;
+    const result = fn_ptr(device, create_info, allocator, &framebuffer);
+    try vkResultToError(result);
+    return framebuffer;
+}
+
+pub fn destroyFramebuffer(
+    device: VkDevice,
+    framebuffer: VkFramebuffer,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyFramebuffer) |fn_ptr| {
+        fn_ptr(device, framebuffer, allocator);
     }
 }
