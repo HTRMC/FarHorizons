@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
     });
     defer window.deinit();
 
-    var renderer = try Renderer.init(gpa, &VulkanRenderer.vtable);
+    var renderer = try Renderer.init(gpa, &window, &VulkanRenderer.vtable);
     defer renderer.deinit();
 
     std.log.info("Entering main loop...", .{});

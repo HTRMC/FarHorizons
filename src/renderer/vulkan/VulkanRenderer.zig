@@ -1,15 +1,23 @@
 const std = @import("std");
 const Renderer = @import("../Renderer.zig").Renderer;
-const vk = @import("volk").c;
+const vk = @import("../../platform/volk.zig").c;
+const Window = @import("../../platform/Window.zig").Window;
 
 pub const VulkanRenderer = struct {
     allocator: std.mem.Allocator,
+    window: *const Window,
     instance: vk.VkInstance,
     physical_device: vk.VkPhysicalDevice,
     device: vk.VkDevice,
     graphics_queue: vk.VkQueue,
+    surface: vk.VkSurfaceKHR,
+    swapchain: vk.VkSwapchainKHR,
+    swapchain_images: std.ArrayList(vk.VkImage),
+    swapchain_image_views: std.ArrayList(vk.VkImageView),
+    swapchain_format: vk.VkFormat,
+    swapchain_extent: vk.VkExtent2D,
 
-    pub fn init(allocator: std.mem.Allocator) !*VulkanRenderer {
+    pub fn init(allocator: std.mem.Allocator, window: *const Window) !*VulkanRenderer {
         const self = try allocator.create(VulkanRenderer);
         errdefer allocator.destroy(self);
 
@@ -22,7 +30,10 @@ pub const VulkanRenderer = struct {
 
         vk.volkLoadInstance(instance);
 
-        const physical_device = try selectPhysicalDevice(instance);
+        const surface = try window.createSurface(instance, null);
+        errdefer vk.vkDestroySurfaceKHR.?(instance, surface, null);
+
+        const physical_device = try selectPhysicalDevice(instance, surface);
         const device = try createDevice(physical_device);
         errdefer vk.vkDestroyDevice.?(device, null);
 
@@ -31,13 +42,25 @@ pub const VulkanRenderer = struct {
         var graphics_queue: vk.VkQueue = undefined;
         vk.vkGetDeviceQueue.?(device, 0, 0, &graphics_queue);
 
+        const swapchain_images: std.ArrayList(vk.VkImage) = .empty;
+        const swapchain_image_views: std.ArrayList(vk.VkImageView) = .empty;
+
         self.* = .{
             .allocator = allocator,
+            .window = window,
             .instance = instance,
             .physical_device = physical_device,
             .device = device,
             .graphics_queue = graphics_queue,
+            .surface = surface,
+            .swapchain = null,
+            .swapchain_images = swapchain_images,
+            .swapchain_image_views = swapchain_image_views,
+            .swapchain_format = vk.VK_FORMAT_UNDEFINED,
+            .swapchain_extent = .{ .width = 0, .height = 0 },
         };
+
+        try self.createSwapchain();
 
         std.log.info("VulkanRenderer initialized", .{});
         return self;
@@ -45,6 +68,12 @@ pub const VulkanRenderer = struct {
 
     pub fn deinit(self: *VulkanRenderer) void {
         _ = vk.vkDeviceWaitIdle.?(self.device);
+
+        self.cleanupSwapchain();
+        self.swapchain_images.deinit(self.allocator);
+        self.swapchain_image_views.deinit(self.allocator);
+
+        vk.vkDestroySurfaceKHR.?(self.instance, self.surface, null);
         vk.vkDestroyDevice.?(self.device, null);
         vk.vkDestroyInstance.?(self.instance, null);
         std.log.info("VulkanRenderer destroyed", .{});
@@ -74,6 +103,8 @@ pub const VulkanRenderer = struct {
             .apiVersion = vk.VK_API_VERSION_1_2,
         };
 
+        const extensions = Window.getRequiredExtensions();
+
         const create_info = vk.VkInstanceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             .pNext = null,
@@ -81,8 +112,8 @@ pub const VulkanRenderer = struct {
             .pApplicationInfo = &app_info,
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = null,
-            .enabledExtensionCount = 0,
-            .ppEnabledExtensionNames = null,
+            .enabledExtensionCount = 2,
+            .ppEnabledExtensionNames = extensions,
         };
 
         var instance: vk.VkInstance = undefined;
@@ -94,7 +125,8 @@ pub const VulkanRenderer = struct {
         return instance;
     }
 
-    fn selectPhysicalDevice(instance: vk.VkInstance) !vk.VkPhysicalDevice {
+    fn selectPhysicalDevice(instance: vk.VkInstance, surface: vk.VkSurfaceKHR) !vk.VkPhysicalDevice {
+        _ = surface;
         var device_count: u32 = 0;
         _ = vk.vkEnumeratePhysicalDevices.?(instance, &device_count, null);
 
@@ -126,6 +158,8 @@ pub const VulkanRenderer = struct {
             .pQueuePriorities = &queue_priority,
         };
 
+        const device_extensions = [_][*:0]const u8{vk.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
         const create_info = vk.VkDeviceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .pNext = null,
@@ -134,8 +168,8 @@ pub const VulkanRenderer = struct {
             .pQueueCreateInfos = &queue_create_info,
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = null,
-            .enabledExtensionCount = 0,
-            .ppEnabledExtensionNames = null,
+            .enabledExtensionCount = device_extensions.len,
+            .ppEnabledExtensionNames = &device_extensions,
             .pEnabledFeatures = null,
         };
 
@@ -148,8 +182,106 @@ pub const VulkanRenderer = struct {
         return device;
     }
 
-    fn initVTable(allocator: std.mem.Allocator) anyerror!*anyopaque {
-        const self = try init(allocator);
+    fn createSwapchain(self: *VulkanRenderer) !void {
+        var capabilities: vk.VkSurfaceCapabilitiesKHR = undefined;
+        _ = vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR.?(self.physical_device, self.surface, &capabilities);
+
+        var format_count: u32 = 0;
+        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR.?(self.physical_device, self.surface, &format_count, null);
+        var formats = try self.allocator.alloc(vk.VkSurfaceFormatKHR, format_count);
+        defer self.allocator.free(formats);
+        _ = vk.vkGetPhysicalDeviceSurfaceFormatsKHR.?(self.physical_device, self.surface, &format_count, formats.ptr);
+
+        const format = formats[0];
+        self.swapchain_format = format.format;
+
+        const fb_size = self.window.getFramebufferSize();
+        self.swapchain_extent = .{
+            .width = std.math.clamp(fb_size.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+            .height = std.math.clamp(fb_size.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height),
+        };
+
+        var image_count = capabilities.minImageCount + 1;
+        if (capabilities.maxImageCount > 0 and image_count > capabilities.maxImageCount) {
+            image_count = capabilities.maxImageCount;
+        }
+
+        const create_info = vk.VkSwapchainCreateInfoKHR{
+            .sType = vk.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+            .pNext = null,
+            .flags = 0,
+            .surface = self.surface,
+            .minImageCount = image_count,
+            .imageFormat = format.format,
+            .imageColorSpace = format.colorSpace,
+            .imageExtent = self.swapchain_extent,
+            .imageArrayLayers = 1,
+            .imageUsage = vk.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            .imageSharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+            .preTransform = capabilities.currentTransform,
+            .compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .presentMode = vk.VK_PRESENT_MODE_FIFO_KHR,
+            .clipped = vk.VK_TRUE,
+            .oldSwapchain = null,
+        };
+
+        if (vk.vkCreateSwapchainKHR.?(self.device, &create_info, null, &self.swapchain) != vk.VK_SUCCESS) {
+            return error.SwapchainCreationFailed;
+        }
+
+        var swapchain_image_count: u32 = 0;
+        _ = vk.vkGetSwapchainImagesKHR.?(self.device, self.swapchain, &swapchain_image_count, null);
+        try self.swapchain_images.resize(self.allocator, swapchain_image_count);
+        _ = vk.vkGetSwapchainImagesKHR.?(self.device, self.swapchain, &swapchain_image_count, self.swapchain_images.items.ptr);
+
+        try self.swapchain_image_views.resize(self.allocator, swapchain_image_count);
+        for (self.swapchain_images.items, 0..) |image, i| {
+            const view_info = vk.VkImageViewCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .image = image,
+                .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+                .format = self.swapchain_format,
+                .components = .{
+                    .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                    .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                },
+                .subresourceRange = .{
+                    .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+            };
+
+            if (vk.vkCreateImageView.?(self.device, &view_info, null, &self.swapchain_image_views.items[i]) != vk.VK_SUCCESS) {
+                return error.ImageViewCreationFailed;
+            }
+        }
+
+        std.log.info("Swapchain created: {}x{} ({} images)", .{ self.swapchain_extent.width, self.swapchain_extent.height, swapchain_image_count });
+    }
+
+    fn cleanupSwapchain(self: *VulkanRenderer) void {
+        for (self.swapchain_image_views.items) |view| {
+            vk.vkDestroyImageView.?(self.device, view, null);
+        }
+        self.swapchain_image_views.clearRetainingCapacity();
+        self.swapchain_images.clearRetainingCapacity();
+
+        if (self.swapchain != null) {
+            vk.vkDestroySwapchainKHR.?(self.device, self.swapchain, null);
+        }
+    }
+
+    fn initVTable(allocator: std.mem.Allocator, window: *const Window) anyerror!*anyopaque {
+        const self = try init(allocator, window);
         return @ptrCast(self);
     }
 

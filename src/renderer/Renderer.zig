@@ -1,4 +1,5 @@
 const std = @import("std");
+const Window = @import("../platform/Window.zig").Window;
 
 pub const Renderer = struct {
     allocator: std.mem.Allocator,
@@ -6,15 +7,15 @@ pub const Renderer = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        init: *const fn (allocator: std.mem.Allocator) anyerror!*anyopaque,
+        init: *const fn (allocator: std.mem.Allocator, window: *const Window) anyerror!*anyopaque,
         deinit: *const fn (self: *anyopaque) void,
         begin_frame: *const fn (self: *anyopaque) anyerror!void,
         end_frame: *const fn (self: *anyopaque) anyerror!void,
         render: *const fn (self: *anyopaque) anyerror!void,
     };
 
-    pub fn init(allocator: std.mem.Allocator, backend: *const VTable) !Renderer {
-        const impl = try backend.init(allocator);
+    pub fn init(allocator: std.mem.Allocator, window: *const Window, backend: *const VTable) !Renderer {
+        const impl = try backend.init(allocator, window);
         return Renderer{
             .allocator = allocator,
             .impl = impl,

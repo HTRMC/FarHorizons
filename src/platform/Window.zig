@@ -1,5 +1,5 @@
 const std = @import("std");
-const glfw = @import("glfw");
+const glfw = @import("glfw.zig");
 
 pub const Window = struct {
     handle: *glfw.Window,
@@ -50,5 +50,25 @@ pub const Window = struct {
         var height: c_int = 0;
         glfw.getFramebufferSize(self.handle, &width, &height);
         return .{ .width = @intCast(width), .height = @intCast(height) };
+    }
+
+    pub fn createSurface(self: *const Window, instance: anytype, allocator: ?*const anyopaque) !@import("c.zig").c.VkSurfaceKHR {
+        const c = @import("c.zig").c;
+        var surface: c.VkSurfaceKHR = null;
+        const result = glfw.createWindowSurface(
+            instance,
+            self.handle,
+            @ptrCast(@alignCast(allocator)),
+            &surface,
+        );
+        if (result != 0) {
+            return error.SurfaceCreationFailed;
+        }
+        return surface;
+    }
+
+    pub fn getRequiredExtensions() [*]const [*:0]const u8 {
+        var count: u32 = 0;
+        return @ptrCast(glfw.getRequiredInstanceExtensions(&count));
     }
 };
