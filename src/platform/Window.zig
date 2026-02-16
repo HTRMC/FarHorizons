@@ -1,6 +1,8 @@
 const std = @import("std");
 const glfw = @import("glfw.zig");
 
+var glfw_init_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
 pub const Window = struct {
     handle: *glfw.Window,
 
@@ -11,8 +13,14 @@ pub const Window = struct {
     };
 
     pub fn init(config: Config) !Window {
-        if (glfw.init() == glfw.GLFW_FALSE) {
-            return error.GLFWInitFailed;
+        const prev_count = glfw_init_count.fetchAdd(1, .monotonic);
+        errdefer _ = glfw_init_count.fetchSub(1, .monotonic);
+
+        if (prev_count == 0) {
+            if (glfw.init() == glfw.GLFW_FALSE) {
+                return error.GLFWInitFailed;
+            }
+            std.log.info("GLFW initialized", .{});
         }
 
         glfw.windowHint(glfw.GLFW_CLIENT_API, glfw.GLFW_NO_API);
@@ -33,8 +41,13 @@ pub const Window = struct {
 
     pub fn deinit(self: *Window) void {
         glfw.destroyWindow(self.handle);
-        glfw.terminate();
         std.log.info("Window destroyed", .{});
+
+        const prev_count = glfw_init_count.fetchSub(1, .monotonic);
+        if (prev_count == 1) {
+            glfw.terminate();
+            std.log.info("GLFW terminated", .{});
+        }
     }
 
     pub fn shouldClose(self: *const Window) bool {
