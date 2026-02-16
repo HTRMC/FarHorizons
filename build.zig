@@ -45,28 +45,6 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const headers_dep = b.lazyDependency("farhorizons_deps_headers", .{});
-
-    const glfw_module = b.createModule(.{
-        .root_source_file = b.path("src/platform/glfw.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    if (headers_dep) |d| {
-        glfw_module.addIncludePath(d.path(""));
-    }
-
-    const volk_module = b.createModule(.{
-        .root_source_file = b.path("src/platform/volk.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    if (headers_dep) |d| {
-        volk_module.addIncludePath(d.path(""));
-    }
-
     const mod = b.addModule("FarHorizons", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
@@ -80,8 +58,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "FarHorizons", .module = mod },
-                .{ .name = "glfw", .module = glfw_module },
-                .{ .name = "volk", .module = volk_module },
             },
         }),
     });

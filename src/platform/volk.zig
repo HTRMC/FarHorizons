@@ -1,4 +1,1 @@
-pub const c = @cImport({
-    @cDefine("VK_NO_PROTOTYPES", "1");
-    @cInclude("volk.h");
-});
+pub const c = @import("c.zig").c;

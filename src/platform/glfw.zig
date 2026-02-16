@@ -1,6 +1,4 @@
-pub const c = @cImport({
-    @cInclude("GLFW/glfw3.h");
-});
+const c = @import("c.zig").c;
 
 pub const Window = c.GLFWwindow;
 pub const Monitor = c.GLFWmonitor;
@@ -32,3 +30,5 @@ pub const setKeyCallback = c.glfwSetKeyCallback;
 pub const setFramebufferSizeCallback = c.glfwSetFramebufferSizeCallback;
 pub const setWindowUserPointer = c.glfwSetWindowUserPointer;
 pub const getWindowUserPointer = c.glfwGetWindowUserPointer;
+pub const getRequiredInstanceExtensions = c.glfwGetRequiredInstanceExtensions;
+pub const createWindowSurface = c.glfwCreateWindowSurface;
