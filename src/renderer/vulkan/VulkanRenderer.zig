@@ -549,7 +549,7 @@ pub const VulkanRenderer = struct {
             .resolveImageLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
             .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
+            .clearValue = .{ .color = .{ .float32 = .{ 0.224, 0.643, 0.918, 1.0 } } },
         };
 
         const depth_attachment = vk.VkRenderingAttachmentInfo{
