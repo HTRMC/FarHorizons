@@ -6,7 +6,7 @@ pub const ShaderKind = enum {
     fragment,
     compute,
 
-    fn toShaderc(self: ShaderKind) c_uint {
+    fn toShaderc(self: ShaderKind) shaderc.shaderc_shader_kind {
         return switch (self) {
             .vertex => shaderc.shaderc_vertex_shader,
             .fragment => shaderc.shaderc_fragment_shader,
