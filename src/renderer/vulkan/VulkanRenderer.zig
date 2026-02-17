@@ -1,6 +1,7 @@
 const std = @import("std");
 const Renderer = @import("../Renderer.zig").Renderer;
 const vk = @import("../../platform/volk.zig");
+const c = @import("../../platform/c.zig").c;
 const Window = @import("../../platform/Window.zig").Window;
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const Camera = @import("../Camera.zig");
@@ -9,63 +10,63 @@ const zlm = @import("../../math/zlm.zig");
 const enable_validation_layers = @import("builtin").mode == .Debug;
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 const MAX_FRAMES_IN_FLIGHT = 2;
+const MAX_TEXTURES = 256;
 
-pub const Vertex = struct {
-    position: [3]f32,
-    color: [3]f32,
-
-    pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
-        return vk.VkVertexInputBindingDescription{
-            .binding = 0,
-            .stride = @sizeOf(Vertex),
-            .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
-        };
-    }
-
-    pub fn getAttributeDescriptions() [2]vk.VkVertexInputAttributeDescription {
-        return [2]vk.VkVertexInputAttributeDescription{
-            vk.VkVertexInputAttributeDescription{
-                .binding = 0,
-                .location = 0,
-                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = @offsetOf(Vertex, "position"),
-            },
-            vk.VkVertexInputAttributeDescription{
-                .binding = 0,
-                .location = 1,
-                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
-                .offset = @offsetOf(Vertex, "color"),
-            },
-        };
-    }
+const GpuVertex = extern struct {
+    px: f32,
+    py: f32,
+    pz: f32,
+    u: f32,
+    v: f32,
+    tex_index: u32,
 };
 
-const cube_vertices = [_]Vertex{
-    // Front face (red)
-    Vertex{ .position = [3]f32{ -0.5, -0.5, 0.5 }, .color = [3]f32{ 1.0, 0.0, 0.0 } },
-    Vertex{ .position = [3]f32{ 0.5, -0.5, 0.5 }, .color = [3]f32{ 1.0, 0.0, 0.0 } },
-    Vertex{ .position = [3]f32{ 0.5, 0.5, 0.5 }, .color = [3]f32{ 1.0, 0.0, 0.0 } },
-    Vertex{ .position = [3]f32{ -0.5, 0.5, 0.5 }, .color = [3]f32{ 1.0, 0.0, 0.0 } },
-    // Back face (green)
-    Vertex{ .position = [3]f32{ -0.5, -0.5, -0.5 }, .color = [3]f32{ 0.0, 1.0, 0.0 } },
-    Vertex{ .position = [3]f32{ 0.5, -0.5, -0.5 }, .color = [3]f32{ 0.0, 1.0, 0.0 } },
-    Vertex{ .position = [3]f32{ 0.5, 0.5, -0.5 }, .color = [3]f32{ 0.0, 1.0, 0.0 } },
-    Vertex{ .position = [3]f32{ -0.5, 0.5, -0.5 }, .color = [3]f32{ 0.0, 1.0, 0.0 } },
+const cube_vertices = [_]GpuVertex{
+    // Front face (z = +0.5)
+    .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
+    .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    // Back face (z = -0.5)
+    .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    // Left face (x = -0.5)
+    .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
+    .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    // Right face (x = +0.5)
+    .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    // Top face (y = +0.5)
+    .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
+    .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    // Bottom face (y = -0.5)
+    .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
+    .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
+    .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
 };
 
 const cube_indices = [_]u16{
     // Front face
-    0, 1, 2, 2, 3, 0,
+    0,  1,  2,  2,  3,  0,
     // Back face
-    5, 4, 7, 7, 6, 5,
+    4,  5,  6,  6,  7,  4,
     // Left face
-    4, 0, 3, 3, 7, 4,
+    8,  9,  10, 10, 11, 8,
     // Right face
-    1, 5, 6, 6, 2, 1,
+    12, 13, 14, 14, 15, 12,
     // Top face
-    3, 2, 6, 6, 7, 3,
+    16, 17, 18, 18, 19, 16,
     // Bottom face
-    4, 5, 1, 1, 0, 4,
+    20, 21, 22, 22, 23, 20,
 };
 
 fn debugCallback(
@@ -112,10 +113,19 @@ pub const VulkanRenderer = struct {
     depth_image: vk.VkImage,
     depth_image_memory: vk.VkDeviceMemory,
     depth_image_view: vk.VkImageView,
-    render_pass: vk.VkRenderPass,
-    framebuffers: std.ArrayList(vk.VkFramebuffer),
+    // Texture system
+    texture_image: vk.VkImage,
+    texture_image_memory: vk.VkDeviceMemory,
+    texture_image_view: vk.VkImageView,
+    texture_sampler: vk.VkSampler,
+    // Bindless descriptors (graphics)
+    bindless_descriptor_set_layout: vk.VkDescriptorSetLayout,
+    bindless_descriptor_pool: vk.VkDescriptorPool,
+    bindless_descriptor_set: vk.VkDescriptorSet,
+    // Graphics pipeline
     pipeline_layout: vk.VkPipelineLayout,
     graphics_pipeline: vk.VkPipeline,
+    // Compute pipeline (culling)
     descriptor_set_layout: vk.VkDescriptorSetLayout,
     descriptor_pool: vk.VkDescriptorPool,
     descriptor_set: vk.VkDescriptorSet,
@@ -125,6 +135,7 @@ pub const VulkanRenderer = struct {
     indirect_buffer_memory: vk.VkDeviceMemory,
     indirect_count_buffer: vk.VkBuffer,
     indirect_count_buffer_memory: vk.VkDeviceMemory,
+    // Command buffers and sync
     command_pool: vk.VkCommandPool,
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
@@ -132,6 +143,7 @@ pub const VulkanRenderer = struct {
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence,
     images_in_flight: std.ArrayList(?vk.VkFence),
     current_frame: u32,
+    // Vertex/index buffers
     vertex_buffer: vk.VkBuffer,
     vertex_buffer_memory: vk.VkDeviceMemory,
     index_buffer: vk.VkBuffer,
@@ -171,7 +183,6 @@ pub const VulkanRenderer = struct {
 
         const swapchain_images: std.ArrayList(vk.VkImage) = .empty;
         const swapchain_image_views: std.ArrayList(vk.VkImageView) = .empty;
-        const framebuffers: std.ArrayList(vk.VkFramebuffer) = .empty;
         const render_finished_semaphores: std.ArrayList(vk.VkSemaphore) = .empty;
         const images_in_flight: std.ArrayList(?vk.VkFence) = .empty;
 
@@ -194,8 +205,13 @@ pub const VulkanRenderer = struct {
             .depth_image = null,
             .depth_image_memory = null,
             .depth_image_view = null,
-            .render_pass = null,
-            .framebuffers = framebuffers,
+            .texture_image = null,
+            .texture_image_memory = null,
+            .texture_image_view = null,
+            .texture_sampler = null,
+            .bindless_descriptor_set_layout = null,
+            .bindless_descriptor_pool = null,
+            .bindless_descriptor_set = null,
             .pipeline_layout = null,
             .graphics_pipeline = null,
             .descriptor_set_layout = null,
@@ -224,13 +240,14 @@ pub const VulkanRenderer = struct {
         try self.createSwapchain();
         self.camera = Camera.init(self.swapchain_extent.width, self.swapchain_extent.height);
         try self.createDepthBuffer();
-        try self.createFramebuffers();
+        try self.createCommandPool();
+        try self.createTextureImage();
+        try self.createVertexBuffer();
+        try self.createIndexBuffer();
+        try self.createBindlessDescriptorSet();
         try self.createGraphicsPipeline();
         try self.createIndirectBuffer();
         try self.createComputePipeline();
-        try self.createCommandPool();
-        try self.createVertexBuffer();
-        try self.createIndexBuffer();
         try self.createCommandBuffers();
         try self.createSyncObjects();
 
@@ -265,6 +282,16 @@ pub const VulkanRenderer = struct {
         vk.destroyBuffer(self.device, self.indirect_count_buffer, null);
         vk.freeMemory(self.device, self.indirect_count_buffer_memory, null);
 
+        // Destroy bindless descriptor resources
+        vk.destroyDescriptorPool(self.device, self.bindless_descriptor_pool, null);
+        vk.destroyDescriptorSetLayout(self.device, self.bindless_descriptor_set_layout, null);
+
+        // Destroy texture resources
+        vk.destroySampler(self.device, self.texture_sampler, null);
+        vk.destroyImageView(self.device, self.texture_image_view, null);
+        vk.destroyImage(self.device, self.texture_image, null);
+        vk.freeMemory(self.device, self.texture_image_memory, null);
+
         vk.destroyBuffer(self.device, self.vertex_buffer, null);
         vk.freeMemory(self.device, self.vertex_buffer_memory, null);
         vk.destroyBuffer(self.device, self.index_buffer, null);
@@ -276,14 +303,12 @@ pub const VulkanRenderer = struct {
         self.cleanupSwapchain();
         self.swapchain_images.deinit(self.allocator);
         self.swapchain_image_views.deinit(self.allocator);
-        self.framebuffers.deinit(self.allocator);
         self.images_in_flight.deinit(self.allocator);
 
         vk.destroyImageView(self.device, self.depth_image_view, null);
         vk.destroyImage(self.device, self.depth_image, null);
         vk.freeMemory(self.device, self.depth_image_memory, null);
 
-        vk.destroyRenderPass(self.device, self.render_pass, null);
         vk.destroySurfaceKHR(self.instance, self.surface, null);
         vk.destroyDevice(self.device, null);
 
@@ -372,6 +397,7 @@ pub const VulkanRenderer = struct {
 
         try vk.beginCommandBuffer(command_buffer, &begin_info);
 
+        // Compute culling pass
         var data: ?*anyopaque = null;
         try vk.mapMemory(self.device, self.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
         const count_ptr: *u32 = @ptrCast(@alignCast(data));
@@ -402,41 +428,147 @@ pub const VulkanRenderer = struct {
 
         vk.cmdDispatch(command_buffer, 1, 1, 1);
 
-        const clear_values = [_]vk.VkClearValue{
-            .{
-                .color = .{
-                    .float32 = .{ 0.0, 0.0, 0.0, 1.0 },
-                },
-            },
-            .{
-                .depthStencil = .{
-                    .depth = 1.0,
-                    .stencil = 0,
-                },
+        // Barrier: depth image UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL
+        const depth_barrier = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = vk.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.depth_image,
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
             },
         };
 
-        const render_pass_info = vk.VkRenderPassBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &[_]vk.VkImageMemoryBarrier{depth_barrier},
+        );
+
+        // Barrier: swapchain image UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
+        const color_barrier = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
-            .renderPass = self.render_pass,
-            .framebuffer = self.framebuffers.items[image_index],
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.swapchain_images.items[image_index],
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &[_]vk.VkImageMemoryBarrier{color_barrier},
+        );
+
+        // Dynamic rendering
+        const color_attachment = vk.VkRenderingAttachmentInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext = null,
+            .imageView = self.swapchain_image_views.items[image_index],
+            .imageLayout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .resolveMode = 0,
+            .resolveImageView = null,
+            .resolveImageLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue = .{ .color = .{ .float32 = .{ 0.0, 0.0, 0.0, 1.0 } } },
+        };
+
+        const depth_attachment = vk.VkRenderingAttachmentInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .pNext = null,
+            .imageView = self.depth_image_view,
+            .imageLayout = vk.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
+            .resolveMode = 0,
+            .resolveImageView = null,
+            .resolveImageLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .clearValue = .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+        };
+
+        const rendering_info = vk.VkRenderingInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .pNext = null,
+            .flags = 0,
             .renderArea = .{
                 .offset = .{ .x = 0, .y = 0 },
                 .extent = self.swapchain_extent,
             },
-            .clearValueCount = clear_values.len,
-            .pClearValues = &clear_values,
+            .layerCount = 1,
+            .viewMask = 0,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &color_attachment,
+            .pDepthAttachment = &depth_attachment,
+            .pStencilAttachment = null,
         };
 
-        vk.cmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
+        vk.cmdBeginRendering(command_buffer, &rendering_info);
 
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
 
-        // Bind vertex buffer
-        const vertex_buffers = [_]vk.VkBuffer{self.vertex_buffer};
-        const vertex_offsets = [_]vk.VkDeviceSize{0};
-        vk.cmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers, &vertex_offsets);
+        // Set viewport and scissor
+        const viewport = vk.VkViewport{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapchain_extent.width),
+            .height = @floatFromInt(self.swapchain_extent.height),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        };
+        vk.cmdSetViewport(command_buffer, 0, 1, &[_]vk.VkViewport{viewport});
+
+        const scissor = vk.VkRect2D{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        };
+        vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
+
+        // Bind bindless descriptor set (vertex SSBO + textures)
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.bindless_descriptor_set},
+            0,
+            null,
+        );
 
         // Bind index buffer
         vk.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT16);
@@ -455,7 +587,40 @@ pub const VulkanRenderer = struct {
         // Draw indexed
         vk.cmdDrawIndexed(command_buffer, cube_indices.len, 1, 0, 0, 0);
 
-        vk.cmdEndRenderPass(command_buffer);
+        vk.cmdEndRendering(command_buffer);
+
+        // Barrier: swapchain image COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR
+        const present_barrier = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = 0,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .newLayout = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.swapchain_images.items[image_index],
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &[_]vk.VkImageMemoryBarrier{present_barrier},
+        );
 
         try vk.endCommandBuffer(command_buffer);
     }
@@ -519,7 +684,7 @@ pub const VulkanRenderer = struct {
             .applicationVersion = vk.VK_MAKE_VERSION(0, 0, 1),
             .pEngineName = "FarHorizons Engine",
             .engineVersion = vk.VK_MAKE_VERSION(0, 0, 1),
-            .apiVersion = vk.VK_API_VERSION_1_2,
+            .apiVersion = vk.VK_API_VERSION_1_3,
         };
 
         const window_extensions = Window.getRequiredExtensions();
@@ -651,10 +816,21 @@ pub const VulkanRenderer = struct {
         vulkan12_features.descriptorBindingVariableDescriptorCount = vk.VK_TRUE;
         vulkan12_features.shaderSampledImageArrayNonUniformIndexing = vk.VK_TRUE;
         vulkan12_features.shaderStorageBufferArrayNonUniformIndexing = vk.VK_TRUE;
+        vulkan12_features.descriptorBindingUpdateUnusedWhilePending = vk.VK_TRUE;
+        vulkan12_features.descriptorBindingSampledImageUpdateAfterBind = vk.VK_TRUE;
+        vulkan12_features.descriptorBindingStorageBufferUpdateAfterBind = vk.VK_TRUE;
+
+        var vulkan13_features: vk.VkPhysicalDeviceVulkan13Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan13Features);
+        vulkan13_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        vulkan13_features.dynamicRendering = vk.VK_TRUE;
+        vulkan13_features.synchronization2 = vk.VK_TRUE;
+
+        // Chain: DeviceCreateInfo -> Vulkan13Features -> Vulkan12Features
+        vulkan13_features.pNext = &vulkan12_features;
 
         const create_info = vk.VkDeviceCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-            .pNext = &vulkan12_features,
+            .pNext = &vulkan13_features,
             .flags = 0,
             .queueCreateInfoCount = 1,
             .pQueueCreateInfos = &queue_create_info,
@@ -666,81 +842,6 @@ pub const VulkanRenderer = struct {
         };
 
         return try vk.createDevice(physical_device, &create_info, null);
-    }
-
-    fn createRenderPass(self: *VulkanRenderer) !void {
-        const color_attachment = vk.VkAttachmentDescription{
-            .flags = 0,
-            .format = self.swapchain_format,
-            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
-            .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE,
-            .stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = vk.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        };
-
-        const depth_attachment = vk.VkAttachmentDescription{
-            .flags = 0,
-            .format = vk.VK_FORMAT_D32_SFLOAT,
-            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
-            .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
-            .storeOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .stencilLoadOp = vk.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-            .stencilStoreOp = vk.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
-            .finalLayout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        };
-
-        const color_attachment_ref = vk.VkAttachmentReference{
-            .attachment = 0,
-            .layout = vk.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        };
-
-        const depth_attachment_ref = vk.VkAttachmentReference{
-            .attachment = 1,
-            .layout = vk.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-        };
-
-        const subpass = vk.VkSubpassDescription{
-            .flags = 0,
-            .pipelineBindPoint = vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            .inputAttachmentCount = 0,
-            .pInputAttachments = null,
-            .colorAttachmentCount = 1,
-            .pColorAttachments = &color_attachment_ref,
-            .pResolveAttachments = null,
-            .pDepthStencilAttachment = &depth_attachment_ref,
-            .preserveAttachmentCount = 0,
-            .pPreserveAttachments = null,
-        };
-
-        const dependency = vk.VkSubpassDependency{
-            .srcSubpass = vk.VK_SUBPASS_EXTERNAL,
-            .dstSubpass = 0,
-            .srcStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-            .dstStageMask = vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
-            .srcAccessMask = 0,
-            .dstAccessMask = vk.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | vk.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            .dependencyFlags = 0,
-        };
-
-        const attachments = [_]vk.VkAttachmentDescription{ color_attachment, depth_attachment };
-        const render_pass_info = vk.VkRenderPassCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .attachmentCount = attachments.len,
-            .pAttachments = &attachments,
-            .subpassCount = 1,
-            .pSubpasses = &subpass,
-            .dependencyCount = 1,
-            .pDependencies = &dependency,
-        };
-
-        self.render_pass = try vk.createRenderPass(self.device, &render_pass_info, null);
-        std.log.info("Render pass created", .{});
     }
 
     fn createSwapchain(self: *VulkanRenderer) !void {
@@ -755,11 +856,6 @@ pub const VulkanRenderer = struct {
 
         const format = formats[0];
         self.swapchain_format = format.format;
-
-        // Create render pass first now that we know the format
-        if (self.render_pass == null) {
-            try self.createRenderPass();
-        }
 
         const fb_size = self.window.getFramebufferSize();
         self.swapchain_extent = .{
@@ -847,14 +943,6 @@ pub const VulkanRenderer = struct {
     }
 
     fn cleanupSwapchain(self: *VulkanRenderer) void {
-        // Note: render_finished_semaphores are destroyed in deinit(), not here
-        // to avoid double-free when cleanupSwapchain is called from deinit()
-
-        for (self.framebuffers.items) |framebuffer| {
-            vk.destroyFramebuffer(self.device, framebuffer, null);
-        }
-        self.framebuffers.clearRetainingCapacity();
-
         for (self.swapchain_image_views.items) |view| {
             vk.destroyImageView(self.device, view, null);
         }
@@ -895,21 +983,10 @@ pub const VulkanRenderer = struct {
         var mem_requirements: vk.VkMemoryRequirements = undefined;
         vk.getImageMemoryRequirements(self.device, self.depth_image, &mem_requirements);
 
-        var mem_properties: vk.VkPhysicalDeviceMemoryProperties = undefined;
-        vk.getPhysicalDeviceMemoryProperties(self.physical_device, &mem_properties);
-
-        const memory_type_index = blk: {
-            const required_props = vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-            var i: u32 = 0;
-            while (i < mem_properties.memoryTypeCount) : (i += 1) {
-                if ((mem_requirements.memoryTypeBits & (@as(u32, 1) << (std.math.cast(u5, i) orelse unreachable))) != 0) {
-                    if ((mem_properties.memoryTypes[i].propertyFlags & required_props) == required_props) {
-                        break :blk i;
-                    }
-                }
-            }
-            return error.NoSuitableMemoryType;
-        };
+        const memory_type_index = try self.findMemoryType(
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        );
 
         const alloc_info = vk.VkMemoryAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
@@ -946,27 +1023,397 @@ pub const VulkanRenderer = struct {
         self.depth_image_view = try vk.createImageView(self.device, &view_info, null);
     }
 
-    fn createFramebuffers(self: *VulkanRenderer) !void {
-        const swapchain_image_count = self.swapchain_image_views.items.len;
-        try self.framebuffers.resize(self.allocator, swapchain_image_count);
+    fn createTextureImage(self: *VulkanRenderer) !void {
+        var tex_width: c_int = 0;
+        var tex_height: c_int = 0;
+        var tex_channels: c_int = 0;
+        const pixels = c.stbi_load("assets/farhorizons/textures/block/debug.png", &tex_width, &tex_height, &tex_channels, 4) orelse {
+            std.log.err("Failed to load texture image", .{});
+            return error.TextureLoadFailed;
+        };
+        defer c.stbi_image_free(pixels);
 
-        for (self.swapchain_image_views.items, 0..) |image_view, i| {
-            const attachments = [_]vk.VkImageView{ image_view, self.depth_image_view };
+        const image_size: vk.VkDeviceSize = @intCast(@as(u64, @intCast(tex_width)) * @as(u64, @intCast(tex_height)) * 4);
 
-            const framebuffer_info = vk.VkFramebufferCreateInfo{
-                .sType = vk.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        // Create staging buffer
+        var staging_buffer: vk.VkBuffer = undefined;
+        var staging_buffer_memory: vk.VkDeviceMemory = undefined;
+        try self.createBuffer(
+            image_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buffer,
+            &staging_buffer_memory,
+        );
+
+        var data: ?*anyopaque = null;
+        try vk.mapMemory(self.device, staging_buffer_memory, 0, image_size, 0, &data);
+        const dst: [*]u8 = @ptrCast(data.?);
+        const src: [*]const u8 = @ptrCast(pixels);
+        @memcpy(dst[0..@intCast(image_size)], src[0..@intCast(image_size)]);
+        vk.unmapMemory(self.device, staging_buffer_memory);
+
+        // Create the texture image
+        const image_info = vk.VkImageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .imageType = vk.VK_IMAGE_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
+            .extent = .{
+                .width = @intCast(tex_width),
+                .height = @intCast(tex_height),
+                .depth = 1,
+            },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
+            .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+
+        self.texture_image = try vk.createImage(self.device, &image_info, null);
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vk.getImageMemoryRequirements(self.device, self.texture_image, &mem_requirements);
+
+        const memory_type_index = try self.findMemoryType(
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        );
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = memory_type_index,
+        };
+
+        self.texture_image_memory = try vk.allocateMemory(self.device, &alloc_info, null);
+        try vk.bindImageMemory(self.device, self.texture_image, self.texture_image_memory, 0);
+
+        // Transition + copy via one-time command buffer
+        const cmd_alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = self.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var cmd_buffers: [1]vk.VkCommandBuffer = undefined;
+        try vk.allocateCommandBuffers(self.device, &cmd_alloc_info, &cmd_buffers);
+        const cmd = cmd_buffers[0];
+
+        const cmd_begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        };
+        try vk.beginCommandBuffer(cmd, &cmd_begin_info);
+
+        // Barrier: UNDEFINED -> TRANSFER_DST_OPTIMAL
+        const to_transfer_barrier = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.texture_image,
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        vk.cmdPipelineBarrier(
+            cmd,
+            vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &[_]vk.VkImageMemoryBarrier{to_transfer_barrier},
+        );
+
+        // Copy buffer to image
+        const region = vk.VkBufferImageCopy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
+            .imageExtent = .{
+                .width = @intCast(tex_width),
+                .height = @intCast(tex_height),
+                .depth = 1,
+            },
+        };
+
+        vk.cmdCopyBufferToImage(
+            cmd,
+            staging_buffer,
+            self.texture_image,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1,
+            &[_]vk.VkBufferImageCopy{region},
+        );
+
+        // Barrier: TRANSFER_DST -> SHADER_READ_ONLY_OPTIMAL
+        const to_shader_barrier = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.texture_image,
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        vk.cmdPipelineBarrier(
+            cmd,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+            vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            1,
+            &[_]vk.VkImageMemoryBarrier{to_shader_barrier},
+        );
+
+        try vk.endCommandBuffer(cmd);
+
+        const submit_infos = [_]vk.VkSubmitInfo{.{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        }};
+
+        try vk.queueSubmit(self.graphics_queue, 1, &submit_infos, null);
+        try vk.queueWaitIdle(self.graphics_queue);
+        vk.freeCommandBuffers(self.device, self.command_pool, 1, &cmd_buffers);
+
+        // Clean up staging buffer
+        vk.destroyBuffer(self.device, staging_buffer, null);
+        vk.freeMemory(self.device, staging_buffer_memory, null);
+
+        // Create image view
+        const view_info = vk.VkImageViewCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .image = self.texture_image,
+            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
+            .components = .{
+                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+
+        self.texture_image_view = try vk.createImageView(self.device, &view_info, null);
+
+        // Create sampler (nearest for pixel-art style)
+        const sampler_info = vk.VkSamplerCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .magFilter = vk.VK_FILTER_NEAREST,
+            .minFilter = vk.VK_FILTER_NEAREST,
+            .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+            .mipLodBias = 0.0,
+            .anisotropyEnable = vk.VK_FALSE,
+            .maxAnisotropy = 1.0,
+            .compareEnable = vk.VK_FALSE,
+            .compareOp = 0,
+            .minLod = 0.0,
+            .maxLod = 0.0,
+            .borderColor = vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            .unnormalizedCoordinates = vk.VK_FALSE,
+        };
+
+        self.texture_sampler = try vk.createSampler(self.device, &sampler_info, null);
+        std.log.info("Texture image created ({}x{})", .{ tex_width, tex_height });
+    }
+
+    fn createBindlessDescriptorSet(self: *VulkanRenderer) !void {
+        // Layout: binding 0 = SSBO (vertex buffer), binding 1 = sampler2D array
+        const bindings = [_]vk.VkDescriptorSetLayoutBinding{
+            .{
+                .binding = 0,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = MAX_TEXTURES,
+                .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = null,
+            },
+        };
+
+        // Binding flags: binding 0 = UPDATE_AFTER_BIND, binding 1 = PARTIALLY_BOUND | VARIABLE_COUNT | UPDATE_AFTER_BIND
+        const binding_flags = [_]c.VkDescriptorBindingFlags{
+            vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            vk.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
+                vk.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
+                vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        };
+
+        const binding_flags_info = vk.VkDescriptorSetLayoutBindingFlagsCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+            .pNext = null,
+            .bindingCount = bindings.len,
+            .pBindingFlags = &binding_flags,
+        };
+
+        const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = &binding_flags_info,
+            .flags = vk.VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+            .bindingCount = bindings.len,
+            .pBindings = &bindings,
+        };
+
+        self.bindless_descriptor_set_layout = try vk.createDescriptorSetLayout(self.device, &layout_info, null);
+
+        // Pool
+        const pool_sizes = [_]vk.VkDescriptorPoolSize{
+            .{
+                .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+            },
+            .{
+                .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = MAX_TEXTURES,
+            },
+        };
+
+        const pool_info = vk.VkDescriptorPoolCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = vk.VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
+            .maxSets = 1,
+            .poolSizeCount = pool_sizes.len,
+            .pPoolSizes = &pool_sizes,
+        };
+
+        self.bindless_descriptor_pool = try vk.createDescriptorPool(self.device, &pool_info, null);
+
+        // Allocate with variable descriptor count
+        const actual_texture_count: u32 = 1;
+        const variable_count_info = vk.VkDescriptorSetVariableDescriptorCountAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorSetCount = 1,
+            .pDescriptorCounts = &actual_texture_count,
+        };
+
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = &variable_count_info,
+            .descriptorPool = self.bindless_descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &self.bindless_descriptor_set_layout,
+        };
+
+        var descriptor_sets: [1]vk.VkDescriptorSet = undefined;
+        try vk.allocateDescriptorSets(self.device, &alloc_info, &descriptor_sets);
+        self.bindless_descriptor_set = descriptor_sets[0];
+
+        // Write descriptors
+        const vertex_buffer_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.vertex_buffer,
+            .offset = 0,
+            .range = @sizeOf(@TypeOf(cube_vertices)),
+        };
+
+        const texture_image_info = vk.VkDescriptorImageInfo{
+            .sampler = self.texture_sampler,
+            .imageView = self.texture_image_view,
+            .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+
+        const descriptor_writes = [_]vk.VkWriteDescriptorSet{
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .pNext = null,
-                .flags = 0,
-                .renderPass = self.render_pass,
-                .attachmentCount = attachments.len,
-                .pAttachments = &attachments,
-                .width = self.swapchain_extent.width,
-                .height = self.swapchain_extent.height,
-                .layers = 1,
-            };
+                .dstSet = self.bindless_descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &vertex_buffer_info,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.bindless_descriptor_set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &texture_image_info,
+                .pBufferInfo = null,
+                .pTexelBufferView = null,
+            },
+        };
 
-            self.framebuffers.items[i] = try vk.createFramebuffer(self.device, &framebuffer_info, null);
-        }
+        vk.updateDescriptorSets(self.device, descriptor_writes.len, &descriptor_writes, 0, null);
+        std.log.info("Bindless descriptor set created", .{});
     }
 
     fn createGraphicsPipeline(self: *VulkanRenderer) !void {
@@ -1023,17 +1470,15 @@ pub const VulkanRenderer = struct {
 
         const shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{ vert_stage_info, frag_stage_info };
 
-        const binding_description = Vertex.getBindingDescription();
-        const attribute_descriptions = Vertex.getAttributeDescriptions();
-
+        // Empty vertex input — vertex pulling from SSBO
         const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .vertexBindingDescriptionCount = 1,
-            .pVertexBindingDescriptions = &binding_description,
-            .vertexAttributeDescriptionCount = attribute_descriptions.len,
-            .pVertexAttributeDescriptions = &attribute_descriptions,
+            .vertexBindingDescriptionCount = 0,
+            .pVertexBindingDescriptions = null,
+            .vertexAttributeDescriptionCount = 0,
+            .pVertexAttributeDescriptions = null,
         };
 
         const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
@@ -1044,28 +1489,14 @@ pub const VulkanRenderer = struct {
             .primitiveRestartEnable = vk.VK_FALSE,
         };
 
-        const viewport = vk.VkViewport{
-            .x = 0.0,
-            .y = 0.0,
-            .width = @floatFromInt(self.swapchain_extent.width),
-            .height = @floatFromInt(self.swapchain_extent.height),
-            .minDepth = 0.0,
-            .maxDepth = 1.0,
-        };
-
-        const scissor = vk.VkRect2D{
-            .offset = .{ .x = 0, .y = 0 },
-            .extent = self.swapchain_extent,
-        };
-
         const viewport_state = vk.VkPipelineViewportStateCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .viewportCount = 1,
-            .pViewports = &viewport,
+            .pViewports = null,
             .scissorCount = 1,
-            .pScissors = &scissor,
+            .pScissors = null,
         };
 
         const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{
@@ -1143,17 +1574,39 @@ pub const VulkanRenderer = struct {
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .setLayoutCount = 0,
-            .pSetLayouts = null,
+            .setLayoutCount = 1,
+            .pSetLayouts = &self.bindless_descriptor_set_layout,
             .pushConstantRangeCount = 1,
             .pPushConstantRanges = &push_constant_range,
         };
 
         self.pipeline_layout = try vk.createPipelineLayout(self.device, &pipeline_layout_info, null);
 
+        // Dynamic rendering pipeline info
+        const color_attachment_format = [_]vk.VkFormat{self.swapchain_format};
+        const rendering_create_info = vk.VkPipelineRenderingCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .pNext = null,
+            .viewMask = 0,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &color_attachment_format,
+            .depthAttachmentFormat = vk.VK_FORMAT_D32_SFLOAT,
+            .stencilAttachmentFormat = vk.VK_FORMAT_UNDEFINED,
+        };
+
+        // Dynamic state for viewport and scissor
+        const dynamic_states = [_]c.VkDynamicState{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
+        const dynamic_state_info = c.VkPipelineDynamicStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .dynamicStateCount = dynamic_states.len,
+            .pDynamicStates = &dynamic_states,
+        };
+
         const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .pNext = null,
+            .pNext = &rendering_create_info,
             .flags = 0,
             .stageCount = 2,
             .pStages = &shader_stages,
@@ -1165,9 +1618,9 @@ pub const VulkanRenderer = struct {
             .pMultisampleState = &multisampling,
             .pDepthStencilState = &depth_stencil,
             .pColorBlendState = &color_blending,
-            .pDynamicState = null,
+            .pDynamicState = &dynamic_state_info,
             .layout = self.pipeline_layout,
-            .renderPass = self.render_pass,
+            .renderPass = null,
             .subpass = 0,
             .basePipelineHandle = null,
             .basePipelineIndex = -1,
@@ -1317,7 +1770,7 @@ pub const VulkanRenderer = struct {
 
         self.descriptor_pool = try vk.createDescriptorPool(self.device, &pool_info, null);
 
-        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+        const desc_alloc_info = vk.VkDescriptorSetAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = null,
             .descriptorPool = self.descriptor_pool,
@@ -1326,7 +1779,7 @@ pub const VulkanRenderer = struct {
         };
 
         var descriptor_sets: [1]vk.VkDescriptorSet = undefined;
-        try vk.allocateDescriptorSets(self.device, &alloc_info, &descriptor_sets);
+        try vk.allocateDescriptorSets(self.device, &desc_alloc_info, &descriptor_sets);
         self.descriptor_set = descriptor_sets[0];
 
         const draw_buffer_info = vk.VkDescriptorBufferInfo{
@@ -1558,13 +2011,13 @@ pub const VulkanRenderer = struct {
 
         var data: ?*anyopaque = null;
         try vk.mapMemory(self.device, staging_buffer_memory, 0, buffer_size, 0, &data);
-        const vertex_ptr: [*]Vertex = @ptrCast(@alignCast(data));
+        const vertex_ptr: [*]GpuVertex = @ptrCast(@alignCast(data));
         @memcpy(vertex_ptr[0..cube_vertices.len], &cube_vertices);
         vk.unmapMemory(self.device, staging_buffer_memory);
 
         try self.createBuffer(
             buffer_size,
-            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
             &self.vertex_buffer,
             &self.vertex_buffer_memory,
