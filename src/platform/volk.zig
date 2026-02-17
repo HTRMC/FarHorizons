@@ -162,6 +162,7 @@ pub const VkPipelineMultisampleStateCreateInfo = c.VkPipelineMultisampleStateCre
 pub const VkPipelineColorBlendAttachmentState = c.VkPipelineColorBlendAttachmentState;
 pub const VkPipelineColorBlendStateCreateInfo = c.VkPipelineColorBlendStateCreateInfo;
 pub const VkPipelineDepthStencilStateCreateInfo = c.VkPipelineDepthStencilStateCreateInfo;
+pub const VkStencilOpState = c.VkStencilOpState;
 pub const VkPipelineLayoutCreateInfo = c.VkPipelineLayoutCreateInfo;
 pub const VkPushConstantRange = c.VkPushConstantRange;
 pub const VkGraphicsPipelineCreateInfo = c.VkGraphicsPipelineCreateInfo;

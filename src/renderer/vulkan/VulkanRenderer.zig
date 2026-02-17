@@ -1105,8 +1105,8 @@ pub const VulkanRenderer = struct {
             .depthCompareOp = vk.VK_COMPARE_OP_LESS,
             .depthBoundsTestEnable = vk.VK_FALSE,
             .stencilTestEnable = vk.VK_FALSE,
-            .front = std.mem.zeroes(vk.c.VkStencilOpState),
-            .back = std.mem.zeroes(vk.c.VkStencilOpState),
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
             .minDepthBounds = 0.0,
             .maxDepthBounds = 1.0,
         };
