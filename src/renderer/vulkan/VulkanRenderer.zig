@@ -136,7 +136,7 @@ pub const VulkanRenderer = struct {
     vertex_buffer_memory: vk.VkDeviceMemory,
     index_buffer: vk.VkBuffer,
     index_buffer_memory: vk.VkDeviceMemory,
-    camera: Camera,
+    camera: ?Camera,
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window) !*VulkanRenderer {
         const self = try allocator.create(VulkanRenderer);
@@ -191,34 +191,34 @@ pub const VulkanRenderer = struct {
             .swapchain_image_views = swapchain_image_views,
             .swapchain_format = vk.VK_FORMAT_UNDEFINED,
             .swapchain_extent = .{ .width = 0, .height = 0 },
-            .depth_image = undefined,
-            .depth_image_memory = undefined,
-            .depth_image_view = undefined,
+            .depth_image = null,
+            .depth_image_memory = null,
+            .depth_image_view = null,
             .render_pass = null,
             .framebuffers = framebuffers,
-            .pipeline_layout = undefined,
-            .graphics_pipeline = undefined,
-            .descriptor_set_layout = undefined,
-            .descriptor_pool = undefined,
-            .descriptor_set = undefined,
-            .compute_pipeline_layout = undefined,
-            .compute_pipeline = undefined,
-            .indirect_buffer = undefined,
-            .indirect_buffer_memory = undefined,
-            .indirect_count_buffer = undefined,
-            .indirect_count_buffer_memory = undefined,
-            .command_pool = undefined,
-            .command_buffers = undefined,
-            .image_available_semaphores = undefined,
+            .pipeline_layout = null,
+            .graphics_pipeline = null,
+            .descriptor_set_layout = null,
+            .descriptor_pool = null,
+            .descriptor_set = null,
+            .compute_pipeline_layout = null,
+            .compute_pipeline = null,
+            .indirect_buffer = null,
+            .indirect_buffer_memory = null,
+            .indirect_count_buffer = null,
+            .indirect_count_buffer_memory = null,
+            .command_pool = null,
+            .command_buffers = [_]vk.VkCommandBuffer{null} ** MAX_FRAMES_IN_FLIGHT,
+            .image_available_semaphores = [_]vk.VkSemaphore{null} ** MAX_FRAMES_IN_FLIGHT,
             .render_finished_semaphores = render_finished_semaphores,
-            .in_flight_fences = undefined,
+            .in_flight_fences = [_]vk.VkFence{null} ** MAX_FRAMES_IN_FLIGHT,
             .images_in_flight = images_in_flight,
             .current_frame = 0,
-            .vertex_buffer = undefined,
-            .vertex_buffer_memory = undefined,
-            .index_buffer = undefined,
-            .index_buffer_memory = undefined,
-            .camera = undefined,
+            .vertex_buffer = null,
+            .vertex_buffer_memory = null,
+            .index_buffer = null,
+            .index_buffer_memory = null,
+            .camera = null,
         };
 
         try self.createSwapchain();
@@ -442,7 +442,7 @@ pub const VulkanRenderer = struct {
         vk.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT16);
 
         // Push MVP matrix
-        const mvp = self.camera.getViewProjectionMatrix();
+        const mvp = self.camera.?.getViewProjectionMatrix();
         vk.cmdPushConstants(
             command_buffer,
             self.pipeline_layout,
@@ -1656,12 +1656,12 @@ pub const VulkanRenderer = struct {
 
     fn rotateCameraVTable(impl: *anyopaque, delta_azimuth: f32, delta_elevation: f32) void {
         const self: *VulkanRenderer = @ptrCast(@alignCast(impl));
-        self.camera.rotate(delta_azimuth, delta_elevation);
+        self.camera.?.rotate(delta_azimuth, delta_elevation);
     }
 
     fn zoomCameraVTable(impl: *anyopaque, delta_distance: f32) void {
         const self: *VulkanRenderer = @ptrCast(@alignCast(impl));
-        self.camera.zoom(delta_distance);
+        self.camera.?.zoom(delta_distance);
     }
 
     pub const vtable: Renderer.VTable = .{
