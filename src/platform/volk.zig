@@ -65,6 +65,27 @@ pub const VkBufferCopy = c.VkBufferCopy;
 pub const VkVertexInputBindingDescription = c.VkVertexInputBindingDescription;
 pub const VkVertexInputAttributeDescription = c.VkVertexInputAttributeDescription;
 
+// Texture and sampler types
+pub const VkSampler = c.VkSampler;
+pub const VkSamplerCreateInfo = c.VkSamplerCreateInfo;
+pub const VkDescriptorImageInfo = c.VkDescriptorImageInfo;
+pub const VkBufferImageCopy = c.VkBufferImageCopy;
+pub const VkImageMemoryBarrier = c.VkImageMemoryBarrier;
+pub const VkImageSubresourceRange = c.VkImageSubresourceRange;
+pub const VkImageSubresourceLayers = c.VkImageSubresourceLayers;
+pub const VkExtent3D = c.VkExtent3D;
+pub const VkOffset3D = c.VkOffset3D;
+
+// Dynamic rendering types (Vulkan 1.3)
+pub const VkRenderingInfo = c.VkRenderingInfo;
+pub const VkRenderingAttachmentInfo = c.VkRenderingAttachmentInfo;
+pub const VkPipelineRenderingCreateInfo = c.VkPipelineRenderingCreateInfo;
+pub const VkPhysicalDeviceVulkan13Features = c.VkPhysicalDeviceVulkan13Features;
+
+// Bindless descriptor types
+pub const VkDescriptorSetLayoutBindingFlagsCreateInfo = c.VkDescriptorSetLayoutBindingFlagsCreateInfo;
+pub const VkDescriptorSetVariableDescriptorCountAllocateInfo = c.VkDescriptorSetVariableDescriptorCountAllocateInfo;
+
 // Re-export constants
 pub const VK_SUCCESS = c.VK_SUCCESS;
 pub const VK_TRUE = c.VK_TRUE;
@@ -96,6 +117,7 @@ pub const VK_KHR_SWAPCHAIN_EXTENSION_NAME = c.VK_KHR_SWAPCHAIN_EXTENSION_NAME;
 pub const VK_EXT_DEBUG_UTILS_EXTENSION_NAME = c.VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
 pub const VK_MAKE_VERSION = c.VK_MAKE_VERSION;
 pub const VK_API_VERSION_1_2 = c.VK_API_VERSION_1_2;
+pub const VK_API_VERSION_1_3 = c.VK_API_VERSION_1_3;
 pub const VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 pub const VK_ATTACHMENT_LOAD_OP_CLEAR = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -144,6 +166,49 @@ pub const VK_MEMORY_PROPERTY_HOST_COHERENT_BIT = c.VK_MEMORY_PROPERTY_HOST_COHER
 pub const VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 pub const VK_VERTEX_INPUT_RATE_VERTEX = c.VK_VERTEX_INPUT_RATE_VERTEX;
 pub const VK_FORMAT_R32G32B32_SFLOAT = c.VK_FORMAT_R32G32B32_SFLOAT;
+pub const VK_FORMAT_R32G32_SFLOAT = c.VK_FORMAT_R32G32_SFLOAT;
+pub const VK_FORMAT_R8G8B8A8_SRGB = c.VK_FORMAT_R8G8B8A8_SRGB;
+
+// Image layout constants for textures
+pub const VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+pub const VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+pub const VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL = c.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+
+// Image usage
+pub const VK_IMAGE_USAGE_TRANSFER_DST_BIT = c.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+// Descriptor type
+pub const VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+
+// Sampler constants
+pub const VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+pub const VK_FILTER_NEAREST = c.VK_FILTER_NEAREST;
+pub const VK_SAMPLER_MIPMAP_MODE_NEAREST = c.VK_SAMPLER_MIPMAP_MODE_NEAREST;
+pub const VK_SAMPLER_ADDRESS_MODE_REPEAT = c.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+pub const VK_BORDER_COLOR_INT_OPAQUE_BLACK = c.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+
+// Barrier constants
+pub const VK_PIPELINE_STAGE_TRANSFER_BIT = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
+pub const VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT = c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+pub const VK_ACCESS_TRANSFER_WRITE_BIT = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+pub const VK_ACCESS_SHADER_READ_BIT = c.VK_ACCESS_SHADER_READ_BIT;
+pub const VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+pub const VK_QUEUE_FAMILY_IGNORED = c.VK_QUEUE_FAMILY_IGNORED;
+
+// Dynamic rendering constants (Vulkan 1.3)
+pub const VK_STRUCTURE_TYPE_RENDERING_INFO = c.VK_STRUCTURE_TYPE_RENDERING_INFO;
+pub const VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+pub const VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+
+// Bindless descriptor flags
+pub const VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT = c.VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+pub const VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT = c.VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
+pub const VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT = c.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+pub const VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT = c.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT;
+pub const VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT = c.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+pub const VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
 
 // Shader and pipeline types
 pub const VkShaderModule = c.VkShaderModule;
@@ -1162,5 +1227,96 @@ pub fn cmdPushConstants(
 ) void {
     if (c.vkCmdPushConstants) |fn_ptr| {
         fn_ptr(command_buffer, layout, stage_flags, offset, size, values);
+    }
+}
+
+pub fn cmdCopyBufferToImage(
+    command_buffer: VkCommandBuffer,
+    src_buffer: VkBuffer,
+    dst_image: VkImage,
+    dst_image_layout: c.VkImageLayout,
+    region_count: u32,
+    regions: [*]const VkBufferImageCopy,
+) void {
+    if (c.vkCmdCopyBufferToImage) |fn_ptr| {
+        fn_ptr(command_buffer, src_buffer, dst_image, dst_image_layout, region_count, regions);
+    }
+}
+
+pub fn cmdPipelineBarrier(
+    command_buffer: VkCommandBuffer,
+    src_stage_mask: c.VkPipelineStageFlags,
+    dst_stage_mask: c.VkPipelineStageFlags,
+    dependency_flags: c.VkDependencyFlags,
+    memory_barrier_count: u32,
+    memory_barriers: ?[*]const c.VkMemoryBarrier,
+    buffer_memory_barrier_count: u32,
+    buffer_memory_barriers: ?[*]const c.VkBufferMemoryBarrier,
+    image_memory_barrier_count: u32,
+    image_memory_barriers: ?[*]const VkImageMemoryBarrier,
+) void {
+    if (c.vkCmdPipelineBarrier) |fn_ptr| {
+        fn_ptr(command_buffer, src_stage_mask, dst_stage_mask, dependency_flags, memory_barrier_count, memory_barriers, buffer_memory_barrier_count, buffer_memory_barriers, image_memory_barrier_count, image_memory_barriers);
+    }
+}
+
+pub fn createSampler(
+    device: VkDevice,
+    create_info: *const VkSamplerCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkSampler {
+    const fn_ptr = c.vkCreateSampler orelse return error.FunctionNotLoaded;
+    var sampler: VkSampler = undefined;
+    const result = fn_ptr(device, create_info, allocator, &sampler);
+    try vkResultToError(result);
+    return sampler;
+}
+
+pub fn destroySampler(
+    device: VkDevice,
+    sampler: VkSampler,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroySampler) |fn_ptr| {
+        fn_ptr(device, sampler, allocator);
+    }
+}
+
+pub fn cmdBeginRendering(
+    command_buffer: VkCommandBuffer,
+    rendering_info: *const VkRenderingInfo,
+) void {
+    if (c.vkCmdBeginRendering) |fn_ptr| {
+        fn_ptr(command_buffer, rendering_info);
+    }
+}
+
+pub fn cmdEndRendering(
+    command_buffer: VkCommandBuffer,
+) void {
+    if (c.vkCmdEndRendering) |fn_ptr| {
+        fn_ptr(command_buffer);
+    }
+}
+
+pub fn cmdSetViewport(
+    command_buffer: VkCommandBuffer,
+    first_viewport: u32,
+    viewport_count: u32,
+    viewports: [*]const VkViewport,
+) void {
+    if (c.vkCmdSetViewport) |fn_ptr| {
+        fn_ptr(command_buffer, first_viewport, viewport_count, viewports);
+    }
+}
+
+pub fn cmdSetScissor(
+    command_buffer: VkCommandBuffer,
+    first_scissor: u32,
+    scissor_count: u32,
+    scissors: [*]const VkRect2D,
+) void {
+    if (c.vkCmdSetScissor) |fn_ptr| {
+        fn_ptr(command_buffer, first_scissor, scissor_count, scissors);
     }
 }
