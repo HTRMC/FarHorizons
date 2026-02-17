@@ -17,7 +17,6 @@ pub const ShaderKind = enum {
 
 pub const CompileError = error{
     CompilationFailed,
-    OutOfMemory,
 };
 
 pub fn compile(
@@ -25,7 +24,7 @@ pub fn compile(
     source: []const u8,
     filename: []const u8,
     kind: ShaderKind,
-) CompileError![]const u8 {
+) (CompileError || std.mem.Allocator.Error)![]const u8 {
     const compiler = shaderc.compiler_initialize();
     defer shaderc.compiler_release(compiler);
 
