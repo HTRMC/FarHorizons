@@ -93,12 +93,13 @@ pub fn setFramebufferSizeCallback(window: *Window, callback: ?*const fn (?*Windo
     _ = c.glfwSetFramebufferSizeCallback(window, callback);
 }
 
-pub fn setWindowUserPointer(window: *Window, pointer: ?*anyopaque) void {
+pub fn setWindowUserPointer(window: *Window, pointer: anytype) void {
     c.glfwSetWindowUserPointer(window, pointer);
 }
 
-pub fn getWindowUserPointer(window: *Window) ?*anyopaque {
-    return c.glfwGetWindowUserPointer(window);
+pub fn getWindowUserPointer(window: *Window, comptime T: type) ?*T {
+    const ptr = c.glfwGetWindowUserPointer(window) orelse return null;
+    return @ptrCast(@alignCast(ptr));
 }
 
 pub fn setScrollCallback(window: *Window, callback: ?*const fn (?*Window, f64, f64) callconv(.c) void) void {

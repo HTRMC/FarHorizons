@@ -10,8 +10,7 @@ const InputState = struct {
 
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
     _ = xoffset;
-    const user_ptr = glfw.getWindowUserPointer(window.?) orelse return;
-    const input_state: *InputState = @ptrCast(@alignCast(user_ptr));
+    const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
     input_state.scroll_delta += @floatCast(yoffset);
 }
 
