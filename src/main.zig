@@ -69,7 +69,7 @@ pub fn main() !void {
 
         // Handle scroll input for camera zoom
         if (input_state.scroll_delta != 0.0) {
-            renderer.zoomCamera(-input_state.scroll_delta * zoom_speed * delta_time);
+            renderer.zoomCamera(-input_state.scroll_delta * zoom_speed);
             input_state.scroll_delta = 0.0;
         }
 
