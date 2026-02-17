@@ -23,7 +23,9 @@ pub const GLFW_KEY_UP = c.GLFW_KEY_UP;
 pub const GLFW_KEY_DOWN = c.GLFW_KEY_DOWN;
 pub const GLFW_KEY_LEFT = c.GLFW_KEY_LEFT;
 pub const GLFW_KEY_RIGHT = c.GLFW_KEY_RIGHT;
+pub const GLFW_KEY_F11 = c.GLFW_KEY_F11;
 pub const GLFW_PRESS = c.GLFW_PRESS;
+pub const GLFW_RELEASE = c.GLFW_RELEASE;
 
 // Error type
 pub const GlfwError = error{
@@ -104,6 +106,38 @@ pub fn getWindowUserPointer(window: *Window, comptime T: type) ?*T {
 
 pub fn setScrollCallback(window: *Window, callback: ?*const fn (?*Window, f64, f64) callconv(.c) void) void {
     _ = c.glfwSetScrollCallback(window, callback);
+}
+
+pub fn getPrimaryMonitor() ?*Monitor {
+    return c.glfwGetPrimaryMonitor();
+}
+
+pub fn getVideoMode(monitor: *Monitor) *const VidMode {
+    return c.glfwGetVideoMode(monitor);
+}
+
+pub fn setWindowMonitor(
+    window: *Window,
+    monitor: ?*Monitor,
+    xpos: c_int,
+    ypos: c_int,
+    width: c_int,
+    height: c_int,
+    refresh_rate: c_int,
+) void {
+    c.glfwSetWindowMonitor(window, monitor, xpos, ypos, width, height, refresh_rate);
+}
+
+pub fn getWindowMonitor(window: *Window) ?*Monitor {
+    return c.glfwGetWindowMonitor(window);
+}
+
+pub fn getWindowPos(window: *Window, xpos: *c_int, ypos: *c_int) void {
+    c.glfwGetWindowPos(window, xpos, ypos);
+}
+
+pub fn getWindowSize(window: *Window, width: *c_int, height: *c_int) void {
+    c.glfwGetWindowSize(window, width, height);
 }
 
 pub fn getTime() f64 {

@@ -112,6 +112,7 @@ pub const VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT = c.VK_IMAGE_USAGE_COLOR_ATTACHMEN
 pub const VK_SHARING_MODE_EXCLUSIVE = c.VK_SHARING_MODE_EXCLUSIVE;
 pub const VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 pub const VK_PRESENT_MODE_FIFO_KHR = c.VK_PRESENT_MODE_FIFO_KHR;
+pub const VK_SUBOPTIMAL_KHR = c.VK_SUBOPTIMAL_KHR;
 pub const VK_IMAGE_VIEW_TYPE_2D = c.VK_IMAGE_VIEW_TYPE_2D;
 pub const VK_COMPONENT_SWIZZLE_IDENTITY = c.VK_COMPONENT_SWIZZLE_IDENTITY;
 pub const VK_IMAGE_ASPECT_COLOR_BIT = c.VK_IMAGE_ASPECT_COLOR_BIT;
@@ -354,7 +355,7 @@ pub const VulkanError = error{
 
 fn vkResultToError(result: VkResult) VulkanError!void {
     return switch (result) {
-        c.VK_SUCCESS => {},
+        c.VK_SUCCESS, c.VK_SUBOPTIMAL_KHR => {},
         // Core errors
         c.VK_ERROR_OUT_OF_HOST_MEMORY => error.OutOfHostMemory,
         c.VK_ERROR_OUT_OF_DEVICE_MEMORY => error.OutOfDeviceMemory,
@@ -771,6 +772,20 @@ pub fn acquireNextImageKHR(
     try vkResultToError(result);
 }
 
+pub fn acquireNextImageKHRResult(
+    device: VkDevice,
+    swapchain: VkSwapchainKHR,
+    timeout: u64,
+    semaphore: VkSemaphore,
+    fence: VkFence,
+    image_index: *u32,
+) VulkanError!VkResult {
+    const fn_ptr = c.vkAcquireNextImageKHR orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, swapchain, timeout, semaphore, fence, image_index);
+    try vkResultToError(result);
+    return result;
+}
+
 pub fn queueSubmit(
     queue: VkQueue,
     submit_count: u32,
@@ -795,6 +810,16 @@ pub fn queuePresentKHR(
     const fn_ptr = c.vkQueuePresentKHR orelse return error.FunctionNotLoaded;
     const result = fn_ptr(queue, present_info);
     try vkResultToError(result);
+}
+
+pub fn queuePresentKHRResult(
+    queue: VkQueue,
+    present_info: *const VkPresentInfoKHR,
+) VulkanError!VkResult {
+    const fn_ptr = c.vkQueuePresentKHR orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(queue, present_info);
+    try vkResultToError(result);
+    return result;
 }
 
 pub fn beginCommandBuffer(

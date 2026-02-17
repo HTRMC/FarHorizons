@@ -6,6 +6,10 @@ var glfw_init_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
 pub const Window = struct {
     handle: *glfw.Window,
+    windowed_x: c_int = 0,
+    windowed_y: c_int = 0,
+    windowed_width: c_int = 0,
+    windowed_height: c_int = 0,
 
     pub const Config = struct {
         width: u32 = 1280,
@@ -68,6 +72,29 @@ pub const Window = struct {
         var surface: vk.VkSurfaceKHR = null;
         try glfw.createWindowSurface(instance, self.handle, allocator, &surface);
         return surface;
+    }
+
+    pub fn toggleFullscreen(self: *Window) void {
+        if (glfw.getWindowMonitor(self.handle) == null) {
+            // Currently windowed -> go fullscreen
+            glfw.getWindowPos(self.handle, &self.windowed_x, &self.windowed_y);
+            glfw.getWindowSize(self.handle, &self.windowed_width, &self.windowed_height);
+
+            const monitor = glfw.getPrimaryMonitor() orelse return;
+            const mode = glfw.getVideoMode(monitor);
+            glfw.setWindowMonitor(self.handle, monitor, 0, 0, mode.width, mode.height, mode.refreshRate);
+        } else {
+            // Currently fullscreen -> go windowed
+            glfw.setWindowMonitor(
+                self.handle,
+                null,
+                self.windowed_x,
+                self.windowed_y,
+                self.windowed_width,
+                self.windowed_height,
+                0,
+            );
+        }
     }
 
     pub const Extensions = struct {

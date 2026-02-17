@@ -14,6 +14,7 @@ pub const Renderer = struct {
         render: *const fn (self: *anyopaque) anyerror!void,
         rotate_camera: *const fn (self: *anyopaque, delta_azimuth: f32, delta_elevation: f32) void,
         zoom_camera: *const fn (self: *anyopaque, delta_distance: f32) void,
+        get_framebuffer_resized_ptr: *const fn (self: *anyopaque) *bool,
     };
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window, backend: *const VTable) !Renderer {
@@ -47,5 +48,9 @@ pub const Renderer = struct {
 
     pub fn zoomCamera(self: *Renderer, delta_distance: f32) void {
         self.vtable.zoom_camera(self.impl, delta_distance);
+    }
+
+    pub fn getFramebufferResizedPtr(self: *Renderer) *bool {
+        return self.vtable.get_framebuffer_resized_ptr(self.impl);
     }
 };

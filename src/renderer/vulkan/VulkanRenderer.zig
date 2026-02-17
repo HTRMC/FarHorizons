@@ -3,6 +3,7 @@ const Renderer = @import("../Renderer.zig").Renderer;
 const vk = @import("../../platform/volk.zig");
 const c = @import("../../platform/c.zig").c;
 const Window = @import("../../platform/Window.zig").Window;
+const glfw = @import("../../platform/glfw.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const Camera = @import("../Camera.zig");
 const zlm = @import("zlm");
@@ -195,6 +196,7 @@ pub const VulkanRenderer = struct {
     index_buffer_memory: vk.VkDeviceMemory,
     camera: ?Camera,
     chunk_index_count: u32,
+    framebuffer_resized: bool,
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window) !*VulkanRenderer {
         const self = try allocator.create(VulkanRenderer);
@@ -282,6 +284,7 @@ pub const VulkanRenderer = struct {
             .index_buffer_memory = null,
             .camera = null,
             .chunk_index_count = 0,
+            .framebuffer_resized = false,
         };
 
         try self.createSwapchain();
@@ -381,15 +384,28 @@ pub const VulkanRenderer = struct {
     }
 
     pub fn render(self: *VulkanRenderer) !void {
+        // Handle minimized window (0x0 framebuffer)
+        const fb_size = self.window.getFramebufferSize();
+        if (fb_size.width == 0 or fb_size.height == 0) {
+            glfw.waitEvents();
+            return;
+        }
+
         var image_index: u32 = undefined;
-        try vk.acquireNextImageKHR(
+        const acquire_result = vk.acquireNextImageKHRResult(
             self.device,
             self.swapchain,
             std.math.maxInt(u64),
             self.image_available_semaphores[self.current_frame],
             null,
             &image_index,
-        );
+        ) catch |err| {
+            if (err == error.OutOfDateKHR) {
+                try self.recreateSwapchain();
+                return;
+            }
+            return err;
+        };
 
         if (self.images_in_flight.items[image_index]) |image_fence| {
             const fence = &[_]vk.VkFence{image_fence};
@@ -434,7 +450,47 @@ pub const VulkanRenderer = struct {
             .pResults = null,
         };
 
-        try vk.queuePresentKHR(self.graphics_queue, &present_info);
+        const present_result = vk.queuePresentKHRResult(self.graphics_queue, &present_info) catch |err| {
+            if (err == error.OutOfDateKHR) {
+                try self.recreateSwapchain();
+                return;
+            }
+            return err;
+        };
+
+        if (present_result == vk.VK_SUBOPTIMAL_KHR or acquire_result == vk.VK_SUBOPTIMAL_KHR or self.framebuffer_resized) {
+            self.framebuffer_resized = false;
+            try self.recreateSwapchain();
+        }
+    }
+
+    fn recreateSwapchain(self: *VulkanRenderer) !void {
+        // Wait for all in-flight frames to complete
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const fence = &[_]vk.VkFence{self.in_flight_fences[i]};
+            try vk.waitForFences(self.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
+        }
+
+        // Destroy depth buffer
+        vk.destroyImageView(self.device, self.depth_image_view, null);
+        vk.destroyImage(self.device, self.depth_image, null);
+        vk.freeMemory(self.device, self.depth_image_memory, null);
+
+        // Cleanup old swapchain (image views + swapchain handle)
+        self.cleanupSwapchain();
+
+        // Recreate swapchain, image views (semaphores are reused/grown inside)
+        try self.createSwapchain();
+
+        // Recreate depth buffer at new size
+        try self.createDepthBuffer();
+
+        // Update camera aspect ratio
+        if (self.camera) |*cam| {
+            cam.updateAspect(self.swapchain_extent.width, self.swapchain_extent.height);
+        }
+
+        std.log.info("Swapchain recreated: {}x{}", .{ self.swapchain_extent.width, self.swapchain_extent.height });
     }
 
     fn recordCommandBuffer(self: *VulkanRenderer, command_buffer: vk.VkCommandBuffer, image_index: u32) !void {
@@ -1025,8 +1081,9 @@ pub const VulkanRenderer = struct {
             .flags = 0,
         };
 
+        const old_semaphore_count = self.render_finished_semaphores.items.len;
         try self.render_finished_semaphores.resize(self.allocator, swapchain_image_count);
-        for (0..swapchain_image_count) |i| {
+        for (old_semaphore_count..swapchain_image_count) |i| {
             self.render_finished_semaphores.items[i] = try vk.createSemaphore(self.device, &semaphore_info, null);
         }
 
@@ -2251,6 +2308,11 @@ pub const VulkanRenderer = struct {
         self.camera.?.zoom(delta_distance);
     }
 
+    fn getFramebufferResizedPtrVTable(impl: *anyopaque) *bool {
+        const self: *VulkanRenderer = @ptrCast(@alignCast(impl));
+        return &self.framebuffer_resized;
+    }
+
     pub const vtable: Renderer.VTable = .{
         .init = initVTable,
         .deinit = deinitVTable,
@@ -2259,5 +2321,6 @@ pub const VulkanRenderer = struct {
         .render = renderVTable,
         .rotate_camera = rotateCameraVTable,
         .zoom_camera = zoomCameraVTable,
+        .get_framebuffer_resized_ptr = getFramebufferResizedPtrVTable,
     };
 };

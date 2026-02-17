@@ -6,12 +6,30 @@ const glfw = @import("platform/glfw.zig");
 
 const InputState = struct {
     scroll_delta: f32 = 0.0,
+    window: *Window,
+    framebuffer_resized: *bool,
 };
 
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
     _ = xoffset;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
     input_state.scroll_delta += @floatCast(yoffset);
+}
+
+fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.c) void {
+    _ = scancode;
+    _ = mods;
+    if (key == glfw.GLFW_KEY_F11 and action == glfw.GLFW_RELEASE) {
+        const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+        input_state.window.toggleFullscreen();
+    }
+}
+
+fn framebufferSizeCallback(window: ?*glfw.Window, width: c_int, height: c_int) callconv(.c) void {
+    _ = width;
+    _ = height;
+    const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+    input_state.framebuffer_resized.* = true;
 }
 
 pub fn main() !void {
@@ -29,9 +47,16 @@ pub fn main() !void {
     var renderer = try Renderer.init(allocator, &window, &VulkanRenderer.vtable);
     defer renderer.deinit();
 
-    var input_state = InputState{};
+    const framebuffer_resized = renderer.getFramebufferResizedPtr();
+
+    var input_state = InputState{
+        .window = &window,
+        .framebuffer_resized = framebuffer_resized,
+    };
     glfw.setWindowUserPointer(window.handle, &input_state);
     glfw.setScrollCallback(window.handle, scrollCallback);
+    glfw.setKeyCallback(window.handle, keyCallback);
+    glfw.setFramebufferSizeCallback(window.handle, framebufferSizeCallback);
 
     std.log.info("Entering main loop...", .{});
 
