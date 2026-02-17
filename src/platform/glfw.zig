@@ -18,6 +18,13 @@ pub const GLFW_MAXIMIZED = c.GLFW_MAXIMIZED;
 pub const GLFW_TRUE = c.GLFW_TRUE;
 pub const GLFW_FALSE = c.GLFW_FALSE;
 
+// Input constants
+pub const GLFW_KEY_UP = c.GLFW_KEY_UP;
+pub const GLFW_KEY_DOWN = c.GLFW_KEY_DOWN;
+pub const GLFW_KEY_LEFT = c.GLFW_KEY_LEFT;
+pub const GLFW_KEY_RIGHT = c.GLFW_KEY_RIGHT;
+pub const GLFW_PRESS = c.GLFW_PRESS;
+
 // Error type
 pub const GlfwError = error{
     InitFailed,
@@ -92,6 +99,14 @@ pub fn setWindowUserPointer(window: *Window, pointer: ?*anyopaque) void {
 
 pub fn getWindowUserPointer(window: *Window) ?*anyopaque {
     return c.glfwGetWindowUserPointer(window);
+}
+
+pub fn setScrollCallback(window: *Window, callback: ?*const fn (?*Window, f64, f64) callconv(.c) void) void {
+    _ = c.glfwSetScrollCallback(window, callback);
+}
+
+pub fn getTime() f64 {
+    return c.glfwGetTime();
 }
 
 pub fn getRequiredInstanceExtensions(count: *u32) ?[*]const [*:0]const u8 {
