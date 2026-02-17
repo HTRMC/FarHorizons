@@ -3,4 +3,5 @@ pub const c = @cImport({
     @cInclude("volk.h");
     @cInclude("GLFW/glfw3.h");
     @cInclude("shaderc/shaderc.h");
+    @cInclude("stb_image.h");
 });
