@@ -60,6 +60,10 @@ pub const VkMemoryAllocateInfo = c.VkMemoryAllocateInfo;
 pub const VkMemoryRequirements = c.VkMemoryRequirements;
 pub const VkPhysicalDeviceMemoryProperties = c.VkPhysicalDeviceMemoryProperties;
 pub const VkDrawIndirectCommand = c.VkDrawIndirectCommand;
+pub const VkIndexType = c.VkIndexType;
+pub const VkBufferCopy = c.VkBufferCopy;
+pub const VkVertexInputBindingDescription = c.VkVertexInputBindingDescription;
+pub const VkVertexInputAttributeDescription = c.VkVertexInputAttributeDescription;
 
 // Re-export constants
 pub const VK_SUCCESS = c.VK_SUCCESS;
@@ -120,6 +124,7 @@ pub const VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO = c.VK_STRUCTURE_TYPE_COMM
 pub const VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 pub const VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 pub const VK_COMMAND_BUFFER_LEVEL_PRIMARY = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+pub const VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 pub const VK_FENCE_CREATE_SIGNALED_BIT = c.VK_FENCE_CREATE_SIGNALED_BIT;
 pub const VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 pub const VK_SUBPASS_CONTENTS_INLINE = c.VK_SUBPASS_CONTENTS_INLINE;
@@ -129,10 +134,16 @@ pub const VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO = c.VK_STRUCTURE_TYPE_BUFFER_CREA
 pub const VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 pub const VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT = c.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
 pub const VK_BUFFER_USAGE_STORAGE_BUFFER_BIT = c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+pub const VK_BUFFER_USAGE_TRANSFER_SRC_BIT = c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 pub const VK_BUFFER_USAGE_TRANSFER_DST_BIT = c.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+pub const VK_BUFFER_USAGE_VERTEX_BUFFER_BIT = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+pub const VK_BUFFER_USAGE_INDEX_BUFFER_BIT = c.VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+pub const VK_INDEX_TYPE_UINT16 = c.VK_INDEX_TYPE_UINT16;
 pub const VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT = c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
 pub const VK_MEMORY_PROPERTY_HOST_COHERENT_BIT = c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 pub const VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+pub const VK_VERTEX_INPUT_RATE_VERTEX = c.VK_VERTEX_INPUT_RATE_VERTEX;
+pub const VK_FORMAT_R32G32B32_SFLOAT = c.VK_FORMAT_R32G32B32_SFLOAT;
 
 // Shader and pipeline types
 pub const VkShaderModule = c.VkShaderModule;
@@ -191,6 +202,7 @@ pub const VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE
 pub const VK_POLYGON_MODE_FILL = c.VK_POLYGON_MODE_FILL;
 pub const VK_CULL_MODE_BACK_BIT = c.VK_CULL_MODE_BACK_BIT;
 pub const VK_FRONT_FACE_CLOCKWISE = c.VK_FRONT_FACE_CLOCKWISE;
+pub const VK_FRONT_FACE_COUNTER_CLOCKWISE = c.VK_FRONT_FACE_COUNTER_CLOCKWISE;
 pub const VK_BLEND_FACTOR_ONE = c.VK_BLEND_FACTOR_ONE;
 pub const VK_BLEND_FACTOR_ZERO = c.VK_BLEND_FACTOR_ZERO;
 pub const VK_BLEND_OP_ADD = c.VK_BLEND_OP_ADD;
@@ -593,6 +605,17 @@ pub fn allocateCommandBuffers(
     try vkResultToError(result);
 }
 
+pub fn freeCommandBuffers(
+    device: VkDevice,
+    command_pool: VkCommandPool,
+    command_buffer_count: u32,
+    command_buffers: [*]const VkCommandBuffer,
+) void {
+    if (c.vkFreeCommandBuffers) |fn_ptr| {
+        fn_ptr(device, command_pool, command_buffer_count, command_buffers);
+    }
+}
+
 pub fn createSemaphore(
     device: VkDevice,
     create_info: *const VkSemaphoreCreateInfo,
@@ -683,6 +706,12 @@ pub fn queueSubmit(
     try vkResultToError(result);
 }
 
+pub fn queueWaitIdle(queue: VkQueue) VulkanError!void {
+    const fn_ptr = c.vkQueueWaitIdle orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(queue);
+    try vkResultToError(result);
+}
+
 pub fn queuePresentKHR(
     queue: VkQueue,
     present_info: *const VkPresentInfoKHR,
@@ -736,6 +765,54 @@ pub fn cmdDraw(
 ) void {
     if (c.vkCmdDraw) |fn_ptr| {
         fn_ptr(command_buffer, vertex_count, instance_count, first_vertex, first_instance);
+    }
+}
+
+pub fn cmdBindVertexBuffers(
+    command_buffer: VkCommandBuffer,
+    first_binding: u32,
+    binding_count: u32,
+    buffers: [*]const VkBuffer,
+    offsets: [*]const VkDeviceSize,
+) void {
+    if (c.vkCmdBindVertexBuffers) |fn_ptr| {
+        fn_ptr(command_buffer, first_binding, binding_count, buffers, offsets);
+    }
+}
+
+pub fn cmdBindIndexBuffer(
+    command_buffer: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: VkDeviceSize,
+    index_type: VkIndexType,
+) void {
+    if (c.vkCmdBindIndexBuffer) |fn_ptr| {
+        fn_ptr(command_buffer, buffer, offset, index_type);
+    }
+}
+
+pub fn cmdDrawIndexed(
+    command_buffer: VkCommandBuffer,
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
+    first_instance: u32,
+) void {
+    if (c.vkCmdDrawIndexed) |fn_ptr| {
+        fn_ptr(command_buffer, index_count, instance_count, first_index, vertex_offset, first_instance);
+    }
+}
+
+pub fn cmdCopyBuffer(
+    command_buffer: VkCommandBuffer,
+    src_buffer: VkBuffer,
+    dst_buffer: VkBuffer,
+    region_count: u32,
+    regions: [*]const VkBufferCopy,
+) void {
+    if (c.vkCmdCopyBuffer) |fn_ptr| {
+        fn_ptr(command_buffer, src_buffer, dst_buffer, region_count, regions);
     }
 }
 
