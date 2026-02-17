@@ -5,7 +5,7 @@ const c = @import("../../platform/c.zig").c;
 const Window = @import("../../platform/Window.zig").Window;
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const Camera = @import("../Camera.zig");
-const zlm = @import("../../math/zlm.zig");
+const zlm = @import("zlm");
 
 const enable_validation_layers = @import("builtin").mode == .Debug;
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};

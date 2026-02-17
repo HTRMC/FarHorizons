@@ -28,6 +28,10 @@
             .hash = "N-V-__8AAEIdEQJys7RIzSOgZvGI4gxm1JRYCcJbLyu_7RyP",
             .lazy = true,
         },
+        .zlm = .{
+            .url = "git+https://github.com/HTRMC/zlm.git#0afcb03e5ae18b47ceec574cbc26b0c023b5f18d",
+            .hash = "zlm-0.1.0-kTeHg5QPAACkQiwBEGC3MKT8wr5_hEs9aIRCv_K7TyQr",
+        },
     },
     .paths = .{
         "build.zig",

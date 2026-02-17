@@ -54,6 +54,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    const zlm_dep = b.dependency("zlm", .{});
+    exe.root_module.addImport("zlm", zlm_dep.module("zlm"));
+
     linkDependencies(b, exe);
 
     b.installArtifact(exe);

@@ -1,5 +1,5 @@
 const std = @import("std");
-const zlm = @import("../math/zlm.zig");
+const zlm = @import("zlm");
 
 const Camera = @This();
 
