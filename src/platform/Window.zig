@@ -26,8 +26,8 @@ pub const Window = struct {
         glfw.windowHint(glfw.GLFW_RESIZABLE, glfw.GLFW_TRUE);
 
         const handle = try glfw.createWindow(
-            @intCast(config.width),
-            @intCast(config.height),
+            std.math.cast(c_int, config.width) orelse unreachable,
+            std.math.cast(c_int, config.height) orelse unreachable,
             config.title.ptr,
             null,
             null,
@@ -61,7 +61,7 @@ pub const Window = struct {
         var width: c_int = 0;
         var height: c_int = 0;
         glfw.getFramebufferSize(self.handle, &width, &height);
-        return .{ .width = @intCast(width), .height = @intCast(height) };
+        return .{ .width = std.math.cast(u32, width) orelse unreachable, .height = std.math.cast(u32, height) orelse unreachable };
     }
 
     pub fn createSurface(self: *const Window, instance: anytype, allocator: ?*const anyopaque) !vk.VkSurfaceKHR {

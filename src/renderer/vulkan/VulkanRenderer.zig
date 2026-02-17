@@ -541,7 +541,7 @@ pub const VulkanRenderer = struct {
             .pApplicationInfo = &app_info,
             .enabledLayerCount = if (enable_validation_layers) validation_layers.len else 0,
             .ppEnabledLayerNames = if (enable_validation_layers) &validation_layers else null,
-            .enabledExtensionCount = @intCast(extensions.items.len),
+            .enabledExtensionCount = std.math.cast(u32, extensions.items.len) orelse unreachable,
             .ppEnabledExtensionNames = extensions.items.ptr,
         };
 
@@ -619,10 +619,10 @@ pub const VulkanRenderer = struct {
             const supports_graphics = (family.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT) != 0;
 
             var present_support: vk.VkBool32 = vk.VK_FALSE;
-            try vk.getPhysicalDeviceSurfaceSupportKHR(device, @intCast(i), surface, &present_support);
+            try vk.getPhysicalDeviceSurfaceSupportKHR(device, std.math.cast(u32, i) orelse unreachable, surface, &present_support);
 
             if (supports_graphics and present_support == vk.VK_TRUE) {
-                return @intCast(i);
+                return std.math.cast(u32, i) orelse unreachable;
             }
         }
 
@@ -902,7 +902,7 @@ pub const VulkanRenderer = struct {
             const required_props = vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
             var i: u32 = 0;
             while (i < mem_properties.memoryTypeCount) : (i += 1) {
-                if ((mem_requirements.memoryTypeBits & (@as(u32, 1) << @intCast(i))) != 0) {
+                if ((mem_requirements.memoryTypeBits & (@as(u32, 1) << (std.math.cast(u5, i) orelse unreachable))) != 0) {
                     if ((mem_properties.memoryTypes[i].propertyFlags & required_props) == required_props) {
                         break :blk i;
                     }
@@ -1436,12 +1436,12 @@ pub const VulkanRenderer = struct {
         vk.getPhysicalDeviceMemoryProperties(self.physical_device, &mem_properties);
 
         for (0..mem_properties.memoryTypeCount) |i| {
-            const type_bit = @as(u32, 1) << @intCast(i);
+            const type_bit = @as(u32, 1) << (std.math.cast(u5, i) orelse unreachable);
             const has_type = (type_filter & type_bit) != 0;
             const has_properties = (mem_properties.memoryTypes[i].propertyFlags & properties) == properties;
 
             if (has_type and has_properties) {
-                return @intCast(i);
+                return std.math.cast(u32, i) orelse unreachable;
             }
         }
 
