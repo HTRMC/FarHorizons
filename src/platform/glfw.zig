@@ -85,11 +85,11 @@ pub fn getKey(window: *Window, key: c_int) c_int {
     return c.glfwGetKey(window, key);
 }
 
-pub fn setKeyCallback(window: *Window, callback: ?*const fn (?*Window, c_int, c_int, c_int, c_int) callconv(.C) void) void {
+pub fn setKeyCallback(window: *Window, callback: ?*const fn (?*Window, c_int, c_int, c_int, c_int) callconv(.c) void) void {
     _ = c.glfwSetKeyCallback(window, callback);
 }
 
-pub fn setFramebufferSizeCallback(window: *Window, callback: ?*const fn (?*Window, c_int, c_int) callconv(.C) void) void {
+pub fn setFramebufferSizeCallback(window: *Window, callback: ?*const fn (?*Window, c_int, c_int) callconv(.c) void) void {
     _ = c.glfwSetFramebufferSizeCallback(window, callback);
 }
 
