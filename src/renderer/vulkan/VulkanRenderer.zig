@@ -3,10 +3,70 @@ const Renderer = @import("../Renderer.zig").Renderer;
 const vk = @import("../../platform/volk.zig");
 const Window = @import("../../platform/Window.zig").Window;
 const ShaderCompiler = @import("ShaderCompiler.zig");
+const Camera = @import("../Camera.zig");
+const zlm = @import("../../math/zlm.zig");
 
 const enable_validation_layers = @import("builtin").mode == .Debug;
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 const MAX_FRAMES_IN_FLIGHT = 2;
+
+pub const Vertex = struct {
+    position: [3]f32,
+    color: [3]f32,
+
+    pub fn getBindingDescription() vk.VkVertexInputBindingDescription {
+        return vk.VkVertexInputBindingDescription{
+            .binding = 0,
+            .stride = @sizeOf(Vertex),
+            .inputRate = vk.VK_VERTEX_INPUT_RATE_VERTEX,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [2]vk.VkVertexInputAttributeDescription {
+        return [2]vk.VkVertexInputAttributeDescription{
+            vk.VkVertexInputAttributeDescription{
+                .binding = 0,
+                .location = 0,
+                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = @offsetOf(Vertex, "position"),
+            },
+            vk.VkVertexInputAttributeDescription{
+                .binding = 0,
+                .location = 1,
+                .format = vk.VK_FORMAT_R32G32B32_SFLOAT,
+                .offset = @offsetOf(Vertex, "color"),
+            },
+        };
+    }
+};
+
+const cube_vertices = [_]Vertex{
+    // Front face (red)
+    Vertex{ .position = [3]f32{ -0.5, -0.5, 0.5 }, .color = [3]f32{ 1.0, 0.0, 0.0 } },
+    Vertex{ .position = [3]f32{ 0.5, -0.5, 0.5 }, .color = [3]f32{ 1.0, 0.0, 0.0 } },
+    Vertex{ .position = [3]f32{ 0.5, 0.5, 0.5 }, .color = [3]f32{ 1.0, 0.0, 0.0 } },
+    Vertex{ .position = [3]f32{ -0.5, 0.5, 0.5 }, .color = [3]f32{ 1.0, 0.0, 0.0 } },
+    // Back face (green)
+    Vertex{ .position = [3]f32{ -0.5, -0.5, -0.5 }, .color = [3]f32{ 0.0, 1.0, 0.0 } },
+    Vertex{ .position = [3]f32{ 0.5, -0.5, -0.5 }, .color = [3]f32{ 0.0, 1.0, 0.0 } },
+    Vertex{ .position = [3]f32{ 0.5, 0.5, -0.5 }, .color = [3]f32{ 0.0, 1.0, 0.0 } },
+    Vertex{ .position = [3]f32{ -0.5, 0.5, -0.5 }, .color = [3]f32{ 0.0, 1.0, 0.0 } },
+};
+
+const cube_indices = [_]u16{
+    // Front face
+    0, 1, 2, 2, 3, 0,
+    // Back face
+    5, 4, 7, 7, 6, 5,
+    // Left face
+    4, 0, 3, 3, 7, 4,
+    // Right face
+    1, 5, 6, 6, 2, 1,
+    // Top face
+    3, 2, 6, 6, 7, 3,
+    // Bottom face
+    4, 5, 1, 1, 0, 4,
+};
 
 fn debugCallback(
     message_severity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
@@ -72,6 +132,11 @@ pub const VulkanRenderer = struct {
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence,
     images_in_flight: std.ArrayList(?vk.VkFence),
     current_frame: u32,
+    vertex_buffer: vk.VkBuffer,
+    vertex_buffer_memory: vk.VkDeviceMemory,
+    index_buffer: vk.VkBuffer,
+    index_buffer_memory: vk.VkDeviceMemory,
+    camera: Camera,
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window) !*VulkanRenderer {
         const self = try allocator.create(VulkanRenderer);
@@ -149,15 +214,23 @@ pub const VulkanRenderer = struct {
             .in_flight_fences = undefined,
             .images_in_flight = images_in_flight,
             .current_frame = 0,
+            .vertex_buffer = undefined,
+            .vertex_buffer_memory = undefined,
+            .index_buffer = undefined,
+            .index_buffer_memory = undefined,
+            .camera = undefined,
         };
 
         try self.createSwapchain();
+        self.camera = Camera.init(self.swapchain_extent.width, self.swapchain_extent.height);
         try self.createDepthBuffer();
         try self.createFramebuffers();
         try self.createGraphicsPipeline();
         try self.createIndirectBuffer();
         try self.createComputePipeline();
         try self.createCommandPool();
+        try self.createVertexBuffer();
+        try self.createIndexBuffer();
         try self.createCommandBuffers();
         try self.createSyncObjects();
 
@@ -191,6 +264,11 @@ pub const VulkanRenderer = struct {
         vk.freeMemory(self.device, self.indirect_buffer_memory, null);
         vk.destroyBuffer(self.device, self.indirect_count_buffer, null);
         vk.freeMemory(self.device, self.indirect_count_buffer_memory, null);
+
+        vk.destroyBuffer(self.device, self.vertex_buffer, null);
+        vk.freeMemory(self.device, self.vertex_buffer_memory, null);
+        vk.destroyBuffer(self.device, self.index_buffer, null);
+        vk.freeMemory(self.device, self.index_buffer_memory, null);
 
         vk.destroyPipeline(self.device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(self.device, self.pipeline_layout, null);
@@ -354,15 +432,28 @@ pub const VulkanRenderer = struct {
         vk.cmdBeginRenderPass(command_buffer, &render_pass_info, vk.VK_SUBPASS_CONTENTS_INLINE);
 
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
-        vk.cmdDrawIndirectCount(
+
+        // Bind vertex buffer
+        const vertex_buffers = [_]vk.VkBuffer{self.vertex_buffer};
+        const vertex_offsets = [_]vk.VkDeviceSize{0};
+        vk.cmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers, &vertex_offsets);
+
+        // Bind index buffer
+        vk.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT16);
+
+        // Push MVP matrix
+        const mvp = self.camera.getViewProjectionMatrix();
+        vk.cmdPushConstants(
             command_buffer,
-            self.indirect_buffer,
+            self.pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT,
             0,
-            self.indirect_count_buffer,
-            0,
-            1,
-            @sizeOf(vk.VkDrawIndirectCommand),
+            @sizeOf(zlm.Mat4),
+            &mvp.m,
         );
+
+        // Draw indexed
+        vk.cmdDrawIndexed(command_buffer, cube_indices.len, 1, 0, 0, 0);
 
         vk.cmdEndRenderPass(command_buffer);
 
@@ -756,10 +847,8 @@ pub const VulkanRenderer = struct {
     }
 
     fn cleanupSwapchain(self: *VulkanRenderer) void {
-        for (self.render_finished_semaphores.items) |semaphore| {
-            vk.destroySemaphore(self.device, semaphore, null);
-        }
-        self.render_finished_semaphores.clearRetainingCapacity();
+        // Note: render_finished_semaphores are destroyed in deinit(), not here
+        // to avoid double-free when cleanupSwapchain is called from deinit()
 
         for (self.framebuffers.items) |framebuffer| {
             vk.destroyFramebuffer(self.device, framebuffer, null);
@@ -934,14 +1023,17 @@ pub const VulkanRenderer = struct {
 
         const shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{ vert_stage_info, frag_stage_info };
 
+        const binding_description = Vertex.getBindingDescription();
+        const attribute_descriptions = Vertex.getAttributeDescriptions();
+
         const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .vertexBindingDescriptionCount = 0,
-            .pVertexBindingDescriptions = null,
-            .vertexAttributeDescriptionCount = 0,
-            .pVertexAttributeDescriptions = null,
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &binding_description,
+            .vertexAttributeDescriptionCount = attribute_descriptions.len,
+            .pVertexAttributeDescriptions = &attribute_descriptions,
         };
 
         const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
@@ -984,7 +1076,7 @@ pub const VulkanRenderer = struct {
             .rasterizerDiscardEnable = vk.VK_FALSE,
             .polygonMode = vk.VK_POLYGON_MODE_FILL,
             .cullMode = vk.VK_CULL_MODE_BACK_BIT,
-            .frontFace = vk.VK_FRONT_FACE_CLOCKWISE,
+            .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
             .depthBiasEnable = vk.VK_FALSE,
             .depthBiasConstantFactor = 0.0,
             .depthBiasClamp = 0.0,
@@ -1041,14 +1133,20 @@ pub const VulkanRenderer = struct {
             .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
         };
 
+        const push_constant_range = vk.VkPushConstantRange{
+            .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+            .offset = 0,
+            .size = 64, // sizeof(mat4)
+        };
+
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .setLayoutCount = 0,
             .pSetLayouts = null,
-            .pushConstantRangeCount = 0,
-            .pPushConstantRanges = null,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constant_range,
         };
 
         self.pipeline_layout = try vk.createPipelineLayout(self.device, &pipeline_layout_info, null);
@@ -1350,6 +1448,168 @@ pub const VulkanRenderer = struct {
         return error.NoSuitableMemoryType;
     }
 
+    fn createBuffer(
+        self: *VulkanRenderer,
+        size: vk.VkDeviceSize,
+        usage: c_uint,
+        properties: c_uint,
+        buffer: *vk.VkBuffer,
+        buffer_memory: *vk.VkDeviceMemory,
+    ) !void {
+        const buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = size,
+            .usage = usage,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+        };
+
+        buffer.* = try vk.createBuffer(self.device, &buffer_info, null);
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vk.getBufferMemoryRequirements(self.device, buffer.*, &mem_requirements);
+
+        const memory_type_index = try self.findMemoryType(
+            mem_requirements.memoryTypeBits,
+            properties,
+        );
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = memory_type_index,
+        };
+
+        buffer_memory.* = try vk.allocateMemory(self.device, &alloc_info, null);
+        try vk.bindBufferMemory(self.device, buffer.*, buffer_memory.*, 0);
+    }
+
+    fn copyBuffer(
+        self: *VulkanRenderer,
+        src_buffer: vk.VkBuffer,
+        dst_buffer: vk.VkBuffer,
+        size: vk.VkDeviceSize,
+    ) !void {
+        const alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = self.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var command_buffers: [1]vk.VkCommandBuffer = undefined;
+        try vk.allocateCommandBuffers(self.device, &alloc_info, &command_buffers);
+        const command_buffer = command_buffers[0];
+
+        const begin_info = vk.VkCommandBufferBeginInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        };
+
+        try vk.beginCommandBuffer(command_buffer, &begin_info);
+
+        const copy_regions = [_]vk.VkBufferCopy{.{
+            .srcOffset = 0,
+            .dstOffset = 0,
+            .size = size,
+        }};
+
+        vk.cmdCopyBuffer(command_buffer, src_buffer, dst_buffer, 1, &copy_regions);
+        try vk.endCommandBuffer(command_buffer);
+
+        const submit_infos = [_]vk.VkSubmitInfo{.{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &command_buffer,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        }};
+
+        try vk.queueSubmit(self.graphics_queue, 1, &submit_infos, null);
+        try vk.queueWaitIdle(self.graphics_queue);
+
+        vk.freeCommandBuffers(self.device, self.command_pool, 1, &command_buffers);
+    }
+
+    fn createVertexBuffer(self: *VulkanRenderer) !void {
+        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(cube_vertices));
+
+        var staging_buffer: vk.VkBuffer = undefined;
+        var staging_buffer_memory: vk.VkDeviceMemory = undefined;
+
+        try self.createBuffer(
+            buffer_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buffer,
+            &staging_buffer_memory,
+        );
+
+        var data: ?*anyopaque = null;
+        try vk.mapMemory(self.device, staging_buffer_memory, 0, buffer_size, 0, &data);
+        const vertex_ptr: [*]Vertex = @ptrCast(@alignCast(data));
+        @memcpy(vertex_ptr[0..cube_vertices.len], &cube_vertices);
+        vk.unmapMemory(self.device, staging_buffer_memory);
+
+        try self.createBuffer(
+            buffer_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.vertex_buffer,
+            &self.vertex_buffer_memory,
+        );
+
+        try self.copyBuffer(staging_buffer, self.vertex_buffer, buffer_size);
+
+        vk.destroyBuffer(self.device, staging_buffer, null);
+        vk.freeMemory(self.device, staging_buffer_memory, null);
+    }
+
+    fn createIndexBuffer(self: *VulkanRenderer) !void {
+        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(cube_indices));
+
+        var staging_buffer: vk.VkBuffer = undefined;
+        var staging_buffer_memory: vk.VkDeviceMemory = undefined;
+
+        try self.createBuffer(
+            buffer_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buffer,
+            &staging_buffer_memory,
+        );
+
+        var data: ?*anyopaque = null;
+        try vk.mapMemory(self.device, staging_buffer_memory, 0, buffer_size, 0, &data);
+        const index_ptr: [*]u16 = @ptrCast(@alignCast(data));
+        @memcpy(index_ptr[0..cube_indices.len], &cube_indices);
+        vk.unmapMemory(self.device, staging_buffer_memory);
+
+        try self.createBuffer(
+            buffer_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.index_buffer,
+            &self.index_buffer_memory,
+        );
+
+        try self.copyBuffer(staging_buffer, self.index_buffer, buffer_size);
+
+        vk.destroyBuffer(self.device, staging_buffer, null);
+        vk.freeMemory(self.device, staging_buffer_memory, null);
+    }
+
     fn createDebugMessenger(instance: vk.VkInstance) !vk.VkDebugUtilsMessengerEXT {
         const create_info = vk.VkDebugUtilsMessengerCreateInfoEXT{
             .sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
@@ -1394,11 +1654,23 @@ pub const VulkanRenderer = struct {
         return render(self);
     }
 
+    fn rotateCameraVTable(impl: *anyopaque, delta_azimuth: f32, delta_elevation: f32) void {
+        const self: *VulkanRenderer = @ptrCast(@alignCast(impl));
+        self.camera.rotate(delta_azimuth, delta_elevation);
+    }
+
+    fn zoomCameraVTable(impl: *anyopaque, delta_distance: f32) void {
+        const self: *VulkanRenderer = @ptrCast(@alignCast(impl));
+        self.camera.zoom(delta_distance);
+    }
+
     pub const vtable: Renderer.VTable = .{
         .init = initVTable,
         .deinit = deinitVTable,
         .begin_frame = beginFrameVTable,
         .end_frame = endFrameVTable,
         .render = renderVTable,
+        .rotate_camera = rotateCameraVTable,
+        .zoom_camera = zoomCameraVTable,
     };
 };
