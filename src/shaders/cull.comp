@@ -3,9 +3,10 @@
 layout(local_size_x = 64) in;
 
 struct DrawCommand {
-    uint vertexCount;
+    uint indexCount;
     uint instanceCount;
-    uint firstVertex;
+    uint firstIndex;
+    int  vertexOffset;
     uint firstInstance;
 };
 
@@ -19,6 +20,7 @@ layout(set = 0, binding = 1) buffer DrawCount {
 
 layout(push_constant) uniform PushConstants {
     uint objectCount;
+    uint totalIndexCount;
 } pc;
 
 void main() {
@@ -30,8 +32,9 @@ void main() {
 
     uint outIndex = atomicAdd(drawCount.count, 1);
 
-    drawCommands.commands[outIndex].vertexCount = 3;
+    drawCommands.commands[outIndex].indexCount = pc.totalIndexCount;
     drawCommands.commands[outIndex].instanceCount = 1;
-    drawCommands.commands[outIndex].firstVertex = 0;
+    drawCommands.commands[outIndex].firstIndex = 0;
+    drawCommands.commands[outIndex].vertexOffset = 0;
     drawCommands.commands[outIndex].firstInstance = 0;
 }

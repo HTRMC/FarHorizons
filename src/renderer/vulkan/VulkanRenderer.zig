@@ -12,6 +12,13 @@ const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 const MAX_FRAMES_IN_FLIGHT = 2;
 const MAX_TEXTURES = 256;
 
+const CHUNK_SIZE = 16;
+const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; // 4096
+const VERTS_PER_BLOCK = 24;
+const INDICES_PER_BLOCK = 36;
+const CHUNK_VERTEX_COUNT = BLOCKS_PER_CHUNK * VERTS_PER_BLOCK; // 98304
+const CHUNK_INDEX_COUNT = BLOCKS_PER_CHUNK * INDICES_PER_BLOCK; // 147456
+
 const GpuVertex = extern struct {
     px: f32,
     py: f32,
@@ -21,53 +28,54 @@ const GpuVertex = extern struct {
     tex_index: u32,
 };
 
-const cube_vertices = [_]GpuVertex{
+// Per-face vertex template (unit cube centered at origin)
+const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }{
     // Front face (z = +0.5)
-    .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
-    .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    .{
+        .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 1.0 },
+        .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 1.0 },
+        .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 0.0 },
+        .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 0.0 },
+    },
     // Back face (z = -0.5)
-    .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    .{
+        .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0 },
+        .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0 },
+        .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0 },
+        .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0 },
+    },
     // Left face (x = -0.5)
-    .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
-    .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    .{
+        .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0 },
+        .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 1.0 },
+        .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 0.0 },
+        .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0 },
+    },
     // Right face (x = +0.5)
-    .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    .{
+        .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 1.0 },
+        .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0 },
+        .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0 },
+        .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 0.0 },
+    },
     // Top face (y = +0.5)
-    .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
-    .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    .{
+        .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 1.0 },
+        .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 1.0 },
+        .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0 },
+        .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0 },
+    },
     // Bottom face (y = -0.5)
-    .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0, .tex_index = 0 },
-    .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 0.0, .tex_index = 0 },
-    .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 0.0, .tex_index = 0 },
+    .{
+        .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0 },
+        .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0 },
+        .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 0.0 },
+        .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 0.0 },
+    },
 };
 
-const cube_indices = [_]u16{
-    // Front face
-    0,  1,  2,  2,  3,  0,
-    // Back face
-    4,  5,  6,  6,  7,  4,
-    // Left face
-    8,  9,  10, 10, 11, 8,
-    // Right face
-    12, 13, 14, 14, 15, 12,
-    // Top face
-    16, 17, 18, 18, 19, 16,
-    // Bottom face
-    20, 21, 22, 22, 23, 20,
-};
+// Per-face index pattern (two triangles, 6 indices referencing 4 verts)
+const face_index_pattern = [6]u32{ 0, 1, 2, 2, 3, 0 };
 
 fn debugCallback(
     message_severity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
@@ -238,12 +246,15 @@ pub const VulkanRenderer = struct {
         };
 
         try self.createSwapchain();
-        self.camera = Camera.init(self.swapchain_extent.width, self.swapchain_extent.height);
+        var cam = Camera.init(self.swapchain_extent.width, self.swapchain_extent.height);
+        cam.target = zlm.Vec3.init(8.0, 8.0, 8.0);
+        cam.distance = 40.0;
+        cam.elevation = 0.5;
+        self.camera = cam;
         try self.createDepthBuffer();
         try self.createCommandPool();
         try self.createTextureImage();
-        try self.createVertexBuffer();
-        try self.createIndexBuffer();
+        try self.createChunkBuffers();
         try self.createBindlessDescriptorSet();
         try self.createGraphicsPipeline();
         try self.createIndirectBuffer();
@@ -416,17 +427,50 @@ pub const VulkanRenderer = struct {
             null,
         );
 
-        const object_count: u32 = 1;
+        const ComputePushConstants = extern struct {
+            object_count: u32,
+            total_index_count: u32,
+        };
+        const compute_pc = ComputePushConstants{
+            .object_count = 1,
+            .total_index_count = CHUNK_INDEX_COUNT,
+        };
         vk.cmdPushConstants(
             command_buffer,
             self.compute_pipeline_layout,
             vk.VK_SHADER_STAGE_COMPUTE_BIT,
             0,
-            @sizeOf(u32),
-            &object_count,
+            @sizeOf(ComputePushConstants),
+            &compute_pc,
         );
 
         vk.cmdDispatch(command_buffer, 1, 1, 1);
+
+        // Buffer memory barrier: compute shader write -> indirect command read
+        const indirect_barrier = vk.VkBufferMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .buffer = self.indirect_buffer,
+            .offset = 0,
+            .size = @sizeOf(vk.VkDrawIndexedIndirectCommand),
+        };
+
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            vk.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+            0,
+            0,
+            null,
+            1,
+            &[_]vk.VkBufferMemoryBarrier{indirect_barrier},
+            0,
+            null,
+        );
 
         // Barrier: depth image UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL
         const depth_barrier = vk.VkImageMemoryBarrier{
@@ -570,8 +614,8 @@ pub const VulkanRenderer = struct {
             null,
         );
 
-        // Bind index buffer
-        vk.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT16);
+        // Bind index buffer (u32 indices for chunk)
+        vk.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT32);
 
         // Push MVP matrix
         const mvp = self.camera.?.getViewProjectionMatrix();
@@ -584,8 +628,16 @@ pub const VulkanRenderer = struct {
             &mvp.m,
         );
 
-        // Draw indexed
-        vk.cmdDrawIndexed(command_buffer, cube_indices.len, 1, 0, 0, 0);
+        // Draw indexed indirect with count
+        vk.cmdDrawIndexedIndirectCount(
+            command_buffer,
+            self.indirect_buffer,
+            0,
+            self.indirect_count_buffer,
+            0,
+            1,
+            @sizeOf(vk.VkDrawIndexedIndirectCommand),
+        );
 
         vk.cmdEndRendering(command_buffer);
 
@@ -1027,7 +1079,7 @@ pub const VulkanRenderer = struct {
         var tex_width: c_int = 0;
         var tex_height: c_int = 0;
         var tex_channels: c_int = 0;
-        const pixels = c.stbi_load("assets/farhorizons/textures/block/debug.png", &tex_width, &tex_height, &tex_channels, 4) orelse {
+        const pixels = c.stbi_load("assets/farhorizons/textures/block/glass.png", &tex_width, &tex_height, &tex_channels, 4) orelse {
             std.log.err("Failed to load texture image", .{});
             return error.TextureLoadFailed;
         };
@@ -1376,7 +1428,7 @@ pub const VulkanRenderer = struct {
         const vertex_buffer_info = vk.VkDescriptorBufferInfo{
             .buffer = self.vertex_buffer,
             .offset = 0,
-            .range = @sizeOf(@TypeOf(cube_vertices)),
+            .range = CHUNK_VERTEX_COUNT * @sizeOf(GpuVertex),
         };
 
         const texture_image_info = vk.VkDescriptorImageInfo{
@@ -1635,52 +1687,20 @@ pub const VulkanRenderer = struct {
     }
 
     fn createIndirectBuffer(self: *VulkanRenderer) !void {
-        const buffer_size = @sizeOf(vk.VkDrawIndirectCommand);
+        const buffer_size = @sizeOf(vk.VkDrawIndexedIndirectCommand);
 
-        const buffer_info = vk.VkBufferCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .size = buffer_size,
-            .usage = vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-        };
-
-        self.indirect_buffer = try vk.createBuffer(self.device, &buffer_info, null);
-
-        var mem_requirements: vk.VkMemoryRequirements = undefined;
-        vk.getBufferMemoryRequirements(self.device, self.indirect_buffer, &mem_requirements);
-
-        const memory_type_index = try self.findMemoryType(
-            mem_requirements.memoryTypeBits,
+        try self.createBuffer(
+            buffer_size,
+            vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &self.indirect_buffer,
+            &self.indirect_buffer_memory,
         );
-
-        const alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = mem_requirements.size,
-            .memoryTypeIndex = memory_type_index,
-        };
-
-        self.indirect_buffer_memory = try vk.allocateMemory(self.device, &alloc_info, null);
-        try vk.bindBufferMemory(self.device, self.indirect_buffer, self.indirect_buffer_memory, 0);
 
         var data: ?*anyopaque = null;
         try vk.mapMemory(self.device, self.indirect_buffer_memory, 0, buffer_size, 0, &data);
-
-        const draw_cmd = vk.VkDrawIndirectCommand{
-            .vertexCount = 3,
-            .instanceCount = 1,
-            .firstVertex = 0,
-            .firstInstance = 0,
-        };
-
-        const draw_ptr: *vk.VkDrawIndirectCommand = @ptrCast(@alignCast(data));
-        draw_ptr.* = draw_cmd;
-
+        const draw_ptr: *vk.VkDrawIndexedIndirectCommand = @ptrCast(@alignCast(data));
+        draw_ptr.* = std.mem.zeroes(vk.VkDrawIndexedIndirectCommand);
         vk.unmapMemory(self.device, self.indirect_buffer_memory);
 
         const count_buffer_size = @sizeOf(u32);
@@ -1785,7 +1805,7 @@ pub const VulkanRenderer = struct {
         const draw_buffer_info = vk.VkDescriptorBufferInfo{
             .buffer = self.indirect_buffer,
             .offset = 0,
-            .range = @sizeOf(vk.VkDrawIndirectCommand),
+            .range = @sizeOf(vk.VkDrawIndexedIndirectCommand),
         };
 
         const count_buffer_info = vk.VkDescriptorBufferInfo{
@@ -1841,7 +1861,7 @@ pub const VulkanRenderer = struct {
         const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
             .offset = 0,
-            .size = @sizeOf(u32),
+            .size = @sizeOf(u32) * 2, // objectCount + totalIndexCount
         };
 
         const compute_layout_info = vk.VkPipelineLayoutCreateInfo{
@@ -1995,72 +2015,126 @@ pub const VulkanRenderer = struct {
         vk.freeCommandBuffers(self.device, self.command_pool, 1, &command_buffers);
     }
 
-    fn createVertexBuffer(self: *VulkanRenderer) !void {
-        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(cube_vertices));
+    fn generateChunkMesh(
+        allocator: std.mem.Allocator,
+    ) !struct { vertices: []GpuVertex, indices: []u32 } {
+        const vertices = try allocator.alloc(GpuVertex, CHUNK_VERTEX_COUNT);
+        errdefer allocator.free(vertices);
+        const indices = try allocator.alloc(u32, CHUNK_INDEX_COUNT);
+        errdefer allocator.free(indices);
 
-        var staging_buffer: vk.VkBuffer = undefined;
-        var staging_buffer_memory: vk.VkDeviceMemory = undefined;
+        var block_index: u32 = 0;
+        for (0..CHUNK_SIZE) |by| {
+            for (0..CHUNK_SIZE) |bz| {
+                for (0..CHUNK_SIZE) |bx| {
+                    const bx_f: f32 = @floatFromInt(bx);
+                    const by_f: f32 = @floatFromInt(by);
+                    const bz_f: f32 = @floatFromInt(bz);
 
-        try self.createBuffer(
-            buffer_size,
-            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &staging_buffer,
-            &staging_buffer_memory,
-        );
+                    const vert_base = block_index * VERTS_PER_BLOCK;
+                    const idx_base = block_index * INDICES_PER_BLOCK;
 
-        var data: ?*anyopaque = null;
-        try vk.mapMemory(self.device, staging_buffer_memory, 0, buffer_size, 0, &data);
-        const vertex_ptr: [*]GpuVertex = @ptrCast(@alignCast(data));
-        @memcpy(vertex_ptr[0..cube_vertices.len], &cube_vertices);
-        vk.unmapMemory(self.device, staging_buffer_memory);
+                    // 6 faces, 4 verts each = 24 verts per block
+                    for (0..6) |face| {
+                        for (0..4) |v| {
+                            const vi = vert_base + @as(u32, @intCast(face)) * 4 + @as(u32, @intCast(v));
+                            const fv = face_vertices[face][v];
+                            vertices[vi] = .{
+                                .px = fv.px + bx_f,
+                                .py = fv.py + by_f,
+                                .pz = fv.pz + bz_f,
+                                .u = fv.u,
+                                .v = fv.v,
+                                .tex_index = 0,
+                            };
+                        }
 
-        try self.createBuffer(
-            buffer_size,
-            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.vertex_buffer,
-            &self.vertex_buffer_memory,
-        );
+                        // 6 indices per face
+                        const face_vert_base = vert_base + @as(u32, @intCast(face)) * 4;
+                        for (0..6) |i| {
+                            indices[idx_base + @as(u32, @intCast(face)) * 6 + @as(u32, @intCast(i))] =
+                                face_vert_base + face_index_pattern[i];
+                        }
+                    }
 
-        try self.copyBuffer(staging_buffer, self.vertex_buffer, buffer_size);
+                    block_index += 1;
+                }
+            }
+        }
 
-        vk.destroyBuffer(self.device, staging_buffer, null);
-        vk.freeMemory(self.device, staging_buffer_memory, null);
+        return .{ .vertices = vertices, .indices = indices };
     }
 
-    fn createIndexBuffer(self: *VulkanRenderer) !void {
-        const buffer_size: vk.VkDeviceSize = @sizeOf(@TypeOf(cube_indices));
+    fn createChunkBuffers(self: *VulkanRenderer) !void {
+        const mesh = try generateChunkMesh(self.allocator);
+        defer self.allocator.free(mesh.vertices);
+        defer self.allocator.free(mesh.indices);
 
-        var staging_buffer: vk.VkBuffer = undefined;
-        var staging_buffer_memory: vk.VkDeviceMemory = undefined;
+        // Create vertex buffer via staging
+        const vb_size: vk.VkDeviceSize = @intCast(CHUNK_VERTEX_COUNT * @sizeOf(GpuVertex));
+        {
+            var staging_buffer: vk.VkBuffer = undefined;
+            var staging_memory: vk.VkDeviceMemory = undefined;
+            try self.createBuffer(
+                vb_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer,
+                &staging_memory,
+            );
 
-        try self.createBuffer(
-            buffer_size,
-            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &staging_buffer,
-            &staging_buffer_memory,
-        );
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(self.device, staging_memory, 0, vb_size, 0, &data);
+            const dst: [*]GpuVertex = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..CHUNK_VERTEX_COUNT], mesh.vertices);
+            vk.unmapMemory(self.device, staging_memory);
 
-        var data: ?*anyopaque = null;
-        try vk.mapMemory(self.device, staging_buffer_memory, 0, buffer_size, 0, &data);
-        const index_ptr: [*]u16 = @ptrCast(@alignCast(data));
-        @memcpy(index_ptr[0..cube_indices.len], &cube_indices);
-        vk.unmapMemory(self.device, staging_buffer_memory);
+            try self.createBuffer(
+                vb_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &self.vertex_buffer,
+                &self.vertex_buffer_memory,
+            );
 
-        try self.createBuffer(
-            buffer_size,
-            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.index_buffer,
-            &self.index_buffer_memory,
-        );
+            try self.copyBuffer(staging_buffer, self.vertex_buffer, vb_size);
+            vk.destroyBuffer(self.device, staging_buffer, null);
+            vk.freeMemory(self.device, staging_memory, null);
+        }
 
-        try self.copyBuffer(staging_buffer, self.index_buffer, buffer_size);
+        // Create index buffer via staging (u32)
+        const ib_size: vk.VkDeviceSize = @intCast(CHUNK_INDEX_COUNT * @sizeOf(u32));
+        {
+            var staging_buffer: vk.VkBuffer = undefined;
+            var staging_memory: vk.VkDeviceMemory = undefined;
+            try self.createBuffer(
+                ib_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer,
+                &staging_memory,
+            );
 
-        vk.destroyBuffer(self.device, staging_buffer, null);
-        vk.freeMemory(self.device, staging_buffer_memory, null);
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(self.device, staging_memory, 0, ib_size, 0, &data);
+            const dst: [*]u32 = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..CHUNK_INDEX_COUNT], mesh.indices);
+            vk.unmapMemory(self.device, staging_memory);
+
+            try self.createBuffer(
+                ib_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &self.index_buffer,
+                &self.index_buffer_memory,
+            );
+
+            try self.copyBuffer(staging_buffer, self.index_buffer, ib_size);
+            vk.destroyBuffer(self.device, staging_buffer, null);
+            vk.freeMemory(self.device, staging_memory, null);
+        }
+
+        std.log.info("Chunk buffers created ({} vertices, {} indices)", .{ CHUNK_VERTEX_COUNT, CHUNK_INDEX_COUNT });
     }
 
     fn createDebugMessenger(instance: vk.VkInstance) !vk.VkDebugUtilsMessengerEXT {

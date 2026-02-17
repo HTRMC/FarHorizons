@@ -60,7 +60,9 @@ pub const VkMemoryAllocateInfo = c.VkMemoryAllocateInfo;
 pub const VkMemoryRequirements = c.VkMemoryRequirements;
 pub const VkPhysicalDeviceMemoryProperties = c.VkPhysicalDeviceMemoryProperties;
 pub const VkDrawIndirectCommand = c.VkDrawIndirectCommand;
+pub const VkDrawIndexedIndirectCommand = c.VkDrawIndexedIndirectCommand;
 pub const VkIndexType = c.VkIndexType;
+pub const VkBufferMemoryBarrier = c.VkBufferMemoryBarrier;
 pub const VkBufferCopy = c.VkBufferCopy;
 pub const VkVertexInputBindingDescription = c.VkVertexInputBindingDescription;
 pub const VkVertexInputAttributeDescription = c.VkVertexInputAttributeDescription;
@@ -161,6 +163,7 @@ pub const VK_BUFFER_USAGE_TRANSFER_DST_BIT = c.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 pub const VK_BUFFER_USAGE_VERTEX_BUFFER_BIT = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 pub const VK_BUFFER_USAGE_INDEX_BUFFER_BIT = c.VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 pub const VK_INDEX_TYPE_UINT16 = c.VK_INDEX_TYPE_UINT16;
+pub const VK_INDEX_TYPE_UINT32 = c.VK_INDEX_TYPE_UINT32;
 pub const VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT = c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
 pub const VK_MEMORY_PROPERTY_HOST_COHERENT_BIT = c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 pub const VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
@@ -190,9 +193,14 @@ pub const VK_BORDER_COLOR_INT_OPAQUE_BLACK = c.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
 // Barrier constants
 pub const VK_PIPELINE_STAGE_TRANSFER_BIT = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
 pub const VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT = c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+pub const VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT = c.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+pub const VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT = c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 pub const VK_ACCESS_TRANSFER_WRITE_BIT = c.VK_ACCESS_TRANSFER_WRITE_BIT;
 pub const VK_ACCESS_SHADER_READ_BIT = c.VK_ACCESS_SHADER_READ_BIT;
+pub const VK_ACCESS_INDIRECT_COMMAND_READ_BIT = c.VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+pub const VK_ACCESS_SHADER_WRITE_BIT = c.VK_ACCESS_SHADER_WRITE_BIT;
 pub const VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+pub const VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER = c.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
 pub const VK_QUEUE_FAMILY_IGNORED = c.VK_QUEUE_FAMILY_IGNORED;
 
 // Dynamic rendering constants (Vulkan 1.3)
@@ -969,6 +977,20 @@ pub fn cmdDrawIndirectCount(
     stride: u32,
 ) void {
     if (c.vkCmdDrawIndirectCount) |fn_ptr| {
+        fn_ptr(command_buffer, buffer, offset, count_buffer, count_buffer_offset, max_draw_count, stride);
+    }
+}
+
+pub fn cmdDrawIndexedIndirectCount(
+    command_buffer: VkCommandBuffer,
+    buffer: VkBuffer,
+    offset: VkDeviceSize,
+    count_buffer: VkBuffer,
+    count_buffer_offset: VkDeviceSize,
+    max_draw_count: u32,
+    stride: u32,
+) void {
+    if (c.vkCmdDrawIndexedIndirectCount) |fn_ptr| {
         fn_ptr(command_buffer, buffer, offset, count_buffer, count_buffer_offset, max_draw_count, stride);
     }
 }

@@ -13,7 +13,7 @@ near: f32,
 far: f32,
 
 const MIN_DISTANCE: f32 = 1.0;
-const MAX_DISTANCE: f32 = 20.0;
+const MAX_DISTANCE: f32 = 100.0;
 const MIN_ELEVATION: f32 = -std.math.pi / 2.0 + 0.1;
 const MAX_ELEVATION: f32 = std.math.pi / 2.0 - 0.1;
 
@@ -40,7 +40,7 @@ pub fn getPosition(self: Camera) zlm.Vec3 {
     const x = self.distance * @cos(self.elevation) * @sin(self.azimuth);
     const y = self.distance * @sin(self.elevation);
     const z = self.distance * @cos(self.elevation) * @cos(self.azimuth);
-    return zlm.Vec3.init(x, y, z);
+    return zlm.Vec3.init(x + self.target.x, y + self.target.y, z + self.target.z);
 }
 
 pub fn getViewMatrix(self: Camera) zlm.Mat4 {
