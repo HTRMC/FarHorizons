@@ -310,7 +310,7 @@ fn vkResultToError(result: VkResult) VulkanError!void {
         c.VK_ERROR_COMPRESSION_EXHAUSTED_EXT => error.CompressionExhaustedEXT,
         c.VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT => error.IncompatibleShaderBinaryEXT,
         else => {
-            std.log.err("Unhandled VkResult: {} (0x{x})", .{ result, @as(u32, @bitCast(result)) });
+            std.log.err("Unhandled VkResult: {d} (0x{x})", .{ result, result });
             return error.Unknown;
         },
     };
