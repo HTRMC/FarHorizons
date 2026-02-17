@@ -77,6 +77,43 @@ const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }
 // Per-face index pattern (two triangles, 6 indices referencing 4 verts)
 const face_index_pattern = [6]u32{ 0, 1, 2, 2, 3, 0 };
 
+// Face neighbor offsets: for each face index, the (dx, dy, dz) to the adjacent block
+// Matches face_vertices order: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
+const face_neighbor_offsets = [6][3]i32{
+    .{ 0, 0, 1 }, // front  (+Z)
+    .{ 0, 0, -1 }, // back   (-Z)
+    .{ -1, 0, 0 }, // left   (-X)
+    .{ 1, 0, 0 }, // right  (+X)
+    .{ 0, 1, 0 }, // top    (+Y)
+    .{ 0, -1, 0 }, // bottom (-Y)
+};
+
+const BlockType = enum(u8) {
+    air,
+    glass,
+};
+
+const block_properties = struct {
+    fn isOpaque(block: BlockType) bool {
+        return switch (block) {
+            .air => false,
+            .glass => false,
+        };
+    }
+    fn cullsSelf(block: BlockType) bool {
+        return switch (block) {
+            .air => false,
+            .glass => true,
+        };
+    }
+};
+
+const chunk_blocks: [BLOCKS_PER_CHUNK]BlockType = .{.glass} ** BLOCKS_PER_CHUNK;
+
+fn chunkIndex(x: usize, y: usize, z: usize) usize {
+    return y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
+}
+
 fn debugCallback(
     message_severity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
     message_type: vk.VkDebugUtilsMessageTypeFlagsEXT,
@@ -157,6 +194,7 @@ pub const VulkanRenderer = struct {
     index_buffer: vk.VkBuffer,
     index_buffer_memory: vk.VkDeviceMemory,
     camera: ?Camera,
+    chunk_index_count: u32,
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window) !*VulkanRenderer {
         const self = try allocator.create(VulkanRenderer);
@@ -243,6 +281,7 @@ pub const VulkanRenderer = struct {
             .index_buffer = null,
             .index_buffer_memory = null,
             .camera = null,
+            .chunk_index_count = 0,
         };
 
         try self.createSwapchain();
@@ -433,7 +472,7 @@ pub const VulkanRenderer = struct {
         };
         const compute_pc = ComputePushConstants{
             .object_count = 1,
-            .total_index_count = CHUNK_INDEX_COUNT,
+            .total_index_count = self.chunk_index_count,
         };
         vk.cmdPushConstants(
             command_buffer,
@@ -1595,9 +1634,9 @@ pub const VulkanRenderer = struct {
         };
 
         const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
-            .blendEnable = vk.VK_FALSE,
-            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE,
-            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
             .colorBlendOp = vk.VK_BLEND_OP_ADD,
             .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
             .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
@@ -2017,29 +2056,46 @@ pub const VulkanRenderer = struct {
 
     fn generateChunkMesh(
         allocator: std.mem.Allocator,
-    ) !struct { vertices: []GpuVertex, indices: []u32 } {
+        blocks: []const BlockType,
+    ) !struct { vertices: []GpuVertex, indices: []u32, vertex_count: u32, index_count: u32 } {
         const vertices = try allocator.alloc(GpuVertex, CHUNK_VERTEX_COUNT);
         errdefer allocator.free(vertices);
         const indices = try allocator.alloc(u32, CHUNK_INDEX_COUNT);
         errdefer allocator.free(indices);
 
-        var block_index: u32 = 0;
+        var vert_count: u32 = 0;
+        var idx_count: u32 = 0;
+
         for (0..CHUNK_SIZE) |by| {
             for (0..CHUNK_SIZE) |bz| {
                 for (0..CHUNK_SIZE) |bx| {
+                    const block = blocks[chunkIndex(bx, by, bz)];
+                    if (block == .air) continue;
+
                     const bx_f: f32 = @floatFromInt(bx);
                     const by_f: f32 = @floatFromInt(by);
                     const bz_f: f32 = @floatFromInt(bz);
 
-                    const vert_base = block_index * VERTS_PER_BLOCK;
-                    const idx_base = block_index * INDICES_PER_BLOCK;
-
-                    // 6 faces, 4 verts each = 24 verts per block
                     for (0..6) |face| {
+                        const offset = face_neighbor_offsets[face];
+                        const nx: i32 = @as(i32, @intCast(bx)) + offset[0];
+                        const ny: i32 = @as(i32, @intCast(by)) + offset[1];
+                        const nz: i32 = @as(i32, @intCast(bz)) + offset[2];
+
+                        // Check if neighbor is within chunk bounds
+                        if (nx >= 0 and nx < CHUNK_SIZE and ny >= 0 and ny < CHUNK_SIZE and nz >= 0 and nz < CHUNK_SIZE) {
+                            const neighbor = blocks[chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))];
+                            // Skip face if neighbor is opaque
+                            if (block_properties.isOpaque(neighbor)) continue;
+                            // Skip face if same type and block culls self
+                            if (neighbor == block and block_properties.cullsSelf(block)) continue;
+                        }
+                        // Out-of-bounds neighbor = chunk boundary, always emit face
+
+                        // Emit 4 vertices for this face
                         for (0..4) |v| {
-                            const vi = vert_base + @as(u32, @intCast(face)) * 4 + @as(u32, @intCast(v));
                             const fv = face_vertices[face][v];
-                            vertices[vi] = .{
+                            vertices[vert_count + @as(u32, @intCast(v))] = .{
                                 .px = fv.px + bx_f,
                                 .py = fv.py + by_f,
                                 .pz = fv.pz + bz_f,
@@ -2049,34 +2105,37 @@ pub const VulkanRenderer = struct {
                             };
                         }
 
-                        // 6 indices per face
-                        const face_vert_base = vert_base + @as(u32, @intCast(face)) * 4;
+                        // Emit 6 indices for this face
                         for (0..6) |i| {
-                            indices[idx_base + @as(u32, @intCast(face)) * 6 + @as(u32, @intCast(i))] =
-                                face_vert_base + face_index_pattern[i];
+                            indices[idx_count + @as(u32, @intCast(i))] = vert_count + face_index_pattern[i];
                         }
-                    }
 
-                    block_index += 1;
+                        vert_count += 4;
+                        idx_count += 6;
+                    }
                 }
             }
         }
 
-        return .{ .vertices = vertices, .indices = indices };
+        std.log.info("Chunk mesh: {} indices ({} faces) out of max {}", .{ idx_count, idx_count / 6, CHUNK_INDEX_COUNT });
+        return .{ .vertices = vertices, .indices = indices, .vertex_count = vert_count, .index_count = idx_count };
     }
 
     fn createChunkBuffers(self: *VulkanRenderer) !void {
-        const mesh = try generateChunkMesh(self.allocator);
+        const mesh = try generateChunkMesh(self.allocator, &chunk_blocks);
         defer self.allocator.free(mesh.vertices);
         defer self.allocator.free(mesh.indices);
 
-        // Create vertex buffer via staging
-        const vb_size: vk.VkDeviceSize = @intCast(CHUNK_VERTEX_COUNT * @sizeOf(GpuVertex));
+        self.chunk_index_count = mesh.index_count;
+
+        // Create vertex buffer via staging (allocate max size, upload actual data)
+        const vb_max_size: vk.VkDeviceSize = @intCast(CHUNK_VERTEX_COUNT * @sizeOf(GpuVertex));
+        const vb_actual_size: vk.VkDeviceSize = @intCast(mesh.vertex_count * @sizeOf(GpuVertex));
         {
             var staging_buffer: vk.VkBuffer = undefined;
             var staging_memory: vk.VkDeviceMemory = undefined;
             try self.createBuffer(
-                vb_size,
+                vb_actual_size,
                 vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &staging_buffer,
@@ -2084,31 +2143,32 @@ pub const VulkanRenderer = struct {
             );
 
             var data: ?*anyopaque = null;
-            try vk.mapMemory(self.device, staging_memory, 0, vb_size, 0, &data);
+            try vk.mapMemory(self.device, staging_memory, 0, vb_actual_size, 0, &data);
             const dst: [*]GpuVertex = @ptrCast(@alignCast(data));
-            @memcpy(dst[0..CHUNK_VERTEX_COUNT], mesh.vertices);
+            @memcpy(dst[0..mesh.vertex_count], mesh.vertices[0..mesh.vertex_count]);
             vk.unmapMemory(self.device, staging_memory);
 
             try self.createBuffer(
-                vb_size,
+                vb_max_size,
                 vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 &self.vertex_buffer,
                 &self.vertex_buffer_memory,
             );
 
-            try self.copyBuffer(staging_buffer, self.vertex_buffer, vb_size);
+            try self.copyBuffer(staging_buffer, self.vertex_buffer, vb_actual_size);
             vk.destroyBuffer(self.device, staging_buffer, null);
             vk.freeMemory(self.device, staging_memory, null);
         }
 
-        // Create index buffer via staging (u32)
-        const ib_size: vk.VkDeviceSize = @intCast(CHUNK_INDEX_COUNT * @sizeOf(u32));
+        // Create index buffer via staging (allocate max size, upload actual data)
+        const ib_max_size: vk.VkDeviceSize = @intCast(CHUNK_INDEX_COUNT * @sizeOf(u32));
+        const ib_actual_size: vk.VkDeviceSize = @intCast(mesh.index_count * @sizeOf(u32));
         {
             var staging_buffer: vk.VkBuffer = undefined;
             var staging_memory: vk.VkDeviceMemory = undefined;
             try self.createBuffer(
-                ib_size,
+                ib_actual_size,
                 vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &staging_buffer,
@@ -2116,25 +2176,25 @@ pub const VulkanRenderer = struct {
             );
 
             var data: ?*anyopaque = null;
-            try vk.mapMemory(self.device, staging_memory, 0, ib_size, 0, &data);
+            try vk.mapMemory(self.device, staging_memory, 0, ib_actual_size, 0, &data);
             const dst: [*]u32 = @ptrCast(@alignCast(data));
-            @memcpy(dst[0..CHUNK_INDEX_COUNT], mesh.indices);
+            @memcpy(dst[0..mesh.index_count], mesh.indices[0..mesh.index_count]);
             vk.unmapMemory(self.device, staging_memory);
 
             try self.createBuffer(
-                ib_size,
+                ib_max_size,
                 vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 &self.index_buffer,
                 &self.index_buffer_memory,
             );
 
-            try self.copyBuffer(staging_buffer, self.index_buffer, ib_size);
+            try self.copyBuffer(staging_buffer, self.index_buffer, ib_actual_size);
             vk.destroyBuffer(self.device, staging_buffer, null);
             vk.freeMemory(self.device, staging_memory, null);
         }
 
-        std.log.info("Chunk buffers created ({} vertices, {} indices)", .{ CHUNK_VERTEX_COUNT, CHUNK_INDEX_COUNT });
+        std.log.info("Chunk buffers created ({} vertices, {} indices)", .{ mesh.vertex_count, mesh.index_count });
     }
 
     fn createDebugMessenger(instance: vk.VkInstance) !vk.VkDebugUtilsMessengerEXT {
