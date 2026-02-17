@@ -13,7 +13,7 @@ near: f32,
 far: f32,
 
 const MIN_DISTANCE: f32 = 1.0;
-const MAX_DISTANCE: f32 = 100.0;
+const MAX_DISTANCE: f32 = 200.0;
 const MIN_ELEVATION: f32 = -std.math.pi / 2.0 + 0.1;
 const MAX_ELEVATION: f32 = std.math.pi / 2.0 - 0.1;
 
@@ -28,7 +28,7 @@ pub fn init(width: u32, height: u32) Camera {
         .fov = std.math.pi / 4.0, // 45 degrees
         .aspect = aspect_ratio,
         .near = 0.1,
-        .far = 100.0,
+        .far = 500.0,
     };
 }
 

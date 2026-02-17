@@ -20,6 +20,11 @@ const INDICES_PER_BLOCK = 36;
 const CHUNK_VERTEX_COUNT = BLOCKS_PER_CHUNK * VERTS_PER_BLOCK; // 98304
 const CHUNK_INDEX_COUNT = BLOCKS_PER_CHUNK * INDICES_PER_BLOCK; // 147456
 
+const WORLD_CHUNKS = 3;
+const WORLD_SIZE = WORLD_CHUNKS * CHUNK_SIZE; // 48
+const MAX_WORLD_VERTEX_COUNT = WORLD_CHUNKS * WORLD_CHUNKS * WORLD_CHUNKS * CHUNK_VERTEX_COUNT;
+const MAX_WORLD_INDEX_COUNT = WORLD_CHUNKS * WORLD_CHUNKS * WORLD_CHUNKS * CHUNK_INDEX_COUNT;
+
 const GpuVertex = extern struct {
     px: f32,
     py: f32,
@@ -109,10 +114,47 @@ const block_properties = struct {
     }
 };
 
-const chunk_blocks: [BLOCKS_PER_CHUNK]BlockType = .{.glass} ** BLOCKS_PER_CHUNK;
+const Chunk = struct {
+    blocks: [BLOCKS_PER_CHUNK]BlockType,
+};
 
 fn chunkIndex(x: usize, y: usize, z: usize) usize {
     return y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
+}
+
+fn generateSphereWorld() [WORLD_CHUNKS][WORLD_CHUNKS][WORLD_CHUNKS]Chunk {
+    @setEvalBranchQuota(200_000);
+    const half_world = @as(f32, WORLD_SIZE) / 2.0;
+    const radius_sq = 15.5 * 15.5;
+    var world: [WORLD_CHUNKS][WORLD_CHUNKS][WORLD_CHUNKS]Chunk = undefined;
+
+    for (0..WORLD_CHUNKS) |cy| {
+        for (0..WORLD_CHUNKS) |cz| {
+            for (0..WORLD_CHUNKS) |cx| {
+                var blocks: [BLOCKS_PER_CHUNK]BlockType = .{.air} ** BLOCKS_PER_CHUNK;
+
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |z| {
+                        for (0..CHUNK_SIZE) |x| {
+                            const wx: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE + x)) - half_world;
+                            const wy: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + y)) - half_world;
+                            const wz: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + z)) - half_world;
+                            const dx = wx;
+                            const dy = wy;
+                            const dz = wz;
+                            if (dx * dx + dy * dy + dz * dz <= radius_sq) {
+                                blocks[chunkIndex(x, y, z)] = .glass;
+                            }
+                        }
+                    }
+                }
+
+                world[cy][cz][cx] = .{ .blocks = blocks };
+            }
+        }
+    }
+
+    return world;
 }
 
 fn debugCallback(
@@ -289,8 +331,8 @@ pub const VulkanRenderer = struct {
 
         try self.createSwapchain();
         var cam = Camera.init(self.swapchain_extent.width, self.swapchain_extent.height);
-        cam.target = zlm.Vec3.init(8.0, 8.0, 8.0);
-        cam.distance = 40.0;
+        cam.target = zlm.Vec3.init(0.0, 0.0, 0.0);
+        cam.distance = 60.0;
         cam.elevation = 0.5;
         self.camera = cam;
         try self.createDepthBuffer();
@@ -2111,82 +2153,109 @@ pub const VulkanRenderer = struct {
         vk.freeCommandBuffers(self.device, self.command_pool, 1, &command_buffers);
     }
 
-    fn generateChunkMesh(
+    fn generateWorldMesh(
         allocator: std.mem.Allocator,
-        blocks: []const BlockType,
+        world: *const [WORLD_CHUNKS][WORLD_CHUNKS][WORLD_CHUNKS]Chunk,
     ) !struct { vertices: []GpuVertex, indices: []u32, vertex_count: u32, index_count: u32 } {
-        const vertices = try allocator.alloc(GpuVertex, CHUNK_VERTEX_COUNT);
+        const vertices = try allocator.alloc(GpuVertex, MAX_WORLD_VERTEX_COUNT);
         errdefer allocator.free(vertices);
-        const indices = try allocator.alloc(u32, CHUNK_INDEX_COUNT);
+        const indices = try allocator.alloc(u32, MAX_WORLD_INDEX_COUNT);
         errdefer allocator.free(indices);
 
         var vert_count: u32 = 0;
         var idx_count: u32 = 0;
 
-        for (0..CHUNK_SIZE) |by| {
-            for (0..CHUNK_SIZE) |bz| {
-                for (0..CHUNK_SIZE) |bx| {
-                    const block = blocks[chunkIndex(bx, by, bz)];
-                    if (block == .air) continue;
+        for (0..WORLD_CHUNKS) |cy| {
+            for (0..WORLD_CHUNKS) |cz| {
+                for (0..WORLD_CHUNKS) |cx| {
+                    const chunk = &world[cy][cz][cx];
 
-                    const bx_f: f32 = @floatFromInt(bx);
-                    const by_f: f32 = @floatFromInt(by);
-                    const bz_f: f32 = @floatFromInt(bz);
+                    for (0..CHUNK_SIZE) |by| {
+                        for (0..CHUNK_SIZE) |bz| {
+                            for (0..CHUNK_SIZE) |bx| {
+                                const block = chunk.blocks[chunkIndex(bx, by, bz)];
+                                if (block == .air) continue;
 
-                    for (0..6) |face| {
-                        const offset = face_neighbor_offsets[face];
-                        const nx: i32 = @as(i32, @intCast(bx)) + offset[0];
-                        const ny: i32 = @as(i32, @intCast(by)) + offset[1];
-                        const nz: i32 = @as(i32, @intCast(bz)) + offset[2];
+                                const half_world: f32 = @as(f32, WORLD_SIZE) / 2.0;
+                                const world_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE + bx)) - half_world;
+                                const world_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + by)) - half_world;
+                                const world_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + bz)) - half_world;
 
-                        // Check if neighbor is within chunk bounds
-                        if (nx >= 0 and nx < CHUNK_SIZE and ny >= 0 and ny < CHUNK_SIZE and nz >= 0 and nz < CHUNK_SIZE) {
-                            const neighbor = blocks[chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))];
-                            // Skip face if neighbor is opaque
-                            if (block_properties.isOpaque(neighbor)) continue;
-                            // Skip face if same type and block culls self
-                            if (neighbor == block and block_properties.cullsSelf(block)) continue;
+                                for (0..6) |face| {
+                                    const offset = face_neighbor_offsets[face];
+                                    const nx: i32 = @as(i32, @intCast(bx)) + offset[0];
+                                    const ny: i32 = @as(i32, @intCast(by)) + offset[1];
+                                    const nz: i32 = @as(i32, @intCast(bz)) + offset[2];
+
+                                    // Cross-chunk neighbor lookup
+                                    const neighbor = blk: {
+                                        if (nx >= 0 and nx < CHUNK_SIZE and ny >= 0 and ny < CHUNK_SIZE and nz >= 0 and nz < CHUNK_SIZE) {
+                                            // Within same chunk
+                                            break :blk chunk.blocks[chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))];
+                                        }
+
+                                        // Compute neighbor chunk coordinates
+                                        const ncx: i32 = @as(i32, @intCast(cx)) + if (nx < 0) @as(i32, -1) else if (nx >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
+                                        const ncy: i32 = @as(i32, @intCast(cy)) + if (ny < 0) @as(i32, -1) else if (ny >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
+                                        const ncz: i32 = @as(i32, @intCast(cz)) + if (nz < 0) @as(i32, -1) else if (nz >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
+
+                                        // Out of world bounds → air (emit face)
+                                        if (ncx < 0 or ncx >= WORLD_CHUNKS or ncy < 0 or ncy >= WORLD_CHUNKS or ncz < 0 or ncz >= WORLD_CHUNKS) {
+                                            break :blk BlockType.air;
+                                        }
+
+                                        // Wrap local coordinate into neighbor chunk
+                                        const lx: usize = @intCast(@mod(nx, @as(i32, CHUNK_SIZE)));
+                                        const ly: usize = @intCast(@mod(ny, @as(i32, CHUNK_SIZE)));
+                                        const lz: usize = @intCast(@mod(nz, @as(i32, CHUNK_SIZE)));
+                                        break :blk world[@intCast(ncy)][@intCast(ncz)][@intCast(ncx)].blocks[chunkIndex(lx, ly, lz)];
+                                    };
+
+                                    if (block_properties.isOpaque(neighbor)) continue;
+                                    if (neighbor == block and block_properties.cullsSelf(block)) continue;
+
+                                    // Emit 4 vertices for this face
+                                    for (0..4) |v| {
+                                        const fv = face_vertices[face][v];
+                                        vertices[vert_count + @as(u32, @intCast(v))] = .{
+                                            .px = fv.px + world_x,
+                                            .py = fv.py + world_y,
+                                            .pz = fv.pz + world_z,
+                                            .u = fv.u,
+                                            .v = fv.v,
+                                            .tex_index = 0,
+                                        };
+                                    }
+
+                                    // Emit 6 indices for this face
+                                    for (0..6) |i| {
+                                        indices[idx_count + @as(u32, @intCast(i))] = vert_count + face_index_pattern[i];
+                                    }
+
+                                    vert_count += 4;
+                                    idx_count += 6;
+                                }
+                            }
                         }
-                        // Out-of-bounds neighbor = chunk boundary, always emit face
-
-                        // Emit 4 vertices for this face
-                        for (0..4) |v| {
-                            const fv = face_vertices[face][v];
-                            vertices[vert_count + @as(u32, @intCast(v))] = .{
-                                .px = fv.px + bx_f,
-                                .py = fv.py + by_f,
-                                .pz = fv.pz + bz_f,
-                                .u = fv.u,
-                                .v = fv.v,
-                                .tex_index = 0,
-                            };
-                        }
-
-                        // Emit 6 indices for this face
-                        for (0..6) |i| {
-                            indices[idx_count + @as(u32, @intCast(i))] = vert_count + face_index_pattern[i];
-                        }
-
-                        vert_count += 4;
-                        idx_count += 6;
                     }
                 }
             }
         }
 
-        std.log.info("Chunk mesh: {} indices ({} faces) out of max {}", .{ idx_count, idx_count / 6, CHUNK_INDEX_COUNT });
+        std.log.info("World mesh: {} indices ({} faces) out of max {}", .{ idx_count, idx_count / 6, MAX_WORLD_INDEX_COUNT });
         return .{ .vertices = vertices, .indices = indices, .vertex_count = vert_count, .index_count = idx_count };
     }
 
     fn createChunkBuffers(self: *VulkanRenderer) !void {
-        const mesh = try generateChunkMesh(self.allocator, &chunk_blocks);
+        const world = comptime generateSphereWorld();
+        const mesh = try generateWorldMesh(self.allocator, &world);
         defer self.allocator.free(mesh.vertices);
         defer self.allocator.free(mesh.indices);
 
         self.chunk_index_count = mesh.index_count;
 
         // Create vertex buffer via staging (allocate max size, upload actual data)
-        const vb_max_size: vk.VkDeviceSize = @intCast(CHUNK_VERTEX_COUNT * @sizeOf(GpuVertex));
+        const vb_max_size: vk.VkDeviceSize = @intCast(MAX_WORLD_VERTEX_COUNT * @sizeOf(GpuVertex));
         const vb_actual_size: vk.VkDeviceSize = @intCast(mesh.vertex_count * @sizeOf(GpuVertex));
         {
             var staging_buffer: vk.VkBuffer = undefined;
@@ -2219,7 +2288,7 @@ pub const VulkanRenderer = struct {
         }
 
         // Create index buffer via staging (allocate max size, upload actual data)
-        const ib_max_size: vk.VkDeviceSize = @intCast(CHUNK_INDEX_COUNT * @sizeOf(u32));
+        const ib_max_size: vk.VkDeviceSize = @intCast(MAX_WORLD_INDEX_COUNT * @sizeOf(u32));
         const ib_actual_size: vk.VkDeviceSize = @intCast(mesh.index_count * @sizeOf(u32));
         {
             var staging_buffer: vk.VkBuffer = undefined;
