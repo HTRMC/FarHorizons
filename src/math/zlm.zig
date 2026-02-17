@@ -43,7 +43,7 @@ pub const Vec3 = struct {
 
     pub fn normalize(v: Vec3) Vec3 {
         const len = length(v);
-        if (len == 0.0) return v;
+        if (len < std.math.floatEps(f32)) return v;
         return scale(v, 1.0 / len);
     }
 
