@@ -67,7 +67,7 @@ pub fn rotate(self: *Camera, delta_azimuth: f32, delta_elevation: f32) void {
     self.elevation = @max(MIN_ELEVATION, @min(MAX_ELEVATION, self.elevation));
 
     // Normalize azimuth to [0, 2π]
-    self.azimuth = @mod(self.azimuth, 2.0 * std.math.pi);
+    self.azimuth = @rem(self.azimuth, 2.0 * std.math.pi);
 }
 
 pub fn zoom(self: *Camera, delta_distance: f32) void {
