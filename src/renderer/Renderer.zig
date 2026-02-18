@@ -7,7 +7,7 @@ pub const Renderer = struct {
     vtable: *const VTable,
 
     pub const VTable = struct {
-        init: *const fn (allocator: std.mem.Allocator, window: *const Window) anyerror!*anyopaque,
+        init: *const fn (allocator: std.mem.Allocator, window: *const Window, user_data: ?*anyopaque) anyerror!*anyopaque,
         deinit: *const fn (self: *anyopaque) void,
         begin_frame: *const fn (self: *anyopaque) anyerror!void,
         end_frame: *const fn (self: *anyopaque) anyerror!void,
@@ -17,8 +17,8 @@ pub const Renderer = struct {
         get_framebuffer_resized_ptr: *const fn (self: *anyopaque) *bool,
     };
 
-    pub fn init(allocator: std.mem.Allocator, window: *const Window, backend: *const VTable) !Renderer {
-        const impl = try backend.init(allocator, window);
+    pub fn init(allocator: std.mem.Allocator, window: *const Window, backend: *const VTable, user_data: ?*anyopaque) !Renderer {
+        const impl = try backend.init(allocator, window, user_data);
         return Renderer{
             .allocator = allocator,
             .impl = impl,

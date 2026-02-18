@@ -2,6 +2,7 @@ const std = @import("std");
 const Window = @import("platform/Window.zig").Window;
 const Renderer = @import("renderer/Renderer.zig").Renderer;
 const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRenderer;
+const GameState = @import("GameState.zig");
 const glfw = @import("platform/glfw.zig");
 
 const InputState = struct {
@@ -44,7 +45,9 @@ pub fn main() !void {
     });
     defer window.deinit();
 
-    var renderer = try Renderer.init(allocator, &window, &VulkanRenderer.vtable);
+    var game_state = GameState.init(1280, 720);
+
+    var renderer = try Renderer.init(allocator, &window, &VulkanRenderer.vtable, @ptrCast(&game_state));
     defer renderer.deinit();
 
     const framebuffer_resized = renderer.getFramebufferResizedPtr();
