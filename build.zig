@@ -38,6 +38,7 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
         exe.root_module.linkSystemLibrary("user32", .{});
         exe.root_module.linkSystemLibrary("shell32", .{});
         exe.root_module.linkSystemLibrary("opengl32", .{});
+        exe.root_module.linkSystemLibrary("dwmapi", .{});
     }
 }
 
