@@ -20,10 +20,15 @@ const INDICES_PER_BLOCK = 36;
 const CHUNK_VERTEX_COUNT = BLOCKS_PER_CHUNK * VERTS_PER_BLOCK; // 98304
 const CHUNK_INDEX_COUNT = BLOCKS_PER_CHUNK * INDICES_PER_BLOCK; // 147456
 
-const WORLD_CHUNKS = 3;
-const WORLD_SIZE = WORLD_CHUNKS * CHUNK_SIZE; // 48
-const MAX_WORLD_VERTEX_COUNT = WORLD_CHUNKS * WORLD_CHUNKS * WORLD_CHUNKS * CHUNK_VERTEX_COUNT;
-const MAX_WORLD_INDEX_COUNT = WORLD_CHUNKS * WORLD_CHUNKS * WORLD_CHUNKS * CHUNK_INDEX_COUNT;
+const WORLD_CHUNKS_X = 8;
+const WORLD_CHUNKS_Y = 2;
+const WORLD_CHUNKS_Z = 8;
+const WORLD_SIZE_X = WORLD_CHUNKS_X * CHUNK_SIZE; // 128
+const WORLD_SIZE_Y = WORLD_CHUNKS_Y * CHUNK_SIZE; // 32
+const WORLD_SIZE_Z = WORLD_CHUNKS_Z * CHUNK_SIZE; // 128
+const TOTAL_WORLD_CHUNKS = WORLD_CHUNKS_X * WORLD_CHUNKS_Y * WORLD_CHUNKS_Z; // 128
+const MAX_WORLD_VERTEX_COUNT = TOTAL_WORLD_CHUNKS * CHUNK_VERTEX_COUNT;
+const MAX_WORLD_INDEX_COUNT = TOTAL_WORLD_CHUNKS * CHUNK_INDEX_COUNT;
 
 const GpuVertex = extern struct {
     px: f32,
@@ -134,27 +139,43 @@ fn chunkIndex(x: usize, y: usize, z: usize) usize {
     return y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
 }
 
-fn generateSphereWorld() [WORLD_CHUNKS][WORLD_CHUNKS][WORLD_CHUNKS]Chunk {
-    @setEvalBranchQuota(200_000);
-    const half_world = @as(f32, WORLD_SIZE) / 2.0;
+fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk {
+    @setEvalBranchQuota(100_000_000);
+    const half_x = @as(f32, WORLD_SIZE_X) / 2.0;
+    const half_y = @as(f32, WORLD_SIZE_Y) / 2.0;
+    const half_z = @as(f32, WORLD_SIZE_Z) / 2.0;
     const radius_sq = 15.5 * 15.5;
-    var world: [WORLD_CHUNKS][WORLD_CHUNKS][WORLD_CHUNKS]Chunk = undefined;
+    var world: [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk = undefined;
 
-    for (0..WORLD_CHUNKS) |cy| {
-        for (0..WORLD_CHUNKS) |cz| {
-            for (0..WORLD_CHUNKS) |cx| {
+    for (0..WORLD_CHUNKS_Y) |cy| {
+        for (0..WORLD_CHUNKS_Z) |cz| {
+            for (0..WORLD_CHUNKS_X) |cx| {
                 var blocks: [BLOCKS_PER_CHUNK]BlockType = .{.air} ** BLOCKS_PER_CHUNK;
 
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |z| {
                         for (0..CHUNK_SIZE) |x| {
-                            const wx: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE + x)) - half_world;
-                            const wy: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + y)) - half_world;
-                            const wz: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + z)) - half_world;
-                            const dx = wx;
-                            const dy = wy;
-                            const dz = wz;
-                            if (dx * dx + dy * dy + dz * dz <= radius_sq) {
+                            const wx: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE + x)) - half_x;
+                            const wy: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + y)) - half_y;
+                            const wz: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + z)) - half_z;
+
+                            // Check against all 16 sphere centers (4x4 grid)
+                            var hit = false;
+                            for (0..4) |gz| {
+                                if (hit) break;
+                                for (0..4) |gx| {
+                                    const center_x = @as(f32, @floatFromInt(gx * 32 + 16)) - half_x;
+                                    const center_z = @as(f32, @floatFromInt(gz * 32 + 16)) - half_z;
+                                    const dx = wx - center_x;
+                                    const dy = wy;
+                                    const dz = wz - center_z;
+                                    if (dx * dx + dy * dy + dz * dz <= radius_sq) {
+                                        hit = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (hit) {
                                 blocks[chunkIndex(x, y, z)] = .glass;
                             }
                         }
@@ -379,7 +400,7 @@ pub const VulkanRenderer = struct {
         try self.createSwapchain();
         var cam = Camera.init(self.swapchain_extent.width, self.swapchain_extent.height);
         cam.target = zlm.Vec3.init(0.0, 0.0, 0.0);
-        cam.distance = 60.0;
+        cam.distance = 160.0;
         cam.elevation = 0.5;
         self.camera = cam;
         try self.createDepthBuffer();
@@ -1710,7 +1731,7 @@ pub const VulkanRenderer = struct {
         const vertex_buffer_info = vk.VkDescriptorBufferInfo{
             .buffer = self.vertex_buffer,
             .offset = 0,
-            .range = CHUNK_VERTEX_COUNT * @sizeOf(GpuVertex),
+            .range = std.math.maxInt(u64), // VK_WHOLE_SIZE
         };
 
         const texture_image_info = vk.VkDescriptorImageInfo{
@@ -2299,7 +2320,7 @@ pub const VulkanRenderer = struct {
 
     fn generateWorldMesh(
         allocator: std.mem.Allocator,
-        world: *const [WORLD_CHUNKS][WORLD_CHUNKS][WORLD_CHUNKS]Chunk,
+        world: *const [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk,
     ) !struct { vertices: []GpuVertex, indices: []u32, vertex_count: u32, index_count: u32 } {
         const vertices = try allocator.alloc(GpuVertex, MAX_WORLD_VERTEX_COUNT);
         errdefer allocator.free(vertices);
@@ -2309,9 +2330,13 @@ pub const VulkanRenderer = struct {
         var vert_count: u32 = 0;
         var idx_count: u32 = 0;
 
-        for (0..WORLD_CHUNKS) |cy| {
-            for (0..WORLD_CHUNKS) |cz| {
-                for (0..WORLD_CHUNKS) |cx| {
+        const half_world_x: f32 = @as(f32, WORLD_SIZE_X) / 2.0;
+        const half_world_y: f32 = @as(f32, WORLD_SIZE_Y) / 2.0;
+        const half_world_z: f32 = @as(f32, WORLD_SIZE_Z) / 2.0;
+
+        for (0..WORLD_CHUNKS_Y) |cy| {
+            for (0..WORLD_CHUNKS_Z) |cz| {
+                for (0..WORLD_CHUNKS_X) |cx| {
                     const chunk = &world[cy][cz][cx];
 
                     for (0..CHUNK_SIZE) |by| {
@@ -2320,10 +2345,9 @@ pub const VulkanRenderer = struct {
                                 const block = chunk.blocks[chunkIndex(bx, by, bz)];
                                 if (block == .air) continue;
 
-                                const half_world: f32 = @as(f32, WORLD_SIZE) / 2.0;
-                                const world_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE + bx)) - half_world;
-                                const world_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + by)) - half_world;
-                                const world_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + bz)) - half_world;
+                                const world_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE + bx)) - half_world_x;
+                                const world_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + by)) - half_world_y;
+                                const world_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + bz)) - half_world_z;
 
                                 for (0..6) |face| {
                                     const offset = face_neighbor_offsets[face];
@@ -2344,7 +2368,7 @@ pub const VulkanRenderer = struct {
                                         const ncz: i32 = @as(i32, @intCast(cz)) + if (nz < 0) @as(i32, -1) else if (nz >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
 
                                         // Out of world bounds → air (emit face)
-                                        if (ncx < 0 or ncx >= WORLD_CHUNKS or ncy < 0 or ncy >= WORLD_CHUNKS or ncz < 0 or ncz >= WORLD_CHUNKS) {
+                                        if (ncx < 0 or ncx >= WORLD_CHUNKS_X or ncy < 0 or ncy >= WORLD_CHUNKS_Y or ncz < 0 or ncz >= WORLD_CHUNKS_Z) {
                                             break :blk BlockType.air;
                                         }
 
@@ -2398,8 +2422,7 @@ pub const VulkanRenderer = struct {
 
         self.chunk_index_count = mesh.index_count;
 
-        // Create vertex buffer via staging (allocate max size, upload actual data)
-        const vb_max_size: vk.VkDeviceSize = @intCast(MAX_WORLD_VERTEX_COUNT * @sizeOf(GpuVertex));
+        // Create vertex buffer via staging (allocate at actual size)
         const vb_actual_size: vk.VkDeviceSize = @intCast(mesh.vertex_count * @sizeOf(GpuVertex));
         {
             var staging_buffer: vk.VkBuffer = undefined;
@@ -2419,7 +2442,7 @@ pub const VulkanRenderer = struct {
             vk.unmapMemory(self.device, staging_memory);
 
             try self.createBuffer(
-                vb_max_size,
+                vb_actual_size,
                 vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 &self.vertex_buffer,
@@ -2431,8 +2454,7 @@ pub const VulkanRenderer = struct {
             vk.freeMemory(self.device, staging_memory, null);
         }
 
-        // Create index buffer via staging (allocate max size, upload actual data)
-        const ib_max_size: vk.VkDeviceSize = @intCast(MAX_WORLD_INDEX_COUNT * @sizeOf(u32));
+        // Create index buffer via staging (allocate at actual size)
         const ib_actual_size: vk.VkDeviceSize = @intCast(mesh.index_count * @sizeOf(u32));
         {
             var staging_buffer: vk.VkBuffer = undefined;
@@ -2452,7 +2474,7 @@ pub const VulkanRenderer = struct {
             vk.unmapMemory(self.device, staging_memory);
 
             try self.createBuffer(
-                ib_max_size,
+                ib_actual_size,
                 vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
                 vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 &self.index_buffer,
@@ -2650,7 +2672,9 @@ pub const VulkanRenderer = struct {
     }
 
     fn generateChunkOutlines(self: *VulkanRenderer) void {
-        const half_world: f32 = @as(f32, WORLD_SIZE) / 2.0;
+        const half_world_x: f32 = @as(f32, WORLD_SIZE_X) / 2.0;
+        const half_world_y: f32 = @as(f32, WORLD_SIZE_Y) / 2.0;
+        const half_world_z: f32 = @as(f32, WORLD_SIZE_Z) / 2.0;
 
         var data: ?*anyopaque = null;
         vk.mapMemory(self.device, self.debug_line_vertex_buffer_memory, 0, DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex), 0, &data) catch return;
@@ -2658,12 +2682,12 @@ pub const VulkanRenderer = struct {
 
         var count: u32 = 0;
 
-        for (0..WORLD_CHUNKS) |cy| {
-            for (0..WORLD_CHUNKS) |cz| {
-                for (0..WORLD_CHUNKS) |cx| {
-                    const min_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE)) - half_world;
-                    const min_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE)) - half_world;
-                    const min_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE)) - half_world;
+        for (0..WORLD_CHUNKS_Y) |cy| {
+            for (0..WORLD_CHUNKS_Z) |cz| {
+                for (0..WORLD_CHUNKS_X) |cx| {
+                    const min_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE)) - half_world_x;
+                    const min_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE)) - half_world_y;
+                    const min_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE)) - half_world_z;
                     const max_x: f32 = min_x + CHUNK_SIZE;
                     const max_y: f32 = min_y + CHUNK_SIZE;
                     const max_z: f32 = min_z + CHUNK_SIZE;
