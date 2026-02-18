@@ -1,0 +1,25 @@
+#version 450
+
+layout(local_size_x = 1) in;
+
+struct DrawCommand {
+    uint vertexCount;
+    uint instanceCount;
+    uint firstVertex;
+    uint firstInstance;
+};
+
+layout(set = 0, binding = 0) buffer DrawCommands {
+    DrawCommand command;
+} drawCommand;
+
+layout(push_constant) uniform PushConstants {
+    uint vertexCount;
+} pc;
+
+void main() {
+    drawCommand.command.vertexCount = pc.vertexCount;
+    drawCommand.command.instanceCount = 1;
+    drawCommand.command.firstVertex = 0;
+    drawCommand.command.firstInstance = 0;
+}

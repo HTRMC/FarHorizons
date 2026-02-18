@@ -34,6 +34,18 @@ const GpuVertex = extern struct {
     tex_index: u32,
 };
 
+const LineVertex = extern struct {
+    px: f32,
+    py: f32,
+    pz: f32,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+};
+
+const DEBUG_LINE_MAX_VERTICES = 16384;
+
 // Per-face vertex template (unit cube centered at origin)
 const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }{
     // Front face (z = +0.5)
@@ -239,6 +251,24 @@ pub const VulkanRenderer = struct {
     camera: ?Camera,
     chunk_index_count: u32,
     framebuffer_resized: bool,
+    // Debug line rendering
+    debug_line_pipeline: vk.VkPipeline,
+    debug_line_pipeline_layout: vk.VkPipelineLayout,
+    debug_line_compute_pipeline: vk.VkPipeline,
+    debug_line_compute_pipeline_layout: vk.VkPipelineLayout,
+    debug_line_descriptor_set_layout: vk.VkDescriptorSetLayout,
+    debug_line_descriptor_pool: vk.VkDescriptorPool,
+    debug_line_descriptor_set: vk.VkDescriptorSet,
+    debug_line_compute_descriptor_set_layout: vk.VkDescriptorSetLayout,
+    debug_line_compute_descriptor_pool: vk.VkDescriptorPool,
+    debug_line_compute_descriptor_set: vk.VkDescriptorSet,
+    debug_line_vertex_buffer: vk.VkBuffer,
+    debug_line_vertex_buffer_memory: vk.VkDeviceMemory,
+    debug_line_indirect_buffer: vk.VkBuffer,
+    debug_line_indirect_buffer_memory: vk.VkDeviceMemory,
+    debug_line_count_buffer: vk.VkBuffer,
+    debug_line_count_buffer_memory: vk.VkDeviceMemory,
+    debug_line_vertex_count: u32,
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window) !*VulkanRenderer {
         const self = try allocator.create(VulkanRenderer);
@@ -327,6 +357,23 @@ pub const VulkanRenderer = struct {
             .camera = null,
             .chunk_index_count = 0,
             .framebuffer_resized = false,
+            .debug_line_pipeline = null,
+            .debug_line_pipeline_layout = null,
+            .debug_line_compute_pipeline = null,
+            .debug_line_compute_pipeline_layout = null,
+            .debug_line_descriptor_set_layout = null,
+            .debug_line_descriptor_pool = null,
+            .debug_line_descriptor_set = null,
+            .debug_line_compute_descriptor_set_layout = null,
+            .debug_line_compute_descriptor_pool = null,
+            .debug_line_compute_descriptor_set = null,
+            .debug_line_vertex_buffer = null,
+            .debug_line_vertex_buffer_memory = null,
+            .debug_line_indirect_buffer = null,
+            .debug_line_indirect_buffer_memory = null,
+            .debug_line_count_buffer = null,
+            .debug_line_count_buffer_memory = null,
+            .debug_line_vertex_count = 0,
         };
 
         try self.createSwapchain();
@@ -343,6 +390,9 @@ pub const VulkanRenderer = struct {
         try self.createGraphicsPipeline();
         try self.createIndirectBuffer();
         try self.createComputePipeline();
+        try self.createDebugLineResources();
+        try self.createDebugLinePipeline();
+        try self.createDebugLineComputePipeline();
         try self.createCommandBuffers();
         try self.createSyncObjects();
 
@@ -376,6 +426,22 @@ pub const VulkanRenderer = struct {
         vk.freeMemory(self.device, self.indirect_buffer_memory, null);
         vk.destroyBuffer(self.device, self.indirect_count_buffer, null);
         vk.freeMemory(self.device, self.indirect_count_buffer_memory, null);
+
+        // Destroy debug line resources
+        vk.destroyPipeline(self.device, self.debug_line_compute_pipeline, null);
+        vk.destroyPipelineLayout(self.device, self.debug_line_compute_pipeline_layout, null);
+        vk.destroyDescriptorPool(self.device, self.debug_line_compute_descriptor_pool, null);
+        vk.destroyDescriptorSetLayout(self.device, self.debug_line_compute_descriptor_set_layout, null);
+        vk.destroyPipeline(self.device, self.debug_line_pipeline, null);
+        vk.destroyPipelineLayout(self.device, self.debug_line_pipeline_layout, null);
+        vk.destroyDescriptorPool(self.device, self.debug_line_descriptor_pool, null);
+        vk.destroyDescriptorSetLayout(self.device, self.debug_line_descriptor_set_layout, null);
+        vk.destroyBuffer(self.device, self.debug_line_vertex_buffer, null);
+        vk.freeMemory(self.device, self.debug_line_vertex_buffer_memory, null);
+        vk.destroyBuffer(self.device, self.debug_line_indirect_buffer, null);
+        vk.freeMemory(self.device, self.debug_line_indirect_buffer_memory, null);
+        vk.destroyBuffer(self.device, self.debug_line_count_buffer, null);
+        vk.freeMemory(self.device, self.debug_line_count_buffer_memory, null);
 
         // Destroy bindless descriptor resources
         vk.destroyDescriptorPool(self.device, self.bindless_descriptor_pool, null);
@@ -609,6 +675,54 @@ pub const VulkanRenderer = struct {
             null,
         );
 
+        // Debug line compute dispatch
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.debug_line_compute_pipeline);
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+            self.debug_line_compute_pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.debug_line_compute_descriptor_set},
+            0,
+            null,
+        );
+        vk.cmdPushConstants(
+            command_buffer,
+            self.debug_line_compute_pipeline_layout,
+            vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            @sizeOf(u32),
+            &self.debug_line_vertex_count,
+        );
+        vk.cmdDispatch(command_buffer, 1, 1, 1);
+
+        // Barrier: compute write -> indirect read for debug lines
+        const debug_line_indirect_barrier = vk.VkBufferMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .buffer = self.debug_line_indirect_buffer,
+            .offset = 0,
+            .size = @sizeOf(vk.VkDrawIndirectCommand),
+        };
+
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            vk.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+            0,
+            0,
+            null,
+            1,
+            &[_]vk.VkBufferMemoryBarrier{debug_line_indirect_barrier},
+            0,
+            null,
+        );
+
         // Barrier: depth image UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL
         const depth_barrier = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -774,6 +888,36 @@ pub const VulkanRenderer = struct {
             0,
             1,
             @sizeOf(vk.VkDrawIndexedIndirectCommand),
+        );
+
+        // Debug line draw
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.debug_line_pipeline);
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.debug_line_pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.debug_line_descriptor_set},
+            0,
+            null,
+        );
+        vk.cmdPushConstants(
+            command_buffer,
+            self.debug_line_pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            @sizeOf(zlm.Mat4),
+            &mvp.m,
+        );
+        vk.cmdDrawIndirectCount(
+            command_buffer,
+            self.debug_line_indirect_buffer,
+            0,
+            self.debug_line_count_buffer,
+            0,
+            1,
+            @sizeOf(vk.VkDrawIndirectCommand),
         );
 
         vk.cmdEndRendering(command_buffer);
@@ -2321,6 +2465,516 @@ pub const VulkanRenderer = struct {
         }
 
         std.log.info("Chunk buffers created ({} vertices, {} indices)", .{ mesh.vertex_count, mesh.index_count });
+    }
+
+    fn createDebugLineResources(self: *VulkanRenderer) !void {
+        // Vertex SSBO (host-visible for CPU writes)
+        const vertex_buffer_size: vk.VkDeviceSize = DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex);
+        try self.createBuffer(
+            vertex_buffer_size,
+            vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &self.debug_line_vertex_buffer,
+            &self.debug_line_vertex_buffer_memory,
+        );
+
+        // Indirect draw buffer (device-local, written by compute)
+        try self.createBuffer(
+            @sizeOf(vk.VkDrawIndirectCommand),
+            vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.debug_line_indirect_buffer,
+            &self.debug_line_indirect_buffer_memory,
+        );
+
+        // Count buffer (host-visible, always 1)
+        try self.createBuffer(
+            @sizeOf(u32),
+            vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &self.debug_line_count_buffer,
+            &self.debug_line_count_buffer_memory,
+        );
+        {
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(self.device, self.debug_line_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
+            const count_ptr: *u32 = @ptrCast(@alignCast(data));
+            count_ptr.* = 1;
+            vk.unmapMemory(self.device, self.debug_line_count_buffer_memory);
+        }
+
+        // Graphics descriptor set (binding 0 = vertex SSBO)
+        {
+            const binding = vk.VkDescriptorSetLayoutBinding{
+                .binding = 0,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = null,
+            };
+
+            const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .bindingCount = 1,
+                .pBindings = &binding,
+            };
+
+            self.debug_line_descriptor_set_layout = try vk.createDescriptorSetLayout(self.device, &layout_info, null);
+
+            const pool_size = vk.VkDescriptorPoolSize{
+                .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+            };
+
+            const pool_info = vk.VkDescriptorPoolCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .maxSets = 1,
+                .poolSizeCount = 1,
+                .pPoolSizes = &pool_size,
+            };
+
+            self.debug_line_descriptor_pool = try vk.createDescriptorPool(self.device, &pool_info, null);
+
+            const alloc_info = vk.VkDescriptorSetAllocateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .pNext = null,
+                .descriptorPool = self.debug_line_descriptor_pool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &self.debug_line_descriptor_set_layout,
+            };
+
+            var sets: [1]vk.VkDescriptorSet = undefined;
+            try vk.allocateDescriptorSets(self.device, &alloc_info, &sets);
+            self.debug_line_descriptor_set = sets[0];
+
+            const buffer_info = vk.VkDescriptorBufferInfo{
+                .buffer = self.debug_line_vertex_buffer,
+                .offset = 0,
+                .range = vertex_buffer_size,
+            };
+
+            const write = vk.VkWriteDescriptorSet{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.debug_line_descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &buffer_info,
+                .pTexelBufferView = null,
+            };
+
+            vk.updateDescriptorSets(self.device, 1, &[_]vk.VkWriteDescriptorSet{write}, 0, null);
+        }
+
+        // Compute descriptor set (binding 0 = indirect draw command SSBO)
+        {
+            const binding = vk.VkDescriptorSetLayoutBinding{
+                .binding = 0,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = null,
+            };
+
+            const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .bindingCount = 1,
+                .pBindings = &binding,
+            };
+
+            self.debug_line_compute_descriptor_set_layout = try vk.createDescriptorSetLayout(self.device, &layout_info, null);
+
+            const pool_size = vk.VkDescriptorPoolSize{
+                .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+            };
+
+            const pool_info = vk.VkDescriptorPoolCreateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .maxSets = 1,
+                .poolSizeCount = 1,
+                .pPoolSizes = &pool_size,
+            };
+
+            self.debug_line_compute_descriptor_pool = try vk.createDescriptorPool(self.device, &pool_info, null);
+
+            const alloc_info = vk.VkDescriptorSetAllocateInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                .pNext = null,
+                .descriptorPool = self.debug_line_compute_descriptor_pool,
+                .descriptorSetCount = 1,
+                .pSetLayouts = &self.debug_line_compute_descriptor_set_layout,
+            };
+
+            var sets: [1]vk.VkDescriptorSet = undefined;
+            try vk.allocateDescriptorSets(self.device, &alloc_info, &sets);
+            self.debug_line_compute_descriptor_set = sets[0];
+
+            const buffer_info = vk.VkDescriptorBufferInfo{
+                .buffer = self.debug_line_indirect_buffer,
+                .offset = 0,
+                .range = @sizeOf(vk.VkDrawIndirectCommand),
+            };
+
+            const write = vk.VkWriteDescriptorSet{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.debug_line_compute_descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &buffer_info,
+                .pTexelBufferView = null,
+            };
+
+            vk.updateDescriptorSets(self.device, 1, &[_]vk.VkWriteDescriptorSet{write}, 0, null);
+        }
+
+        // Fill vertex buffer with chunk outlines
+        self.generateChunkOutlines();
+
+        std.log.info("Debug line resources created ({} vertices)", .{self.debug_line_vertex_count});
+    }
+
+    fn generateChunkOutlines(self: *VulkanRenderer) void {
+        const half_world: f32 = @as(f32, WORLD_SIZE) / 2.0;
+
+        var data: ?*anyopaque = null;
+        vk.mapMemory(self.device, self.debug_line_vertex_buffer_memory, 0, DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex), 0, &data) catch return;
+        const vertices: [*]LineVertex = @ptrCast(@alignCast(data));
+
+        var count: u32 = 0;
+
+        for (0..WORLD_CHUNKS) |cy| {
+            for (0..WORLD_CHUNKS) |cz| {
+                for (0..WORLD_CHUNKS) |cx| {
+                    const min_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE)) - half_world;
+                    const min_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE)) - half_world;
+                    const min_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE)) - half_world;
+                    const max_x: f32 = min_x + CHUNK_SIZE;
+                    const max_y: f32 = min_y + CHUNK_SIZE;
+                    const max_z: f32 = min_z + CHUNK_SIZE;
+
+                    // 8 corners of the chunk box
+                    const corners = [8][3]f32{
+                        .{ min_x, min_y, min_z },
+                        .{ max_x, min_y, min_z },
+                        .{ max_x, min_y, max_z },
+                        .{ min_x, min_y, max_z },
+                        .{ min_x, max_y, min_z },
+                        .{ max_x, max_y, min_z },
+                        .{ max_x, max_y, max_z },
+                        .{ min_x, max_y, max_z },
+                    };
+
+                    // 12 edges as pairs of corner indices
+                    const edges = [12][2]u8{
+                        .{ 0, 1 }, .{ 1, 2 }, .{ 2, 3 }, .{ 3, 0 }, // bottom
+                        .{ 4, 5 }, .{ 5, 6 }, .{ 6, 7 }, .{ 7, 4 }, // top
+                        .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 }, // vertical
+                    };
+
+                    for (edges) |edge| {
+                        const c0 = corners[edge[0]];
+                        const c1 = corners[edge[1]];
+                        vertices[count] = .{ .px = c0[0], .py = c0[1], .pz = c0[2], .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+                        count += 1;
+                        vertices[count] = .{ .px = c1[0], .py = c1[1], .pz = c1[2], .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+                        count += 1;
+                    }
+                }
+            }
+        }
+
+        vk.unmapMemory(self.device, self.debug_line_vertex_buffer_memory);
+        self.debug_line_vertex_count = count;
+    }
+
+    fn createDebugLinePipeline(self: *VulkanRenderer) !void {
+        const vert_src = @embedFile("../../shaders/debug_line.vert");
+        const frag_src = @embedFile("../../shaders/debug_line.frag");
+
+        const vert_spirv = try ShaderCompiler.compile(self.allocator, vert_src, "debug_line.vert", .vertex);
+        defer self.allocator.free(vert_spirv);
+
+        const frag_spirv = try ShaderCompiler.compile(self.allocator, frag_src, "debug_line.frag", .fragment);
+        defer self.allocator.free(frag_spirv);
+
+        const vert_module_info = vk.VkShaderModuleCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = vert_spirv.len,
+            .pCode = @ptrCast(@alignCast(vert_spirv.ptr)),
+        };
+
+        const frag_module_info = vk.VkShaderModuleCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = frag_spirv.len,
+            .pCode = @ptrCast(@alignCast(frag_spirv.ptr)),
+        };
+
+        const vert_module = try vk.createShaderModule(self.device, &vert_module_info, null);
+        defer vk.destroyShaderModule(self.device, vert_module, null);
+
+        const frag_module = try vk.createShaderModule(self.device, &frag_module_info, null);
+        defer vk.destroyShaderModule(self.device, frag_module, null);
+
+        const shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stage = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vert_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = frag_module,
+                .pName = "main",
+                .pSpecializationInfo = null,
+            },
+        };
+
+        const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .vertexBindingDescriptionCount = 0,
+            .pVertexBindingDescriptions = null,
+            .vertexAttributeDescriptionCount = 0,
+            .pVertexAttributeDescriptions = null,
+        };
+
+        const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .topology = vk.VK_PRIMITIVE_TOPOLOGY_LINE_LIST,
+            .primitiveRestartEnable = vk.VK_FALSE,
+        };
+
+        const viewport_state = vk.VkPipelineViewportStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .viewportCount = 1,
+            .pViewports = null,
+            .scissorCount = 1,
+            .pScissors = null,
+        };
+
+        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthClampEnable = vk.VK_FALSE,
+            .rasterizerDiscardEnable = vk.VK_FALSE,
+            .polygonMode = vk.VK_POLYGON_MODE_FILL,
+            .cullMode = vk.VK_CULL_MODE_NONE,
+            .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable = vk.VK_FALSE,
+            .depthBiasConstantFactor = 0.0,
+            .depthBiasClamp = 0.0,
+            .depthBiasSlopeFactor = 0.0,
+            .lineWidth = 1.0,
+        };
+
+        const multisampling = vk.VkPipelineMultisampleStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .sampleShadingEnable = vk.VK_FALSE,
+            .minSampleShading = 1.0,
+            .pSampleMask = null,
+            .alphaToCoverageEnable = vk.VK_FALSE,
+            .alphaToOneEnable = vk.VK_FALSE,
+        };
+
+        const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_TRUE,
+            .depthWriteEnable = vk.VK_FALSE,
+            .depthCompareOp = vk.VK_COMPARE_OP_LESS_OR_EQUAL,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
+        };
+
+        const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        const color_blending = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = 0,
+            .attachmentCount = 1,
+            .pAttachments = &color_blend_attachment,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        const push_constant_range = vk.VkPushConstantRange{
+            .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+            .offset = 0,
+            .size = 64, // sizeof(mat4)
+        };
+
+        const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &self.debug_line_descriptor_set_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constant_range,
+        };
+
+        self.debug_line_pipeline_layout = try vk.createPipelineLayout(self.device, &pipeline_layout_info, null);
+
+        const color_attachment_format = [_]vk.VkFormat{self.swapchain_format};
+        const rendering_create_info = vk.VkPipelineRenderingCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+            .pNext = null,
+            .viewMask = 0,
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &color_attachment_format,
+            .depthAttachmentFormat = vk.VK_FORMAT_D32_SFLOAT,
+            .stencilAttachmentFormat = vk.VK_FORMAT_UNDEFINED,
+        };
+
+        const dynamic_states = [_]c.VkDynamicState{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
+        const dynamic_state_info = c.VkPipelineDynamicStateCreateInfo{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .dynamicStateCount = dynamic_states.len,
+            .pDynamicStates = &dynamic_states,
+        };
+
+        const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &rendering_create_info,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_stencil,
+            .pColorBlendState = &color_blending,
+            .pDynamicState = &dynamic_state_info,
+            .layout = self.debug_line_pipeline_layout,
+            .renderPass = null,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        var pipelines: [1]vk.VkPipeline = undefined;
+        try vk.createGraphicsPipelines(self.device, null, 1, &[_]vk.VkGraphicsPipelineCreateInfo{pipeline_info}, null, &pipelines);
+        self.debug_line_pipeline = pipelines[0];
+
+        std.log.info("Debug line graphics pipeline created", .{});
+    }
+
+    fn createDebugLineComputePipeline(self: *VulkanRenderer) !void {
+        const comp_src = @embedFile("../../shaders/debug_line_indirect.comp");
+        const comp_spirv = try ShaderCompiler.compile(self.allocator, comp_src, "debug_line_indirect.comp", .compute);
+        defer self.allocator.free(comp_spirv);
+
+        const comp_module_info = vk.VkShaderModuleCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = comp_spirv.len,
+            .pCode = @ptrCast(@alignCast(comp_spirv.ptr)),
+        };
+
+        const comp_module = try vk.createShaderModule(self.device, &comp_module_info, null);
+        defer vk.destroyShaderModule(self.device, comp_module, null);
+
+        const push_constant_range = vk.VkPushConstantRange{
+            .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = @sizeOf(u32),
+        };
+
+        const compute_layout_info = vk.VkPipelineLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &self.debug_line_compute_descriptor_set_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constant_range,
+        };
+
+        self.debug_line_compute_pipeline_layout = try vk.createPipelineLayout(self.device, &compute_layout_info, null);
+
+        const compute_stage_info = vk.VkPipelineShaderStageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = comp_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        };
+
+        const compute_pipeline_info = vk.VkComputePipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = compute_stage_info,
+            .layout = self.debug_line_compute_pipeline_layout,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        var pipelines: [1]vk.VkPipeline = undefined;
+        try vk.createComputePipelines(self.device, null, 1, &[_]vk.VkComputePipelineCreateInfo{compute_pipeline_info}, null, &pipelines);
+        self.debug_line_compute_pipeline = pipelines[0];
+
+        std.log.info("Debug line compute pipeline created", .{});
     }
 
     fn createDebugMessenger(instance: vk.VkInstance) !vk.VkDebugUtilsMessengerEXT {
