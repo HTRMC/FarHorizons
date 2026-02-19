@@ -918,16 +918,6 @@ pub const VulkanRenderer = struct {
         return render(self);
     }
 
-    fn rotateCameraVTable(impl: *anyopaque, delta_azimuth: f32, delta_elevation: f32) void {
-        const self: *VulkanRenderer = @ptrCast(@alignCast(impl));
-        self.game_state.camera.rotate(delta_azimuth, delta_elevation);
-    }
-
-    fn zoomCameraVTable(impl: *anyopaque, delta_distance: f32) void {
-        const self: *VulkanRenderer = @ptrCast(@alignCast(impl));
-        self.game_state.camera.zoom(delta_distance);
-    }
-
     fn getFramebufferResizedPtrVTable(impl: *anyopaque) *bool {
         const self: *VulkanRenderer = @ptrCast(@alignCast(impl));
         return &self.framebuffer_resized;
@@ -939,8 +929,6 @@ pub const VulkanRenderer = struct {
         .begin_frame = beginFrameVTable,
         .end_frame = endFrameVTable,
         .render = renderVTable,
-        .rotate_camera = rotateCameraVTable,
-        .zoom_camera = zoomCameraVTable,
         .get_framebuffer_resized_ptr = getFramebufferResizedPtrVTable,
     };
 };

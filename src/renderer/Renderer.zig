@@ -12,8 +12,6 @@ pub const Renderer = struct {
         begin_frame: *const fn (self: *anyopaque) anyerror!void,
         end_frame: *const fn (self: *anyopaque) anyerror!void,
         render: *const fn (self: *anyopaque) anyerror!void,
-        rotate_camera: *const fn (self: *anyopaque, delta_azimuth: f32, delta_elevation: f32) void,
-        zoom_camera: *const fn (self: *anyopaque, delta_distance: f32) void,
         get_framebuffer_resized_ptr: *const fn (self: *anyopaque) *bool,
     };
 
@@ -40,14 +38,6 @@ pub const Renderer = struct {
 
     pub fn render(self: *Renderer) !void {
         return self.vtable.render(self.impl);
-    }
-
-    pub fn rotateCamera(self: *Renderer, delta_azimuth: f32, delta_elevation: f32) void {
-        self.vtable.rotate_camera(self.impl, delta_azimuth, delta_elevation);
-    }
-
-    pub fn zoomCamera(self: *Renderer, delta_distance: f32) void {
-        self.vtable.zoom_camera(self.impl, delta_distance);
     }
 
     pub fn getFramebufferResizedPtr(self: *Renderer) *bool {

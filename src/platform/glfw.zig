@@ -19,6 +19,13 @@ pub const GLFW_TRUE = c.GLFW_TRUE;
 pub const GLFW_FALSE = c.GLFW_FALSE;
 
 // Input constants
+pub const GLFW_KEY_W = c.GLFW_KEY_W;
+pub const GLFW_KEY_A = c.GLFW_KEY_A;
+pub const GLFW_KEY_S = c.GLFW_KEY_S;
+pub const GLFW_KEY_D = c.GLFW_KEY_D;
+pub const GLFW_KEY_SPACE = c.GLFW_KEY_SPACE;
+pub const GLFW_KEY_LEFT_SHIFT = c.GLFW_KEY_LEFT_SHIFT;
+pub const GLFW_KEY_ESCAPE = c.GLFW_KEY_ESCAPE;
 pub const GLFW_KEY_UP = c.GLFW_KEY_UP;
 pub const GLFW_KEY_DOWN = c.GLFW_KEY_DOWN;
 pub const GLFW_KEY_LEFT = c.GLFW_KEY_LEFT;
@@ -26,6 +33,12 @@ pub const GLFW_KEY_RIGHT = c.GLFW_KEY_RIGHT;
 pub const GLFW_KEY_F11 = c.GLFW_KEY_F11;
 pub const GLFW_PRESS = c.GLFW_PRESS;
 pub const GLFW_RELEASE = c.GLFW_RELEASE;
+
+// Mouse / cursor constants
+pub const GLFW_MOUSE_BUTTON_RIGHT = c.GLFW_MOUSE_BUTTON_RIGHT;
+pub const GLFW_CURSOR = c.GLFW_CURSOR;
+pub const GLFW_CURSOR_DISABLED = c.GLFW_CURSOR_DISABLED;
+pub const GLFW_CURSOR_NORMAL = c.GLFW_CURSOR_NORMAL;
 
 // Error type
 pub const GlfwError = error{
@@ -106,6 +119,18 @@ pub fn getWindowUserPointer(window: *Window, comptime T: type) ?*T {
 
 pub fn setScrollCallback(window: *Window, callback: ?*const fn (?*Window, f64, f64) callconv(.c) void) void {
     _ = c.glfwSetScrollCallback(window, callback);
+}
+
+pub fn setMouseButtonCallback(window: *Window, callback: ?*const fn (?*Window, c_int, c_int, c_int) callconv(.c) void) void {
+    _ = c.glfwSetMouseButtonCallback(window, callback);
+}
+
+pub fn getCursorPos(window: *Window, xpos: *f64, ypos: *f64) void {
+    c.glfwGetCursorPos(window, xpos, ypos);
+}
+
+pub fn setInputMode(window: *Window, mode: c_int, value: c_int) void {
+    c.glfwSetInputMode(window, mode, value);
 }
 
 pub fn getPrimaryMonitor() ?*Monitor {
