@@ -7,22 +7,13 @@ const vk_utils = @import("vk_utils.zig");
 const types = @import("types.zig");
 const GpuVertex = types.GpuVertex;
 const LineVertex = types.LineVertex;
-const WorldState = @import("../../world/WorldState.zig");
 const app_config = @import("../../app_config.zig");
 const tracy = @import("../../platform/tracy.zig");
 
-const MAX_FRAMES_IN_FLIGHT = 2;
+pub const MAX_FRAMES_IN_FLIGHT = 2;
 const BLOCK_TEXTURE_COUNT = 4;
 const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{ "glass.png", "grass_block.png", "dirt.png", "stone.png" };
 const DEBUG_LINE_MAX_VERTICES = 16384;
-
-const CHUNK_SIZE = WorldState.CHUNK_SIZE;
-const WORLD_CHUNKS_X = WorldState.WORLD_CHUNKS_X;
-const WORLD_CHUNKS_Y = WorldState.WORLD_CHUNKS_Y;
-const WORLD_CHUNKS_Z = WorldState.WORLD_CHUNKS_Z;
-const WORLD_SIZE_X = WorldState.WORLD_SIZE_X;
-const WORLD_SIZE_Y = WorldState.WORLD_SIZE_Y;
-const WORLD_SIZE_Z = WorldState.WORLD_SIZE_Z;
 
 pub const RenderState = struct {
     // Texture system
@@ -213,6 +204,16 @@ pub const RenderState = struct {
     ) !void {
         const tz = tracy.zone(@src(), "uploadChunkMesh");
         defer tz.end();
+
+        // Free old buffers if re-uploading
+        if (self.vertex_buffer != null) {
+            vk.destroyBuffer(ctx.device, self.vertex_buffer, null);
+            vk.freeMemory(ctx.device, self.vertex_buffer_memory, null);
+        }
+        if (self.index_buffer != null) {
+            vk.destroyBuffer(ctx.device, self.index_buffer, null);
+            vk.freeMemory(ctx.device, self.index_buffer_memory, null);
+        }
 
         // Create vertex buffer via staging
         const vb_size: vk.VkDeviceSize = @intCast(@as(u64, vertex_count) * @sizeOf(GpuVertex));
@@ -585,88 +586,6 @@ pub const RenderState = struct {
         };
 
         self.texture_sampler = try vk.createSampler(ctx.device, &sampler_info, null);
-    }
-
-    fn createChunkBuffers(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
-        const tz = tracy.zone(@src(), "createChunkBuffers");
-        defer tz.end();
-
-        const world = comptime WorldState.generateSphereWorld();
-        const mesh = try WorldState.generateWorldMesh(allocator, &world);
-        defer allocator.free(mesh.vertices);
-        defer allocator.free(mesh.indices);
-
-        self.chunk_index_count = mesh.index_count;
-
-        // Create vertex buffer via staging (allocate at actual size)
-        const vb_actual_size: vk.VkDeviceSize = @intCast(mesh.vertex_count * @sizeOf(GpuVertex));
-        {
-            var staging_buffer: vk.VkBuffer = undefined;
-            var staging_memory: vk.VkDeviceMemory = undefined;
-            try vk_utils.createBuffer(
-                ctx,
-                vb_actual_size,
-                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &staging_buffer,
-                &staging_memory,
-            );
-
-            var data: ?*anyopaque = null;
-            try vk.mapMemory(ctx.device, staging_memory, 0, vb_actual_size, 0, &data);
-            const dst: [*]GpuVertex = @ptrCast(@alignCast(data));
-            @memcpy(dst[0..mesh.vertex_count], mesh.vertices[0..mesh.vertex_count]);
-            vk.unmapMemory(ctx.device, staging_memory);
-
-            try vk_utils.createBuffer(
-                ctx,
-                vb_actual_size,
-                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                &self.vertex_buffer,
-                &self.vertex_buffer_memory,
-            );
-
-            try vk_utils.copyBuffer(ctx, staging_buffer, self.vertex_buffer, vb_actual_size);
-            vk.destroyBuffer(ctx.device, staging_buffer, null);
-            vk.freeMemory(ctx.device, staging_memory, null);
-        }
-
-        // Create index buffer via staging (allocate at actual size)
-        const ib_actual_size: vk.VkDeviceSize = @intCast(mesh.index_count * @sizeOf(u32));
-        {
-            var staging_buffer: vk.VkBuffer = undefined;
-            var staging_memory: vk.VkDeviceMemory = undefined;
-            try vk_utils.createBuffer(
-                ctx,
-                ib_actual_size,
-                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &staging_buffer,
-                &staging_memory,
-            );
-
-            var data: ?*anyopaque = null;
-            try vk.mapMemory(ctx.device, staging_memory, 0, ib_actual_size, 0, &data);
-            const dst: [*]u32 = @ptrCast(@alignCast(data));
-            @memcpy(dst[0..mesh.index_count], mesh.indices[0..mesh.index_count]);
-            vk.unmapMemory(ctx.device, staging_memory);
-
-            try vk_utils.createBuffer(
-                ctx,
-                ib_actual_size,
-                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                &self.index_buffer,
-                &self.index_buffer_memory,
-            );
-
-            try vk_utils.copyBuffer(ctx, staging_buffer, self.index_buffer, ib_actual_size);
-            vk.destroyBuffer(ctx.device, staging_buffer, null);
-            vk.freeMemory(ctx.device, staging_memory, null);
-        }
-
-        std.log.info("Chunk buffers created ({} vertices, {} indices)", .{ mesh.vertex_count, mesh.index_count });
     }
 
     fn createBindlessDescriptorSet(self: *RenderState, ctx: *const VulkanContext) !void {
@@ -1409,56 +1328,11 @@ pub const RenderState = struct {
         const tz = tracy.zone(@src(), "generateChunkOutlines");
         defer tz.end();
 
-        // const half_world_x: f32 = @as(f32, WORLD_SIZE_X) / 2.0;
-        // const half_world_y: f32 = @as(f32, WORLD_SIZE_Y) / 2.0;
-        // const half_world_z: f32 = @as(f32, WORLD_SIZE_Z) / 2.0;
-
         var data: ?*anyopaque = null;
         vk.mapMemory(device, self.debug_line_vertex_buffer_memory, 0, DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex), 0, &data) catch return;
         const vertices: [*]LineVertex = @ptrCast(@alignCast(data));
 
         var count: u32 = 0;
-
-        // for (0..WORLD_CHUNKS_Y) |cy| {
-        //     for (0..WORLD_CHUNKS_Z) |cz| {
-        //         for (0..WORLD_CHUNKS_X) |cx| {
-        //             const min_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE)) - half_world_x;
-        //             const min_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE)) - half_world_y;
-        //             const min_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE)) - half_world_z;
-        //             const max_x: f32 = min_x + CHUNK_SIZE;
-        //             const max_y: f32 = min_y + CHUNK_SIZE;
-        //             const max_z: f32 = min_z + CHUNK_SIZE;
-
-        //             // 8 corners of the chunk box
-        //             const corners = [8][3]f32{
-        //                 .{ min_x, min_y, min_z },
-        //                 .{ max_x, min_y, min_z },
-        //                 .{ max_x, min_y, max_z },
-        //                 .{ min_x, min_y, max_z },
-        //                 .{ min_x, max_y, min_z },
-        //                 .{ max_x, max_y, min_z },
-        //                 .{ max_x, max_y, max_z },
-        //                 .{ min_x, max_y, max_z },
-        //             };
-
-        //             // 12 edges as pairs of corner indices
-        //             const edges = [12][2]u8{
-        //                 .{ 0, 1 }, .{ 1, 2 }, .{ 2, 3 }, .{ 3, 0 }, // bottom
-        //                 .{ 4, 5 }, .{ 5, 6 }, .{ 6, 7 }, .{ 7, 4 }, // top
-        //                 .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 }, // vertical
-        //             };
-
-        //             for (edges) |edge| {
-        //                 const c0 = corners[edge[0]];
-        //                 const c1 = corners[edge[1]];
-        //                 vertices[count] = .{ .px = c0[0], .py = c0[1], .pz = c0[2], .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
-        //                 count += 1;
-        //                 vertices[count] = .{ .px = c1[0], .py = c1[1], .pz = c1[2], .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
-        //                 count += 1;
-        //             }
-        //         }
-        //     }
-        // }
 
         // World axis lines (64 units each, from origin)
         // X axis - red

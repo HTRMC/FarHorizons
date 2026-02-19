@@ -5,7 +5,9 @@ const Window = @import("../../platform/Window.zig").Window;
 const glfw = @import("../../platform/glfw.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const SurfaceState = @import("SurfaceState.zig").SurfaceState;
-const RenderState = @import("RenderState.zig").RenderState;
+const render_state_mod = @import("RenderState.zig");
+const RenderState = render_state_mod.RenderState;
+const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
 const zlm = @import("zlm");
@@ -13,7 +15,6 @@ const tracy = @import("../../platform/tracy.zig");
 
 const enable_validation_layers = @import("builtin").mode == .Debug;
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
-const MAX_FRAMES_IN_FLIGHT = 2;
 
 fn debugCallback(
     message_severity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
@@ -46,14 +47,10 @@ pub const VulkanRenderer = struct {
     instance: vk.VkInstance,
     debug_messenger: ?vk.VkDebugUtilsMessengerEXT,
     validation_enabled: bool,
-    device: vk.VkDevice,
-    graphics_queue: vk.VkQueue,
-    queue_family_index: u32,
     surface: vk.VkSurfaceKHR,
     ctx: VulkanContext,
     surface_state: SurfaceState,
     render_state: RenderState,
-    command_pool: vk.VkCommandPool,
     mesh_worker: MeshWorker,
     game_state: *GameState,
     framebuffer_resized: bool,
@@ -106,14 +103,10 @@ pub const VulkanRenderer = struct {
             .instance = instance,
             .debug_messenger = debug_messenger,
             .validation_enabled = validation_enabled,
-            .device = device,
-            .graphics_queue = graphics_queue,
-            .queue_family_index = device_info.queue_family_index,
             .surface = surface,
             .ctx = ctx,
             .surface_state = undefined,
             .render_state = undefined,
-            .command_pool = null,
             .mesh_worker = MeshWorker.init(allocator),
             .game_state = game_state,
             .framebuffer_resized = false,
@@ -134,17 +127,17 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "VulkanRenderer.deinit");
         defer tz.end();
 
-        vk.deviceWaitIdle(self.device) catch |err| {
+        vk.deviceWaitIdle(self.ctx.device) catch |err| {
             std.log.err("vkDeviceWaitIdle failed: {}", .{err});
         };
 
         self.mesh_worker.deinit();
-        self.render_state.deinit(self.device);
-        vk.destroyCommandPool(self.device, self.command_pool, null);
-        self.surface_state.deinit(self.allocator, self.device);
+        self.render_state.deinit(self.ctx.device);
+        vk.destroyCommandPool(self.ctx.device, self.ctx.command_pool, null);
+        self.surface_state.deinit(self.allocator, self.ctx.device);
 
         vk.destroySurfaceKHR(self.instance, self.surface, null);
-        vk.destroyDevice(self.device, null);
+        vk.destroyDevice(self.ctx.device, null);
 
         if (self.debug_messenger) |messenger| {
             vk.destroyDebugUtilsMessengerEXT(self.instance, messenger, null);
@@ -160,7 +153,7 @@ pub const VulkanRenderer = struct {
         defer tz.end();
 
         const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[self.render_state.current_frame]};
-        try vk.waitForFences(self.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
+        try vk.waitForFences(self.ctx.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
 
         self.pollMeshWorker();
     }
@@ -201,7 +194,7 @@ pub const VulkanRenderer = struct {
 
         var image_index: u32 = undefined;
         const acquire_result = vk.acquireNextImageKHRResult(
-            self.device,
+            self.ctx.device,
             self.surface_state.swapchain,
             std.math.maxInt(u64),
             self.render_state.image_available_semaphores[self.render_state.current_frame],
@@ -217,13 +210,13 @@ pub const VulkanRenderer = struct {
 
         if (self.surface_state.images_in_flight.items[image_index]) |image_fence| {
             const fence = &[_]vk.VkFence{image_fence};
-            try vk.waitForFences(self.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
+            try vk.waitForFences(self.ctx.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
         }
 
         self.surface_state.images_in_flight.items[image_index] = self.render_state.in_flight_fences[self.render_state.current_frame];
 
         const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[self.render_state.current_frame]};
-        try vk.resetFences(self.device, 1, fence);
+        try vk.resetFences(self.ctx.device, 1, fence);
 
         try self.recordCommandBuffer(self.render_state.command_buffers[self.render_state.current_frame], image_index);
 
@@ -244,7 +237,7 @@ pub const VulkanRenderer = struct {
         };
 
         const submit_infos = &[_]vk.VkSubmitInfo{submit_info};
-        try vk.queueSubmit(self.graphics_queue, 1, submit_infos, self.render_state.in_flight_fences[self.render_state.current_frame]);
+        try vk.queueSubmit(self.ctx.graphics_queue, 1, submit_infos, self.render_state.in_flight_fences[self.render_state.current_frame]);
 
         const swapchains = [_]vk.VkSwapchainKHR{self.surface_state.swapchain};
         const present_info = vk.VkPresentInfoKHR{
@@ -258,7 +251,7 @@ pub const VulkanRenderer = struct {
             .pResults = null,
         };
 
-        const present_result = vk.queuePresentKHRResult(self.graphics_queue, &present_info) catch |err| {
+        const present_result = vk.queuePresentKHRResult(self.ctx.graphics_queue, &present_info) catch |err| {
             if (err == error.OutOfDateKHR) {
                 try self.recreateSwapchain();
                 return;
@@ -279,16 +272,16 @@ pub const VulkanRenderer = struct {
         // Wait for all in-flight frames to complete
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[i]};
-            try vk.waitForFences(self.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
+            try vk.waitForFences(self.ctx.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
         }
 
         // Destroy depth buffer
-        vk.destroyImageView(self.device, self.surface_state.depth_image_view, null);
-        vk.destroyImage(self.device, self.surface_state.depth_image, null);
-        vk.freeMemory(self.device, self.surface_state.depth_image_memory, null);
+        vk.destroyImageView(self.ctx.device, self.surface_state.depth_image_view, null);
+        vk.destroyImage(self.ctx.device, self.surface_state.depth_image, null);
+        vk.freeMemory(self.ctx.device, self.surface_state.depth_image_memory, null);
 
         // Cleanup old swapchain (image views + swapchain handle)
-        self.surface_state.cleanupSwapchain(self.device);
+        self.surface_state.cleanupSwapchain(self.ctx.device);
 
         // Recreate swapchain, image views (semaphores are reused/grown inside)
         try self.surface_state.createSwapchain(self.allocator, &self.ctx, self.surface, self.window);
@@ -319,10 +312,10 @@ pub const VulkanRenderer = struct {
         const has_chunks = self.render_state.chunk_index_count > 0;
         if (has_chunks) {
             var data: ?*anyopaque = null;
-            try vk.mapMemory(self.device, self.render_state.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
+            try vk.mapMemory(self.ctx.device, self.render_state.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
             const count_ptr: *u32 = @ptrCast(@alignCast(data));
             count_ptr.* = 0;
-            vk.unmapMemory(self.device, self.render_state.indirect_count_buffer_memory);
+            vk.unmapMemory(self.ctx.device, self.render_state.indirect_count_buffer_memory);
 
             vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.compute_pipeline);
             vk.cmdBindDescriptorSets(
@@ -677,11 +670,10 @@ pub const VulkanRenderer = struct {
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .pNext = null,
             .flags = vk.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
-            .queueFamilyIndex = self.queue_family_index,
+            .queueFamilyIndex = self.ctx.queue_family_index,
         };
 
-        self.command_pool = try vk.createCommandPool(self.device, &pool_info, null);
-        self.ctx.command_pool = self.command_pool;
+        self.ctx.command_pool = try vk.createCommandPool(self.ctx.device, &pool_info, null);
         std.log.info("Command pool created", .{});
     }
 

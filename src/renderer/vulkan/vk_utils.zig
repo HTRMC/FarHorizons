@@ -83,6 +83,7 @@ pub fn copyBuffer(
 
     var command_buffers: [1]vk.VkCommandBuffer = undefined;
     try vk.allocateCommandBuffers(ctx.device, &alloc_info, &command_buffers);
+    defer vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &command_buffers);
     const command_buffer = command_buffers[0];
 
     const begin_info = vk.VkCommandBufferBeginInfo{
@@ -117,6 +118,4 @@ pub fn copyBuffer(
 
     try vk.queueSubmit(ctx.graphics_queue, 1, &submit_infos, null);
     try vk.queueWaitIdle(ctx.graphics_queue);
-
-    vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &command_buffers);
 }
