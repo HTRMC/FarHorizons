@@ -318,8 +318,8 @@ pub const RenderState = struct {
 
         const sep = std.fs.path.sep_str;
 
-        const tex_w = 32;
-        const tex_h = 32;
+        const tex_w = 16;
+        const tex_h = 16;
         const layer_size: vk.VkDeviceSize = tex_w * tex_h * 4;
         const total_size: vk.VkDeviceSize = layer_size * BLOCK_TEXTURE_COUNT;
 
@@ -367,7 +367,7 @@ pub const RenderState = struct {
             .pNext = null,
             .flags = 0,
             .imageType = vk.VK_IMAGE_TYPE_2D,
-            .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
+            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
             .extent = .{ .width = tex_w, .height = tex_h, .depth = 1 },
             .mipLevels = 1,
             .arrayLayers = BLOCK_TEXTURE_COUNT,
@@ -544,7 +544,7 @@ pub const RenderState = struct {
             .flags = 0,
             .image = self.texture_image,
             .viewType = vk.VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-            .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
+            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
             .components = .{
                 .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
                 .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
