@@ -12,7 +12,8 @@ const app_config = @import("../../app_config.zig");
 const tracy = @import("../../platform/tracy.zig");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
-const MAX_TEXTURES = 256;
+const BLOCK_TEXTURE_COUNT = 4;
+const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{ "glass.png", "grass_block.png", "dirt.png", "stone.png" };
 const DEBUG_LINE_MAX_VERTICES = 16384;
 
 const CHUNK_SIZE = WorldState.CHUNK_SIZE;
@@ -316,53 +317,60 @@ pub const RenderState = struct {
         defer allocator.free(base_path);
 
         const sep = std.fs.path.sep_str;
-        const texture_path = try std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "block" ++ sep ++ "glass.png", .{base_path}, 0);
-        defer allocator.free(texture_path);
 
-        var tex_width: c_int = 0;
-        var tex_height: c_int = 0;
-        var tex_channels: c_int = 0;
-        const pixels = c.stbi_load(texture_path.ptr, &tex_width, &tex_height, &tex_channels, 4) orelse {
-            std.log.err("Failed to load texture image from {s}", .{texture_path});
-            return error.TextureLoadFailed;
-        };
-        defer c.stbi_image_free(pixels);
+        const tex_w = 32;
+        const tex_h = 32;
+        const layer_size: vk.VkDeviceSize = tex_w * tex_h * 4;
+        const total_size: vk.VkDeviceSize = layer_size * BLOCK_TEXTURE_COUNT;
 
-        const image_size: vk.VkDeviceSize = @intCast(@as(u64, @intCast(tex_width)) * @as(u64, @intCast(tex_height)) * 4);
-
-        // Create staging buffer
+        // Create one staging buffer for all layers
         var staging_buffer: vk.VkBuffer = undefined;
         var staging_buffer_memory: vk.VkDeviceMemory = undefined;
         try vk_utils.createBuffer(
             ctx,
-            image_size,
+            total_size,
             vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             &staging_buffer,
             &staging_buffer_memory,
         );
 
+        // Map once, load each texture into its layer offset
         var data: ?*anyopaque = null;
-        try vk.mapMemory(ctx.device, staging_buffer_memory, 0, image_size, 0, &data);
+        try vk.mapMemory(ctx.device, staging_buffer_memory, 0, total_size, 0, &data);
         const dst: [*]u8 = @ptrCast(data.?);
-        const src: [*]const u8 = @ptrCast(pixels);
-        @memcpy(dst[0..@intCast(image_size)], src[0..@intCast(image_size)]);
+
+        for (0..BLOCK_TEXTURE_COUNT) |i| {
+            const texture_path = try std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "block" ++ sep ++ "{s}", .{ base_path, block_texture_names[i] }, 0);
+            defer allocator.free(texture_path);
+
+            var tw: c_int = 0;
+            var th: c_int = 0;
+            var tc: c_int = 0;
+            const pixels = c.stbi_load(texture_path.ptr, &tw, &th, &tc, 4) orelse {
+                std.log.err("Failed to load texture image from {s}", .{texture_path});
+                return error.TextureLoadFailed;
+            };
+            defer c.stbi_image_free(pixels);
+
+            const offset = i * @as(usize, @intCast(layer_size));
+            const src: [*]const u8 = @ptrCast(pixels);
+            @memcpy(dst[offset..][0..@intCast(layer_size)], src[0..@intCast(layer_size)]);
+            std.log.info("Texture loaded: {s} ({}x{})", .{ block_texture_names[i], tw, th });
+        }
+
         vk.unmapMemory(ctx.device, staging_buffer_memory);
 
-        // Create the texture image
+        // Create single VkImage with arrayLayers = BLOCK_TEXTURE_COUNT
         const image_info = vk.VkImageCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .imageType = vk.VK_IMAGE_TYPE_2D,
             .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
-            .extent = .{
-                .width = @intCast(tex_width),
-                .height = @intCast(tex_height),
-                .depth = 1,
-            },
+            .extent = .{ .width = tex_w, .height = tex_h, .depth = 1 },
             .mipLevels = 1,
-            .arrayLayers = 1,
+            .arrayLayers = BLOCK_TEXTURE_COUNT,
             .samples = vk.VK_SAMPLE_COUNT_1_BIT,
             .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
             .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -393,7 +401,7 @@ pub const RenderState = struct {
         self.texture_image_memory = try vk.allocateMemory(ctx.device, &alloc_info, null);
         try vk.bindImageMemory(ctx.device, self.texture_image, self.texture_image_memory, 0);
 
-        // Transition + copy via one-time command buffer
+        // One command buffer: barrier all layers, copy each layer, barrier all layers
         const cmd_alloc_info = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
@@ -414,7 +422,7 @@ pub const RenderState = struct {
         };
         try vk.beginCommandBuffer(cmd, &cmd_begin_info);
 
-        // Barrier: UNDEFINED -> TRANSFER_DST_OPTIMAL
+        // Barrier: UNDEFINED -> TRANSFER_DST_OPTIMAL (all layers)
         const to_transfer_barrier = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -430,7 +438,7 @@ pub const RenderState = struct {
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = 1,
+                .layerCount = BLOCK_TEXTURE_COUNT,
             },
         };
 
@@ -447,35 +455,34 @@ pub const RenderState = struct {
             &[_]vk.VkImageMemoryBarrier{to_transfer_barrier},
         );
 
-        // Copy buffer to image
-        const region = vk.VkBufferImageCopy{
-            .bufferOffset = 0,
-            .bufferRowLength = 0,
-            .bufferImageHeight = 0,
-            .imageSubresource = .{
-                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-            .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
-            .imageExtent = .{
-                .width = @intCast(tex_width),
-                .height = @intCast(tex_height),
-                .depth = 1,
-            },
-        };
+        // Copy each layer from staging buffer
+        var regions: [BLOCK_TEXTURE_COUNT]vk.VkBufferImageCopy = undefined;
+        for (0..BLOCK_TEXTURE_COUNT) |i| {
+            regions[i] = .{
+                .bufferOffset = @intCast(i * @as(usize, @intCast(layer_size))),
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource = .{
+                    .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = @intCast(i),
+                    .layerCount = 1,
+                },
+                .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
+                .imageExtent = .{ .width = tex_w, .height = tex_h, .depth = 1 },
+            };
+        }
 
         vk.cmdCopyBufferToImage(
             cmd,
             staging_buffer,
             self.texture_image,
             vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            1,
-            &[_]vk.VkBufferImageCopy{region},
+            BLOCK_TEXTURE_COUNT,
+            &regions,
         );
 
-        // Barrier: TRANSFER_DST -> SHADER_READ_ONLY_OPTIMAL
+        // Barrier: TRANSFER_DST -> SHADER_READ_ONLY_OPTIMAL (all layers)
         const to_shader_barrier = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -491,7 +498,7 @@ pub const RenderState = struct {
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = 1,
+                .layerCount = BLOCK_TEXTURE_COUNT,
             },
         };
 
@@ -530,13 +537,13 @@ pub const RenderState = struct {
         vk.destroyBuffer(ctx.device, staging_buffer, null);
         vk.freeMemory(ctx.device, staging_buffer_memory, null);
 
-        // Create image view
+        // Create 2D array image view
         const view_info = vk.VkImageViewCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .image = self.texture_image,
-            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D_ARRAY,
             .format = vk.VK_FORMAT_R8G8B8A8_SRGB,
             .components = .{
                 .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -549,13 +556,13 @@ pub const RenderState = struct {
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = 1,
+                .layerCount = BLOCK_TEXTURE_COUNT,
             },
         };
 
         self.texture_image_view = try vk.createImageView(ctx.device, &view_info, null);
 
-        // Create sampler (nearest for pixel-art style)
+        // Create shared sampler (nearest for pixel-art style)
         const sampler_info = vk.VkSamplerCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .pNext = null,
@@ -578,7 +585,6 @@ pub const RenderState = struct {
         };
 
         self.texture_sampler = try vk.createSampler(ctx.device, &sampler_info, null);
-        std.log.info("Texture image created ({}x{})", .{ tex_width, tex_height });
     }
 
     fn createChunkBuffers(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
@@ -667,7 +673,7 @@ pub const RenderState = struct {
         const tz = tracy.zone(@src(), "createBindlessDescriptorSet");
         defer tz.end();
 
-        // Layout: binding 0 = SSBO (vertex buffer), binding 1 = sampler2D array
+        // Layout: binding 0 = SSBO (vertex buffer), binding 1 = sampler2DArray (single descriptor)
         const bindings = [_]vk.VkDescriptorSetLayoutBinding{
             .{
                 .binding = 0,
@@ -679,18 +685,16 @@ pub const RenderState = struct {
             .{
                 .binding = 1,
                 .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = MAX_TEXTURES,
+                .descriptorCount = 1,
                 .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
                 .pImmutableSamplers = null,
             },
         };
 
-        // Binding flags: binding 0 = UPDATE_AFTER_BIND, binding 1 = PARTIALLY_BOUND | VARIABLE_COUNT | UPDATE_AFTER_BIND
+        // Binding flags: UPDATE_AFTER_BIND for both bindings
         const binding_flags = [_]c.VkDescriptorBindingFlags{
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
-            vk.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT |
-                vk.VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
-                vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         };
 
         const binding_flags_info = vk.VkDescriptorSetLayoutBindingFlagsCreateInfo{
@@ -718,7 +722,7 @@ pub const RenderState = struct {
             },
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = MAX_TEXTURES,
+                .descriptorCount = 1,
             },
         };
 
@@ -733,18 +737,10 @@ pub const RenderState = struct {
 
         self.bindless_descriptor_pool = try vk.createDescriptorPool(ctx.device, &pool_info, null);
 
-        // Allocate with variable descriptor count
-        const actual_texture_count: u32 = 1;
-        const variable_count_info = vk.VkDescriptorSetVariableDescriptorCountAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
-            .pNext = null,
-            .descriptorSetCount = 1,
-            .pDescriptorCounts = &actual_texture_count,
-        };
-
+        // Allocate descriptor set (no variable count needed)
         const alloc_info = vk.VkDescriptorSetAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .pNext = &variable_count_info,
+            .pNext = null,
             .descriptorPool = self.bindless_descriptor_pool,
             .descriptorSetCount = 1,
             .pSetLayouts = &self.bindless_descriptor_set_layout,
@@ -754,30 +750,28 @@ pub const RenderState = struct {
         try vk.allocateDescriptorSets(ctx.device, &alloc_info, &descriptor_sets);
         self.bindless_descriptor_set = descriptor_sets[0];
 
-        // Write texture descriptor only (binding 1) — vertex SSBO (binding 0) is written later by uploadChunkMesh
-        const texture_image_info = vk.VkDescriptorImageInfo{
+        // Write texture array descriptor (binding 1) — vertex SSBO (binding 0) is written later by uploadChunkMesh
+        const image_info = vk.VkDescriptorImageInfo{
             .sampler = self.texture_sampler,
             .imageView = self.texture_image_view,
             .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         };
 
-        const descriptor_writes = [_]vk.VkWriteDescriptorSet{
-            .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = self.bindless_descriptor_set,
-                .dstBinding = 1,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &texture_image_info,
-                .pBufferInfo = null,
-                .pTexelBufferView = null,
-            },
+        const descriptor_write = vk.VkWriteDescriptorSet{
+            .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = null,
+            .dstSet = self.bindless_descriptor_set,
+            .dstBinding = 1,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &image_info,
+            .pBufferInfo = null,
+            .pTexelBufferView = null,
         };
 
-        vk.updateDescriptorSets(ctx.device, descriptor_writes.len, &descriptor_writes, 0, null);
-        std.log.info("Bindless descriptor set created", .{});
+        vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
+        std.log.info("Descriptor set created (texture array with {} layers)", .{BLOCK_TEXTURE_COUNT});
     }
 
     fn createGraphicsPipeline(self: *RenderState, shader_compiler: *ShaderCompiler, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
