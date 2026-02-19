@@ -162,6 +162,8 @@ pub const VulkanRenderer = struct {
         const result = self.mesh_worker.poll() orelse return;
         defer self.allocator.free(result.vertices);
         defer self.allocator.free(result.indices);
+        defer self.allocator.free(result.chunk_positions);
+        defer self.allocator.free(result.draw_commands);
 
         self.render_state.uploadChunkMesh(
             &self.ctx,
@@ -169,6 +171,9 @@ pub const VulkanRenderer = struct {
             result.indices,
             result.vertex_count,
             result.index_count,
+            result.chunk_positions,
+            result.draw_commands,
+            result.draw_count,
         ) catch |err| {
             std.log.err("Failed to upload chunk mesh: {}", .{err});
         };
@@ -308,72 +313,7 @@ pub const VulkanRenderer = struct {
 
         try vk.beginCommandBuffer(command_buffer, &begin_info);
 
-        // Compute culling pass (only if chunk mesh is available)
-        const has_chunks = self.render_state.chunk_index_count > 0;
-        if (has_chunks) {
-            var data: ?*anyopaque = null;
-            try vk.mapMemory(self.ctx.device, self.render_state.pipelines.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
-            const count_ptr: *u32 = @ptrCast(@alignCast(data));
-            count_ptr.* = 0;
-            vk.unmapMemory(self.ctx.device, self.render_state.pipelines.indirect_count_buffer_memory);
-
-            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.pipelines.compute_pipeline);
-            vk.cmdBindDescriptorSets(
-                command_buffer,
-                vk.VK_PIPELINE_BIND_POINT_COMPUTE,
-                self.render_state.pipelines.compute_pipeline_layout,
-                0,
-                1,
-                &[_]vk.VkDescriptorSet{self.render_state.pipelines.descriptor_set},
-                0,
-                null,
-            );
-
-            const ComputePushConstants = extern struct {
-                object_count: u32,
-                total_index_count: u32,
-            };
-            const compute_pc = ComputePushConstants{
-                .object_count = 1,
-                .total_index_count = self.render_state.chunk_index_count,
-            };
-            vk.cmdPushConstants(
-                command_buffer,
-                self.render_state.pipelines.compute_pipeline_layout,
-                vk.VK_SHADER_STAGE_COMPUTE_BIT,
-                0,
-                @sizeOf(ComputePushConstants),
-                &compute_pc,
-            );
-
-            vk.cmdDispatch(command_buffer, 1, 1, 1);
-
-            // Buffer memory barrier: compute shader write -> indirect command read
-            const indirect_barrier = vk.VkBufferMemoryBarrier{
-                .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-                .pNext = null,
-                .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
-                .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
-                .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-                .buffer = self.render_state.pipelines.indirect_buffer,
-                .offset = 0,
-                .size = @sizeOf(vk.VkDrawIndexedIndirectCommand),
-            };
-
-            vk.cmdPipelineBarrier(
-                command_buffer,
-                vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                vk.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-                0,
-                0,
-                null,
-                1,
-                &[_]vk.VkBufferMemoryBarrier{indirect_barrier},
-                0,
-                null,
-            );
-        }
+        const has_chunks = self.render_state.draw_count > 0;
 
         // Debug line compute dispatch
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.debug_lines.compute_pipeline);
@@ -582,14 +522,14 @@ pub const VulkanRenderer = struct {
                 &mvp.m,
             );
 
-            // Draw indexed indirect with count
+            // Draw indexed indirect with count (multi-draw, one per chunk)
             vk.cmdDrawIndexedIndirectCount(
                 command_buffer,
                 self.render_state.pipelines.indirect_buffer,
                 0,
                 self.render_state.pipelines.indirect_count_buffer,
                 0,
-                1,
+                self.render_state.draw_count,
                 @sizeOf(vk.VkDrawIndexedIndirectCommand),
             );
         }
@@ -825,6 +765,10 @@ pub const VulkanRenderer = struct {
 
         const device_extensions = [_][*:0]const u8{vk.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
+        var vulkan11_features: vk.c.VkPhysicalDeviceVulkan11Features = std.mem.zeroes(vk.c.VkPhysicalDeviceVulkan11Features);
+        vulkan11_features.sType = vk.c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        vulkan11_features.shaderDrawParameters = vk.VK_TRUE;
+
         var vulkan12_features: vk.VkPhysicalDeviceVulkan12Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan12Features);
         vulkan12_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
         vulkan12_features.drawIndirectCount = vk.VK_TRUE;
@@ -843,7 +787,8 @@ pub const VulkanRenderer = struct {
         vulkan13_features.dynamicRendering = vk.VK_TRUE;
         vulkan13_features.synchronization2 = vk.VK_TRUE;
 
-        // Chain: DeviceCreateInfo -> Vulkan13Features -> Vulkan12Features
+        // Chain: DeviceCreateInfo -> Vulkan13Features -> Vulkan12Features -> Vulkan11Features
+        vulkan12_features.pNext = &vulkan11_features;
         vulkan13_features.pNext = &vulkan12_features;
 
         const create_info = vk.VkDeviceCreateInfo{

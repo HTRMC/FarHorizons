@@ -5,15 +5,11 @@ const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
 const tracy = @import("../../platform/tracy.zig");
+const WorldState = @import("../../world/WorldState.zig");
 
 pub const PipelineBuilder = struct {
     pipeline_layout: vk.VkPipelineLayout,
     graphics_pipeline: vk.VkPipeline,
-    descriptor_set_layout: vk.VkDescriptorSetLayout,
-    descriptor_pool: vk.VkDescriptorPool,
-    descriptor_set: vk.VkDescriptorSet,
-    compute_pipeline_layout: vk.VkPipelineLayout,
-    compute_pipeline: vk.VkPipeline,
     indirect_buffer: vk.VkBuffer,
     indirect_buffer_memory: vk.VkDeviceMemory,
     indirect_count_buffer: vk.VkBuffer,
@@ -31,11 +27,6 @@ pub const PipelineBuilder = struct {
         var self = PipelineBuilder{
             .pipeline_layout = null,
             .graphics_pipeline = null,
-            .descriptor_set_layout = null,
-            .descriptor_pool = null,
-            .descriptor_set = null,
-            .compute_pipeline_layout = null,
-            .compute_pipeline = null,
             .indirect_buffer = null,
             .indirect_buffer_memory = null,
             .indirect_count_buffer = null,
@@ -44,16 +35,11 @@ pub const PipelineBuilder = struct {
 
         try self.createGraphicsPipeline(shader_compiler, ctx.device, swapchain_format, bindless_descriptor_set_layout);
         try self.createIndirectBuffer(ctx);
-        try self.createComputePipeline(shader_compiler, ctx);
 
         return self;
     }
 
     pub fn deinit(self: *PipelineBuilder, device: vk.VkDevice) void {
-        vk.destroyPipeline(device, self.compute_pipeline, null);
-        vk.destroyPipelineLayout(device, self.compute_pipeline_layout, null);
-        vk.destroyDescriptorPool(device, self.descriptor_pool, null);
-        vk.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
         vk.destroyBuffer(device, self.indirect_buffer, null);
         vk.freeMemory(device, self.indirect_buffer_memory, null);
         vk.destroyBuffer(device, self.indirect_count_buffer, null);
@@ -287,7 +273,7 @@ pub const PipelineBuilder = struct {
         const tz = tracy.zone(@src(), "createIndirectBuffer");
         defer tz.end();
 
-        const buffer_size = @sizeOf(vk.VkDrawIndexedIndirectCommand);
+        const buffer_size: vk.VkDeviceSize = WorldState.TOTAL_WORLD_CHUNKS * @sizeOf(vk.VkDrawIndexedIndirectCommand);
 
         try vk_utils.createBuffer(
             ctx,
@@ -298,10 +284,11 @@ pub const PipelineBuilder = struct {
             &self.indirect_buffer_memory,
         );
 
+        // Zero-initialize
         var data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, self.indirect_buffer_memory, 0, buffer_size, 0, &data);
-        const draw_ptr: *vk.VkDrawIndexedIndirectCommand = @ptrCast(@alignCast(data));
-        draw_ptr.* = std.mem.zeroes(vk.VkDrawIndexedIndirectCommand);
+        const dst: [*]u8 = @ptrCast(data.?);
+        @memset(dst[0..@intCast(buffer_size)], 0);
         vk.unmapMemory(ctx.device, self.indirect_buffer_memory);
 
         const count_buffer_size = @sizeOf(u32);
@@ -337,174 +324,13 @@ pub const PipelineBuilder = struct {
         self.indirect_count_buffer_memory = try vk.allocateMemory(ctx.device, &count_alloc_info, null);
         try vk.bindBufferMemory(ctx.device, self.indirect_count_buffer, self.indirect_count_buffer_memory, 0);
 
+        // Initialize count to 0
         var count_data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, self.indirect_count_buffer_memory, 0, count_buffer_size, 0, &count_data);
-
         const count_ptr: *u32 = @ptrCast(@alignCast(count_data));
-        count_ptr.* = 1;
-
+        count_ptr.* = 0;
         vk.unmapMemory(ctx.device, self.indirect_count_buffer_memory);
 
-        std.log.info("Indirect draw buffers created (count buffer for GPU-driven rendering)", .{});
-    }
-
-    fn createComputePipeline(self: *PipelineBuilder, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext) !void {
-        const tz = tracy.zone(@src(), "createComputePipeline");
-        defer tz.end();
-
-        const bindings = [_]vk.VkDescriptorSetLayoutBinding{
-            .{
-                .binding = 0,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .descriptorCount = 1,
-                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
-                .pImmutableSamplers = null,
-            },
-            .{
-                .binding = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .descriptorCount = 1,
-                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
-                .pImmutableSamplers = null,
-            },
-        };
-
-        const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .bindingCount = bindings.len,
-            .pBindings = &bindings,
-        };
-
-        self.descriptor_set_layout = try vk.createDescriptorSetLayout(ctx.device, &layout_info, null);
-
-        const pool_size = vk.VkDescriptorPoolSize{
-            .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .descriptorCount = 2,
-        };
-
-        const pool_info = vk.VkDescriptorPoolCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .maxSets = 1,
-            .poolSizeCount = 1,
-            .pPoolSizes = &pool_size,
-        };
-
-        self.descriptor_pool = try vk.createDescriptorPool(ctx.device, &pool_info, null);
-
-        const desc_alloc_info = vk.VkDescriptorSetAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .pNext = null,
-            .descriptorPool = self.descriptor_pool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &self.descriptor_set_layout,
-        };
-
-        var descriptor_sets: [1]vk.VkDescriptorSet = undefined;
-        try vk.allocateDescriptorSets(ctx.device, &desc_alloc_info, &descriptor_sets);
-        self.descriptor_set = descriptor_sets[0];
-
-        const draw_buffer_info = vk.VkDescriptorBufferInfo{
-            .buffer = self.indirect_buffer,
-            .offset = 0,
-            .range = @sizeOf(vk.VkDrawIndexedIndirectCommand),
-        };
-
-        const count_buffer_info = vk.VkDescriptorBufferInfo{
-            .buffer = self.indirect_count_buffer,
-            .offset = 0,
-            .range = @sizeOf(u32),
-        };
-
-        const descriptor_writes = [_]vk.VkWriteDescriptorSet{
-            .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = self.descriptor_set,
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = null,
-                .pBufferInfo = &draw_buffer_info,
-                .pTexelBufferView = null,
-            },
-            .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = self.descriptor_set,
-                .dstBinding = 1,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = null,
-                .pBufferInfo = &count_buffer_info,
-                .pTexelBufferView = null,
-            },
-        };
-
-        vk.updateDescriptorSets(ctx.device, descriptor_writes.len, &descriptor_writes, 0, null);
-
-        const comp_spirv = try shader_compiler.compile("cull.comp", .compute);
-        defer shader_compiler.allocator.free(comp_spirv);
-
-        const comp_module_info = vk.VkShaderModuleCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .codeSize = comp_spirv.len,
-            .pCode = @ptrCast(@alignCast(comp_spirv.ptr)),
-        };
-
-        const comp_module = try vk.createShaderModule(ctx.device, &comp_module_info, null);
-        defer vk.destroyShaderModule(ctx.device, comp_module, null);
-
-        const push_constant_range = vk.VkPushConstantRange{
-            .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
-            .offset = 0,
-            .size = @sizeOf(u32) * 2, // objectCount + totalIndexCount
-        };
-
-        const compute_layout_info = vk.VkPipelineLayoutCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .setLayoutCount = 1,
-            .pSetLayouts = &self.descriptor_set_layout,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &push_constant_range,
-        };
-
-        self.compute_pipeline_layout = try vk.createPipelineLayout(ctx.device, &compute_layout_info, null);
-
-        const compute_stage_info = vk.VkPipelineShaderStageCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .stage = vk.VK_SHADER_STAGE_COMPUTE_BIT,
-            .module = comp_module,
-            .pName = "main",
-            .pSpecializationInfo = null,
-        };
-
-        const compute_pipeline_info = vk.VkComputePipelineCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .stage = compute_stage_info,
-            .layout = self.compute_pipeline_layout,
-            .basePipelineHandle = null,
-            .basePipelineIndex = -1,
-        };
-
-        const pipeline_infos = &[_]vk.VkComputePipelineCreateInfo{compute_pipeline_info};
-        var pipelines: [1]vk.VkPipeline = undefined;
-        try vk.createComputePipelines(ctx.device, null, 1, pipeline_infos, null, &pipelines);
-        self.compute_pipeline = pipelines[0];
-
-        std.log.info("Compute pipeline created", .{});
+        std.log.info("Indirect draw buffers created (max {} draw commands)", .{WorldState.TOTAL_WORLD_CHUNKS});
     }
 };

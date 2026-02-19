@@ -8,6 +8,14 @@ pub const GpuVertex = extern struct {
     light: f32,
 };
 
+pub const DrawCommand = extern struct {
+    index_count: u32,
+    instance_count: u32,
+    first_index: u32,
+    vertex_offset: i32,
+    first_instance: u32,
+};
+
 pub const LineVertex = extern struct {
     px: f32,
     py: f32,

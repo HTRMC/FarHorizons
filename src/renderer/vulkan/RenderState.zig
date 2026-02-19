@@ -5,6 +5,7 @@ const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
 const types = @import("types.zig");
 const GpuVertex = types.GpuVertex;
+const DrawCommand = types.DrawCommand;
 const tracy = @import("../../platform/tracy.zig");
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
 pub const PipelineBuilder = @import("PipelineBuilder.zig").PipelineBuilder;
@@ -26,7 +27,9 @@ pub const RenderState = struct {
     vertex_buffer_memory: vk.VkDeviceMemory,
     index_buffer: vk.VkBuffer,
     index_buffer_memory: vk.VkDeviceMemory,
-    chunk_index_count: u32,
+    chunk_positions_buffer: vk.VkBuffer,
+    chunk_positions_buffer_memory: vk.VkDeviceMemory,
+    draw_count: u32,
 
     pub fn create(allocator: std.mem.Allocator, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !RenderState {
         const create_zone = tracy.zone(@src(), "RenderState.create");
@@ -56,7 +59,9 @@ pub const RenderState = struct {
             .vertex_buffer_memory = null,
             .index_buffer = null,
             .index_buffer_memory = null,
-            .chunk_index_count = 0,
+            .chunk_positions_buffer = null,
+            .chunk_positions_buffer_memory = null,
+            .draw_count = 0,
         };
 
         try self.createCommandBuffers(ctx);
@@ -86,6 +91,10 @@ pub const RenderState = struct {
             vk.destroyBuffer(device, self.index_buffer, null);
             vk.freeMemory(device, self.index_buffer_memory, null);
         }
+        if (self.chunk_positions_buffer != null) {
+            vk.destroyBuffer(device, self.chunk_positions_buffer, null);
+            vk.freeMemory(device, self.chunk_positions_buffer_memory, null);
+        }
     }
 
     pub fn uploadChunkMesh(
@@ -95,6 +104,9 @@ pub const RenderState = struct {
         indices: []const u32,
         vertex_count: u32,
         index_count: u32,
+        chunk_positions: []const [4]f32,
+        draw_commands: []const DrawCommand,
+        draw_count: u32,
     ) !void {
         const tz = tracy.zone(@src(), "uploadChunkMesh");
         defer tz.end();
@@ -107,6 +119,10 @@ pub const RenderState = struct {
         if (self.index_buffer != null) {
             vk.destroyBuffer(ctx.device, self.index_buffer, null);
             vk.freeMemory(ctx.device, self.index_buffer_memory, null);
+        }
+        if (self.chunk_positions_buffer != null) {
+            vk.destroyBuffer(ctx.device, self.chunk_positions_buffer, null);
+            vk.freeMemory(ctx.device, self.chunk_positions_buffer_memory, null);
         }
 
         // Create vertex buffer via staging
@@ -177,12 +193,53 @@ pub const RenderState = struct {
             vk.freeMemory(ctx.device, staging_memory, null);
         }
 
-        self.chunk_index_count = index_count;
+        // Create chunk positions buffer (host-visible, small data)
+        const cp_size: vk.VkDeviceSize = @intCast(@as(u64, draw_count) * @sizeOf([4]f32));
+        {
+            try vk_utils.createBuffer(
+                ctx,
+                cp_size,
+                vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &self.chunk_positions_buffer,
+                &self.chunk_positions_buffer_memory,
+            );
+
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, self.chunk_positions_buffer_memory, 0, cp_size, 0, &data);
+            const dst: [*][4]f32 = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..draw_count], chunk_positions[0..draw_count]);
+            vk.unmapMemory(ctx.device, self.chunk_positions_buffer_memory);
+        }
+
+        // Copy draw commands into indirect buffer (host-visible, direct memcpy)
+        {
+            const cmd_size: vk.VkDeviceSize = @intCast(@as(u64, draw_count) * @sizeOf(DrawCommand));
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, self.pipelines.indirect_buffer_memory, 0, cmd_size, 0, &data);
+            const dst: [*]DrawCommand = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..draw_count], draw_commands[0..draw_count]);
+            vk.unmapMemory(ctx.device, self.pipelines.indirect_buffer_memory);
+        }
+
+        // Write draw count into indirect count buffer
+        {
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, self.pipelines.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
+            const count_ptr: *u32 = @ptrCast(@alignCast(data));
+            count_ptr.* = draw_count;
+            vk.unmapMemory(ctx.device, self.pipelines.indirect_count_buffer_memory);
+        }
+
+        self.draw_count = draw_count;
 
         // Update binding 0 (vertex SSBO) in bindless descriptor set
         self.texture_manager.updateVertexDescriptor(ctx, self.vertex_buffer, vb_size);
 
-        std.log.info("Chunk mesh uploaded ({} vertices, {} indices)", .{ vertex_count, index_count });
+        // Update binding 2 (chunk positions SSBO)
+        self.texture_manager.updateChunkPositions(ctx, self.chunk_positions_buffer, cp_size);
+
+        std.log.info("Chunk mesh uploaded ({} vertices, {} indices, {} draw commands)", .{ vertex_count, index_count, draw_count });
     }
 
     fn createCommandBuffers(self: *RenderState, ctx: *const VulkanContext) !void {

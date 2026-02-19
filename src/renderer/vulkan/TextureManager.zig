@@ -47,6 +47,29 @@ pub const TextureManager = struct {
         vk.freeMemory(device, self.texture_image_memory, null);
     }
 
+    pub fn updateChunkPositions(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
+        const buffer_info = vk.VkDescriptorBufferInfo{
+            .buffer = buffer,
+            .offset = 0,
+            .range = size,
+        };
+
+        const descriptor_write = vk.VkWriteDescriptorSet{
+            .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = null,
+            .dstSet = self.bindless_descriptor_set,
+            .dstBinding = 2,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pImageInfo = null,
+            .pBufferInfo = &buffer_info,
+            .pTexelBufferView = null,
+        };
+
+        vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
+    }
+
     pub fn updateVertexDescriptor(self: *TextureManager, ctx: *const VulkanContext, vertex_buffer: vk.VkBuffer, vb_size: vk.VkDeviceSize) void {
         const vertex_buffer_info = vk.VkDescriptorBufferInfo{
             .buffer = vertex_buffer,
@@ -357,9 +380,17 @@ pub const TextureManager = struct {
                 .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
                 .pImmutableSamplers = null,
             },
+            .{
+                .binding = 2,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = null,
+            },
         };
 
         const binding_flags = [_]c.VkDescriptorBindingFlags{
+            vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         };
@@ -384,7 +415,7 @@ pub const TextureManager = struct {
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .descriptorCount = 1,
+                .descriptorCount = 2,
             },
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,

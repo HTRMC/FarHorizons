@@ -1,6 +1,8 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
-const GpuVertex = @import("../renderer/vulkan/types.zig").GpuVertex;
+const types = @import("../renderer/vulkan/types.zig");
+const GpuVertex = types.GpuVertex;
+const DrawCommand = types.DrawCommand;
 const tracy = @import("../platform/tracy.zig");
 
 pub const MeshWorker = struct {
@@ -9,6 +11,9 @@ pub const MeshWorker = struct {
     indices: ?[]u32,
     vertex_count: u32,
     index_count: u32,
+    chunk_positions: ?[][4]f32,
+    draw_commands: ?[]DrawCommand,
+    draw_count: u32,
     thread: ?std.Thread,
     allocator: std.mem.Allocator,
 
@@ -19,6 +24,9 @@ pub const MeshWorker = struct {
         indices: []u32,
         vertex_count: u32,
         index_count: u32,
+        chunk_positions: [][4]f32,
+        draw_commands: []DrawCommand,
+        draw_count: u32,
     };
 
     pub fn init(allocator: std.mem.Allocator) MeshWorker {
@@ -28,6 +36,9 @@ pub const MeshWorker = struct {
             .indices = null,
             .vertex_count = 0,
             .index_count = 0,
+            .chunk_positions = null,
+            .draw_commands = null,
+            .draw_count = 0,
             .thread = null,
             .allocator = allocator,
         };
@@ -50,10 +61,15 @@ pub const MeshWorker = struct {
             .indices = self.indices.?,
             .vertex_count = self.vertex_count,
             .index_count = self.index_count,
+            .chunk_positions = self.chunk_positions.?,
+            .draw_commands = self.draw_commands.?,
+            .draw_count = self.draw_count,
         };
 
         self.vertices = null;
         self.indices = null;
+        self.chunk_positions = null;
+        self.draw_commands = null;
         self.state.store(.idle, .release);
 
         return result;
@@ -66,6 +82,8 @@ pub const MeshWorker = struct {
         }
         if (self.vertices) |v| self.allocator.free(v);
         if (self.indices) |i| self.allocator.free(i);
+        if (self.chunk_positions) |cp| self.allocator.free(cp);
+        if (self.draw_commands) |dc| self.allocator.free(dc);
     }
 
     fn workerFn(self: *MeshWorker) void {
@@ -83,6 +101,9 @@ pub const MeshWorker = struct {
         self.indices = mesh.indices;
         self.vertex_count = mesh.vertex_count;
         self.index_count = mesh.index_count;
+        self.chunk_positions = mesh.chunk_positions;
+        self.draw_commands = mesh.draw_commands;
+        self.draw_count = mesh.draw_count;
         self.state.store(.ready, .release);
     }
 };

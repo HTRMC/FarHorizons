@@ -1,5 +1,7 @@
 const std = @import("std");
-const GpuVertex = @import("../renderer/vulkan/types.zig").GpuVertex;
+const types = @import("../renderer/vulkan/types.zig");
+const GpuVertex = types.GpuVertex;
+const DrawCommand = types.DrawCommand;
 const tracy = @import("../platform/tracy.zig");
 
 pub const CHUNK_SIZE = 16;
@@ -196,10 +198,20 @@ pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chu
     return world;
 }
 
+pub const MeshResult = struct {
+    vertices: []GpuVertex,
+    indices: []u32,
+    vertex_count: u32,
+    index_count: u32,
+    chunk_positions: [][4]f32,
+    draw_commands: []DrawCommand,
+    draw_count: u32,
+};
+
 pub fn generateWorldMesh(
     allocator: std.mem.Allocator,
     world: *const [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk,
-) !struct { vertices: []GpuVertex, indices: []u32, vertex_count: u32, index_count: u32 } {
+) !MeshResult {
     const tz = tracy.zone(@src(), "generateWorldMesh");
     defer tz.end();
 
@@ -207,18 +219,21 @@ pub fn generateWorldMesh(
     errdefer allocator.free(vertices);
     const indices = try allocator.alloc(u32, MAX_WORLD_INDEX_COUNT);
     errdefer allocator.free(indices);
+    var chunk_positions = try allocator.alloc([4]f32, TOTAL_WORLD_CHUNKS);
+    errdefer allocator.free(chunk_positions);
+    var draw_commands = try allocator.alloc(DrawCommand, TOTAL_WORLD_CHUNKS);
+    errdefer allocator.free(draw_commands);
 
     var vert_count: u32 = 0;
     var idx_count: u32 = 0;
-
-    const half_world_x: f32 = @as(f32, WORLD_SIZE_X) / 2.0;
-    const half_world_y: f32 = @as(f32, WORLD_SIZE_Y) / 2.0;
-    const half_world_z: f32 = @as(f32, WORLD_SIZE_Z) / 2.0;
+    var draw_count: u32 = 0;
 
     for (0..WORLD_CHUNKS_Y) |cy| {
         for (0..WORLD_CHUNKS_Z) |cz| {
             for (0..WORLD_CHUNKS_X) |cx| {
                 const chunk = &world[cy][cz][cx];
+
+                const chunk_first_index = idx_count;
 
                 for (0..CHUNK_SIZE) |by| {
                     for (0..CHUNK_SIZE) |bz| {
@@ -226,9 +241,9 @@ pub fn generateWorldMesh(
                             const block = chunk.blocks[chunkIndex(bx, by, bz)];
                             if (block == .air) continue;
 
-                            const world_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE + bx)) - half_world_x;
-                            const world_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + by)) - half_world_y;
-                            const world_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + bz)) - half_world_z;
+                            const local_x: f32 = @floatFromInt(bx);
+                            const local_y: f32 = @floatFromInt(by);
+                            const local_z: f32 = @floatFromInt(bz);
 
                             for (0..6) |face| {
                                 const offset = face_neighbor_offsets[face];
@@ -239,21 +254,17 @@ pub fn generateWorldMesh(
                                 // Cross-chunk neighbor lookup
                                 const neighbor = blk: {
                                     if (nx >= 0 and nx < CHUNK_SIZE and ny >= 0 and ny < CHUNK_SIZE and nz >= 0 and nz < CHUNK_SIZE) {
-                                        // Within same chunk
                                         break :blk chunk.blocks[chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))];
                                     }
 
-                                    // Compute neighbor chunk coordinates
                                     const ncx: i32 = @as(i32, @intCast(cx)) + if (nx < 0) @as(i32, -1) else if (nx >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
                                     const ncy: i32 = @as(i32, @intCast(cy)) + if (ny < 0) @as(i32, -1) else if (ny >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
                                     const ncz: i32 = @as(i32, @intCast(cz)) + if (nz < 0) @as(i32, -1) else if (nz >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
 
-                                    // Out of world bounds → air (emit face)
                                     if (ncx < 0 or ncx >= WORLD_CHUNKS_X or ncy < 0 or ncy >= WORLD_CHUNKS_Y or ncz < 0 or ncz >= WORLD_CHUNKS_Z) {
                                         break :blk BlockType.air;
                                     }
 
-                                    // Wrap local coordinate into neighbor chunk
                                     const lx: usize = @intCast(@mod(nx, @as(i32, CHUNK_SIZE)));
                                     const ly: usize = @intCast(@mod(ny, @as(i32, CHUNK_SIZE)));
                                     const lz: usize = @intCast(@mod(nz, @as(i32, CHUNK_SIZE)));
@@ -263,7 +274,6 @@ pub fn generateWorldMesh(
                                 if (block_properties.isOpaque(neighbor)) continue;
                                 if (neighbor == block and block_properties.cullsSelf(block)) continue;
 
-                                // Emit 4 vertices for this face
                                 const tex_index: u32 = switch (block) {
                                     .air => unreachable,
                                     .glass => 0,
@@ -275,9 +285,9 @@ pub fn generateWorldMesh(
                                 for (0..4) |v| {
                                     const fv = face_vertices[face][v];
                                     vertices[vert_count + @as(u32, @intCast(v))] = .{
-                                        .px = fv.px + world_x,
-                                        .py = fv.py + world_y,
-                                        .pz = fv.pz + world_z,
+                                        .px = fv.px + local_x,
+                                        .py = fv.py + local_y,
+                                        .pz = fv.pz + local_z,
                                         .u = fv.u,
                                         .v = fv.v,
                                         .tex_index = tex_index,
@@ -285,7 +295,6 @@ pub fn generateWorldMesh(
                                     };
                                 }
 
-                                // Emit 6 indices for this face
                                 for (0..6) |i| {
                                     indices[idx_count + @as(u32, @intCast(i))] = vert_count + face_index_pattern[i];
                                 }
@@ -296,10 +305,36 @@ pub fn generateWorldMesh(
                         }
                     }
                 }
+
+                const chunk_index_count = idx_count - chunk_first_index;
+                if (chunk_index_count > 0) {
+                    chunk_positions[draw_count] = .{
+                        @as(f32, @floatFromInt(cx)) - @as(f32, WORLD_CHUNKS_X) / 2.0,
+                        @as(f32, @floatFromInt(cy)) - @as(f32, WORLD_CHUNKS_Y) / 2.0,
+                        @as(f32, @floatFromInt(cz)) - @as(f32, WORLD_CHUNKS_Z) / 2.0,
+                        0.0,
+                    };
+                    draw_commands[draw_count] = .{
+                        .index_count = chunk_index_count,
+                        .instance_count = 1,
+                        .first_index = chunk_first_index,
+                        .vertex_offset = 0,
+                        .first_instance = 0,
+                    };
+                    draw_count += 1;
+                }
             }
         }
     }
 
-    std.log.info("World mesh: {} indices ({} faces) out of max {}", .{ idx_count, idx_count / 6, MAX_WORLD_INDEX_COUNT });
-    return .{ .vertices = vertices, .indices = indices, .vertex_count = vert_count, .index_count = idx_count };
+    std.log.info("World mesh: {} indices ({} faces), {} draw commands", .{ idx_count, idx_count / 6, draw_count });
+    return .{
+        .vertices = vertices,
+        .indices = indices,
+        .vertex_count = vert_count,
+        .index_count = idx_count,
+        .chunk_positions = chunk_positions,
+        .draw_commands = draw_commands,
+        .draw_count = draw_count,
+    };
 }
