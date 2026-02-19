@@ -62,6 +62,28 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // Deploy assets to app data directory
+    const deploy_assets = blk: {
+        const host_os = @import("builtin").os.tag;
+        if (host_os == .windows) {
+            const appdata = b.graph.environ_map.get("APPDATA") orelse @panic("APPDATA not set");
+            const deploy_dest = b.fmt("{s}\\FarHorizons\\assets", .{appdata});
+            const robocopy_cmd = b.fmt("robocopy assets {s} /E /MIR /NJH /NJS /NP /NFL /NDL & if %errorlevel% leq 7 exit /b 0", .{deploy_dest});
+            break :blk b.addSystemCommand(&.{ "cmd", "/c", robocopy_cmd });
+        } else {
+            const xdg = b.graph.environ_map.get("XDG_DATA_HOME");
+            const home = b.graph.environ_map.get("HOME") orelse @panic("HOME not set");
+            const deploy_dest = if (xdg) |x|
+                b.fmt("{s}/farhorizons/assets/", .{x})
+            else
+                b.fmt("{s}/.local/share/farhorizons/assets/", .{home});
+            const mkdir_cmd = b.fmt("mkdir -p {s}", .{deploy_dest});
+            const rsync_cmd = b.fmt("{s} && rsync -a --delete assets/ {s}", .{ mkdir_cmd, deploy_dest });
+            break :blk b.addSystemCommand(&.{ "sh", "-c", rsync_cmd });
+        }
+    };
+    b.getInstallStep().dependOn(&deploy_assets.step);
+
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);

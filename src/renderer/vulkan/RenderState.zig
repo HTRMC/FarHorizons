@@ -8,6 +8,7 @@ const types = @import("types.zig");
 const GpuVertex = types.GpuVertex;
 const LineVertex = types.LineVertex;
 const WorldState = @import("../../world/WorldState.zig");
+const app_config = @import("../../app_config.zig");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 const MAX_TEXTURES = 256;
@@ -122,15 +123,18 @@ pub const RenderState = struct {
             .debug_line_vertex_count = 0,
         };
 
+        var shader_compiler = try ShaderCompiler.init(allocator);
+        defer shader_compiler.deinit();
+
         try self.createTextureImage(allocator, ctx);
         try self.createChunkBuffers(allocator, ctx);
         try self.createBindlessDescriptorSet(ctx);
-        try self.createGraphicsPipeline(allocator, ctx.device, swapchain_format);
+        try self.createGraphicsPipeline(&shader_compiler, ctx.device, swapchain_format);
         try self.createIndirectBuffer(ctx);
-        try self.createComputePipeline(allocator, ctx);
+        try self.createComputePipeline(&shader_compiler, ctx);
         try self.createDebugLineResources(ctx);
-        try self.createDebugLinePipeline(allocator, ctx.device, swapchain_format);
-        try self.createDebugLineComputePipeline(allocator, ctx);
+        try self.createDebugLinePipeline(&shader_compiler, ctx.device, swapchain_format);
+        try self.createDebugLineComputePipeline(&shader_compiler, ctx);
         try self.createCommandBuffers(ctx);
         try self.createSyncObjects(ctx.device);
 
@@ -189,13 +193,18 @@ pub const RenderState = struct {
     }
 
     fn createTextureImage(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
-        _ = allocator;
+        const base_path = try app_config.getAppDataPath(allocator);
+        defer allocator.free(base_path);
+
+        const sep = std.fs.path.sep_str;
+        const texture_path = try std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "block" ++ sep ++ "glass.png", .{base_path}, 0);
+        defer allocator.free(texture_path);
 
         var tex_width: c_int = 0;
         var tex_height: c_int = 0;
         var tex_channels: c_int = 0;
-        const pixels = c.stbi_load("assets/farhorizons/textures/block/glass.png", &tex_width, &tex_height, &tex_channels, 4) orelse {
-            std.log.err("Failed to load texture image", .{});
+        const pixels = c.stbi_load(texture_path.ptr, &tex_width, &tex_height, &tex_channels, 4) orelse {
+            std.log.err("Failed to load texture image from {s}", .{texture_path});
             return error.TextureLoadFailed;
         };
         defer c.stbi_image_free(pixels);
@@ -664,15 +673,12 @@ pub const RenderState = struct {
         std.log.info("Bindless descriptor set created", .{});
     }
 
-    fn createGraphicsPipeline(self: *RenderState, allocator: std.mem.Allocator, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
-        const vert_src = @embedFile("../../shaders/test.vert");
-        const frag_src = @embedFile("../../shaders/test.frag");
+    fn createGraphicsPipeline(self: *RenderState, shader_compiler: *ShaderCompiler, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
+        const vert_spirv = try shader_compiler.compile("test.vert", .vertex);
+        defer shader_compiler.allocator.free(vert_spirv);
 
-        const vert_spirv = try ShaderCompiler.compile(allocator, vert_src, "test.vert", .vertex);
-        defer allocator.free(vert_spirv);
-
-        const frag_spirv = try ShaderCompiler.compile(allocator, frag_src, "test.frag", .fragment);
-        defer allocator.free(frag_spirv);
+        const frag_spirv = try shader_compiler.compile("test.frag", .fragment);
+        defer shader_compiler.allocator.free(frag_spirv);
 
         const vert_module_info = vk.VkShaderModuleCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -944,7 +950,7 @@ pub const RenderState = struct {
         std.log.info("Indirect draw buffers created (count buffer for GPU-driven rendering)", .{});
     }
 
-    fn createComputePipeline(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
+    fn createComputePipeline(self: *RenderState, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext) !void {
         const bindings = [_]vk.VkDescriptorSetLayoutBinding{
             .{
                 .binding = 0,
@@ -1041,9 +1047,8 @@ pub const RenderState = struct {
 
         vk.updateDescriptorSets(ctx.device, descriptor_writes.len, &descriptor_writes, 0, null);
 
-        const comp_src = @embedFile("../../shaders/cull.comp");
-        const comp_spirv = try ShaderCompiler.compile(allocator, comp_src, "cull.comp", .compute);
-        defer allocator.free(comp_spirv);
+        const comp_spirv = try shader_compiler.compile("cull.comp", .compute);
+        defer shader_compiler.allocator.free(comp_spirv);
 
         const comp_module_info = vk.VkShaderModuleCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -1343,15 +1348,12 @@ pub const RenderState = struct {
         self.debug_line_vertex_count = count;
     }
 
-    fn createDebugLinePipeline(self: *RenderState, allocator: std.mem.Allocator, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
-        const vert_src = @embedFile("../../shaders/debug_line.vert");
-        const frag_src = @embedFile("../../shaders/debug_line.frag");
+    fn createDebugLinePipeline(self: *RenderState, shader_compiler: *ShaderCompiler, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
+        const vert_spirv = try shader_compiler.compile("debug_line.vert", .vertex);
+        defer shader_compiler.allocator.free(vert_spirv);
 
-        const vert_spirv = try ShaderCompiler.compile(allocator, vert_src, "debug_line.vert", .vertex);
-        defer allocator.free(vert_spirv);
-
-        const frag_spirv = try ShaderCompiler.compile(allocator, frag_src, "debug_line.frag", .fragment);
-        defer allocator.free(frag_spirv);
+        const frag_spirv = try shader_compiler.compile("debug_line.frag", .fragment);
+        defer shader_compiler.allocator.free(frag_spirv);
 
         const vert_module_info = vk.VkShaderModuleCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
@@ -1556,10 +1558,9 @@ pub const RenderState = struct {
         std.log.info("Debug line graphics pipeline created", .{});
     }
 
-    fn createDebugLineComputePipeline(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
-        const comp_src = @embedFile("../../shaders/debug_line_indirect.comp");
-        const comp_spirv = try ShaderCompiler.compile(allocator, comp_src, "debug_line_indirect.comp", .compute);
-        defer allocator.free(comp_spirv);
+    fn createDebugLineComputePipeline(self: *RenderState, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext) !void {
+        const comp_spirv = try shader_compiler.compile("debug_line_indirect.comp", .compute);
+        defer shader_compiler.allocator.free(comp_spirv);
 
         const comp_module_info = vk.VkShaderModuleCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
