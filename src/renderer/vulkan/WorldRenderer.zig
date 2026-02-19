@@ -4,52 +4,290 @@ const c = @import("../../platform/c.zig").c;
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
+const types = @import("types.zig");
+const GpuVertex = types.GpuVertex;
+const DrawCommand = types.DrawCommand;
 const tracy = @import("../../platform/tracy.zig");
+const zlm = @import("zlm");
 const WorldState = @import("../../world/WorldState.zig");
+pub const TextureManager = @import("TextureManager.zig").TextureManager;
 
-pub const PipelineBuilder = struct {
+pub const WorldRenderer = struct {
+    texture_manager: TextureManager,
+    // Graphics pipeline (from PipelineBuilder)
     pipeline_layout: vk.VkPipelineLayout,
     graphics_pipeline: vk.VkPipeline,
+    // Indirect draw buffers (from PipelineBuilder)
     indirect_buffer: vk.VkBuffer,
     indirect_buffer_memory: vk.VkDeviceMemory,
     indirect_count_buffer: vk.VkBuffer,
     indirect_count_buffer_memory: vk.VkDeviceMemory,
+    // Vertex/index buffers (from RenderState)
+    vertex_buffer: vk.VkBuffer,
+    vertex_buffer_memory: vk.VkDeviceMemory,
+    index_buffer: vk.VkBuffer,
+    index_buffer_memory: vk.VkDeviceMemory,
+    chunk_positions_buffer: vk.VkBuffer,
+    chunk_positions_buffer_memory: vk.VkDeviceMemory,
+    draw_count: u32,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         shader_compiler: *ShaderCompiler,
         ctx: *const VulkanContext,
         swapchain_format: vk.VkFormat,
-        bindless_descriptor_set_layout: vk.VkDescriptorSetLayout,
-    ) !PipelineBuilder {
-        const tz = tracy.zone(@src(), "PipelineBuilder.init");
+    ) !WorldRenderer {
+        const tz = tracy.zone(@src(), "WorldRenderer.init");
         defer tz.end();
 
-        var self = PipelineBuilder{
+        var texture_manager = try TextureManager.init(allocator, ctx);
+        errdefer texture_manager.deinit(ctx.device);
+
+        var self = WorldRenderer{
+            .texture_manager = texture_manager,
             .pipeline_layout = null,
             .graphics_pipeline = null,
             .indirect_buffer = null,
             .indirect_buffer_memory = null,
             .indirect_count_buffer = null,
             .indirect_count_buffer_memory = null,
+            .vertex_buffer = null,
+            .vertex_buffer_memory = null,
+            .index_buffer = null,
+            .index_buffer_memory = null,
+            .chunk_positions_buffer = null,
+            .chunk_positions_buffer_memory = null,
+            .draw_count = 0,
         };
 
-        try self.createGraphicsPipeline(shader_compiler, ctx.device, swapchain_format, bindless_descriptor_set_layout);
+        try self.createGraphicsPipeline(shader_compiler, ctx.device, swapchain_format, texture_manager.bindless_descriptor_set_layout);
+        errdefer {
+            vk.destroyPipeline(ctx.device, self.graphics_pipeline, null);
+            vk.destroyPipelineLayout(ctx.device, self.pipeline_layout, null);
+        }
+
         try self.createIndirectBuffer(ctx);
 
         return self;
     }
 
-    pub fn deinit(self: *PipelineBuilder, device: vk.VkDevice) void {
+    pub fn deinit(self: *WorldRenderer, device: vk.VkDevice) void {
+        const tz = tracy.zone(@src(), "WorldRenderer.deinit");
+        defer tz.end();
+
+        // Indirect buffers
         vk.destroyBuffer(device, self.indirect_buffer, null);
         vk.freeMemory(device, self.indirect_buffer_memory, null);
         vk.destroyBuffer(device, self.indirect_count_buffer, null);
         vk.freeMemory(device, self.indirect_count_buffer_memory, null);
+
+        // Pipeline
         vk.destroyPipeline(device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
+
+        // Mesh buffers
+        if (self.vertex_buffer != null) {
+            vk.destroyBuffer(device, self.vertex_buffer, null);
+            vk.freeMemory(device, self.vertex_buffer_memory, null);
+        }
+        if (self.index_buffer != null) {
+            vk.destroyBuffer(device, self.index_buffer, null);
+            vk.freeMemory(device, self.index_buffer_memory, null);
+        }
+        if (self.chunk_positions_buffer != null) {
+            vk.destroyBuffer(device, self.chunk_positions_buffer, null);
+            vk.freeMemory(device, self.chunk_positions_buffer_memory, null);
+        }
+
+        // Texture manager
+        self.texture_manager.deinit(device);
+    }
+
+    pub fn uploadChunkMesh(
+        self: *WorldRenderer,
+        ctx: *const VulkanContext,
+        vertices: []const GpuVertex,
+        indices: []const u32,
+        vertex_count: u32,
+        index_count: u32,
+        chunk_positions: []const [4]f32,
+        draw_commands: []const DrawCommand,
+        draw_count: u32,
+    ) !void {
+        const tz = tracy.zone(@src(), "uploadChunkMesh");
+        defer tz.end();
+
+        // Free old buffers if re-uploading
+        if (self.vertex_buffer != null) {
+            vk.destroyBuffer(ctx.device, self.vertex_buffer, null);
+            vk.freeMemory(ctx.device, self.vertex_buffer_memory, null);
+        }
+        if (self.index_buffer != null) {
+            vk.destroyBuffer(ctx.device, self.index_buffer, null);
+            vk.freeMemory(ctx.device, self.index_buffer_memory, null);
+        }
+        if (self.chunk_positions_buffer != null) {
+            vk.destroyBuffer(ctx.device, self.chunk_positions_buffer, null);
+            vk.freeMemory(ctx.device, self.chunk_positions_buffer_memory, null);
+        }
+
+        // Create vertex buffer via staging
+        const vb_size: vk.VkDeviceSize = @intCast(@as(u64, vertex_count) * @sizeOf(GpuVertex));
+        {
+            var staging_buffer: vk.VkBuffer = undefined;
+            var staging_memory: vk.VkDeviceMemory = undefined;
+            try vk_utils.createBuffer(
+                ctx,
+                vb_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer,
+                &staging_memory,
+            );
+
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, staging_memory, 0, vb_size, 0, &data);
+            const dst: [*]GpuVertex = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..vertex_count], vertices[0..vertex_count]);
+            vk.unmapMemory(ctx.device, staging_memory);
+
+            try vk_utils.createBuffer(
+                ctx,
+                vb_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &self.vertex_buffer,
+                &self.vertex_buffer_memory,
+            );
+
+            try vk_utils.copyBuffer(ctx, staging_buffer, self.vertex_buffer, vb_size);
+            vk.destroyBuffer(ctx.device, staging_buffer, null);
+            vk.freeMemory(ctx.device, staging_memory, null);
+        }
+
+        // Create index buffer via staging
+        const ib_size: vk.VkDeviceSize = @intCast(@as(u64, index_count) * @sizeOf(u32));
+        {
+            var staging_buffer: vk.VkBuffer = undefined;
+            var staging_memory: vk.VkDeviceMemory = undefined;
+            try vk_utils.createBuffer(
+                ctx,
+                ib_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer,
+                &staging_memory,
+            );
+
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, staging_memory, 0, ib_size, 0, &data);
+            const dst: [*]u32 = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..index_count], indices[0..index_count]);
+            vk.unmapMemory(ctx.device, staging_memory);
+
+            try vk_utils.createBuffer(
+                ctx,
+                ib_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &self.index_buffer,
+                &self.index_buffer_memory,
+            );
+
+            try vk_utils.copyBuffer(ctx, staging_buffer, self.index_buffer, ib_size);
+            vk.destroyBuffer(ctx.device, staging_buffer, null);
+            vk.freeMemory(ctx.device, staging_memory, null);
+        }
+
+        // Create chunk positions buffer (host-visible, small data)
+        const cp_size: vk.VkDeviceSize = @intCast(@as(u64, draw_count) * @sizeOf([4]f32));
+        {
+            try vk_utils.createBuffer(
+                ctx,
+                cp_size,
+                vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &self.chunk_positions_buffer,
+                &self.chunk_positions_buffer_memory,
+            );
+
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, self.chunk_positions_buffer_memory, 0, cp_size, 0, &data);
+            const dst: [*][4]f32 = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..draw_count], chunk_positions[0..draw_count]);
+            vk.unmapMemory(ctx.device, self.chunk_positions_buffer_memory);
+        }
+
+        // Copy draw commands into indirect buffer (host-visible, direct memcpy)
+        {
+            const cmd_size: vk.VkDeviceSize = @intCast(@as(u64, draw_count) * @sizeOf(DrawCommand));
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, self.indirect_buffer_memory, 0, cmd_size, 0, &data);
+            const dst: [*]DrawCommand = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..draw_count], draw_commands[0..draw_count]);
+            vk.unmapMemory(ctx.device, self.indirect_buffer_memory);
+        }
+
+        // Write draw count into indirect count buffer
+        {
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, self.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
+            const count_ptr: *u32 = @ptrCast(@alignCast(data));
+            count_ptr.* = draw_count;
+            vk.unmapMemory(ctx.device, self.indirect_count_buffer_memory);
+        }
+
+        self.draw_count = draw_count;
+
+        // Update binding 0 (vertex SSBO) in bindless descriptor set
+        self.texture_manager.updateVertexDescriptor(ctx, self.vertex_buffer, vb_size);
+
+        // Update binding 2 (chunk positions SSBO)
+        self.texture_manager.updateChunkPositions(ctx, self.chunk_positions_buffer, cp_size);
+
+        std.log.info("Chunk mesh uploaded ({} vertices, {} indices, {} draw commands)", .{ vertex_count, index_count, draw_count });
+    }
+
+    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32) void {
+        if (self.draw_count == 0) return;
+
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.texture_manager.bindless_descriptor_set},
+            0,
+            null,
+        );
+
+        vk.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT32);
+
+        vk.cmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            @sizeOf(zlm.Mat4),
+            mvp,
+        );
+
+        vk.cmdDrawIndexedIndirectCount(
+            command_buffer,
+            self.indirect_buffer,
+            0,
+            self.indirect_count_buffer,
+            0,
+            self.draw_count,
+            @sizeOf(vk.VkDrawIndexedIndirectCommand),
+        );
     }
 
     fn createGraphicsPipeline(
-        self: *PipelineBuilder,
+        self: *WorldRenderer,
         shader_compiler: *ShaderCompiler,
         device: vk.VkDevice,
         swapchain_format: vk.VkFormat,
@@ -269,7 +507,7 @@ pub const PipelineBuilder = struct {
         std.log.info("Graphics pipeline created", .{});
     }
 
-    fn createIndirectBuffer(self: *PipelineBuilder, ctx: *const VulkanContext) !void {
+    fn createIndirectBuffer(self: *WorldRenderer, ctx: *const VulkanContext) !void {
         const tz = tracy.zone(@src(), "createIndirectBuffer");
         defer tz.end();
 

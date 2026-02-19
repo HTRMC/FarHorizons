@@ -7,10 +7,11 @@ const vk_utils = @import("vk_utils.zig");
 const types = @import("types.zig");
 const LineVertex = types.LineVertex;
 const tracy = @import("../../platform/tracy.zig");
+const zlm = @import("zlm");
 
 const DEBUG_LINE_MAX_VERTICES = 16384;
 
-pub const DebugLines = struct {
+pub const DebugRenderer = struct {
     pipeline: vk.VkPipeline,
     pipeline_layout: vk.VkPipelineLayout,
     compute_pipeline: vk.VkPipeline,
@@ -29,11 +30,11 @@ pub const DebugLines = struct {
     count_buffer_memory: vk.VkDeviceMemory,
     vertex_count: u32,
 
-    pub fn init(shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !DebugLines {
-        const tz = tracy.zone(@src(), "DebugLines.init");
+    pub fn init(shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !DebugRenderer {
+        const tz = tracy.zone(@src(), "DebugRenderer.init");
         defer tz.end();
 
-        var self = DebugLines{
+        var self = DebugRenderer{
             .pipeline = null,
             .pipeline_layout = null,
             .compute_pipeline = null,
@@ -60,7 +61,7 @@ pub const DebugLines = struct {
         return self;
     }
 
-    pub fn deinit(self: *DebugLines, device: vk.VkDevice) void {
+    pub fn deinit(self: *DebugRenderer, device: vk.VkDevice) void {
         vk.destroyPipeline(device, self.compute_pipeline, null);
         vk.destroyPipelineLayout(device, self.compute_pipeline_layout, null);
         vk.destroyDescriptorPool(device, self.compute_descriptor_pool, null);
@@ -77,7 +78,87 @@ pub const DebugLines = struct {
         vk.freeMemory(device, self.count_buffer_memory, null);
     }
 
-    fn createResources(self: *DebugLines, ctx: *const VulkanContext) !void {
+    pub fn recordCompute(self: *const DebugRenderer, command_buffer: vk.VkCommandBuffer) void {
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.compute_pipeline);
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+            self.compute_pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.compute_descriptor_set},
+            0,
+            null,
+        );
+        vk.cmdPushConstants(
+            command_buffer,
+            self.compute_pipeline_layout,
+            vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            @sizeOf(u32),
+            &self.vertex_count,
+        );
+        vk.cmdDispatch(command_buffer, 1, 1, 1);
+
+        // Barrier: compute write -> indirect read
+        const indirect_barrier = vk.VkBufferMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .buffer = self.indirect_buffer,
+            .offset = 0,
+            .size = @sizeOf(vk.VkDrawIndirectCommand),
+        };
+
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            vk.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+            0,
+            0,
+            null,
+            1,
+            &[_]vk.VkBufferMemoryBarrier{indirect_barrier},
+            0,
+            null,
+        );
+    }
+
+    pub fn recordDraw(self: *const DebugRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32) void {
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.descriptor_set},
+            0,
+            null,
+        );
+        vk.cmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            @sizeOf(zlm.Mat4),
+            mvp,
+        );
+        vk.cmdDrawIndirectCount(
+            command_buffer,
+            self.indirect_buffer,
+            0,
+            self.count_buffer,
+            0,
+            1,
+            @sizeOf(vk.VkDrawIndirectCommand),
+        );
+    }
+
+    fn createResources(self: *DebugRenderer, ctx: *const VulkanContext) !void {
         const tz = tracy.zone(@src(), "createDebugLineResources");
         defer tz.end();
 
@@ -265,7 +346,7 @@ pub const DebugLines = struct {
         std.log.info("Debug line resources created ({} vertices)", .{self.vertex_count});
     }
 
-    fn generateChunkOutlines(self: *DebugLines, device: vk.VkDevice) void {
+    fn generateChunkOutlines(self: *DebugRenderer, device: vk.VkDevice) void {
         const tz = tracy.zone(@src(), "generateChunkOutlines");
         defer tz.end();
 
@@ -296,7 +377,7 @@ pub const DebugLines = struct {
         self.vertex_count = count;
     }
 
-    fn createPipeline(self: *DebugLines, shader_compiler: *ShaderCompiler, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
+    fn createPipeline(self: *DebugRenderer, shader_compiler: *ShaderCompiler, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
         const tz = tracy.zone(@src(), "createDebugLinePipeline");
         defer tz.end();
 
@@ -509,7 +590,7 @@ pub const DebugLines = struct {
         std.log.info("Debug line graphics pipeline created", .{});
     }
 
-    fn createComputePipeline(self: *DebugLines, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext) !void {
+    fn createComputePipeline(self: *DebugRenderer, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext) !void {
         const tz = tracy.zone(@src(), "createDebugLineComputePipeline");
         defer tz.end();
 

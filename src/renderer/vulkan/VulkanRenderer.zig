@@ -165,7 +165,7 @@ pub const VulkanRenderer = struct {
         defer self.allocator.free(result.chunk_positions);
         defer self.allocator.free(result.draw_commands);
 
-        self.render_state.uploadChunkMesh(
+        self.render_state.world_renderer.uploadChunkMesh(
             &self.ctx,
             result.vertices,
             result.indices,
@@ -313,55 +313,8 @@ pub const VulkanRenderer = struct {
 
         try vk.beginCommandBuffer(command_buffer, &begin_info);
 
-        const has_chunks = self.render_state.draw_count > 0;
-
-        // Debug line compute dispatch
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.debug_lines.compute_pipeline);
-        vk.cmdBindDescriptorSets(
-            command_buffer,
-            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
-            self.render_state.debug_lines.compute_pipeline_layout,
-            0,
-            1,
-            &[_]vk.VkDescriptorSet{self.render_state.debug_lines.compute_descriptor_set},
-            0,
-            null,
-        );
-        vk.cmdPushConstants(
-            command_buffer,
-            self.render_state.debug_lines.compute_pipeline_layout,
-            vk.VK_SHADER_STAGE_COMPUTE_BIT,
-            0,
-            @sizeOf(u32),
-            &self.render_state.debug_lines.vertex_count,
-        );
-        vk.cmdDispatch(command_buffer, 1, 1, 1);
-
-        // Barrier: compute write -> indirect read for debug lines
-        const debug_line_indirect_barrier = vk.VkBufferMemoryBarrier{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .pNext = null,
-            .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
-            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .buffer = self.render_state.debug_lines.indirect_buffer,
-            .offset = 0,
-            .size = @sizeOf(vk.VkDrawIndirectCommand),
-        };
-
-        vk.cmdPipelineBarrier(
-            command_buffer,
-            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            vk.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-            0,
-            0,
-            null,
-            1,
-            &[_]vk.VkBufferMemoryBarrier{debug_line_indirect_barrier},
-            0,
-            null,
-        );
+        // Debug line compute dispatch (before render pass)
+        self.render_state.debug_renderer.recordCompute(command_buffer);
 
         // Barrier: depth image UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL
         const depth_barrier = vk.VkImageMemoryBarrier{
@@ -493,76 +446,11 @@ pub const VulkanRenderer = struct {
 
         const mvp = self.game_state.camera.getViewProjectionMatrix();
 
-        // Draw chunks (only if mesh data is available)
-        if (has_chunks) {
-            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.pipelines.graphics_pipeline);
+        // Draw world chunks
+        self.render_state.world_renderer.record(command_buffer, &mvp.m);
 
-            // Bind bindless descriptor set (vertex SSBO + textures)
-            vk.cmdBindDescriptorSets(
-                command_buffer,
-                vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                self.render_state.pipelines.pipeline_layout,
-                0,
-                1,
-                &[_]vk.VkDescriptorSet{self.render_state.texture_manager.bindless_descriptor_set},
-                0,
-                null,
-            );
-
-            // Bind index buffer (u32 indices for chunk)
-            vk.cmdBindIndexBuffer(command_buffer, self.render_state.index_buffer, 0, vk.VK_INDEX_TYPE_UINT32);
-
-            // Push MVP matrix
-            vk.cmdPushConstants(
-                command_buffer,
-                self.render_state.pipelines.pipeline_layout,
-                vk.VK_SHADER_STAGE_VERTEX_BIT,
-                0,
-                @sizeOf(zlm.Mat4),
-                &mvp.m,
-            );
-
-            // Draw indexed indirect with count (multi-draw, one per chunk)
-            vk.cmdDrawIndexedIndirectCount(
-                command_buffer,
-                self.render_state.pipelines.indirect_buffer,
-                0,
-                self.render_state.pipelines.indirect_count_buffer,
-                0,
-                self.render_state.draw_count,
-                @sizeOf(vk.VkDrawIndexedIndirectCommand),
-            );
-        }
-
-        // Debug line draw
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.debug_lines.pipeline);
-        vk.cmdBindDescriptorSets(
-            command_buffer,
-            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            self.render_state.debug_lines.pipeline_layout,
-            0,
-            1,
-            &[_]vk.VkDescriptorSet{self.render_state.debug_lines.descriptor_set},
-            0,
-            null,
-        );
-        vk.cmdPushConstants(
-            command_buffer,
-            self.render_state.debug_lines.pipeline_layout,
-            vk.VK_SHADER_STAGE_VERTEX_BIT,
-            0,
-            @sizeOf(zlm.Mat4),
-            &mvp.m,
-        );
-        vk.cmdDrawIndirectCount(
-            command_buffer,
-            self.render_state.debug_lines.indirect_buffer,
-            0,
-            self.render_state.debug_lines.count_buffer,
-            0,
-            1,
-            @sizeOf(vk.VkDrawIndirectCommand),
-        );
+        // Draw debug lines
+        self.render_state.debug_renderer.recordDraw(command_buffer, &mvp.m);
 
         vk.cmdEndRendering(command_buffer);
 
