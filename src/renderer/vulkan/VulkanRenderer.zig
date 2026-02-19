@@ -312,19 +312,19 @@ pub const VulkanRenderer = struct {
         const has_chunks = self.render_state.chunk_index_count > 0;
         if (has_chunks) {
             var data: ?*anyopaque = null;
-            try vk.mapMemory(self.ctx.device, self.render_state.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
+            try vk.mapMemory(self.ctx.device, self.render_state.pipelines.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
             const count_ptr: *u32 = @ptrCast(@alignCast(data));
             count_ptr.* = 0;
-            vk.unmapMemory(self.ctx.device, self.render_state.indirect_count_buffer_memory);
+            vk.unmapMemory(self.ctx.device, self.render_state.pipelines.indirect_count_buffer_memory);
 
-            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.compute_pipeline);
+            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.pipelines.compute_pipeline);
             vk.cmdBindDescriptorSets(
                 command_buffer,
                 vk.VK_PIPELINE_BIND_POINT_COMPUTE,
-                self.render_state.compute_pipeline_layout,
+                self.render_state.pipelines.compute_pipeline_layout,
                 0,
                 1,
-                &[_]vk.VkDescriptorSet{self.render_state.descriptor_set},
+                &[_]vk.VkDescriptorSet{self.render_state.pipelines.descriptor_set},
                 0,
                 null,
             );
@@ -339,7 +339,7 @@ pub const VulkanRenderer = struct {
             };
             vk.cmdPushConstants(
                 command_buffer,
-                self.render_state.compute_pipeline_layout,
+                self.render_state.pipelines.compute_pipeline_layout,
                 vk.VK_SHADER_STAGE_COMPUTE_BIT,
                 0,
                 @sizeOf(ComputePushConstants),
@@ -356,7 +356,7 @@ pub const VulkanRenderer = struct {
                 .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
                 .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-                .buffer = self.render_state.indirect_buffer,
+                .buffer = self.render_state.pipelines.indirect_buffer,
                 .offset = 0,
                 .size = @sizeOf(vk.VkDrawIndexedIndirectCommand),
             };
@@ -376,24 +376,24 @@ pub const VulkanRenderer = struct {
         }
 
         // Debug line compute dispatch
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.debug_line_compute_pipeline);
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.debug_lines.compute_pipeline);
         vk.cmdBindDescriptorSets(
             command_buffer,
             vk.VK_PIPELINE_BIND_POINT_COMPUTE,
-            self.render_state.debug_line_compute_pipeline_layout,
+            self.render_state.debug_lines.compute_pipeline_layout,
             0,
             1,
-            &[_]vk.VkDescriptorSet{self.render_state.debug_line_compute_descriptor_set},
+            &[_]vk.VkDescriptorSet{self.render_state.debug_lines.compute_descriptor_set},
             0,
             null,
         );
         vk.cmdPushConstants(
             command_buffer,
-            self.render_state.debug_line_compute_pipeline_layout,
+            self.render_state.debug_lines.compute_pipeline_layout,
             vk.VK_SHADER_STAGE_COMPUTE_BIT,
             0,
             @sizeOf(u32),
-            &self.render_state.debug_line_vertex_count,
+            &self.render_state.debug_lines.vertex_count,
         );
         vk.cmdDispatch(command_buffer, 1, 1, 1);
 
@@ -405,7 +405,7 @@ pub const VulkanRenderer = struct {
             .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
             .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .buffer = self.render_state.debug_line_indirect_buffer,
+            .buffer = self.render_state.debug_lines.indirect_buffer,
             .offset = 0,
             .size = @sizeOf(vk.VkDrawIndirectCommand),
         };
@@ -555,16 +555,16 @@ pub const VulkanRenderer = struct {
 
         // Draw chunks (only if mesh data is available)
         if (has_chunks) {
-            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.graphics_pipeline);
+            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.pipelines.graphics_pipeline);
 
             // Bind bindless descriptor set (vertex SSBO + textures)
             vk.cmdBindDescriptorSets(
                 command_buffer,
                 vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                self.render_state.pipeline_layout,
+                self.render_state.pipelines.pipeline_layout,
                 0,
                 1,
-                &[_]vk.VkDescriptorSet{self.render_state.bindless_descriptor_set},
+                &[_]vk.VkDescriptorSet{self.render_state.texture_manager.bindless_descriptor_set},
                 0,
                 null,
             );
@@ -575,7 +575,7 @@ pub const VulkanRenderer = struct {
             // Push MVP matrix
             vk.cmdPushConstants(
                 command_buffer,
-                self.render_state.pipeline_layout,
+                self.render_state.pipelines.pipeline_layout,
                 vk.VK_SHADER_STAGE_VERTEX_BIT,
                 0,
                 @sizeOf(zlm.Mat4),
@@ -585,9 +585,9 @@ pub const VulkanRenderer = struct {
             // Draw indexed indirect with count
             vk.cmdDrawIndexedIndirectCount(
                 command_buffer,
-                self.render_state.indirect_buffer,
+                self.render_state.pipelines.indirect_buffer,
                 0,
-                self.render_state.indirect_count_buffer,
+                self.render_state.pipelines.indirect_count_buffer,
                 0,
                 1,
                 @sizeOf(vk.VkDrawIndexedIndirectCommand),
@@ -595,20 +595,20 @@ pub const VulkanRenderer = struct {
         }
 
         // Debug line draw
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.debug_line_pipeline);
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.debug_lines.pipeline);
         vk.cmdBindDescriptorSets(
             command_buffer,
             vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            self.render_state.debug_line_pipeline_layout,
+            self.render_state.debug_lines.pipeline_layout,
             0,
             1,
-            &[_]vk.VkDescriptorSet{self.render_state.debug_line_descriptor_set},
+            &[_]vk.VkDescriptorSet{self.render_state.debug_lines.descriptor_set},
             0,
             null,
         );
         vk.cmdPushConstants(
             command_buffer,
-            self.render_state.debug_line_pipeline_layout,
+            self.render_state.debug_lines.pipeline_layout,
             vk.VK_SHADER_STAGE_VERTEX_BIT,
             0,
             @sizeOf(zlm.Mat4),
@@ -616,9 +616,9 @@ pub const VulkanRenderer = struct {
         );
         vk.cmdDrawIndirectCount(
             command_buffer,
-            self.render_state.debug_line_indirect_buffer,
+            self.render_state.debug_lines.indirect_buffer,
             0,
-            self.render_state.debug_line_count_buffer,
+            self.render_state.debug_lines.count_buffer,
             0,
             1,
             @sizeOf(vk.VkDrawIndirectCommand),
