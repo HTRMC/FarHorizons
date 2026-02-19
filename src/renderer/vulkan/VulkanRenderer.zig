@@ -6,6 +6,7 @@ const glfw = @import("../../platform/glfw.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const SurfaceState = @import("SurfaceState.zig").SurfaceState;
 const RenderState = @import("RenderState.zig").RenderState;
+const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
 const zlm = @import("zlm");
 const tracy = @import("../../platform/tracy.zig");
@@ -53,6 +54,7 @@ pub const VulkanRenderer = struct {
     surface_state: SurfaceState,
     render_state: RenderState,
     command_pool: vk.VkCommandPool,
+    mesh_worker: MeshWorker,
     game_state: *GameState,
     framebuffer_resized: bool,
 
@@ -112,6 +114,7 @@ pub const VulkanRenderer = struct {
             .surface_state = undefined,
             .render_state = undefined,
             .command_pool = null,
+            .mesh_worker = MeshWorker.init(allocator),
             .game_state = game_state,
             .framebuffer_resized = false,
         };
@@ -120,6 +123,8 @@ pub const VulkanRenderer = struct {
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
         self.game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
         self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format);
+
+        self.mesh_worker.start();
 
         std.log.info("VulkanRenderer initialized", .{});
         return self;
@@ -133,6 +138,7 @@ pub const VulkanRenderer = struct {
             std.log.err("vkDeviceWaitIdle failed: {}", .{err});
         };
 
+        self.mesh_worker.deinit();
         self.render_state.deinit(self.device);
         vk.destroyCommandPool(self.device, self.command_pool, null);
         self.surface_state.deinit(self.allocator, self.device);
@@ -155,6 +161,24 @@ pub const VulkanRenderer = struct {
 
         const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[self.render_state.current_frame]};
         try vk.waitForFences(self.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
+
+        self.pollMeshWorker();
+    }
+
+    fn pollMeshWorker(self: *VulkanRenderer) void {
+        const result = self.mesh_worker.poll() orelse return;
+        defer self.allocator.free(result.vertices);
+        defer self.allocator.free(result.indices);
+
+        self.render_state.uploadChunkMesh(
+            &self.ctx,
+            result.vertices,
+            result.indices,
+            result.vertex_count,
+            result.index_count,
+        ) catch |err| {
+            std.log.err("Failed to upload chunk mesh: {}", .{err});
+        };
     }
 
     pub fn endFrame(self: *VulkanRenderer) !void {
@@ -291,69 +315,72 @@ pub const VulkanRenderer = struct {
 
         try vk.beginCommandBuffer(command_buffer, &begin_info);
 
-        // Compute culling pass
-        var data: ?*anyopaque = null;
-        try vk.mapMemory(self.device, self.render_state.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
-        const count_ptr: *u32 = @ptrCast(@alignCast(data));
-        count_ptr.* = 0;
-        vk.unmapMemory(self.device, self.render_state.indirect_count_buffer_memory);
+        // Compute culling pass (only if chunk mesh is available)
+        const has_chunks = self.render_state.chunk_index_count > 0;
+        if (has_chunks) {
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(self.device, self.render_state.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data);
+            const count_ptr: *u32 = @ptrCast(@alignCast(data));
+            count_ptr.* = 0;
+            vk.unmapMemory(self.device, self.render_state.indirect_count_buffer_memory);
 
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.compute_pipeline);
-        vk.cmdBindDescriptorSets(
-            command_buffer,
-            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
-            self.render_state.compute_pipeline_layout,
-            0,
-            1,
-            &[_]vk.VkDescriptorSet{self.render_state.descriptor_set},
-            0,
-            null,
-        );
+            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.compute_pipeline);
+            vk.cmdBindDescriptorSets(
+                command_buffer,
+                vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+                self.render_state.compute_pipeline_layout,
+                0,
+                1,
+                &[_]vk.VkDescriptorSet{self.render_state.descriptor_set},
+                0,
+                null,
+            );
 
-        const ComputePushConstants = extern struct {
-            object_count: u32,
-            total_index_count: u32,
-        };
-        const compute_pc = ComputePushConstants{
-            .object_count = 1,
-            .total_index_count = self.render_state.chunk_index_count,
-        };
-        vk.cmdPushConstants(
-            command_buffer,
-            self.render_state.compute_pipeline_layout,
-            vk.VK_SHADER_STAGE_COMPUTE_BIT,
-            0,
-            @sizeOf(ComputePushConstants),
-            &compute_pc,
-        );
+            const ComputePushConstants = extern struct {
+                object_count: u32,
+                total_index_count: u32,
+            };
+            const compute_pc = ComputePushConstants{
+                .object_count = 1,
+                .total_index_count = self.render_state.chunk_index_count,
+            };
+            vk.cmdPushConstants(
+                command_buffer,
+                self.render_state.compute_pipeline_layout,
+                vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                0,
+                @sizeOf(ComputePushConstants),
+                &compute_pc,
+            );
 
-        vk.cmdDispatch(command_buffer, 1, 1, 1);
+            vk.cmdDispatch(command_buffer, 1, 1, 1);
 
-        // Buffer memory barrier: compute shader write -> indirect command read
-        const indirect_barrier = vk.VkBufferMemoryBarrier{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
-            .pNext = null,
-            .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
-            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .buffer = self.render_state.indirect_buffer,
-            .offset = 0,
-            .size = @sizeOf(vk.VkDrawIndexedIndirectCommand),
-        };
+            // Buffer memory barrier: compute shader write -> indirect command read
+            const indirect_barrier = vk.VkBufferMemoryBarrier{
+                .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                .pNext = null,
+                .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
+                .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+                .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+                .buffer = self.render_state.indirect_buffer,
+                .offset = 0,
+                .size = @sizeOf(vk.VkDrawIndexedIndirectCommand),
+            };
 
-        vk.cmdPipelineBarrier(
-            command_buffer,
-            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-            vk.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
-            0,
-            0,
-            null,
-            1,
-            &[_]vk.VkBufferMemoryBarrier{indirect_barrier},
-            0,
-            null,
-        );
+            vk.cmdPipelineBarrier(
+                command_buffer,
+                vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                vk.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                0,
+                0,
+                null,
+                1,
+                &[_]vk.VkBufferMemoryBarrier{indirect_barrier},
+                0,
+                null,
+            );
+        }
 
         // Debug line compute dispatch
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.render_state.debug_line_compute_pipeline);
@@ -514,8 +541,6 @@ pub const VulkanRenderer = struct {
 
         vk.cmdBeginRendering(command_buffer, &rendering_info);
 
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.graphics_pipeline);
-
         // Set viewport and scissor
         const viewport = vk.VkViewport{
             .x = 0.0,
@@ -533,42 +558,48 @@ pub const VulkanRenderer = struct {
         };
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
 
-        // Bind bindless descriptor set (vertex SSBO + textures)
-        vk.cmdBindDescriptorSets(
-            command_buffer,
-            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            self.render_state.pipeline_layout,
-            0,
-            1,
-            &[_]vk.VkDescriptorSet{self.render_state.bindless_descriptor_set},
-            0,
-            null,
-        );
-
-        // Bind index buffer (u32 indices for chunk)
-        vk.cmdBindIndexBuffer(command_buffer, self.render_state.index_buffer, 0, vk.VK_INDEX_TYPE_UINT32);
-
-        // Push MVP matrix
         const mvp = self.game_state.camera.getViewProjectionMatrix();
-        vk.cmdPushConstants(
-            command_buffer,
-            self.render_state.pipeline_layout,
-            vk.VK_SHADER_STAGE_VERTEX_BIT,
-            0,
-            @sizeOf(zlm.Mat4),
-            &mvp.m,
-        );
 
-        // Draw indexed indirect with count
-        vk.cmdDrawIndexedIndirectCount(
-            command_buffer,
-            self.render_state.indirect_buffer,
-            0,
-            self.render_state.indirect_count_buffer,
-            0,
-            1,
-            @sizeOf(vk.VkDrawIndexedIndirectCommand),
-        );
+        // Draw chunks (only if mesh data is available)
+        if (has_chunks) {
+            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.graphics_pipeline);
+
+            // Bind bindless descriptor set (vertex SSBO + textures)
+            vk.cmdBindDescriptorSets(
+                command_buffer,
+                vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                self.render_state.pipeline_layout,
+                0,
+                1,
+                &[_]vk.VkDescriptorSet{self.render_state.bindless_descriptor_set},
+                0,
+                null,
+            );
+
+            // Bind index buffer (u32 indices for chunk)
+            vk.cmdBindIndexBuffer(command_buffer, self.render_state.index_buffer, 0, vk.VK_INDEX_TYPE_UINT32);
+
+            // Push MVP matrix
+            vk.cmdPushConstants(
+                command_buffer,
+                self.render_state.pipeline_layout,
+                vk.VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                @sizeOf(zlm.Mat4),
+                &mvp.m,
+            );
+
+            // Draw indexed indirect with count
+            vk.cmdDrawIndexedIndirectCount(
+                command_buffer,
+                self.render_state.indirect_buffer,
+                0,
+                self.render_state.indirect_count_buffer,
+                0,
+                1,
+                @sizeOf(vk.VkDrawIndexedIndirectCommand),
+            );
+        }
 
         // Debug line draw
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.render_state.debug_line_pipeline);
@@ -761,6 +792,9 @@ pub const VulkanRenderer = struct {
     }
 
     fn findQueueFamily(allocator: std.mem.Allocator, device: vk.VkPhysicalDevice, surface: vk.VkSurfaceKHR) !?u32 {
+        const tz = tracy.zone(@src(), "findQueueFamily");
+        defer tz.end();
+
         var queue_family_count: u32 = 0;
         try vk.getPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, null);
 
@@ -837,6 +871,9 @@ pub const VulkanRenderer = struct {
     }
 
     fn createDebugMessenger(instance: vk.VkInstance) !vk.VkDebugUtilsMessengerEXT {
+        const tz = tracy.zone(@src(), "createDebugMessenger");
+        defer tz.end();
+
         const create_info = vk.VkDebugUtilsMessengerCreateInfoEXT{
             .sType = vk.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
             .pNext = null,

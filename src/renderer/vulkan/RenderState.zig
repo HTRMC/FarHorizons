@@ -131,7 +131,6 @@ pub const RenderState = struct {
         defer shader_compiler.deinit();
 
         try self.createTextureImage(allocator, ctx);
-        try self.createChunkBuffers(allocator, ctx);
         try self.createBindlessDescriptorSet(ctx);
         try self.createGraphicsPipeline(&shader_compiler, ctx.device, swapchain_format);
         try self.createIndirectBuffer(ctx);
@@ -146,6 +145,9 @@ pub const RenderState = struct {
     }
 
     pub fn deinit(self: *RenderState, device: vk.VkDevice) void {
+        const tz = tracy.zone(@src(), "RenderState.deinit");
+        defer tz.end();
+
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             vk.destroySemaphore(device, self.image_available_semaphores[i], null);
             vk.destroyFence(device, self.in_flight_fences[i], null);
@@ -187,13 +189,123 @@ pub const RenderState = struct {
         vk.destroyImage(device, self.texture_image, null);
         vk.freeMemory(device, self.texture_image_memory, null);
 
-        vk.destroyBuffer(device, self.vertex_buffer, null);
-        vk.freeMemory(device, self.vertex_buffer_memory, null);
-        vk.destroyBuffer(device, self.index_buffer, null);
-        vk.freeMemory(device, self.index_buffer_memory, null);
+        if (self.vertex_buffer != null) {
+            vk.destroyBuffer(device, self.vertex_buffer, null);
+            vk.freeMemory(device, self.vertex_buffer_memory, null);
+        }
+        if (self.index_buffer != null) {
+            vk.destroyBuffer(device, self.index_buffer, null);
+            vk.freeMemory(device, self.index_buffer_memory, null);
+        }
 
         vk.destroyPipeline(device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
+    }
+
+    pub fn uploadChunkMesh(
+        self: *RenderState,
+        ctx: *const VulkanContext,
+        vertices: []const GpuVertex,
+        indices: []const u32,
+        vertex_count: u32,
+        index_count: u32,
+    ) !void {
+        const tz = tracy.zone(@src(), "uploadChunkMesh");
+        defer tz.end();
+
+        // Create vertex buffer via staging
+        const vb_size: vk.VkDeviceSize = @intCast(@as(u64, vertex_count) * @sizeOf(GpuVertex));
+        {
+            var staging_buffer: vk.VkBuffer = undefined;
+            var staging_memory: vk.VkDeviceMemory = undefined;
+            try vk_utils.createBuffer(
+                ctx,
+                vb_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer,
+                &staging_memory,
+            );
+
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, staging_memory, 0, vb_size, 0, &data);
+            const dst: [*]GpuVertex = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..vertex_count], vertices[0..vertex_count]);
+            vk.unmapMemory(ctx.device, staging_memory);
+
+            try vk_utils.createBuffer(
+                ctx,
+                vb_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &self.vertex_buffer,
+                &self.vertex_buffer_memory,
+            );
+
+            try vk_utils.copyBuffer(ctx, staging_buffer, self.vertex_buffer, vb_size);
+            vk.destroyBuffer(ctx.device, staging_buffer, null);
+            vk.freeMemory(ctx.device, staging_memory, null);
+        }
+
+        // Create index buffer via staging
+        const ib_size: vk.VkDeviceSize = @intCast(@as(u64, index_count) * @sizeOf(u32));
+        {
+            var staging_buffer: vk.VkBuffer = undefined;
+            var staging_memory: vk.VkDeviceMemory = undefined;
+            try vk_utils.createBuffer(
+                ctx,
+                ib_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                &staging_buffer,
+                &staging_memory,
+            );
+
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, staging_memory, 0, ib_size, 0, &data);
+            const dst: [*]u32 = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..index_count], indices[0..index_count]);
+            vk.unmapMemory(ctx.device, staging_memory);
+
+            try vk_utils.createBuffer(
+                ctx,
+                ib_size,
+                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                &self.index_buffer,
+                &self.index_buffer_memory,
+            );
+
+            try vk_utils.copyBuffer(ctx, staging_buffer, self.index_buffer, ib_size);
+            vk.destroyBuffer(ctx.device, staging_buffer, null);
+            vk.freeMemory(ctx.device, staging_memory, null);
+        }
+
+        self.chunk_index_count = index_count;
+
+        // Update binding 0 (vertex SSBO) in bindless descriptor set
+        const vertex_buffer_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.vertex_buffer,
+            .offset = 0,
+            .range = vb_size,
+        };
+
+        const descriptor_write = vk.VkWriteDescriptorSet{
+            .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = null,
+            .dstSet = self.bindless_descriptor_set,
+            .dstBinding = 0,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pImageInfo = null,
+            .pBufferInfo = &vertex_buffer_info,
+            .pTexelBufferView = null,
+        };
+
+        vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
+
+        std.log.info("Chunk mesh uploaded ({} vertices, {} indices)", .{ vertex_count, index_count });
     }
 
     fn createTextureImage(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
@@ -552,6 +664,9 @@ pub const RenderState = struct {
     }
 
     fn createBindlessDescriptorSet(self: *RenderState, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createBindlessDescriptorSet");
+        defer tz.end();
+
         // Layout: binding 0 = SSBO (vertex buffer), binding 1 = sampler2D array
         const bindings = [_]vk.VkDescriptorSetLayoutBinding{
             .{
@@ -639,13 +754,7 @@ pub const RenderState = struct {
         try vk.allocateDescriptorSets(ctx.device, &alloc_info, &descriptor_sets);
         self.bindless_descriptor_set = descriptor_sets[0];
 
-        // Write descriptors
-        const vertex_buffer_info = vk.VkDescriptorBufferInfo{
-            .buffer = self.vertex_buffer,
-            .offset = 0,
-            .range = std.math.maxInt(u64), // VK_WHOLE_SIZE
-        };
-
+        // Write texture descriptor only (binding 1) — vertex SSBO (binding 0) is written later by uploadChunkMesh
         const texture_image_info = vk.VkDescriptorImageInfo{
             .sampler = self.texture_sampler,
             .imageView = self.texture_image_view,
@@ -653,18 +762,6 @@ pub const RenderState = struct {
         };
 
         const descriptor_writes = [_]vk.VkWriteDescriptorSet{
-            .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = self.bindless_descriptor_set,
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = null,
-                .pBufferInfo = &vertex_buffer_info,
-                .pTexelBufferView = null,
-            },
             .{
                 .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                 .pNext = null,
@@ -902,6 +999,9 @@ pub const RenderState = struct {
     }
 
     fn createIndirectBuffer(self: *RenderState, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createIndirectBuffer");
+        defer tz.end();
+
         const buffer_size = @sizeOf(vk.VkDrawIndexedIndirectCommand);
 
         try vk_utils.createBuffer(
@@ -1124,6 +1224,9 @@ pub const RenderState = struct {
     }
 
     fn createDebugLineResources(self: *RenderState, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createDebugLineResources");
+        defer tz.end();
+
         // Vertex SSBO (host-visible for CPU writes)
         const vertex_buffer_size: vk.VkDeviceSize = DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex);
         try vk_utils.createBuffer(
@@ -1309,6 +1412,9 @@ pub const RenderState = struct {
     }
 
     fn generateChunkOutlines(self: *RenderState, device: vk.VkDevice) void {
+        const tz = tracy.zone(@src(), "generateChunkOutlines");
+        defer tz.end();
+
         const half_world_x: f32 = @as(f32, WORLD_SIZE_X) / 2.0;
         const half_world_y: f32 = @as(f32, WORLD_SIZE_Y) / 2.0;
         const half_world_z: f32 = @as(f32, WORLD_SIZE_Z) / 2.0;
@@ -1641,6 +1747,9 @@ pub const RenderState = struct {
     }
 
     fn createCommandBuffers(self: *RenderState, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createCommandBuffers");
+        defer tz.end();
+
         const alloc_info = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
@@ -1654,6 +1763,9 @@ pub const RenderState = struct {
     }
 
     fn createSyncObjects(self: *RenderState, device: vk.VkDevice) !void {
+        const tz = tracy.zone(@src(), "createSyncObjects");
+        defer tz.end();
+
         const semaphore_info = vk.VkSemaphoreCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
             .pNext = null,
