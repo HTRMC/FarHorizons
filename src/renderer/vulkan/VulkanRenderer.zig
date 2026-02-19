@@ -8,6 +8,7 @@ const SurfaceState = @import("SurfaceState.zig").SurfaceState;
 const RenderState = @import("RenderState.zig").RenderState;
 const GameState = @import("../../GameState.zig");
 const zlm = @import("zlm");
+const tracy = @import("../../platform/tracy.zig");
 
 const enable_validation_layers = @import("builtin").mode == .Debug;
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
@@ -56,6 +57,9 @@ pub const VulkanRenderer = struct {
     framebuffer_resized: bool,
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window, game_state: *GameState) !*VulkanRenderer {
+        const init_zone = tracy.zone(@src(), "VulkanRenderer.init");
+        defer init_zone.end();
+
         const self = try allocator.create(VulkanRenderer);
         errdefer allocator.destroy(self);
 
@@ -122,6 +126,9 @@ pub const VulkanRenderer = struct {
     }
 
     pub fn deinit(self: *VulkanRenderer) void {
+        const tz = tracy.zone(@src(), "VulkanRenderer.deinit");
+        defer tz.end();
+
         vk.deviceWaitIdle(self.device) catch |err| {
             std.log.err("vkDeviceWaitIdle failed: {}", .{err});
         };
@@ -143,15 +150,24 @@ pub const VulkanRenderer = struct {
     }
 
     pub fn beginFrame(self: *VulkanRenderer) !void {
+        const tz = tracy.zone(@src(), "beginFrame");
+        defer tz.end();
+
         const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[self.render_state.current_frame]};
         try vk.waitForFences(self.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
     }
 
     pub fn endFrame(self: *VulkanRenderer) !void {
+        const tz = tracy.zone(@src(), "endFrame");
+        defer tz.end();
+
         self.render_state.current_frame = (self.render_state.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     pub fn render(self: *VulkanRenderer) !void {
+        const tz = tracy.zone(@src(), "render");
+        defer tz.end();
+
         // Handle minimized window (0x0 framebuffer)
         const fb_size = self.window.getFramebufferSize();
         if (fb_size.width == 0 or fb_size.height == 0) {
@@ -233,6 +249,9 @@ pub const VulkanRenderer = struct {
     }
 
     fn recreateSwapchain(self: *VulkanRenderer) !void {
+        const tz = tracy.zone(@src(), "recreateSwapchain");
+        defer tz.end();
+
         // Wait for all in-flight frames to complete
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[i]};
@@ -260,6 +279,9 @@ pub const VulkanRenderer = struct {
     }
 
     fn recordCommandBuffer(self: *VulkanRenderer, command_buffer: vk.VkCommandBuffer, image_index: u32) !void {
+        const tz = tracy.zone(@src(), "recordCommandBuffer");
+        defer tz.end();
+
         const begin_info = vk.VkCommandBufferBeginInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
             .pNext = null,
@@ -617,6 +639,9 @@ pub const VulkanRenderer = struct {
     }
 
     fn createCommandPool(self: *VulkanRenderer) !void {
+        const tz = tracy.zone(@src(), "createCommandPool");
+        defer tz.end();
+
         const pool_info = vk.VkCommandPoolCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .pNext = null,
@@ -635,6 +660,9 @@ pub const VulkanRenderer = struct {
     };
 
     fn createInstance(allocator: std.mem.Allocator) !InstanceResult {
+        const tz = tracy.zone(@src(), "createInstance");
+        defer tz.end();
+
         const app_info = vk.VkApplicationInfo{
             .sType = vk.VK_STRUCTURE_TYPE_APPLICATION_INFO,
             .pNext = null,
@@ -703,6 +731,9 @@ pub const VulkanRenderer = struct {
     };
 
     fn selectPhysicalDevice(allocator: std.mem.Allocator, instance: vk.VkInstance, surface: vk.VkSurfaceKHR) !DeviceInfo {
+        const tz = tracy.zone(@src(), "selectPhysicalDevice");
+        defer tz.end();
+
         var device_count: u32 = 0;
         try vk.enumeratePhysicalDevices(instance, &device_count, null);
 
@@ -753,6 +784,9 @@ pub const VulkanRenderer = struct {
     }
 
     fn createDevice(physical_device: vk.VkPhysicalDevice, queue_family_index: u32) !vk.VkDevice {
+        const tz = tracy.zone(@src(), "createDevice");
+        defer tz.end();
+
         const queue_priority: f32 = 1.0;
         const queue_create_info = vk.VkDeviceQueueCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,

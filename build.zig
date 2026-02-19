@@ -4,7 +4,7 @@ fn libName(b: *std.Build, name: []const u8) []const u8 {
     return b.fmt("lib{s}.a", .{name});
 }
 
-fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
+fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile, tracy_enabled: bool) void {
     const target = exe.root_module.resolved_target.?;
     const t = target.result;
 
@@ -33,12 +33,20 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile) void {
     exe.root_module.addObjectFile(lib_dep.path(libName(b, "shaderc_combined")));
     exe.root_module.addObjectFile(lib_dep.path(libName(b, "FastNoise")));
 
+    if (tracy_enabled) {
+        exe.root_module.addObjectFile(lib_dep.path(libName(b, "tracy")));
+    }
+
     if (t.os.tag == .windows) {
         exe.root_module.linkSystemLibrary("gdi32", .{});
         exe.root_module.linkSystemLibrary("user32", .{});
         exe.root_module.linkSystemLibrary("shell32", .{});
         exe.root_module.linkSystemLibrary("opengl32", .{});
         exe.root_module.linkSystemLibrary("dwmapi", .{});
+        if (tracy_enabled) {
+            exe.root_module.linkSystemLibrary("ws2_32", .{});
+            exe.root_module.linkSystemLibrary("dbghelp", .{});
+        }
     }
 }
 
@@ -58,7 +66,12 @@ pub fn build(b: *std.Build) void {
     const zlm_dep = b.dependency("zlm", .{});
     exe.root_module.addImport("zlm", zlm_dep.module("zlm"));
 
-    linkDependencies(b, exe);
+    const tracy_enabled = b.option(bool, "tracy", "Enable Tracy profiling") orelse false;
+    const tracy_options = b.addOptions();
+    tracy_options.addOption(bool, "tracy_enabled", tracy_enabled);
+    exe.root_module.addOptions("build_options", tracy_options);
+
+    linkDependencies(b, exe, tracy_enabled);
 
     b.installArtifact(exe);
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const shaderc = @import("../../platform/shaderc.zig");
 const app_config = @import("../../app_config.zig");
+const tracy = @import("../../platform/tracy.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
@@ -35,6 +36,9 @@ shader_base_path: []const u8,
 const Self = @This();
 
 pub fn init(allocator: std.mem.Allocator) !Self {
+    const tz = tracy.zone(@src(), "ShaderCompiler.init");
+    defer tz.end();
+
     const base_path = try app_config.getAppDataPath(allocator);
     defer allocator.free(base_path);
 
@@ -64,6 +68,10 @@ pub fn deinit(self: *Self) void {
 }
 
 pub fn compile(self: *Self, filename: []const u8, kind: ShaderKind) ![]const u8 {
+    const tz = tracy.zone(@src(), "ShaderCompiler.compile");
+    defer tz.end();
+    tz.text(filename);
+
     // Read shader source from disk
     const shader_path = try std.fmt.allocPrint(self.allocator, "{s}" ++ sep ++ "{s}", .{ self.shader_base_path, filename });
     defer self.allocator.free(shader_path);

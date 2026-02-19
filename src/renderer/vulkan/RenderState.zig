@@ -9,6 +9,7 @@ const GpuVertex = types.GpuVertex;
 const LineVertex = types.LineVertex;
 const WorldState = @import("../../world/WorldState.zig");
 const app_config = @import("../../app_config.zig");
+const tracy = @import("../../platform/tracy.zig");
 
 const MAX_FRAMES_IN_FLIGHT = 2;
 const MAX_TEXTURES = 256;
@@ -76,6 +77,9 @@ pub const RenderState = struct {
     debug_line_vertex_count: u32,
 
     pub fn create(allocator: std.mem.Allocator, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !RenderState {
+        const create_zone = tracy.zone(@src(), "RenderState.create");
+        defer create_zone.end();
+
         var self = RenderState{
             .texture_image = null,
             .texture_image_memory = null,
@@ -193,6 +197,9 @@ pub const RenderState = struct {
     }
 
     fn createTextureImage(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createTextureImage");
+        defer tz.end();
+
         const base_path = try app_config.getAppDataPath(allocator);
         defer allocator.free(base_path);
 
@@ -463,6 +470,9 @@ pub const RenderState = struct {
     }
 
     fn createChunkBuffers(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createChunkBuffers");
+        defer tz.end();
+
         const world = comptime WorldState.generateSphereWorld();
         const mesh = try WorldState.generateWorldMesh(allocator, &world);
         defer allocator.free(mesh.vertices);
@@ -674,6 +684,9 @@ pub const RenderState = struct {
     }
 
     fn createGraphicsPipeline(self: *RenderState, shader_compiler: *ShaderCompiler, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
+        const tz = tracy.zone(@src(), "createGraphicsPipeline");
+        defer tz.end();
+
         const vert_spirv = try shader_compiler.compile("test.vert", .vertex);
         defer shader_compiler.allocator.free(vert_spirv);
 
@@ -951,6 +964,9 @@ pub const RenderState = struct {
     }
 
     fn createComputePipeline(self: *RenderState, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createComputePipeline");
+        defer tz.end();
+
         const bindings = [_]vk.VkDescriptorSetLayoutBinding{
             .{
                 .binding = 0,
@@ -1349,6 +1365,9 @@ pub const RenderState = struct {
     }
 
     fn createDebugLinePipeline(self: *RenderState, shader_compiler: *ShaderCompiler, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
+        const tz = tracy.zone(@src(), "createDebugLinePipeline");
+        defer tz.end();
+
         const vert_spirv = try shader_compiler.compile("debug_line.vert", .vertex);
         defer shader_compiler.allocator.free(vert_spirv);
 
@@ -1559,6 +1578,9 @@ pub const RenderState = struct {
     }
 
     fn createDebugLineComputePipeline(self: *RenderState, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createDebugLineComputePipeline");
+        defer tz.end();
+
         const comp_spirv = try shader_compiler.compile("debug_line_indirect.comp", .compute);
         defer shader_compiler.allocator.free(comp_spirv);
 

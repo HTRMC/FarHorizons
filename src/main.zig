@@ -4,6 +4,7 @@ const Renderer = @import("renderer/Renderer.zig").Renderer;
 const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRenderer;
 const GameState = @import("GameState.zig");
 const glfw = @import("platform/glfw.zig");
+const tracy = @import("platform/tracy.zig");
 
 const InputState = struct {
     scroll_delta: f32 = 0.0,
@@ -34,6 +35,9 @@ fn framebufferSizeCallback(window: ?*glfw.Window, width: c_int, height: c_int) c
 }
 
 pub fn main() !void {
+    const tz = tracy.zone(@src(), "main");
+    defer tz.end();
+
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -104,6 +108,8 @@ pub fn main() !void {
         try renderer.beginFrame();
         try renderer.render();
         try renderer.endFrame();
+
+        tracy.frameMark();
     }
 
     std.log.info("Shutting down...", .{});
