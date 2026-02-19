@@ -72,7 +72,7 @@ pub const MeshWorker = struct {
         const tz = tracy.zone(@src(), "MeshWorker.workerFn");
         defer tz.end();
 
-        const world = comptime WorldState.generateSphereWorld();
+        const world = WorldState.generateSphereWorld();
         const mesh = WorldState.generateWorldMesh(self.allocator, &world) catch |err| {
             std.log.err("Mesh generation failed: {}", .{err});
             self.state.store(.idle, .release);

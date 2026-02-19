@@ -19,49 +19,49 @@ pub const TOTAL_WORLD_CHUNKS = WORLD_CHUNKS_X * WORLD_CHUNKS_Y * WORLD_CHUNKS_Z;
 pub const MAX_WORLD_VERTEX_COUNT = TOTAL_WORLD_CHUNKS * CHUNK_VERTEX_COUNT;
 pub const MAX_WORLD_INDEX_COUNT = TOTAL_WORLD_CHUNKS * CHUNK_INDEX_COUNT;
 
-// Per-face vertex template (unit cube centered at origin)
+// Per-face vertex template (unit cube with min corner at origin)
 pub const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }{
-    // Front face (z = +0.5)
+    // Front face (z = 1)
     .{
-        .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 1.0 },
-        .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 1.0 },
-        .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 0.0 },
-        .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 0.0 },
+        .{ .px = 0.0, .py = 0.0, .pz = 1.0, .u = 0.0, .v = 1.0 },
+        .{ .px = 1.0, .py = 0.0, .pz = 1.0, .u = 1.0, .v = 1.0 },
+        .{ .px = 1.0, .py = 1.0, .pz = 1.0, .u = 1.0, .v = 0.0 },
+        .{ .px = 0.0, .py = 1.0, .pz = 1.0, .u = 0.0, .v = 0.0 },
     },
-    // Back face (z = -0.5)
+    // Back face (z = 0)
     .{
-        .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0 },
-        .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0 },
-        .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0 },
-        .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0 },
+        .{ .px = 1.0, .py = 0.0, .pz = 0.0, .u = 0.0, .v = 1.0 },
+        .{ .px = 0.0, .py = 0.0, .pz = 0.0, .u = 1.0, .v = 1.0 },
+        .{ .px = 0.0, .py = 1.0, .pz = 0.0, .u = 1.0, .v = 0.0 },
+        .{ .px = 1.0, .py = 1.0, .pz = 0.0, .u = 0.0, .v = 0.0 },
     },
-    // Left face (x = -0.5)
+    // Left face (x = 0)
     .{
-        .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0 },
-        .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 1.0 },
-        .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 0.0 },
-        .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0 },
+        .{ .px = 0.0, .py = 0.0, .pz = 0.0, .u = 0.0, .v = 1.0 },
+        .{ .px = 0.0, .py = 0.0, .pz = 1.0, .u = 1.0, .v = 1.0 },
+        .{ .px = 0.0, .py = 1.0, .pz = 1.0, .u = 1.0, .v = 0.0 },
+        .{ .px = 0.0, .py = 1.0, .pz = 0.0, .u = 0.0, .v = 0.0 },
     },
-    // Right face (x = +0.5)
+    // Right face (x = 1)
     .{
-        .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 1.0 },
-        .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0 },
-        .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0 },
-        .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 0.0 },
+        .{ .px = 1.0, .py = 0.0, .pz = 1.0, .u = 0.0, .v = 1.0 },
+        .{ .px = 1.0, .py = 0.0, .pz = 0.0, .u = 1.0, .v = 1.0 },
+        .{ .px = 1.0, .py = 1.0, .pz = 0.0, .u = 1.0, .v = 0.0 },
+        .{ .px = 1.0, .py = 1.0, .pz = 1.0, .u = 0.0, .v = 0.0 },
     },
-    // Top face (y = +0.5)
+    // Top face (y = 1)
     .{
-        .{ .px = -0.5, .py = 0.5, .pz = 0.5, .u = 0.0, .v = 1.0 },
-        .{ .px = 0.5, .py = 0.5, .pz = 0.5, .u = 1.0, .v = 1.0 },
-        .{ .px = 0.5, .py = 0.5, .pz = -0.5, .u = 1.0, .v = 0.0 },
-        .{ .px = -0.5, .py = 0.5, .pz = -0.5, .u = 0.0, .v = 0.0 },
+        .{ .px = 0.0, .py = 1.0, .pz = 1.0, .u = 0.0, .v = 1.0 },
+        .{ .px = 1.0, .py = 1.0, .pz = 1.0, .u = 1.0, .v = 1.0 },
+        .{ .px = 1.0, .py = 1.0, .pz = 0.0, .u = 1.0, .v = 0.0 },
+        .{ .px = 0.0, .py = 1.0, .pz = 0.0, .u = 0.0, .v = 0.0 },
     },
-    // Bottom face (y = -0.5)
+    // Bottom face (y = 0)
     .{
-        .{ .px = -0.5, .py = -0.5, .pz = -0.5, .u = 0.0, .v = 1.0 },
-        .{ .px = 0.5, .py = -0.5, .pz = -0.5, .u = 1.0, .v = 1.0 },
-        .{ .px = 0.5, .py = -0.5, .pz = 0.5, .u = 1.0, .v = 0.0 },
-        .{ .px = -0.5, .py = -0.5, .pz = 0.5, .u = 0.0, .v = 0.0 },
+        .{ .px = 0.0, .py = 0.0, .pz = 0.0, .u = 0.0, .v = 1.0 },
+        .{ .px = 1.0, .py = 0.0, .pz = 0.0, .u = 1.0, .v = 1.0 },
+        .{ .px = 1.0, .py = 0.0, .pz = 1.0, .u = 1.0, .v = 0.0 },
+        .{ .px = 0.0, .py = 0.0, .pz = 1.0, .u = 0.0, .v = 0.0 },
     },
 };
 
@@ -108,7 +108,6 @@ pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
 }
 
 pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk {
-    @setEvalBranchQuota(100_000_000);
     const half_x = @as(f32, WORLD_SIZE_X) / 2.0;
     const half_y = @as(f32, WORLD_SIZE_Y) / 2.0;
     const half_z = @as(f32, WORLD_SIZE_Z) / 2.0;

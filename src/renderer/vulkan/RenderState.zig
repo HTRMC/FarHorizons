@@ -1415,9 +1415,9 @@ pub const RenderState = struct {
         const tz = tracy.zone(@src(), "generateChunkOutlines");
         defer tz.end();
 
-        const half_world_x: f32 = @as(f32, WORLD_SIZE_X) / 2.0;
-        const half_world_y: f32 = @as(f32, WORLD_SIZE_Y) / 2.0;
-        const half_world_z: f32 = @as(f32, WORLD_SIZE_Z) / 2.0;
+        // const half_world_x: f32 = @as(f32, WORLD_SIZE_X) / 2.0;
+        // const half_world_y: f32 = @as(f32, WORLD_SIZE_Y) / 2.0;
+        // const half_world_z: f32 = @as(f32, WORLD_SIZE_Z) / 2.0;
 
         var data: ?*anyopaque = null;
         vk.mapMemory(device, self.debug_line_vertex_buffer_memory, 0, DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex), 0, &data) catch return;
@@ -1425,46 +1425,63 @@ pub const RenderState = struct {
 
         var count: u32 = 0;
 
-        for (0..WORLD_CHUNKS_Y) |cy| {
-            for (0..WORLD_CHUNKS_Z) |cz| {
-                for (0..WORLD_CHUNKS_X) |cx| {
-                    const min_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE)) - half_world_x;
-                    const min_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE)) - half_world_y;
-                    const min_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE)) - half_world_z;
-                    const max_x: f32 = min_x + CHUNK_SIZE;
-                    const max_y: f32 = min_y + CHUNK_SIZE;
-                    const max_z: f32 = min_z + CHUNK_SIZE;
+        // for (0..WORLD_CHUNKS_Y) |cy| {
+        //     for (0..WORLD_CHUNKS_Z) |cz| {
+        //         for (0..WORLD_CHUNKS_X) |cx| {
+        //             const min_x: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE)) - half_world_x;
+        //             const min_y: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE)) - half_world_y;
+        //             const min_z: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE)) - half_world_z;
+        //             const max_x: f32 = min_x + CHUNK_SIZE;
+        //             const max_y: f32 = min_y + CHUNK_SIZE;
+        //             const max_z: f32 = min_z + CHUNK_SIZE;
 
-                    // 8 corners of the chunk box
-                    const corners = [8][3]f32{
-                        .{ min_x, min_y, min_z },
-                        .{ max_x, min_y, min_z },
-                        .{ max_x, min_y, max_z },
-                        .{ min_x, min_y, max_z },
-                        .{ min_x, max_y, min_z },
-                        .{ max_x, max_y, min_z },
-                        .{ max_x, max_y, max_z },
-                        .{ min_x, max_y, max_z },
-                    };
+        //             // 8 corners of the chunk box
+        //             const corners = [8][3]f32{
+        //                 .{ min_x, min_y, min_z },
+        //                 .{ max_x, min_y, min_z },
+        //                 .{ max_x, min_y, max_z },
+        //                 .{ min_x, min_y, max_z },
+        //                 .{ min_x, max_y, min_z },
+        //                 .{ max_x, max_y, min_z },
+        //                 .{ max_x, max_y, max_z },
+        //                 .{ min_x, max_y, max_z },
+        //             };
 
-                    // 12 edges as pairs of corner indices
-                    const edges = [12][2]u8{
-                        .{ 0, 1 }, .{ 1, 2 }, .{ 2, 3 }, .{ 3, 0 }, // bottom
-                        .{ 4, 5 }, .{ 5, 6 }, .{ 6, 7 }, .{ 7, 4 }, // top
-                        .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 }, // vertical
-                    };
+        //             // 12 edges as pairs of corner indices
+        //             const edges = [12][2]u8{
+        //                 .{ 0, 1 }, .{ 1, 2 }, .{ 2, 3 }, .{ 3, 0 }, // bottom
+        //                 .{ 4, 5 }, .{ 5, 6 }, .{ 6, 7 }, .{ 7, 4 }, // top
+        //                 .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 }, // vertical
+        //             };
 
-                    for (edges) |edge| {
-                        const c0 = corners[edge[0]];
-                        const c1 = corners[edge[1]];
-                        vertices[count] = .{ .px = c0[0], .py = c0[1], .pz = c0[2], .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
-                        count += 1;
-                        vertices[count] = .{ .px = c1[0], .py = c1[1], .pz = c1[2], .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
-                        count += 1;
-                    }
-                }
-            }
-        }
+        //             for (edges) |edge| {
+        //                 const c0 = corners[edge[0]];
+        //                 const c1 = corners[edge[1]];
+        //                 vertices[count] = .{ .px = c0[0], .py = c0[1], .pz = c0[2], .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+        //                 count += 1;
+        //                 vertices[count] = .{ .px = c1[0], .py = c1[1], .pz = c1[2], .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+        //                 count += 1;
+        //             }
+        //         }
+        //     }
+        // }
+
+        // World axis lines (64 units each, from origin)
+        // X axis - red
+        vertices[count] = .{ .px = 0.0, .py = 0.0, .pz = 0.0, .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+        count += 1;
+        vertices[count] = .{ .px = 64.0, .py = 0.0, .pz = 0.0, .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+        count += 1;
+        // Y axis - green
+        vertices[count] = .{ .px = 0.0, .py = 0.0, .pz = 0.0, .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+        count += 1;
+        vertices[count] = .{ .px = 0.0, .py = 64.0, .pz = 0.0, .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+        count += 1;
+        // Z axis - blue
+        vertices[count] = .{ .px = 0.0, .py = 0.0, .pz = 0.0, .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
+        count += 1;
+        vertices[count] = .{ .px = 0.0, .py = 0.0, .pz = 64.0, .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
+        count += 1;
 
         vk.unmapMemory(device, self.debug_line_vertex_buffer_memory);
         self.debug_line_vertex_count = count;
