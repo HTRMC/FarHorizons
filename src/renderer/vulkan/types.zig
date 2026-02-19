@@ -5,6 +5,7 @@ pub const GpuVertex = extern struct {
     u: f32,
     v: f32,
     tex_index: u32,
+    light: f32,
 };
 
 pub const LineVertex = extern struct {

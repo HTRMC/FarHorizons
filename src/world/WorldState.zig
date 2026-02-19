@@ -82,6 +82,9 @@ pub const face_neighbor_offsets = [6][3]i32{
 pub const BlockType = enum(u8) {
     air,
     glass,
+    grass_block,
+    dirt,
+    stone,
 };
 
 pub const block_properties = struct {
@@ -89,12 +92,14 @@ pub const block_properties = struct {
         return switch (block) {
             .air => false,
             .glass => false,
+            .grass_block, .dirt, .stone => true,
         };
     }
     pub fn cullsSelf(block: BlockType) bool {
         return switch (block) {
             .air => false,
             .glass => true,
+            .grass_block, .dirt, .stone => true,
         };
     }
 };
@@ -107,6 +112,22 @@ pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
     return y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
 }
 
+fn isSolid(wx: f32, wy: f32, wz: f32, half_x: f32, half_z: f32, radius_sq: f32) bool {
+    for (0..4) |gz| {
+        for (0..4) |gx| {
+            const center_x = @as(f32, @floatFromInt(gx * 32 + 16)) - half_x;
+            const center_z = @as(f32, @floatFromInt(gz * 32 + 16)) - half_z;
+            const dx = wx - center_x;
+            const dy = wy;
+            const dz = wz - center_z;
+            if (dx * dx + dy * dy + dz * dz <= radius_sq) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk {
     const half_x = @as(f32, WORLD_SIZE_X) / 2.0;
     const half_y = @as(f32, WORLD_SIZE_Y) / 2.0;
@@ -114,6 +135,7 @@ pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chu
     const radius_sq = 15.5 * 15.5;
     var world: [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk = undefined;
 
+    // First pass: fill solid blocks as glass
     for (0..WORLD_CHUNKS_Y) |cy| {
         for (0..WORLD_CHUNKS_Z) |cz| {
             for (0..WORLD_CHUNKS_X) |cx| {
@@ -126,23 +148,7 @@ pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chu
                             const wy: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + y)) - half_y;
                             const wz: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + z)) - half_z;
 
-                            // Check against all 16 sphere centers (4x4 grid)
-                            var hit = false;
-                            for (0..4) |gz| {
-                                if (hit) break;
-                                for (0..4) |gx| {
-                                    const center_x = @as(f32, @floatFromInt(gx * 32 + 16)) - half_x;
-                                    const center_z = @as(f32, @floatFromInt(gz * 32 + 16)) - half_z;
-                                    const dx = wx - center_x;
-                                    const dy = wy;
-                                    const dz = wz - center_z;
-                                    if (dx * dx + dy * dy + dz * dz <= radius_sq) {
-                                        hit = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (hit) {
+                            if (isSolid(wx, wy, wz, half_x, half_z, radius_sq)) {
                                 blocks[chunkIndex(x, y, z)] = .glass;
                             }
                         }
@@ -150,6 +156,39 @@ pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chu
                 }
 
                 world[cy][cz][cx] = .{ .blocks = blocks };
+            }
+        }
+    }
+
+    // Second pass: assign surface layers per column
+    // For each (wx, wz) column, scan top-down to find surface, then:
+    //   depth 0 = grass_block, depth 1 = dirt, depth 2..4 = stone, rest = glass
+    for (0..WORLD_CHUNKS_X) |cx| {
+        for (0..WORLD_CHUNKS_Z) |cz| {
+            for (0..CHUNK_SIZE) |bx| {
+                for (0..CHUNK_SIZE) |bz| {
+                    var depth: u32 = 0;
+                    // Scan from top of world downward
+                    var wy: i32 = WORLD_SIZE_Y - 1;
+                    while (wy >= 0) : (wy -= 1) {
+                        const y: usize = @intCast(wy);
+                        const cy = y / CHUNK_SIZE;
+                        const ly = y % CHUNK_SIZE;
+                        const block = &world[cy][cz][cx].blocks[chunkIndex(bx, ly, bz)];
+
+                        if (block.* == .air) {
+                            depth = 0;
+                        } else {
+                            block.* = switch (depth) {
+                                0 => .grass_block,
+                                1 => .dirt,
+                                2, 3, 4 => .stone,
+                                else => .glass,
+                            };
+                            depth += 1;
+                        }
+                    }
+                }
             }
         }
     }
@@ -225,6 +264,14 @@ pub fn generateWorldMesh(
                                 if (neighbor == block and block_properties.cullsSelf(block)) continue;
 
                                 // Emit 4 vertices for this face
+                                const tex_index: u32 = switch (block) {
+                                    .air => unreachable,
+                                    .glass => 0,
+                                    .grass_block => 1,
+                                    .dirt => 2,
+                                    .stone => 3,
+                                };
+                                const face_light = [6]f32{ 0.6, 0.6, 0.8, 0.8, 1.0, 0.5 };
                                 for (0..4) |v| {
                                     const fv = face_vertices[face][v];
                                     vertices[vert_count + @as(u32, @intCast(v))] = .{
@@ -233,7 +280,8 @@ pub fn generateWorldMesh(
                                         .pz = fv.pz + world_z,
                                         .u = fv.u,
                                         .v = fv.v,
-                                        .tex_index = 0,
+                                        .tex_index = tex_index,
+                                        .light = face_light[face],
                                     };
                                 }
 
