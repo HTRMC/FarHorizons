@@ -1,5 +1,6 @@
 const std = @import("std");
 const GpuVertex = @import("../renderer/vulkan/types.zig").GpuVertex;
+const tracy = @import("../platform/tracy.zig");
 
 pub const CHUNK_SIZE = 16;
 pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; // 4096
@@ -161,6 +162,9 @@ pub fn generateWorldMesh(
     allocator: std.mem.Allocator,
     world: *const [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk,
 ) !struct { vertices: []GpuVertex, indices: []u32, vertex_count: u32, index_count: u32 } {
+    const tz = tracy.zone(@src(), "generateWorldMesh");
+    defer tz.end();
+
     const vertices = try allocator.alloc(GpuVertex, MAX_WORLD_VERTEX_COUNT);
     errdefer allocator.free(vertices);
     const indices = try allocator.alloc(u32, MAX_WORLD_INDEX_COUNT);

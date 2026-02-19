@@ -1,6 +1,7 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
+const tracy = @import("../../platform/tracy.zig");
 
 pub fn findMemoryType(physical_device: vk.VkPhysicalDevice, type_filter: u32, properties: c_uint) !u32 {
     var mem_properties: vk.VkPhysicalDeviceMemoryProperties = undefined;
@@ -27,6 +28,9 @@ pub fn createBuffer(
     buffer: *vk.VkBuffer,
     buffer_memory: *vk.VkDeviceMemory,
 ) !void {
+    const tz = tracy.zone(@src(), "createBuffer");
+    defer tz.end();
+
     const buffer_info = vk.VkBufferCreateInfo{
         .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = null,
@@ -66,6 +70,9 @@ pub fn copyBuffer(
     dst_buffer: vk.VkBuffer,
     size: vk.VkDeviceSize,
 ) !void {
+    const tz = tracy.zone(@src(), "copyBuffer");
+    defer tz.end();
+
     const alloc_info = vk.VkCommandBufferAllocateInfo{
         .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .pNext = null,

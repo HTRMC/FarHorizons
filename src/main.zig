@@ -35,6 +35,8 @@ fn framebufferSizeCallback(window: ?*glfw.Window, width: c_int, height: c_int) c
 }
 
 pub fn main() !void {
+    tracy.waitForConnection();
+
     const tz = tracy.zone(@src(), "main");
     defer tz.end();
 

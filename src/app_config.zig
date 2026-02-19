@@ -1,9 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const tracy = @import("platform/tracy.zig");
 
 const sep = std.fs.path.sep_str;
 
 pub fn getAppDataPath(allocator: std.mem.Allocator) ![]const u8 {
+    const tz = tracy.zone(@src(), "getAppDataPath");
+    defer tz.end();
+
     if (builtin.os.tag == .windows) {
         const appdata = std.c.getenv("APPDATA") orelse return error.AppDataNotSet;
         return std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "FarHorizons", .{std.mem.span(appdata)});

@@ -41,3 +41,17 @@ pub inline fn frameMark() void {
 pub inline fn message(txt: []const u8) void {
     if (enabled) c.___tracy_emit_message(txt.ptr, txt.len, 0);
 }
+
+pub inline fn connected() bool {
+    if (enabled) return c.___tracy_connected() != 0;
+    return false;
+}
+
+/// Spin-waits until Tracy profiler connects. Call at start of main()
+/// so early startup zones are captured.
+pub fn waitForConnection() void {
+    if (!enabled) return;
+    std.log.info("Waiting for Tracy profiler to connect...", .{});
+    while (c.___tracy_connected() == 0) {}
+    std.log.info("Tracy connected", .{});
+}

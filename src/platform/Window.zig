@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const glfw = @import("glfw.zig");
 const vk = @import("volk.zig");
+const tracy = @import("tracy.zig");
 
 const win32 = if (builtin.os.tag == .windows) struct {
     const HWND = *opaque {};
@@ -54,6 +55,9 @@ pub const Window = struct {
     };
 
     pub fn init(config: Config) !Window {
+        const tz = tracy.zone(@src(), "Window.init");
+        defer tz.end();
+
         const prev_count = glfw_init_count.fetchAdd(1, .monotonic);
         errdefer _ = glfw_init_count.fetchSub(1, .monotonic);
 
@@ -83,6 +87,9 @@ pub const Window = struct {
     }
 
     pub fn deinit(self: *Window) void {
+        const tz = tracy.zone(@src(), "Window.deinit");
+        defer tz.end();
+
         glfw.destroyWindow(self.handle);
         std.log.info("Window destroyed", .{});
 
@@ -109,6 +116,9 @@ pub const Window = struct {
     }
 
     pub fn createSurface(self: *const Window, instance: anytype, allocator: ?*const anyopaque) !vk.VkSurfaceKHR {
+        const tz = tracy.zone(@src(), "createSurface");
+        defer tz.end();
+
         var surface: vk.VkSurfaceKHR = null;
         try glfw.createWindowSurface(instance, self.handle, allocator, &surface);
         return surface;

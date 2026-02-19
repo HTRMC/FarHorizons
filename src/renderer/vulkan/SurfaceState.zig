@@ -3,6 +3,7 @@ const vk = @import("../../platform/volk.zig");
 const Window = @import("../../platform/Window.zig").Window;
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
+const tracy = @import("../../platform/tracy.zig");
 
 pub const SurfaceState = struct {
     swapchain: vk.VkSwapchainKHR,
@@ -17,6 +18,9 @@ pub const SurfaceState = struct {
     images_in_flight: std.ArrayList(?vk.VkFence),
 
     pub fn create(allocator: std.mem.Allocator, ctx: *const VulkanContext, surface: vk.VkSurfaceKHR, window: *const Window) !SurfaceState {
+        const tz = tracy.zone(@src(), "SurfaceState.create");
+        defer tz.end();
+
         var self = SurfaceState{
             .swapchain = null,
             .swapchain_images = .empty,
@@ -37,6 +41,9 @@ pub const SurfaceState = struct {
     }
 
     pub fn deinit(self: *SurfaceState, allocator: std.mem.Allocator, device: vk.VkDevice) void {
+        const tz = tracy.zone(@src(), "SurfaceState.deinit");
+        defer tz.end();
+
         for (self.render_finished_semaphores.items) |semaphore| {
             vk.destroySemaphore(device, semaphore, null);
         }
@@ -53,6 +60,9 @@ pub const SurfaceState = struct {
     }
 
     pub fn createSwapchain(self: *SurfaceState, allocator: std.mem.Allocator, ctx: *const VulkanContext, surface: vk.VkSurfaceKHR, window: *const Window) !void {
+        const tz = tracy.zone(@src(), "createSwapchain");
+        defer tz.end();
+
         var capabilities: vk.VkSurfaceCapabilitiesKHR = undefined;
         try vk.getPhysicalDeviceSurfaceCapabilitiesKHR(ctx.physical_device, surface, &capabilities);
 
@@ -152,6 +162,9 @@ pub const SurfaceState = struct {
     }
 
     pub fn cleanupSwapchain(self: *SurfaceState, device: vk.VkDevice) void {
+        const tz = tracy.zone(@src(), "cleanupSwapchain");
+        defer tz.end();
+
         for (self.swapchain_image_views.items) |view| {
             vk.destroyImageView(device, view, null);
         }
@@ -165,6 +178,9 @@ pub const SurfaceState = struct {
     }
 
     pub fn createDepthBuffer(self: *SurfaceState, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createDepthBuffer");
+        defer tz.end();
+
         const image_info = vk.VkImageCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = null,
