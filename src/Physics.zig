@@ -1,4 +1,5 @@
 const std = @import("std");
+const zlm = @import("zlm");
 const GameState = @import("GameState.zig");
 const WorldState = @import("world/WorldState.zig");
 
@@ -6,9 +7,47 @@ const GRAVITY: f32 = 20.0;
 const HALF_W: f32 = 0.4;
 const HEIGHT: f32 = 1.8;
 const MAX_DT: f32 = 0.05;
+const WALK_SPEED: f32 = 4.3;
+const FRICTION: f32 = 20.0;
+const AIR_CONTROL: f32 = 0.3;
 
 pub fn updateEntity(state: *GameState, dt: f32) void {
+    if (state.mode == .flying) return;
+
     const clamped_dt = @min(dt, MAX_DT);
+
+    // Walking movement from input
+    const forward_input = state.input_move[0];
+    const right_input = state.input_move[2];
+    state.input_move = .{ 0.0, 0.0, 0.0 };
+
+    // Project camera forward/right onto XZ plane
+    const cam_forward = state.camera.getForward();
+    const cam_right = state.camera.getRight();
+    const fwd_xz = zlm.Vec3.init(cam_forward.x, 0.0, cam_forward.z);
+    const right_xz = zlm.Vec3.init(cam_right.x, 0.0, cam_right.z);
+    const fwd_norm = zlm.Vec3.normalize(fwd_xz);
+    const right_norm = zlm.Vec3.normalize(right_xz);
+
+    // Compute wish direction
+    var wish = zlm.Vec3.add(
+        zlm.Vec3.scale(fwd_norm, forward_input),
+        zlm.Vec3.scale(right_norm, right_input),
+    );
+    const wish_len = zlm.Vec3.length(wish);
+    if (wish_len > 1.0) {
+        wish = zlm.Vec3.scale(wish, 1.0 / wish_len);
+    }
+
+    // Target velocity
+    const target_vx = wish.x * WALK_SPEED;
+    const target_vz = wish.z * WALK_SPEED;
+
+    // Approach target velocity (full friction on ground, reduced in air)
+    const control = if (state.entity_on_ground) FRICTION else FRICTION * AIR_CONTROL;
+    const max_delta = control * clamped_dt;
+    state.entity_vel[0] = approach(state.entity_vel[0], target_vx, max_delta);
+    state.entity_vel[2] = approach(state.entity_vel[2], target_vz, max_delta);
 
     // Apply gravity
     state.entity_vel[1] -= GRAVITY * clamped_dt;
@@ -130,4 +169,11 @@ fn aabbMax(axis: usize, max_x: f32, max_y: f32, max_z: f32) f32 {
         2 => max_z,
         else => unreachable,
     };
+}
+
+fn approach(current: f32, target: f32, max_delta: f32) f32 {
+    const diff = target - current;
+    if (diff > max_delta) return current + max_delta;
+    if (diff < -max_delta) return current - max_delta;
+    return target;
 }

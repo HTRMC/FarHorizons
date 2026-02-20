@@ -6,15 +6,21 @@ const GameState = @import("GameState.zig");
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
 
+const JUMP_VELOCITY: f32 = 7.5;
+const DOUBLE_TAP_THRESHOLD: f64 = 0.35;
+
 const InputState = struct {
     window: *Window,
     framebuffer_resized: *bool,
+    game_state: *GameState,
     mouse_captured: bool = false,
     last_cursor_x: f64 = 0.0,
     last_cursor_y: f64 = 0.0,
     first_mouse: bool = true,
     move_speed: f32 = 20.0,
     scroll_speed_delta: f32 = 0.0,
+    last_space_press_time: f64 = 0.0,
+    mode_toggle_requested: bool = false,
 };
 
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
@@ -36,6 +42,16 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
         input_state.mouse_captured = false;
         input_state.first_mouse = true;
         glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+    }
+
+    if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
+        const now = glfw.getTime();
+        if (now - input_state.last_space_press_time < DOUBLE_TAP_THRESHOLD) {
+            input_state.mode_toggle_requested = true;
+            input_state.last_space_press_time = 0.0;
+        } else {
+            input_state.last_space_press_time = now;
+        }
     }
 }
 
@@ -86,6 +102,7 @@ pub fn main() !void {
     var input_state = InputState{
         .window = &window,
         .framebuffer_resized = framebuffer_resized,
+        .game_state = &game_state,
     };
     glfw.setWindowUserPointer(window.handle, &input_state);
     glfw.setScrollCallback(window.handle, scrollCallback);
@@ -139,10 +156,15 @@ pub fn main() !void {
             }
         }
 
+        // Consume mode toggle
+        if (input_state.mode_toggle_requested) {
+            input_state.mode_toggle_requested = false;
+            game_state.toggleMode();
+        }
+
         // WASD movement
         var forward_input: f32 = 0.0;
         var right_input: f32 = 0.0;
-        var up_input: f32 = 0.0;
 
         if (glfw.getKey(window.handle, glfw.GLFW_KEY_W) == glfw.GLFW_PRESS) {
             forward_input += 1.0;
@@ -156,16 +178,27 @@ pub fn main() !void {
         if (glfw.getKey(window.handle, glfw.GLFW_KEY_A) == glfw.GLFW_PRESS) {
             right_input -= 1.0;
         }
-        if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) {
-            up_input += 1.0;
-        }
-        if (glfw.getKey(window.handle, glfw.GLFW_KEY_LEFT_SHIFT) == glfw.GLFW_PRESS) {
-            up_input -= 1.0;
-        }
 
-        if (forward_input != 0.0 or right_input != 0.0 or up_input != 0.0) {
-            const speed = input_state.move_speed * delta_time;
-            game_state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
+        switch (game_state.mode) {
+            .flying => {
+                var up_input: f32 = 0.0;
+                if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) {
+                    up_input += 1.0;
+                }
+                if (glfw.getKey(window.handle, glfw.GLFW_KEY_LEFT_SHIFT) == glfw.GLFW_PRESS) {
+                    up_input -= 1.0;
+                }
+                if (forward_input != 0.0 or right_input != 0.0 or up_input != 0.0) {
+                    const speed = input_state.move_speed * delta_time;
+                    game_state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
+                }
+            },
+            .walking => {
+                game_state.input_move = .{ forward_input, 0.0, right_input };
+                if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS and game_state.entity_on_ground) {
+                    game_state.entity_vel[1] = JUMP_VELOCITY;
+                }
+            },
         }
 
         game_state.update(delta_time);
