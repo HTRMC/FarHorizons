@@ -107,7 +107,7 @@ pub const VulkanRenderer = struct {
             .ctx = ctx,
             .surface_state = undefined,
             .render_state = undefined,
-            .mesh_worker = MeshWorker.init(allocator),
+            .mesh_worker = MeshWorker.init(allocator, game_state.world),
             .game_state = game_state,
             .framebuffer_resized = false,
         };
@@ -156,6 +156,8 @@ pub const VulkanRenderer = struct {
         try vk.waitForFences(self.ctx.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
 
         self.pollMeshWorker();
+
+        self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state.entity_pos);
     }
 
     fn pollMeshWorker(self: *VulkanRenderer) void {

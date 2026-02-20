@@ -16,6 +16,7 @@ pub const MeshWorker = struct {
     draw_count: u32,
     thread: ?std.Thread,
     allocator: std.mem.Allocator,
+    world: *const WorldState.World,
 
     pub const State = enum(u8) { idle, working, ready };
 
@@ -29,7 +30,7 @@ pub const MeshWorker = struct {
         draw_count: u32,
     };
 
-    pub fn init(allocator: std.mem.Allocator) MeshWorker {
+    pub fn init(allocator: std.mem.Allocator, world: *const WorldState.World) MeshWorker {
         return .{
             .state = std.atomic.Value(State).init(.idle),
             .vertices = null,
@@ -41,6 +42,7 @@ pub const MeshWorker = struct {
             .draw_count = 0,
             .thread = null,
             .allocator = allocator,
+            .world = world,
         };
     }
 
@@ -90,8 +92,7 @@ pub const MeshWorker = struct {
         const tz = tracy.zone(@src(), "MeshWorker.workerFn");
         defer tz.end();
 
-        const world = WorldState.generateSphereWorld();
-        const mesh = WorldState.generateWorldMesh(self.allocator, &world) catch |err| {
+        const mesh = WorldState.generateWorldMesh(self.allocator, self.world) catch |err| {
             std.log.err("Mesh generation failed: {}", .{err});
             self.state.store(.idle, .release);
             return;

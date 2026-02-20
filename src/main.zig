@@ -75,7 +75,8 @@ pub fn main() !void {
     });
     defer window.deinit();
 
-    var game_state = GameState.init(1280, 720);
+    var game_state = try GameState.init(allocator, 1280, 720);
+    defer game_state.deinit();
 
     var renderer = try Renderer.init(allocator, &window, &VulkanRenderer.vtable, @ptrCast(&game_state));
     defer renderer.deinit();
@@ -166,6 +167,8 @@ pub fn main() !void {
             const speed = input_state.move_speed * delta_time;
             game_state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
         }
+
+        game_state.update(delta_time);
 
         try renderer.beginFrame();
         try renderer.render();

@@ -346,6 +346,55 @@ pub const DebugRenderer = struct {
         std.log.info("Debug line resources created ({} vertices)", .{self.vertex_count});
     }
 
+    pub fn updateVertices(self: *DebugRenderer, device: vk.VkDevice, entity_pos: [3]f32) void {
+        var data: ?*anyopaque = null;
+        vk.mapMemory(device, self.vertex_buffer_memory, 0, DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex), 0, &data) catch return;
+        const vertices: [*]LineVertex = @ptrCast(@alignCast(data));
+
+        var count: u32 = 0;
+
+        // World axis lines (64 units each, from origin)
+        const yellow = [4]f32{ 1.0, 1.0, 0.0, 1.0 };
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 64.0, 0.0, 0.0, .{ 1.0, 0.0, 0.0, 1.0 }); // X red
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 64.0, 0.0, .{ 0.0, 1.0, 0.0, 1.0 }); // Y green
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 }); // Z blue
+
+        // AABB wireframe (12 edges)
+        const half_w: f32 = 0.4;
+        const height: f32 = 1.8;
+        const x0 = entity_pos[0] - half_w;
+        const y0 = entity_pos[1];
+        const z0 = entity_pos[2] - half_w;
+        const x1 = entity_pos[0] + half_w;
+        const y1 = entity_pos[1] + height;
+        const z1 = entity_pos[2] + half_w;
+
+        // Bottom face (4 edges)
+        count = addLine(vertices, count, x0, y0, z0, x1, y0, z0, yellow);
+        count = addLine(vertices, count, x1, y0, z0, x1, y0, z1, yellow);
+        count = addLine(vertices, count, x1, y0, z1, x0, y0, z1, yellow);
+        count = addLine(vertices, count, x0, y0, z1, x0, y0, z0, yellow);
+        // Top face (4 edges)
+        count = addLine(vertices, count, x0, y1, z0, x1, y1, z0, yellow);
+        count = addLine(vertices, count, x1, y1, z0, x1, y1, z1, yellow);
+        count = addLine(vertices, count, x1, y1, z1, x0, y1, z1, yellow);
+        count = addLine(vertices, count, x0, y1, z1, x0, y1, z0, yellow);
+        // Vertical edges (4 edges)
+        count = addLine(vertices, count, x0, y0, z0, x0, y1, z0, yellow);
+        count = addLine(vertices, count, x1, y0, z0, x1, y1, z0, yellow);
+        count = addLine(vertices, count, x1, y0, z1, x1, y1, z1, yellow);
+        count = addLine(vertices, count, x0, y0, z1, x0, y1, z1, yellow);
+
+        vk.unmapMemory(device, self.vertex_buffer_memory);
+        self.vertex_count = count;
+    }
+
+    fn addLine(vertices: [*]LineVertex, count: u32, px0: f32, py0: f32, pz0: f32, px1: f32, py1: f32, pz1: f32, color: [4]f32) u32 {
+        vertices[count] = .{ .px = px0, .py = py0, .pz = pz0, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
+        vertices[count + 1] = .{ .px = px1, .py = py1, .pz = pz1, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
+        return count + 2;
+    }
+
     fn generateChunkOutlines(self: *DebugRenderer, device: vk.VkDevice) void {
         const tz = tracy.zone(@src(), "generateChunkOutlines");
         defer tz.end();
@@ -357,21 +406,9 @@ pub const DebugRenderer = struct {
         var count: u32 = 0;
 
         // World axis lines (64 units each, from origin)
-        // X axis - red
-        vertices[count] = .{ .px = 0.0, .py = 0.0, .pz = 0.0, .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
-        count += 1;
-        vertices[count] = .{ .px = 64.0, .py = 0.0, .pz = 0.0, .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
-        count += 1;
-        // Y axis - green
-        vertices[count] = .{ .px = 0.0, .py = 0.0, .pz = 0.0, .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
-        count += 1;
-        vertices[count] = .{ .px = 0.0, .py = 64.0, .pz = 0.0, .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
-        count += 1;
-        // Z axis - blue
-        vertices[count] = .{ .px = 0.0, .py = 0.0, .pz = 0.0, .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
-        count += 1;
-        vertices[count] = .{ .px = 0.0, .py = 0.0, .pz = 64.0, .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
-        count += 1;
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 64.0, 0.0, 0.0, .{ 1.0, 0.0, 0.0, 1.0 }); // X red
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 64.0, 0.0, .{ 0.0, 1.0, 0.0, 1.0 }); // Y green
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 }); // Z blue
 
         vk.unmapMemory(device, self.vertex_buffer_memory);
         self.vertex_count = count;

@@ -104,14 +104,43 @@ pub const block_properties = struct {
             .grass_block, .dirt, .stone => true,
         };
     }
+    pub fn isSolid(block: BlockType) bool {
+        return block != .air;
+    }
 };
 
 pub const Chunk = struct {
     blocks: [BLOCKS_PER_CHUNK]BlockType,
 };
 
+pub const World = [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk;
+
 pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
     return y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
+}
+
+pub fn getBlock(world: *const World, wx: i32, wy: i32, wz: i32) BlockType {
+    // World-to-voxel: vx = wx + 64, vy = wy + 16, vz = wz + 64
+    const vx = wx + @as(i32, WORLD_SIZE_X / 2);
+    const vy = wy + @as(i32, WORLD_SIZE_Y / 2);
+    const vz = wz + @as(i32, WORLD_SIZE_Z / 2);
+
+    if (vx < 0 or vx >= WORLD_SIZE_X or vy < 0 or vy >= WORLD_SIZE_Y or vz < 0 or vz >= WORLD_SIZE_Z) {
+        return .air;
+    }
+
+    const uvx: usize = @intCast(vx);
+    const uvy: usize = @intCast(vy);
+    const uvz: usize = @intCast(vz);
+
+    const cx = uvx / CHUNK_SIZE;
+    const cy = uvy / CHUNK_SIZE;
+    const cz = uvz / CHUNK_SIZE;
+    const lx = uvx % CHUNK_SIZE;
+    const ly = uvy % CHUNK_SIZE;
+    const lz = uvz % CHUNK_SIZE;
+
+    return world[cy][cz][cx].blocks[chunkIndex(lx, ly, lz)];
 }
 
 fn isSolid(wx: f32, wy: f32, wz: f32, half_x: f32, half_z: f32, radius_sq: f32) bool {
@@ -130,12 +159,11 @@ fn isSolid(wx: f32, wy: f32, wz: f32, half_x: f32, half_z: f32, radius_sq: f32) 
     return false;
 }
 
-pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk {
+pub fn generateSphereWorld(out: *World) void {
     const half_x = @as(f32, WORLD_SIZE_X) / 2.0;
     const half_y = @as(f32, WORLD_SIZE_Y) / 2.0;
     const half_z = @as(f32, WORLD_SIZE_Z) / 2.0;
     const radius_sq = 15.5 * 15.5;
-    var world: [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk = undefined;
 
     // First pass: fill solid blocks as glass
     for (0..WORLD_CHUNKS_Y) |cy| {
@@ -157,7 +185,7 @@ pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chu
                     }
                 }
 
-                world[cy][cz][cx] = .{ .blocks = blocks };
+                out[cy][cz][cx] = .{ .blocks = blocks };
             }
         }
     }
@@ -174,9 +202,9 @@ pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chu
                     var wy: i32 = WORLD_SIZE_Y - 1;
                     while (wy >= 0) : (wy -= 1) {
                         const y: usize = @intCast(wy);
-                        const cy = y / CHUNK_SIZE;
+                        const cy2 = y / CHUNK_SIZE;
                         const ly = y % CHUNK_SIZE;
-                        const block = &world[cy][cz][cx].blocks[chunkIndex(bx, ly, bz)];
+                        const block = &out[cy2][cz][cx].blocks[chunkIndex(bx, ly, bz)];
 
                         if (block.* == .air) {
                             depth = 0;
@@ -195,7 +223,12 @@ pub fn generateSphereWorld() [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chu
         }
     }
 
-    return world;
+    // Place a test block at world origin (0, 0, 0)
+    const ox = WORLD_SIZE_X / 2;
+    const oy = WORLD_SIZE_Y / 2;
+    const oz = WORLD_SIZE_Z / 2;
+    out[oy / CHUNK_SIZE][oz / CHUNK_SIZE][ox / CHUNK_SIZE]
+        .blocks[chunkIndex(ox % CHUNK_SIZE, oy % CHUNK_SIZE, oz % CHUNK_SIZE)] = .glass;
 }
 
 pub const MeshResult = struct {
@@ -210,7 +243,7 @@ pub const MeshResult = struct {
 
 pub fn generateWorldMesh(
     allocator: std.mem.Allocator,
-    world: *const [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk,
+    world: *const World,
 ) !MeshResult {
     const tz = tracy.zone(@src(), "generateWorldMesh");
     defer tz.end();
