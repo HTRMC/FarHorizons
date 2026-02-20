@@ -184,6 +184,11 @@ pub const VulkanRenderer = struct {
         self.pollMeshWorker();
 
         self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
+
+        if (self.game_state.world_dirty and self.mesh_worker.state.load(.acquire) == .idle) {
+            self.game_state.world_dirty = false;
+            self.mesh_worker.start();
+        }
     }
 
     fn pollMeshWorker(self: *VulkanRenderer) void {
@@ -477,8 +482,21 @@ pub const VulkanRenderer = struct {
         // Draw world chunks
         self.render_state.world_renderer.record(command_buffer, &mvp.m);
 
-        // Draw debug lines
-        self.render_state.debug_renderer.recordDraw(command_buffer, &mvp.m);
+        // Draw debug lines with view-space shrink (Minecraft's depth trick):
+        // Compute P * VIEW_SCALE * V so lines are pulled toward camera in view-space.
+        const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
+        const view_scale = zlm.Mat4{
+            .m = .{
+                VIEW_SHRINK, 0, 0, 0,
+                0, VIEW_SHRINK, 0, 0,
+                0, 0, VIEW_SHRINK, 0,
+                0, 0, 0, 1,
+            },
+        };
+        const view = self.game_state.camera.getViewMatrix();
+        const proj = self.game_state.camera.getProjectionMatrix();
+        const debug_mvp = zlm.Mat4.mul(proj, zlm.Mat4.mul(view_scale, view));
+        self.render_state.debug_renderer.recordDraw(command_buffer, &debug_mvp.m);
 
         vk.cmdEndRendering(command_buffer);
 

@@ -21,6 +21,10 @@ pub const TOTAL_WORLD_CHUNKS = WORLD_CHUNKS_X * WORLD_CHUNKS_Y * WORLD_CHUNKS_Z;
 pub const MAX_WORLD_VERTEX_COUNT = TOTAL_WORLD_CHUNKS * CHUNK_VERTEX_COUNT;
 pub const MAX_WORLD_INDEX_COUNT = TOTAL_WORLD_CHUNKS * CHUNK_INDEX_COUNT;
 
+// Persistent GPU buffer capacities (practical upper bound, not theoretical max)
+pub const MESH_BUFFER_MAX_VERTICES = 2 * 1024 * 1024; // 2M verts (~56 MB)
+pub const MESH_BUFFER_MAX_INDICES = 3 * 1024 * 1024; // 3M indices (~12 MB)
+
 // Per-face vertex template (unit cube with min corner at origin)
 pub const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }{
     // Front face (z = 1)
@@ -117,6 +121,21 @@ pub const World = [WORLD_CHUNKS_Y][WORLD_CHUNKS_Z][WORLD_CHUNKS_X]Chunk;
 
 pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
     return y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
+}
+
+pub fn setBlock(world: *World, wx: i32, wy: i32, wz: i32, block: BlockType) void {
+    const vx = wx + @as(i32, WORLD_SIZE_X / 2);
+    const vy = wy + @as(i32, WORLD_SIZE_Y / 2);
+    const vz = wz + @as(i32, WORLD_SIZE_Z / 2);
+
+    if (vx < 0 or vx >= WORLD_SIZE_X or vy < 0 or vy >= WORLD_SIZE_Y or vz < 0 or vz >= WORLD_SIZE_Z) return;
+
+    const uvx: usize = @intCast(vx);
+    const uvy: usize = @intCast(vy);
+    const uvz: usize = @intCast(vz);
+
+    world[uvy / CHUNK_SIZE][uvz / CHUNK_SIZE][uvx / CHUNK_SIZE]
+        .blocks[chunkIndex(uvx % CHUNK_SIZE, uvy % CHUNK_SIZE, uvz % CHUNK_SIZE)] = block;
 }
 
 pub fn getBlock(world: *const World, wx: i32, wy: i32, wz: i32) BlockType {

@@ -67,6 +67,7 @@ pub const WorldRenderer = struct {
         }
 
         try self.createIndirectBuffer(ctx);
+        try self.createPersistentMeshBuffers(ctx);
 
         return self;
     }
@@ -85,19 +86,13 @@ pub const WorldRenderer = struct {
         vk.destroyPipeline(device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
 
-        // Mesh buffers
-        if (self.vertex_buffer != null) {
-            vk.destroyBuffer(device, self.vertex_buffer, null);
-            vk.freeMemory(device, self.vertex_buffer_memory, null);
-        }
-        if (self.index_buffer != null) {
-            vk.destroyBuffer(device, self.index_buffer, null);
-            vk.freeMemory(device, self.index_buffer_memory, null);
-        }
-        if (self.chunk_positions_buffer != null) {
-            vk.destroyBuffer(device, self.chunk_positions_buffer, null);
-            vk.freeMemory(device, self.chunk_positions_buffer_memory, null);
-        }
+        // Mesh buffers (persistent, always allocated)
+        vk.destroyBuffer(device, self.vertex_buffer, null);
+        vk.freeMemory(device, self.vertex_buffer_memory, null);
+        vk.destroyBuffer(device, self.index_buffer, null);
+        vk.freeMemory(device, self.index_buffer_memory, null);
+        vk.destroyBuffer(device, self.chunk_positions_buffer, null);
+        vk.freeMemory(device, self.chunk_positions_buffer_memory, null);
 
         // Texture manager
         self.texture_manager.deinit(device);
@@ -117,21 +112,10 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "uploadChunkMesh");
         defer tz.end();
 
-        // Free old buffers if re-uploading
-        if (self.vertex_buffer != null) {
-            vk.destroyBuffer(ctx.device, self.vertex_buffer, null);
-            vk.freeMemory(ctx.device, self.vertex_buffer_memory, null);
-        }
-        if (self.index_buffer != null) {
-            vk.destroyBuffer(ctx.device, self.index_buffer, null);
-            vk.freeMemory(ctx.device, self.index_buffer_memory, null);
-        }
-        if (self.chunk_positions_buffer != null) {
-            vk.destroyBuffer(ctx.device, self.chunk_positions_buffer, null);
-            vk.freeMemory(ctx.device, self.chunk_positions_buffer_memory, null);
-        }
+        std.debug.assert(vertex_count <= WorldState.MESH_BUFFER_MAX_VERTICES);
+        std.debug.assert(index_count <= WorldState.MESH_BUFFER_MAX_INDICES);
 
-        // Create vertex buffer via staging
+        // Copy vertices into persistent vertex_buffer via staging
         const vb_size: vk.VkDeviceSize = @intCast(@as(u64, vertex_count) * @sizeOf(GpuVertex));
         {
             var staging_buffer: vk.VkBuffer = undefined;
@@ -151,21 +135,12 @@ pub const WorldRenderer = struct {
             @memcpy(dst[0..vertex_count], vertices[0..vertex_count]);
             vk.unmapMemory(ctx.device, staging_memory);
 
-            try vk_utils.createBuffer(
-                ctx,
-                vb_size,
-                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                &self.vertex_buffer,
-                &self.vertex_buffer_memory,
-            );
-
             try vk_utils.copyBuffer(ctx, staging_buffer, self.vertex_buffer, vb_size);
             vk.destroyBuffer(ctx.device, staging_buffer, null);
             vk.freeMemory(ctx.device, staging_memory, null);
         }
 
-        // Create index buffer via staging
+        // Copy indices into persistent index_buffer via staging
         const ib_size: vk.VkDeviceSize = @intCast(@as(u64, index_count) * @sizeOf(u32));
         {
             var staging_buffer: vk.VkBuffer = undefined;
@@ -185,32 +160,14 @@ pub const WorldRenderer = struct {
             @memcpy(dst[0..index_count], indices[0..index_count]);
             vk.unmapMemory(ctx.device, staging_memory);
 
-            try vk_utils.createBuffer(
-                ctx,
-                ib_size,
-                vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-                vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                &self.index_buffer,
-                &self.index_buffer_memory,
-            );
-
             try vk_utils.copyBuffer(ctx, staging_buffer, self.index_buffer, ib_size);
             vk.destroyBuffer(ctx.device, staging_buffer, null);
             vk.freeMemory(ctx.device, staging_memory, null);
         }
 
-        // Create chunk positions buffer (host-visible, small data)
-        const cp_size: vk.VkDeviceSize = @intCast(@as(u64, draw_count) * @sizeOf([4]f32));
+        // Write chunk positions into persistent host-visible buffer
         {
-            try vk_utils.createBuffer(
-                ctx,
-                cp_size,
-                vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &self.chunk_positions_buffer,
-                &self.chunk_positions_buffer_memory,
-            );
-
+            const cp_size: vk.VkDeviceSize = @intCast(@as(u64, draw_count) * @sizeOf([4]f32));
             var data: ?*anyopaque = null;
             try vk.mapMemory(ctx.device, self.chunk_positions_buffer_memory, 0, cp_size, 0, &data);
             const dst: [*][4]f32 = @ptrCast(@alignCast(data));
@@ -238,12 +195,6 @@ pub const WorldRenderer = struct {
         }
 
         self.draw_count = draw_count;
-
-        // Update binding 0 (vertex SSBO) in bindless descriptor set
-        self.texture_manager.updateVertexDescriptor(ctx, self.vertex_buffer, vb_size);
-
-        // Update binding 2 (chunk positions SSBO)
-        self.texture_manager.updateChunkPositions(ctx, self.chunk_positions_buffer, cp_size);
 
         std.log.info("Chunk mesh uploaded ({} vertices, {} indices, {} draw commands)", .{ vertex_count, index_count, draw_count });
     }
@@ -571,5 +522,50 @@ pub const WorldRenderer = struct {
         vk.unmapMemory(ctx.device, self.indirect_count_buffer_memory);
 
         std.log.info("Indirect draw buffers created (max {} draw commands)", .{WorldState.TOTAL_WORLD_CHUNKS});
+    }
+
+    fn createPersistentMeshBuffers(self: *WorldRenderer, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createPersistentMeshBuffers");
+        defer tz.end();
+
+        const vb_capacity: vk.VkDeviceSize = WorldState.MESH_BUFFER_MAX_VERTICES * @sizeOf(GpuVertex);
+        try vk_utils.createBuffer(
+            ctx,
+            vb_capacity,
+            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.vertex_buffer,
+            &self.vertex_buffer_memory,
+        );
+
+        const ib_capacity: vk.VkDeviceSize = WorldState.MESH_BUFFER_MAX_INDICES * @sizeOf(u32);
+        try vk_utils.createBuffer(
+            ctx,
+            ib_capacity,
+            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.index_buffer,
+            &self.index_buffer_memory,
+        );
+
+        const cp_capacity: vk.VkDeviceSize = WorldState.TOTAL_WORLD_CHUNKS * @sizeOf([4]f32);
+        try vk_utils.createBuffer(
+            ctx,
+            cp_capacity,
+            vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &self.chunk_positions_buffer,
+            &self.chunk_positions_buffer_memory,
+        );
+
+        // Write descriptors once — buffer handles never change
+        self.texture_manager.updateVertexDescriptor(ctx, self.vertex_buffer, vb_capacity);
+        self.texture_manager.updateChunkPositions(ctx, self.chunk_positions_buffer, cp_capacity);
+
+        std.log.info("Persistent mesh buffers created (max {}V / {}I, {:.1} MB)", .{
+            WorldState.MESH_BUFFER_MAX_VERTICES,
+            WorldState.MESH_BUFFER_MAX_INDICES,
+            @as(f64, @floatFromInt(vb_capacity + ib_capacity + cp_capacity)) / (1024.0 * 1024.0),
+        });
     }
 };

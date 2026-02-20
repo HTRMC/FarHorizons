@@ -47,6 +47,10 @@ pub const MeshWorker = struct {
     }
 
     pub fn start(self: *MeshWorker) void {
+        if (self.thread) |t| {
+            t.join();
+            self.thread = null;
+        }
         self.state.store(.working, .release);
         self.thread = std.Thread.spawn(.{}, workerFn, .{self}) catch |err| {
             std.log.err("Failed to spawn mesh worker thread: {}", .{err});

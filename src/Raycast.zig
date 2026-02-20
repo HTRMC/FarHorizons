@@ -4,7 +4,25 @@ const WorldState = @import("world/WorldState.zig");
 
 const MAX_RANGE: f32 = 5.0;
 
-pub const Direction = enum { west, east, down, up, north, south };
+pub const Direction = enum {
+    west,
+    east,
+    down,
+    up,
+    north,
+    south,
+
+    pub fn normal(self: Direction) [3]i32 {
+        return switch (self) {
+            .west => .{ -1, 0, 0 },
+            .east => .{ 1, 0, 0 },
+            .down => .{ 0, -1, 0 },
+            .up => .{ 0, 1, 0 },
+            .north => .{ 0, 0, -1 },
+            .south => .{ 0, 0, 1 },
+        };
+    }
+};
 
 pub const BlockHitResult = struct {
     block_pos: [3]i32,

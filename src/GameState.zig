@@ -19,6 +19,7 @@ entity_on_ground: bool,
 mode: MovementMode,
 input_move: [3]f32,
 hit_result: ?Raycast.BlockHitResult,
+world_dirty: bool,
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     const world = try allocator.create(WorldState.World);
@@ -34,6 +35,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
         .mode = .flying,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .hit_result = null,
+        .world_dirty = false,
     };
 }
 
@@ -76,5 +78,24 @@ pub fn update(self: *GameState, dt: f32) void {
         );
     }
 
+    self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
+}
+
+pub fn breakBlock(self: *GameState) void {
+    const hit = self.hit_result orelse return;
+    WorldState.setBlock(self.world, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], .air);
+    self.world_dirty = true;
+    self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
+}
+
+pub fn placeBlock(self: *GameState) void {
+    const hit = self.hit_result orelse return;
+    const n = hit.direction.normal();
+    const px = hit.block_pos[0] + n[0];
+    const py = hit.block_pos[1] + n[1];
+    const pz = hit.block_pos[2] + n[2];
+    if (WorldState.block_properties.isSolid(WorldState.getBlock(self.world, px, py, pz))) return;
+    WorldState.setBlock(self.world, px, py, pz, .grass_block);
+    self.world_dirty = true;
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }

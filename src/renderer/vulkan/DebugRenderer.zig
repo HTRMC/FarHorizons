@@ -390,13 +390,12 @@ pub const DebugRenderer = struct {
 
         // Block outline (12 edges of targeted block)
         if (game_state.hit_result) |hit| {
-            const e: f32 = 0.002;
-            const bx0: f32 = @as(f32, @floatFromInt(hit.block_pos[0])) - e;
-            const by0: f32 = @as(f32, @floatFromInt(hit.block_pos[1])) - e;
-            const bz0: f32 = @as(f32, @floatFromInt(hit.block_pos[2])) - e;
-            const bx1: f32 = @as(f32, @floatFromInt(hit.block_pos[0])) + 1.0 + e;
-            const by1: f32 = @as(f32, @floatFromInt(hit.block_pos[1])) + 1.0 + e;
-            const bz1: f32 = @as(f32, @floatFromInt(hit.block_pos[2])) + 1.0 + e;
+            const bx0: f32 = @floatFromInt(hit.block_pos[0]);
+            const by0: f32 = @floatFromInt(hit.block_pos[1]);
+            const bz0: f32 = @floatFromInt(hit.block_pos[2]);
+            const bx1: f32 = bx0 + 1.0;
+            const by1: f32 = by0 + 1.0;
+            const bz1: f32 = bz0 + 1.0;
             const outline_color = [4]f32{ 0.1, 0.1, 0.1, 1.0 };
 
             // Bottom face (4 edges)

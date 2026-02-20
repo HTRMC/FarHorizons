@@ -57,13 +57,19 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
 
 fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods: c_int) callconv(.c) void {
     _ = mods;
-    if (button != glfw.GLFW_MOUSE_BUTTON_RIGHT) return;
+    if (action != glfw.GLFW_PRESS) return;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
 
-    if (action == glfw.GLFW_PRESS and !input_state.mouse_captured) {
-        input_state.mouse_captured = true;
-        input_state.first_mouse = true;
-        glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+    if (button == glfw.GLFW_MOUSE_BUTTON_LEFT and input_state.mouse_captured) {
+        input_state.game_state.breakBlock();
+    } else if (button == glfw.GLFW_MOUSE_BUTTON_RIGHT) {
+        if (!input_state.mouse_captured) {
+            input_state.mouse_captured = true;
+            input_state.first_mouse = true;
+            glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+        } else {
+            input_state.game_state.placeBlock();
+        }
     }
 }
 
