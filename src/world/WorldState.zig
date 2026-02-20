@@ -143,44 +143,33 @@ pub fn getBlock(world: *const World, wx: i32, wy: i32, wz: i32) BlockType {
     return world[cy][cz][cx].blocks[chunkIndex(lx, ly, lz)];
 }
 
-fn isSolid(wx: f32, wy: f32, wz: f32, half_x: f32, half_z: f32, radius_sq: f32) bool {
-    for (0..4) |gz| {
-        for (0..4) |gx| {
-            const center_x = @as(f32, @floatFromInt(gx * 32 + 16)) - half_x;
-            const center_z = @as(f32, @floatFromInt(gz * 32 + 16)) - half_z;
-            const dx = wx - center_x;
-            const dy = wy;
-            const dz = wz - center_z;
-            if (dx * dx + dy * dy + dz * dz <= radius_sq) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 pub fn generateSphereWorld(out: *World) void {
-    const half_x = @as(f32, WORLD_SIZE_X) / 2.0;
-    const half_y = @as(f32, WORLD_SIZE_Y) / 2.0;
-    const half_z = @as(f32, WORLD_SIZE_Z) / 2.0;
-    const radius_sq = 15.5 * 15.5;
+    const half_y: i32 = WORLD_SIZE_Y / 2;
 
-    // First pass: fill solid blocks as glass
+    // Flat terrain: surface at world Y=0
+    //   Y=0: grass, Y=-1..-2: dirt, Y=-3..-7: stone
     for (0..WORLD_CHUNKS_Y) |cy| {
         for (0..WORLD_CHUNKS_Z) |cz| {
             for (0..WORLD_CHUNKS_X) |cx| {
                 var blocks: [BLOCKS_PER_CHUNK]BlockType = .{.air} ** BLOCKS_PER_CHUNK;
 
                 for (0..CHUNK_SIZE) |y| {
+                    const wy: i32 = @as(i32, @intCast(cy * CHUNK_SIZE + y)) - half_y;
+
+                    const block_type: BlockType = if (wy == 0)
+                        .grass_block
+                    else if (wy >= -2 and wy <= -1)
+                        .dirt
+                    else if (wy >= -7 and wy <= -3)
+                        .stone
+                    else
+                        .air;
+
+                    if (block_type == .air) continue;
+
                     for (0..CHUNK_SIZE) |z| {
                         for (0..CHUNK_SIZE) |x| {
-                            const wx: f32 = @as(f32, @floatFromInt(cx * CHUNK_SIZE + x)) - half_x;
-                            const wy: f32 = @as(f32, @floatFromInt(cy * CHUNK_SIZE + y)) - half_y;
-                            const wz: f32 = @as(f32, @floatFromInt(cz * CHUNK_SIZE + z)) - half_z;
-
-                            if (isSolid(wx, wy, wz, half_x, half_z, radius_sq)) {
-                                blocks[chunkIndex(x, y, z)] = .glass;
-                            }
+                            blocks[chunkIndex(x, y, z)] = block_type;
                         }
                     }
                 }
@@ -189,46 +178,6 @@ pub fn generateSphereWorld(out: *World) void {
             }
         }
     }
-
-    // Second pass: assign surface layers per column
-    // For each (wx, wz) column, scan top-down to find surface, then:
-    //   depth 0 = grass_block, depth 1 = dirt, depth 2..4 = stone, rest = glass
-    for (0..WORLD_CHUNKS_X) |cx| {
-        for (0..WORLD_CHUNKS_Z) |cz| {
-            for (0..CHUNK_SIZE) |bx| {
-                for (0..CHUNK_SIZE) |bz| {
-                    var depth: u32 = 0;
-                    // Scan from top of world downward
-                    var wy: i32 = WORLD_SIZE_Y - 1;
-                    while (wy >= 0) : (wy -= 1) {
-                        const y: usize = @intCast(wy);
-                        const cy2 = y / CHUNK_SIZE;
-                        const ly = y % CHUNK_SIZE;
-                        const block = &out[cy2][cz][cx].blocks[chunkIndex(bx, ly, bz)];
-
-                        if (block.* == .air) {
-                            depth = 0;
-                        } else {
-                            block.* = switch (depth) {
-                                0 => .grass_block,
-                                1 => .dirt,
-                                2, 3, 4 => .stone,
-                                else => .glass,
-                            };
-                            depth += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Place a test block at world origin (0, 0, 0)
-    const ox = WORLD_SIZE_X / 2;
-    const oy = WORLD_SIZE_Y / 2;
-    const oz = WORLD_SIZE_Z / 2;
-    out[oy / CHUNK_SIZE][oz / CHUNK_SIZE][ox / CHUNK_SIZE]
-        .blocks[chunkIndex(ox % CHUNK_SIZE, oy % CHUNK_SIZE, oz % CHUNK_SIZE)] = .glass;
 }
 
 pub const MeshResult = struct {
