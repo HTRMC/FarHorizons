@@ -55,7 +55,7 @@ pub const DebugRenderer = struct {
         };
 
         try self.createResources(ctx);
-        try self.createPipeline(shader_compiler, ctx.device, swapchain_format);
+        try self.createPipeline(shader_compiler, ctx, swapchain_format);
         try self.createComputePipeline(shader_compiler, ctx);
 
         return self;
@@ -414,7 +414,8 @@ pub const DebugRenderer = struct {
         self.vertex_count = count;
     }
 
-    fn createPipeline(self: *DebugRenderer, shader_compiler: *ShaderCompiler, device: vk.VkDevice, swapchain_format: vk.VkFormat) !void {
+    fn createPipeline(self: *DebugRenderer, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !void {
+        const device = ctx.device;
         const tz = tracy.zone(@src(), "createDebugLinePipeline");
         defer tz.end();
 
@@ -621,7 +622,7 @@ pub const DebugRenderer = struct {
         };
 
         var pipelines: [1]vk.VkPipeline = undefined;
-        try vk.createGraphicsPipelines(device, null, 1, &[_]vk.VkGraphicsPipelineCreateInfo{pipeline_info}, null, &pipelines);
+        try vk.createGraphicsPipelines(device, ctx.pipeline_cache, 1, &[_]vk.VkGraphicsPipelineCreateInfo{pipeline_info}, null, &pipelines);
         self.pipeline = pipelines[0];
 
         std.log.info("Debug line graphics pipeline created", .{});
@@ -684,7 +685,7 @@ pub const DebugRenderer = struct {
         };
 
         var pipelines: [1]vk.VkPipeline = undefined;
-        try vk.createComputePipelines(ctx.device, null, 1, &[_]vk.VkComputePipelineCreateInfo{compute_pipeline_info}, null, &pipelines);
+        try vk.createComputePipelines(ctx.device, ctx.pipeline_cache, 1, &[_]vk.VkComputePipelineCreateInfo{compute_pipeline_info}, null, &pipelines);
         self.compute_pipeline = pipelines[0];
 
         std.log.info("Debug line compute pipeline created", .{});

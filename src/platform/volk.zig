@@ -36,6 +36,7 @@ pub const VkAttachmentDescription = c.VkAttachmentDescription;
 pub const VkAttachmentReference = c.VkAttachmentReference;
 pub const VkSubpassDescription = c.VkSubpassDescription;
 pub const VkSubpassDependency = c.VkSubpassDependency;
+pub const VkPipelineCache = c.VkPipelineCache;
 pub const VkCommandPool = c.VkCommandPool;
 pub const VkCommandBuffer = c.VkCommandBuffer;
 pub const VkSemaphore = c.VkSemaphore;
@@ -1373,4 +1374,37 @@ pub fn cmdSetScissor(
     if (c.vkCmdSetScissor) |fn_ptr| {
         fn_ptr(command_buffer, first_scissor, scissor_count, scissors);
     }
+}
+
+pub fn createPipelineCache(
+    device: VkDevice,
+    create_info: *const c.VkPipelineCacheCreateInfo,
+    allocator: ?*const VkAllocationCallbacks,
+) VulkanError!VkPipelineCache {
+    const fn_ptr = c.vkCreatePipelineCache orelse return error.FunctionNotLoaded;
+    var pipeline_cache: VkPipelineCache = undefined;
+    const result = fn_ptr(device, create_info, allocator, &pipeline_cache);
+    try vkResultToError(result);
+    return pipeline_cache;
+}
+
+pub fn destroyPipelineCache(
+    device: VkDevice,
+    pipeline_cache: VkPipelineCache,
+    allocator: ?*const VkAllocationCallbacks,
+) void {
+    if (c.vkDestroyPipelineCache) |fn_ptr| {
+        fn_ptr(device, pipeline_cache, allocator);
+    }
+}
+
+pub fn getPipelineCacheData(
+    device: VkDevice,
+    pipeline_cache: VkPipelineCache,
+    data_size: *usize,
+    data: ?*anyopaque,
+) VulkanError!void {
+    const fn_ptr = c.vkGetPipelineCacheData orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, pipeline_cache, data_size, data);
+    try vkResultToError(result);
 }

@@ -10,8 +10,13 @@ const RenderState = render_state_mod.RenderState;
 const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
+const app_config = @import("../../app_config.zig");
 const zlm = @import("zlm");
 const tracy = @import("../../platform/tracy.zig");
+const Io = std.Io;
+const Dir = Io.Dir;
+
+const sep = std.fs.path.sep_str;
 
 const enable_validation_layers = @import("builtin").mode == .Debug;
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
@@ -51,6 +56,7 @@ pub const VulkanRenderer = struct {
     ctx: VulkanContext,
     surface_state: SurfaceState,
     render_state: RenderState,
+    pipeline_cache_path: []const u8,
     mesh_worker: MeshWorker,
     game_state: *GameState,
     framebuffer_resized: bool,
@@ -63,6 +69,17 @@ pub const VulkanRenderer = struct {
         errdefer allocator.destroy(self);
 
         try vk.initialize();
+
+        // Build pipeline cache path
+        const app_data_path = try app_config.getAppDataPath(allocator);
+        defer allocator.free(app_data_path);
+        const pipeline_cache_path = try std.fmt.allocPrint(allocator, "{s}" ++ sep ++ ".pipeline_cache", .{app_data_path});
+        errdefer allocator.free(pipeline_cache_path);
+
+        // Read pipeline cache file (synchronous, small file)
+        const io = Io.Threaded.global_single_threaded.io();
+        const cache_data = Dir.readFileAlloc(.cwd(), io, pipeline_cache_path, allocator, .unlimited) catch null;
+        defer if (cache_data) |d| allocator.free(d);
 
         const instance_result = try createInstance(allocator);
         const instance = instance_result.instance;
@@ -89,12 +106,16 @@ pub const VulkanRenderer = struct {
         var graphics_queue: vk.VkQueue = undefined;
         vk.getDeviceQueue(device, device_info.queue_family_index, 0, &graphics_queue);
 
+        // Create pipeline cache
+        const pipeline_cache = try createPipelineCache(device, cache_data);
+
         const ctx = VulkanContext{
             .device = device,
             .physical_device = device_info.physical_device,
             .graphics_queue = graphics_queue,
             .queue_family_index = device_info.queue_family_index,
             .command_pool = undefined,
+            .pipeline_cache = pipeline_cache,
         };
 
         self.* = .{
@@ -105,6 +126,7 @@ pub const VulkanRenderer = struct {
             .validation_enabled = validation_enabled,
             .surface = surface,
             .ctx = ctx,
+            .pipeline_cache_path = pipeline_cache_path,
             .surface_state = undefined,
             .render_state = undefined,
             .mesh_worker = MeshWorker.init(allocator, game_state.world),
@@ -135,6 +157,10 @@ pub const VulkanRenderer = struct {
         self.render_state.deinit(self.ctx.device);
         vk.destroyCommandPool(self.ctx.device, self.ctx.command_pool, null);
         self.surface_state.deinit(self.allocator, self.ctx.device);
+
+        self.savePipelineCache();
+        vk.destroyPipelineCache(self.ctx.device, self.ctx.pipeline_cache, null);
+        self.allocator.free(self.pipeline_cache_path);
 
         vk.destroySurfaceKHR(self.instance, self.surface, null);
         vk.destroyDevice(self.ctx.device, null);
@@ -490,6 +516,58 @@ pub const VulkanRenderer = struct {
         );
 
         try vk.endCommandBuffer(command_buffer);
+    }
+
+    fn createPipelineCache(device: vk.VkDevice, cache_data: ?[]const u8) !vk.VkPipelineCache {
+        const create_info = vk.c.VkPipelineCacheCreateInfo{
+            .sType = vk.c.VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .initialDataSize = if (cache_data) |d| d.len else 0,
+            .pInitialData = if (cache_data) |d| d.ptr else null,
+        };
+
+        const cache = try vk.createPipelineCache(device, &create_info, null);
+
+        if (cache_data) |d| {
+            std.log.info("Pipeline cache: loaded {} bytes from disk", .{d.len});
+        } else {
+            std.log.info("Pipeline cache: created empty", .{});
+        }
+
+        return cache;
+    }
+
+    fn savePipelineCache(self: *VulkanRenderer) void {
+        // Query cache data size
+        var data_size: usize = 0;
+        vk.getPipelineCacheData(self.ctx.device, self.ctx.pipeline_cache, &data_size, null) catch {
+            std.log.warn("Pipeline cache: failed to query size", .{});
+            return;
+        };
+
+        if (data_size == 0) return;
+
+        // Allocate and retrieve cache data
+        const data = self.allocator.alloc(u8, data_size) catch {
+            std.log.warn("Pipeline cache: failed to allocate {} bytes", .{data_size});
+            return;
+        };
+        defer self.allocator.free(data);
+
+        vk.getPipelineCacheData(self.ctx.device, self.ctx.pipeline_cache, &data_size, data.ptr) catch {
+            std.log.warn("Pipeline cache: failed to retrieve data", .{});
+            return;
+        };
+
+        // Write to disk
+        const io = Io.Threaded.global_single_threaded.io();
+        Dir.writeFile(.cwd(), io, .{ .sub_path = self.pipeline_cache_path, .data = data[0..data_size] }) catch {
+            std.log.warn("Pipeline cache: failed to write to disk", .{});
+            return;
+        };
+
+        std.log.info("Pipeline cache: saved {} bytes to disk", .{data_size});
     }
 
     fn createCommandPool(self: *VulkanRenderer) !void {

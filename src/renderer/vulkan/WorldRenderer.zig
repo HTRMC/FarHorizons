@@ -60,7 +60,7 @@ pub const WorldRenderer = struct {
             .draw_count = 0,
         };
 
-        try self.createGraphicsPipeline(shader_compiler, ctx.device, swapchain_format, texture_manager.bindless_descriptor_set_layout);
+        try self.createGraphicsPipeline(shader_compiler, ctx, swapchain_format, texture_manager.bindless_descriptor_set_layout);
         errdefer {
             vk.destroyPipeline(ctx.device, self.graphics_pipeline, null);
             vk.destroyPipelineLayout(ctx.device, self.pipeline_layout, null);
@@ -289,10 +289,11 @@ pub const WorldRenderer = struct {
     fn createGraphicsPipeline(
         self: *WorldRenderer,
         shader_compiler: *ShaderCompiler,
-        device: vk.VkDevice,
+        ctx: *const VulkanContext,
         swapchain_format: vk.VkFormat,
         bindless_descriptor_set_layout: vk.VkDescriptorSetLayout,
     ) !void {
+        const device = ctx.device;
         const tz = tracy.zone(@src(), "createGraphicsPipeline");
         defer tz.end();
 
@@ -501,7 +502,7 @@ pub const WorldRenderer = struct {
 
         const pipeline_infos = &[_]vk.VkGraphicsPipelineCreateInfo{pipeline_info};
         var pipelines: [1]vk.VkPipeline = undefined;
-        try vk.createGraphicsPipelines(device, null, 1, pipeline_infos, null, &pipelines);
+        try vk.createGraphicsPipelines(device, ctx.pipeline_cache, 1, pipeline_infos, null, &pipelines);
         self.graphics_pipeline = pipelines[0];
 
         std.log.info("Graphics pipeline created", .{});

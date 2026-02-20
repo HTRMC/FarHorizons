@@ -6,4 +6,5 @@ pub const VulkanContext = struct {
     graphics_queue: vk.VkQueue,
     queue_family_index: u32,
     command_pool: vk.VkCommandPool,
+    pipeline_cache: vk.VkPipelineCache,
 };
