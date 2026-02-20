@@ -8,6 +8,8 @@ const types = @import("types.zig");
 const LineVertex = types.LineVertex;
 const tracy = @import("../../platform/tracy.zig");
 const zlm = @import("zlm");
+const GameState = @import("../../GameState.zig");
+const Raycast = @import("../../Raycast.zig");
 
 const DEBUG_LINE_MAX_VERTICES = 16384;
 
@@ -346,7 +348,7 @@ pub const DebugRenderer = struct {
         std.log.info("Debug line resources created ({} vertices)", .{self.vertex_count});
     }
 
-    pub fn updateVertices(self: *DebugRenderer, device: vk.VkDevice, entity_pos: [3]f32) void {
+    pub fn updateVertices(self: *DebugRenderer, device: vk.VkDevice, game_state: *const GameState) void {
         var data: ?*anyopaque = null;
         vk.mapMemory(device, self.vertex_buffer_memory, 0, DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex), 0, &data) catch return;
         const vertices: [*]LineVertex = @ptrCast(@alignCast(data));
@@ -360,6 +362,7 @@ pub const DebugRenderer = struct {
         count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 }); // Z blue
 
         // AABB wireframe (12 edges)
+        const entity_pos = game_state.entity_pos;
         const half_w: f32 = 0.4;
         const height: f32 = 1.8;
         const x0 = entity_pos[0] - half_w;
@@ -384,6 +387,34 @@ pub const DebugRenderer = struct {
         count = addLine(vertices, count, x1, y0, z0, x1, y1, z0, yellow);
         count = addLine(vertices, count, x1, y0, z1, x1, y1, z1, yellow);
         count = addLine(vertices, count, x0, y0, z1, x0, y1, z1, yellow);
+
+        // Block outline (12 edges of targeted block)
+        if (game_state.hit_result) |hit| {
+            const e: f32 = 0.002;
+            const bx0: f32 = @as(f32, @floatFromInt(hit.block_pos[0])) - e;
+            const by0: f32 = @as(f32, @floatFromInt(hit.block_pos[1])) - e;
+            const bz0: f32 = @as(f32, @floatFromInt(hit.block_pos[2])) - e;
+            const bx1: f32 = @as(f32, @floatFromInt(hit.block_pos[0])) + 1.0 + e;
+            const by1: f32 = @as(f32, @floatFromInt(hit.block_pos[1])) + 1.0 + e;
+            const bz1: f32 = @as(f32, @floatFromInt(hit.block_pos[2])) + 1.0 + e;
+            const outline_color = [4]f32{ 0.1, 0.1, 0.1, 1.0 };
+
+            // Bottom face (4 edges)
+            count = addLine(vertices, count, bx0, by0, bz0, bx1, by0, bz0, outline_color);
+            count = addLine(vertices, count, bx1, by0, bz0, bx1, by0, bz1, outline_color);
+            count = addLine(vertices, count, bx1, by0, bz1, bx0, by0, bz1, outline_color);
+            count = addLine(vertices, count, bx0, by0, bz1, bx0, by0, bz0, outline_color);
+            // Top face (4 edges)
+            count = addLine(vertices, count, bx0, by1, bz0, bx1, by1, bz0, outline_color);
+            count = addLine(vertices, count, bx1, by1, bz0, bx1, by1, bz1, outline_color);
+            count = addLine(vertices, count, bx1, by1, bz1, bx0, by1, bz1, outline_color);
+            count = addLine(vertices, count, bx0, by1, bz1, bx0, by1, bz0, outline_color);
+            // Vertical edges (4 edges)
+            count = addLine(vertices, count, bx0, by0, bz0, bx0, by1, bz0, outline_color);
+            count = addLine(vertices, count, bx1, by0, bz0, bx1, by1, bz0, outline_color);
+            count = addLine(vertices, count, bx1, by0, bz1, bx1, by1, bz1, outline_color);
+            count = addLine(vertices, count, bx0, by0, bz1, bx0, by1, bz1, outline_color);
+        }
 
         vk.unmapMemory(device, self.vertex_buffer_memory);
         self.vertex_count = count;

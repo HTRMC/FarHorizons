@@ -183,7 +183,7 @@ pub const VulkanRenderer = struct {
 
         self.pollMeshWorker();
 
-        self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state.entity_pos);
+        self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
     }
 
     fn pollMeshWorker(self: *VulkanRenderer) void {

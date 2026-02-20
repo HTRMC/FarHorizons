@@ -3,6 +3,7 @@ const zlm = @import("zlm");
 const Camera = @import("renderer/Camera.zig");
 const WorldState = @import("world/WorldState.zig");
 const Physics = @import("Physics.zig");
+const Raycast = @import("Raycast.zig");
 
 const GameState = @This();
 
@@ -17,6 +18,7 @@ entity_vel: [3]f32,
 entity_on_ground: bool,
 mode: MovementMode,
 input_move: [3]f32,
+hit_result: ?Raycast.BlockHitResult,
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     const world = try allocator.create(WorldState.World);
@@ -31,6 +33,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
         .entity_on_ground = false,
         .mode = .flying,
         .input_move = .{ 0.0, 0.0, 0.0 },
+        .hit_result = null,
     };
 }
 
@@ -72,4 +75,6 @@ pub fn update(self: *GameState, dt: f32) void {
             self.entity_pos[2],
         );
     }
+
+    self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
