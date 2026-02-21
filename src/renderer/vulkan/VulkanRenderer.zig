@@ -139,7 +139,7 @@ pub const VulkanRenderer = struct {
         self.game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
         self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format);
 
-        self.mesh_worker.start();
+        self.mesh_worker.startAll();
 
         std.log.info("VulkanRenderer initialized", .{});
         return self;
@@ -185,31 +185,32 @@ pub const VulkanRenderer = struct {
 
         self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
 
-        if (self.game_state.world_dirty and self.mesh_worker.state.load(.acquire) == .idle) {
-            self.game_state.world_dirty = false;
-            self.mesh_worker.start();
+        if (self.game_state.dirty_chunks.count > 0 and self.mesh_worker.state.load(.acquire) == .idle) {
+            self.mesh_worker.startDirty(self.game_state.dirty_chunks.chunks[0..self.game_state.dirty_chunks.count]);
+            self.game_state.dirty_chunks.clear();
         }
     }
 
     fn pollMeshWorker(self: *VulkanRenderer) void {
-        const result = self.mesh_worker.poll() orelse return;
-        defer self.allocator.free(result.vertices);
-        defer self.allocator.free(result.indices);
-        defer self.allocator.free(result.chunk_positions);
-        defer self.allocator.free(result.draw_commands);
+        const poll_result = self.mesh_worker.poll() orelse return;
 
-        self.render_state.world_renderer.uploadChunkMesh(
-            &self.ctx,
-            result.vertices,
-            result.indices,
-            result.vertex_count,
-            result.index_count,
-            result.chunk_positions,
-            result.draw_commands,
-            result.draw_count,
-        ) catch |err| {
-            std.log.err("Failed to upload chunk mesh: {}", .{err});
-        };
+        for (0..poll_result.count) |i| {
+            if (poll_result.results[i]) |chunk_result| {
+                self.render_state.world_renderer.uploadChunkData(
+                    &self.ctx,
+                    chunk_result.coord,
+                    chunk_result.vertices,
+                    chunk_result.indices,
+                    chunk_result.vertex_count,
+                    chunk_result.index_count,
+                ) catch |err| {
+                    std.log.err("Failed to upload chunk ({},{},{}): {}", .{
+                        chunk_result.coord.cx, chunk_result.coord.cy, chunk_result.coord.cz, err,
+                    });
+                };
+                self.mesh_worker.freeResult(i);
+            }
+        }
     }
 
     pub fn endFrame(self: *VulkanRenderer) !void {
@@ -482,7 +483,7 @@ pub const VulkanRenderer = struct {
         // Draw world chunks
         self.render_state.world_renderer.record(command_buffer, &mvp.m);
 
-        // Draw debug lines with view-space shrink (Minecraft's depth trick):
+        // Draw debug lines with view-space shrink
         // Compute P * VIEW_SCALE * V so lines are pulled toward camera in view-space.
         const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
         const view_scale = zlm.Mat4{

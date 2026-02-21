@@ -19,7 +19,31 @@ entity_on_ground: bool,
 mode: MovementMode,
 input_move: [3]f32,
 hit_result: ?Raycast.BlockHitResult,
-world_dirty: bool,
+dirty_chunks: DirtyChunkSet,
+
+pub const DirtyChunkSet = struct {
+    chunks: [WorldState.TOTAL_WORLD_CHUNKS]WorldState.ChunkCoord,
+    count: u8,
+
+    pub fn empty() DirtyChunkSet {
+        return .{ .chunks = undefined, .count = 0 };
+    }
+
+    pub fn add(self: *DirtyChunkSet, coord: WorldState.ChunkCoord) void {
+        // Deduplicate
+        for (self.chunks[0..self.count]) |c| {
+            if (c.eql(coord)) return;
+        }
+        if (self.count < WorldState.TOTAL_WORLD_CHUNKS) {
+            self.chunks[self.count] = coord;
+            self.count += 1;
+        }
+    }
+
+    pub fn clear(self: *DirtyChunkSet) void {
+        self.count = 0;
+    }
+};
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     const world = try allocator.create(WorldState.World);
@@ -35,7 +59,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
         .mode = .flying,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .hit_result = null,
-        .world_dirty = false,
+        .dirty_chunks = DirtyChunkSet.empty(),
     };
 }
 
@@ -81,10 +105,17 @@ pub fn update(self: *GameState, dt: f32) void {
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 
+fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    const affected = WorldState.affectedChunks(wx, wy, wz);
+    for (affected.coords[0..affected.count]) |coord| {
+        self.dirty_chunks.add(coord);
+    }
+}
+
 pub fn breakBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
     WorldState.setBlock(self.world, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], .air);
-    self.world_dirty = true;
+    self.markDirty(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 
@@ -96,6 +127,6 @@ pub fn placeBlock(self: *GameState) void {
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(WorldState.getBlock(self.world, px, py, pz))) return;
     WorldState.setBlock(self.world, px, py, pz, .grass_block);
-    self.world_dirty = true;
+    self.markDirty(px, py, pz);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }

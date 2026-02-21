@@ -119,3 +119,61 @@ pub fn copyBuffer(
     try vk.queueSubmit(ctx.graphics_queue, 1, &submit_infos, null);
     try vk.queueWaitIdle(ctx.graphics_queue);
 }
+
+pub fn copyBufferRegion(
+    ctx: *const VulkanContext,
+    src_buffer: vk.VkBuffer,
+    src_offset: vk.VkDeviceSize,
+    dst_buffer: vk.VkBuffer,
+    dst_offset: vk.VkDeviceSize,
+    size: vk.VkDeviceSize,
+) !void {
+    const tz = tracy.zone(@src(), "copyBufferRegion");
+    defer tz.end();
+
+    const alloc_info = vk.VkCommandBufferAllocateInfo{
+        .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext = null,
+        .commandPool = ctx.command_pool,
+        .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+
+    var command_buffers: [1]vk.VkCommandBuffer = undefined;
+    try vk.allocateCommandBuffers(ctx.device, &alloc_info, &command_buffers);
+    defer vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &command_buffers);
+    const command_buffer = command_buffers[0];
+
+    const begin_info = vk.VkCommandBufferBeginInfo{
+        .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .pNext = null,
+        .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+        .pInheritanceInfo = null,
+    };
+
+    try vk.beginCommandBuffer(command_buffer, &begin_info);
+
+    const copy_regions = [_]vk.VkBufferCopy{.{
+        .srcOffset = src_offset,
+        .dstOffset = dst_offset,
+        .size = size,
+    }};
+
+    vk.cmdCopyBuffer(command_buffer, src_buffer, dst_buffer, 1, &copy_regions);
+    try vk.endCommandBuffer(command_buffer);
+
+    const submit_infos = [_]vk.VkSubmitInfo{.{
+        .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .pNext = null,
+        .waitSemaphoreCount = 0,
+        .pWaitSemaphores = null,
+        .pWaitDstStageMask = null,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &command_buffer,
+        .signalSemaphoreCount = 0,
+        .pSignalSemaphores = null,
+    }};
+
+    try vk.queueSubmit(ctx.graphics_queue, 1, &submit_infos, null);
+    try vk.queueWaitIdle(ctx.graphics_queue);
+}
