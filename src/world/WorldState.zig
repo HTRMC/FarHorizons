@@ -328,7 +328,6 @@ pub fn generateWorldMesh(
         }
     }
 
-    std.log.info("World mesh: {} indices ({} faces), {} draw commands", .{ idx_count, idx_count / 6, draw_count });
     return .{
         .vertices = vertices,
         .indices = indices,

@@ -195,8 +195,6 @@ pub const WorldRenderer = struct {
         }
 
         self.draw_count = draw_count;
-
-        std.log.info("Chunk mesh uploaded ({} vertices, {} indices, {} draw commands)", .{ vertex_count, index_count, draw_count });
     }
 
     pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32) void {
