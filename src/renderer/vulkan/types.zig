@@ -3,7 +3,7 @@ pub const FaceData = extern struct {
     word1: u32, // reserved
 };
 
-pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_index: u6) FaceData {
+pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_index: u6, ao: [4]u2) FaceData {
     return .{
         .word0 = @as(u32, x) |
             (@as(u32, y) << 5) |
@@ -11,7 +11,10 @@ pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_
             (@as(u32, tex_index) << 15) |
             (@as(u32, normal_index) << 23) |
             (@as(u32, light_index) << 26),
-        .word1 = 0,
+        .word1 = @as(u32, ao[0]) |
+            (@as(u32, ao[1]) << 2) |
+            (@as(u32, ao[2]) << 4) |
+            (@as(u32, ao[3]) << 6),
     };
 }
 
@@ -63,8 +66,19 @@ fn unpackFaceData(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, nor
     };
 }
 
+fn unpackAo(fd: FaceData) [4]u2 {
+    return .{
+        @intCast(fd.word1 & 0x3),
+        @intCast((fd.word1 >> 2) & 0x3),
+        @intCast((fd.word1 >> 4) & 0x3),
+        @intCast((fd.word1 >> 6) & 0x3),
+    };
+}
+
+const no_ao = [4]u2{ 0, 0, 0, 0 };
+
 test "packFaceData roundtrip - zero values" {
-    const fd = packFaceData(0, 0, 0, 0, 0, 0);
+    const fd = packFaceData(0, 0, 0, 0, 0, 0, no_ao);
     const u = unpackFaceData(fd);
     try std.testing.expectEqual(@as(u5, 0), u.x);
     try std.testing.expectEqual(@as(u5, 0), u.y);
@@ -72,10 +86,11 @@ test "packFaceData roundtrip - zero values" {
     try std.testing.expectEqual(@as(u8, 0), u.tex_index);
     try std.testing.expectEqual(@as(u3, 0), u.normal_index);
     try std.testing.expectEqual(@as(u6, 0), u.light_index);
+    try std.testing.expectEqual(no_ao, unpackAo(fd));
 }
 
 test "packFaceData roundtrip - max values" {
-    const fd = packFaceData(31, 31, 31, 255, 7, 63);
+    const fd = packFaceData(31, 31, 31, 255, 7, 63, .{ 3, 3, 3, 3 });
     const u = unpackFaceData(fd);
     try std.testing.expectEqual(@as(u5, 31), u.x);
     try std.testing.expectEqual(@as(u5, 31), u.y);
@@ -83,10 +98,11 @@ test "packFaceData roundtrip - max values" {
     try std.testing.expectEqual(@as(u8, 255), u.tex_index);
     try std.testing.expectEqual(@as(u3, 7), u.normal_index);
     try std.testing.expectEqual(@as(u6, 63), u.light_index);
+    try std.testing.expectEqual([4]u2{ 3, 3, 3, 3 }, unpackAo(fd));
 }
 
 test "packFaceData roundtrip - typical values" {
-    const fd = packFaceData(10, 20, 5, 3, 4, 2);
+    const fd = packFaceData(10, 20, 5, 3, 4, 2, .{ 0, 1, 2, 3 });
     const u = unpackFaceData(fd);
     try std.testing.expectEqual(@as(u5, 10), u.x);
     try std.testing.expectEqual(@as(u5, 20), u.y);
@@ -94,11 +110,12 @@ test "packFaceData roundtrip - typical values" {
     try std.testing.expectEqual(@as(u8, 3), u.tex_index);
     try std.testing.expectEqual(@as(u3, 4), u.normal_index);
     try std.testing.expectEqual(@as(u6, 2), u.light_index);
+    try std.testing.expectEqual([4]u2{ 0, 1, 2, 3 }, unpackAo(fd));
 }
 
 test "packFaceData - no field overlap" {
     // Set only x, verify others are 0
-    const fd_x = packFaceData(31, 0, 0, 0, 0, 0);
+    const fd_x = packFaceData(31, 0, 0, 0, 0, 0, no_ao);
     const u_x = unpackFaceData(fd_x);
     try std.testing.expectEqual(@as(u5, 31), u_x.x);
     try std.testing.expectEqual(@as(u5, 0), u_x.y);
@@ -107,7 +124,7 @@ test "packFaceData - no field overlap" {
     try std.testing.expectEqual(@as(u6, 0), u_x.light_index);
 
     // Set only tex_index
-    const fd_t = packFaceData(0, 0, 0, 255, 0, 0);
+    const fd_t = packFaceData(0, 0, 0, 255, 0, 0, no_ao);
     const u_t = unpackFaceData(fd_t);
     try std.testing.expectEqual(@as(u5, 0), u_t.x);
     try std.testing.expectEqual(@as(u5, 0), u_t.y);
@@ -117,17 +134,24 @@ test "packFaceData - no field overlap" {
     try std.testing.expectEqual(@as(u6, 0), u_t.light_index);
 
     // Set only light_index
-    const fd_l = packFaceData(0, 0, 0, 0, 0, 63);
+    const fd_l = packFaceData(0, 0, 0, 0, 0, 63, no_ao);
     const u_l = unpackFaceData(fd_l);
     try std.testing.expectEqual(@as(u5, 0), u_l.x);
     try std.testing.expectEqual(@as(u8, 0), u_l.tex_index);
     try std.testing.expectEqual(@as(u3, 0), u_l.normal_index);
     try std.testing.expectEqual(@as(u6, 63), u_l.light_index);
+
+    // Set only AO, verify word0 fields are 0
+    const fd_ao = packFaceData(0, 0, 0, 0, 0, 0, .{ 1, 2, 3, 0 });
+    const u_ao = unpackFaceData(fd_ao);
+    try std.testing.expectEqual(@as(u5, 0), u_ao.x);
+    try std.testing.expectEqual(@as(u8, 0), u_ao.tex_index);
+    try std.testing.expectEqual([4]u2{ 1, 2, 3, 0 }, unpackAo(fd_ao));
 }
 
 test "packFaceData - shader unpacking matches" {
     // Verify the GLSL unpacking logic matches our Zig unpacking
-    const fd = packFaceData(15, 8, 22, 130, 5, 40);
+    const fd = packFaceData(15, 8, 22, 130, 5, 40, .{ 2, 1, 3, 0 });
     const w = fd.word0;
     // GLSL: uint x = face.word0 & 0x1F;
     try std.testing.expectEqual(@as(u32, 15), w & 0x1F);
@@ -141,6 +165,12 @@ test "packFaceData - shader unpacking matches" {
     try std.testing.expectEqual(@as(u32, 5), (w >> 23) & 0x7);
     // GLSL: uint lightIdx = (face.word0 >> 26) & 0x3F;
     try std.testing.expectEqual(@as(u32, 40), (w >> 26) & 0x3F);
+    // GLSL: uint aoLevel = (face.word1 >> (cornerID * 2)) & 0x3;
+    const w1 = fd.word1;
+    try std.testing.expectEqual(@as(u32, 2), w1 & 0x3);
+    try std.testing.expectEqual(@as(u32, 1), (w1 >> 2) & 0x3);
+    try std.testing.expectEqual(@as(u32, 3), (w1 >> 4) & 0x3);
+    try std.testing.expectEqual(@as(u32, 0), (w1 >> 6) & 0x3);
 }
 
 const std = @import("std");

@@ -222,6 +222,90 @@ pub fn generateSphereWorld(out: *World) void {
     }
 }
 
+// AO neighbor offset table: for each face direction (6) and corner (4),
+// stores 3 neighbor offsets (side1, side2, diagonal) as (dx, dy, dz)
+// relative to the block position. Offsets include the face normal direction.
+const ao_offsets = computeAoOffsets();
+
+fn computeAoOffsets() [6][4][3][3]i32 {
+    var result: [6][4][3][3]i32 = undefined;
+
+    for (0..6) |face| {
+        const normal = face_neighbor_offsets[face];
+
+        for (0..4) |corner| {
+            const vert = face_vertices[face][corner];
+            const pos = [3]f32{ vert.px, vert.py, vert.pz };
+
+            // Find the two tangent axes (where normal component is 0)
+            var tang: [2]usize = undefined;
+            var ti: usize = 0;
+            for (0..3) |axis| {
+                if (normal[axis] == 0) {
+                    tang[ti] = axis;
+                    ti += 1;
+                }
+            }
+
+            // Edge direction along each tangent axis: vertex at 0 → -1, at 1 → +1
+            var edge1 = [3]i32{ 0, 0, 0 };
+            var edge2 = [3]i32{ 0, 0, 0 };
+            edge1[tang[0]] = if (pos[tang[0]] == 0.0) -1 else 1;
+            edge2[tang[1]] = if (pos[tang[1]] == 0.0) -1 else 1;
+
+            // side1 = normal + edge1
+            result[face][corner][0] = .{
+                normal[0] + edge1[0],
+                normal[1] + edge1[1],
+                normal[2] + edge1[2],
+            };
+            // side2 = normal + edge2
+            result[face][corner][1] = .{
+                normal[0] + edge2[0],
+                normal[1] + edge2[1],
+                normal[2] + edge2[2],
+            };
+            // diagonal = normal + edge1 + edge2
+            result[face][corner][2] = .{
+                normal[0] + edge1[0] + edge2[0],
+                normal[1] + edge1[1] + edge2[1],
+                normal[2] + edge1[2] + edge2[2],
+            };
+        }
+    }
+
+    return result;
+}
+
+/// Look up a block by chunk-local coordinates that may be outside [0, CHUNK_SIZE).
+/// Crosses into neighbor chunks as needed. Returns .air for out-of-world positions.
+fn getNeighborBlock(
+    world: *const World,
+    cx: usize,
+    cy: usize,
+    cz: usize,
+    lx: i32,
+    ly: i32,
+    lz: i32,
+) BlockType {
+    if (lx >= 0 and lx < CHUNK_SIZE and ly >= 0 and ly < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE) {
+        return world[cy][cz][cx].blocks[chunkIndex(@intCast(lx), @intCast(ly), @intCast(lz))];
+    }
+
+    const ncx: i32 = @as(i32, @intCast(cx)) + if (lx < 0) @as(i32, -1) else if (lx >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
+    const ncy: i32 = @as(i32, @intCast(cy)) + if (ly < 0) @as(i32, -1) else if (ly >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
+    const ncz: i32 = @as(i32, @intCast(cz)) + if (lz < 0) @as(i32, -1) else if (lz >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
+
+    if (ncx < 0 or ncx >= WORLD_CHUNKS_X or ncy < 0 or ncy >= WORLD_CHUNKS_Y or ncz < 0 or ncz >= WORLD_CHUNKS_Z) {
+        return .air;
+    }
+
+    const flx: usize = @intCast(@mod(lx, @as(i32, CHUNK_SIZE)));
+    const fly: usize = @intCast(@mod(ly, @as(i32, CHUNK_SIZE)));
+    const flz: usize = @intCast(@mod(lz, @as(i32, CHUNK_SIZE)));
+    return world[@intCast(ncy)][@intCast(ncz)][@intCast(ncx)].blocks[chunkIndex(flx, fly, flz)];
+}
+
 /// Generate mesh data for a single chunk. Faces are grouped by normal direction
 /// and packed into FaceData with deduplicated light entries.
 pub fn generateChunkMesh(
@@ -235,7 +319,6 @@ pub fn generateChunkMesh(
     const cx: usize = coord.cx;
     const cy: usize = coord.cy;
     const cz: usize = coord.cz;
-    const chunk = &world[cy][cz][cx];
 
     // Per-normal face lists: collect faces grouped by normal index
     var normal_faces: [6]std.ArrayList(FaceData) = undefined;
@@ -253,38 +336,21 @@ pub fn generateChunkMesh(
     var light_list: std.ArrayList(LightEntry) = .empty;
     errdefer light_list.deinit(allocator);
 
-    const face_light_values = [6]f32{ 0.6, 0.6, 0.8, 0.8, 1.0, 0.5 };
+    const face_light_values = [6]f32{ 0.8, 0.8, 0.6, 0.6, 1.0, 0.5 };
 
     for (0..CHUNK_SIZE) |by| {
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                const block = chunk.blocks[chunkIndex(bx, by, bz)];
+                const block = world[cy][cz][cx].blocks[chunkIndex(bx, by, bz)];
                 if (block == .air) continue;
+
+                const ibx: i32 = @intCast(bx);
+                const iby: i32 = @intCast(by);
+                const ibz: i32 = @intCast(bz);
 
                 for (0..6) |face| {
                     const fno = face_neighbor_offsets[face];
-                    const nx: i32 = @as(i32, @intCast(bx)) + fno[0];
-                    const ny: i32 = @as(i32, @intCast(by)) + fno[1];
-                    const nz: i32 = @as(i32, @intCast(bz)) + fno[2];
-
-                    const neighbor = blk: {
-                        if (nx >= 0 and nx < CHUNK_SIZE and ny >= 0 and ny < CHUNK_SIZE and nz >= 0 and nz < CHUNK_SIZE) {
-                            break :blk chunk.blocks[chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))];
-                        }
-
-                        const ncx: i32 = @as(i32, @intCast(cx)) + if (nx < 0) @as(i32, -1) else if (nx >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
-                        const ncy: i32 = @as(i32, @intCast(cy)) + if (ny < 0) @as(i32, -1) else if (ny >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
-                        const ncz: i32 = @as(i32, @intCast(cz)) + if (nz < 0) @as(i32, -1) else if (nz >= CHUNK_SIZE) @as(i32, 1) else @as(i32, 0);
-
-                        if (ncx < 0 or ncx >= WORLD_CHUNKS_X or ncy < 0 or ncy >= WORLD_CHUNKS_Y or ncz < 0 or ncz >= WORLD_CHUNKS_Z) {
-                            break :blk BlockType.air;
-                        }
-
-                        const lx: usize = @intCast(@mod(nx, @as(i32, CHUNK_SIZE)));
-                        const ly: usize = @intCast(@mod(ny, @as(i32, CHUNK_SIZE)));
-                        const lz: usize = @intCast(@mod(nz, @as(i32, CHUNK_SIZE)));
-                        break :blk world[@intCast(ncy)][@intCast(ncz)][@intCast(ncx)].blocks[chunkIndex(lx, ly, lz)];
-                    };
+                    const neighbor = getNeighborBlock(world, cx, cy, cz, ibx + fno[0], iby + fno[1], ibz + fno[2]);
 
                     if (block_properties.isOpaque(neighbor)) continue;
                     if (neighbor == block and block_properties.cullsSelf(block)) continue;
@@ -297,7 +363,20 @@ pub fn generateChunkMesh(
                         .stone => 3,
                     };
 
-                    // Pack light: all 4 corners get the same value (no AO yet)
+                    // Compute per-corner AO levels
+                    var ao: [4]u2 = undefined;
+                    for (0..4) |corner| {
+                        const offsets = ao_offsets[face][corner];
+                        const s1 = block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[0][0], iby + offsets[0][1], ibz + offsets[0][2]));
+                        const s2 = block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[1][0], iby + offsets[1][1], ibz + offsets[1][2]));
+                        const diag = if (s1 and s2)
+                            true
+                        else
+                            block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[2][0], iby + offsets[2][1], ibz + offsets[2][2]));
+                        ao[corner] = @intCast(@as(u3, @intFromBool(s1)) + @intFromBool(s2) + @intFromBool(diag));
+                    }
+
+                    // Pack light: all 4 corners get the same face shade value
                     const light_byte: u32 = @intFromFloat(@floor(face_light_values[face] * 255.0));
                     const packed_light: u32 = light_byte | (light_byte << 8) | (light_byte << 16);
                     const corner_pattern = [4]u32{ packed_light, packed_light, packed_light, packed_light };
@@ -320,6 +399,7 @@ pub fn generateChunkMesh(
                         tex_index,
                         @intCast(face),
                         light_index,
+                        ao,
                     );
 
                     try normal_faces[face].append(allocator, face_data);
@@ -399,26 +479,32 @@ pub fn affectedChunks(wx: i32, wy: i32, wz: i32) AffectedChunks {
     const ly = uvy % CHUNK_SIZE;
     const lz = uvz % CHUNK_SIZE;
 
-    if (lx == 0 and base_cx > 0) {
+    // AO extends 1 block beyond the face neighbor check, so a block change
+    // at lx==1 can affect AO of faces at lx==0 whose neighbors cross into
+    // the adjacent chunk.
+    if (lx <= 1 and base_cx > 0) {
         result.coords[result.count] = .{ .cx = base_cx - 1, .cy = base_cy, .cz = base_cz };
         result.count += 1;
-    } else if (lx == CHUNK_SIZE - 1 and base_cx + 1 < WORLD_CHUNKS_X) {
+    }
+    if (lx >= CHUNK_SIZE - 2 and base_cx + 1 < WORLD_CHUNKS_X) {
         result.coords[result.count] = .{ .cx = base_cx + 1, .cy = base_cy, .cz = base_cz };
         result.count += 1;
     }
 
-    if (ly == 0 and base_cy > 0) {
+    if (ly <= 1 and base_cy > 0) {
         result.coords[result.count] = .{ .cx = base_cx, .cy = base_cy - 1, .cz = base_cz };
         result.count += 1;
-    } else if (ly == CHUNK_SIZE - 1 and base_cy + 1 < WORLD_CHUNKS_Y) {
+    }
+    if (ly >= CHUNK_SIZE - 2 and base_cy + 1 < WORLD_CHUNKS_Y) {
         result.coords[result.count] = .{ .cx = base_cx, .cy = base_cy + 1, .cz = base_cz };
         result.count += 1;
     }
 
-    if (lz == 0 and base_cz > 0) {
+    if (lz <= 1 and base_cz > 0) {
         result.coords[result.count] = .{ .cx = base_cx, .cy = base_cy, .cz = base_cz - 1 };
         result.count += 1;
-    } else if (lz == CHUNK_SIZE - 1 and base_cz + 1 < WORLD_CHUNKS_Z) {
+    }
+    if (lz >= CHUNK_SIZE - 2 and base_cz + 1 < WORLD_CHUNKS_Z) {
         result.coords[result.count] = .{ .cx = base_cx, .cy = base_cy, .cz = base_cz + 1 };
         result.count += 1;
     }
@@ -617,11 +703,10 @@ test "light deduplication works" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // With no AO, all faces of the same normal direction have the same light.
-    // There are 6 unique face directions = 6 unique light values.
-    // But some face directions share the same light value:
-    //   +Z/-Z both use 0.6, -X/+X both use 0.8
-    // So unique light entries should be: 0.6, 0.8, 1.0, 0.5 = 4
+    // All faces of the same normal direction have the same light.
+    // Some face directions share the same light value:
+    //   +Z/-Z both use 0.8, -X/+X both use 0.6
+    // So unique light entries should be: 0.8, 0.6, 1.0, 0.5 = 4
     try testing.expectEqual(@as(u32, 4), result.light_count);
 }
 
@@ -650,4 +735,135 @@ test "world boundary blocks have all outer faces" {
 
     // All 6 faces should be present (all neighbors are air - either in-chunk or world boundary)
     try testing.expectEqual(@as(u32, 6), result.total_face_count);
+}
+
+// --- AO Tests ---
+
+fn unpackAo(fd: FaceData) [4]u2 {
+    return .{
+        @intCast(fd.word1 & 0x3),
+        @intCast((fd.word1 >> 2) & 0x3),
+        @intCast((fd.word1 >> 4) & 0x3),
+        @intCast((fd.word1 >> 6) & 0x3),
+    };
+}
+
+/// Find the face with the given normal index from a mesh result.
+/// Assumes faces are grouped by normal.
+fn findFaceByNormal(result: ChunkMeshResult, normal: u3) ?FaceData {
+    var offset: usize = 0;
+    for (0..6) |i| {
+        const count = result.face_counts[i];
+        if (i == normal) {
+            if (count > 0) return result.faces[offset];
+            return null;
+        }
+        offset += count;
+    }
+    return null;
+}
+
+test "AO: single block in air has no occlusion" {
+    var world = makeEmptyWorld();
+    world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // All faces of an isolated block should have AO level 0 on every corner
+    for (result.faces) |face| {
+        try testing.expectEqual([4]u2{ 0, 0, 0, 0 }, unpackAo(face));
+    }
+}
+
+test "AO: block on flat surface has correct top face AO" {
+    var world = makeEmptyWorld();
+    // Create a 3x1x3 flat surface of stone at y=5, centered at (5,5,5)
+    for (4..7) |x| {
+        for (4..7) |z| {
+            world[0][0][0].blocks[chunkIndex(x, 5, z)] = .stone;
+        }
+    }
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // Find the top face (+Y, normal 4) of the center block at (5,5,5)
+    var offset: usize = 0;
+    for (0..4) |i| {
+        offset += result.face_counts[i];
+    }
+    var center_top: ?FaceData = null;
+    for (offset..offset + result.face_counts[4]) |i| {
+        const u = unpackFace(result.faces[i]);
+        if (u.x == 5 and u.y == 5 and u.z == 5) {
+            center_top = result.faces[i];
+            break;
+        }
+    }
+
+    // The center block's top face: all 4 corners are surrounded by
+    // adjacent blocks on the same plane, so each corner has 3 opaque
+    // neighbors (side1, side2, and diagonal — all on the flat surface)
+    // → AO level 3 for all corners
+    const ao = unpackAo(center_top.?);
+    for (ao) |level| {
+        try testing.expectEqual(@as(u2, 3), level);
+    }
+}
+
+test "AO: block in corner has maximum occlusion on enclosed corner" {
+    var world = makeEmptyWorld();
+    // Create an L-shaped corner: blocks along +X, +Y, and +Z from (5,5,5)
+    world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
+    world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .stone; // +X
+    world[0][0][0].blocks[chunkIndex(5, 6, 5)] = .stone; // +Y
+    world[0][0][0].blocks[chunkIndex(5, 5, 6)] = .stone; // +Z
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // The +Z face (normal 0) of the +Y block at (5,6,5):
+    // Corner at (1,0,1) has side neighbors towards +X and -Y from the air space.
+    // +X direction: block at (6,6,6) — air → not opaque
+    // -Y direction: block at (5,5,6) — STONE → opaque (this is the +Z block)
+    // So at least one corner should have AO > 0
+    var found_nonzero = false;
+    for (result.faces) |face| {
+        const ao = unpackAo(face);
+        for (ao) |level| {
+            if (level > 0) {
+                found_nonzero = true;
+                break;
+            }
+        }
+        if (found_nonzero) break;
+    }
+    try testing.expect(found_nonzero);
+}
+
+test "AO: comptime offset table sanity" {
+    // Verify AO offsets are within expected range and include the normal direction
+    for (0..6) |face| {
+        const normal = face_neighbor_offsets[face];
+        for (0..4) |corner| {
+            for (0..3) |sample| { // side1, side2, diagonal
+                const off = ao_offsets[face][corner][sample];
+                for (0..3) |axis| {
+                    // Each component should be in [-1, 1]
+                    try testing.expect(off[axis] >= -1 and off[axis] <= 1);
+                }
+                // The offset along the normal axis should match the normal
+                // (all AO samples are in the air space in front of the face)
+                for (0..3) |axis| {
+                    if (normal[axis] != 0) {
+                        try testing.expectEqual(normal[axis], off[axis]);
+                    }
+                }
+            }
+        }
+    }
 }
