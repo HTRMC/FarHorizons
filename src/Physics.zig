@@ -16,10 +16,9 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
 
     const clamped_dt = @min(dt, MAX_DT);
 
-    // Walking movement from input
+    // Walking movement from input (input_move persists across ticks, set per-frame by main loop)
     const forward_input = state.input_move[0];
     const right_input = state.input_move[2];
-    state.input_move = .{ 0.0, 0.0, 0.0 };
 
     // Project camera forward/right onto XZ plane
     const cam_forward = state.camera.getForward();

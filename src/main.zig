@@ -6,8 +6,8 @@ const GameState = @import("GameState.zig");
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
 
-const JUMP_VELOCITY: f32 = 7.5;
 const DOUBLE_TAP_THRESHOLD: f64 = 0.35;
+const MAX_ACCUMULATOR: f32 = 0.25;
 
 const InputState = struct {
     window: *Window,
@@ -123,6 +123,7 @@ pub fn main() !void {
     const max_speed: f32 = 200.0;
     const speed_scroll_factor: f32 = 1.2;
     var last_time = glfw.getTime();
+    var tick_accumulator: f32 = 0.0;
 
     while (!window.shouldClose()) {
         window.pollEvents();
@@ -142,7 +143,7 @@ pub fn main() !void {
             input_state.scroll_speed_delta = 0.0;
         }
 
-        // Mouse look
+        // Mouse look (per-frame, not tick-rate limited)
         if (input_state.mouse_captured) {
             var cursor_x: f64 = 0.0;
             var cursor_y: f64 = 0.0;
@@ -168,50 +169,42 @@ pub fn main() !void {
             game_state.toggleMode();
         }
 
-        // WASD movement
+        // Buffer movement input (read once per frame, consumed by ticks)
         var forward_input: f32 = 0.0;
         var right_input: f32 = 0.0;
+        var up_input: f32 = 0.0;
 
-        if (glfw.getKey(window.handle, glfw.GLFW_KEY_W) == glfw.GLFW_PRESS) {
-            forward_input += 1.0;
-        }
-        if (glfw.getKey(window.handle, glfw.GLFW_KEY_S) == glfw.GLFW_PRESS) {
-            forward_input -= 1.0;
-        }
-        if (glfw.getKey(window.handle, glfw.GLFW_KEY_D) == glfw.GLFW_PRESS) {
-            right_input += 1.0;
-        }
-        if (glfw.getKey(window.handle, glfw.GLFW_KEY_A) == glfw.GLFW_PRESS) {
-            right_input -= 1.0;
-        }
+        if (glfw.getKey(window.handle, glfw.GLFW_KEY_W) == glfw.GLFW_PRESS) forward_input += 1.0;
+        if (glfw.getKey(window.handle, glfw.GLFW_KEY_S) == glfw.GLFW_PRESS) forward_input -= 1.0;
+        if (glfw.getKey(window.handle, glfw.GLFW_KEY_D) == glfw.GLFW_PRESS) right_input += 1.0;
+        if (glfw.getKey(window.handle, glfw.GLFW_KEY_A) == glfw.GLFW_PRESS) right_input -= 1.0;
+        if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) up_input += 1.0;
+        if (glfw.getKey(window.handle, glfw.GLFW_KEY_LEFT_SHIFT) == glfw.GLFW_PRESS) up_input -= 1.0;
 
-        switch (game_state.mode) {
-            .flying => {
-                var up_input: f32 = 0.0;
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) {
-                    up_input += 1.0;
-                }
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_LEFT_SHIFT) == glfw.GLFW_PRESS) {
-                    up_input -= 1.0;
-                }
-                if (forward_input != 0.0 or right_input != 0.0 or up_input != 0.0) {
-                    const speed = input_state.move_speed * delta_time;
-                    game_state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
-                }
-            },
-            .walking => {
-                game_state.input_move = .{ forward_input, 0.0, right_input };
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS and game_state.entity_on_ground) {
-                    game_state.entity_vel[1] = JUMP_VELOCITY;
-                }
-            },
+        game_state.input_move = .{ forward_input, up_input, right_input };
+
+        if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) {
+            game_state.jump_requested = true;
         }
 
-        game_state.update(delta_time);
+        // Fixed timestep accumulator
+        tick_accumulator += delta_time;
+        if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
+
+        while (tick_accumulator >= GameState.TICK_INTERVAL) {
+            game_state.fixedUpdate(input_state.move_speed);
+            tick_accumulator -= GameState.TICK_INTERVAL;
+        }
+
+        // Interpolate for smooth rendering
+        const alpha = tick_accumulator / GameState.TICK_INTERVAL;
+        game_state.interpolateForRender(alpha);
 
         try renderer.beginFrame();
         try renderer.render();
         try renderer.endFrame();
+
+        game_state.restoreAfterRender();
 
         tracy.frameMark();
     }

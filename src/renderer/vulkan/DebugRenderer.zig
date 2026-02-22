@@ -362,7 +362,7 @@ pub const DebugRenderer = struct {
         count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 }); // Z blue
 
         // AABB wireframe (12 edges)
-        const entity_pos = game_state.entity_pos;
+        const entity_pos = game_state.render_entity_pos;
         const half_w: f32 = 0.4;
         const height: f32 = 1.8;
         const x0 = entity_pos[0] - half_w;

@@ -178,8 +178,9 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "beginFrame");
         defer tz.end();
 
-        const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[self.render_state.current_frame]};
-        try vk.waitForFences(self.ctx.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
+        // Wait for ALL in-flight fences so shared buffers (debug vertices, draw commands)
+        // are not read by the GPU while we update them on the CPU.
+        try vk.waitForFences(self.ctx.device, MAX_FRAMES_IN_FLIGHT, &self.render_state.in_flight_fences, vk.VK_TRUE, std.math.maxInt(u64));
 
         self.pollMeshWorker();
 
