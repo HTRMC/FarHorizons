@@ -23,6 +23,12 @@ void main() {
     FaceData face = faces[faceID];
     ChunkData chunk = chunks[chunkID];
 
+    // Flip quad diagonal to fix AO interpolation anisotropy:
+    // rotating cornerID by 1 changes the index-buffer split from
+    // the 0-2 diagonal to the 1-3 diagonal.
+    uint flipBit = (face.word1 >> 8) & 0x1;
+    cornerID = (cornerID + flipBit) & 3;
+
     uint x = face.word0 & 0x1F;
     uint y = (face.word0 >> 5) & 0x1F;
     uint z = (face.word0 >> 10) & 0x1F;

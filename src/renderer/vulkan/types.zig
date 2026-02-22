@@ -1,9 +1,12 @@
 pub const FaceData = extern struct {
     word0: u32, // x:5 | y:5 | z:5 | texIndex:8 | normalIndex:3 | lightIndex:6
-    word1: u32, // reserved
+    word1: u32, // ao0:2 | ao1:2 | ao2:2 | ao3:2 | flip:1
 };
 
 pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_index: u6, ao: [4]u2) FaceData {
+    // Flip the quad diagonal when opposite-corner AO sums are unequal,
+    // to avoid anisotropic interpolation artifacts.
+    const flip: u32 = @intFromBool(@as(u3, ao[0]) + ao[2] > @as(u3, ao[1]) + ao[3]);
     return .{
         .word0 = @as(u32, x) |
             (@as(u32, y) << 5) |
@@ -14,7 +17,8 @@ pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_
         .word1 = @as(u32, ao[0]) |
             (@as(u32, ao[1]) << 2) |
             (@as(u32, ao[2]) << 4) |
-            (@as(u32, ao[3]) << 6),
+            (@as(u32, ao[3]) << 6) |
+            (flip << 8),
     };
 }
 
@@ -171,6 +175,27 @@ test "packFaceData - shader unpacking matches" {
     try std.testing.expectEqual(@as(u32, 1), (w1 >> 2) & 0x3);
     try std.testing.expectEqual(@as(u32, 3), (w1 >> 4) & 0x3);
     try std.testing.expectEqual(@as(u32, 0), (w1 >> 6) & 0x3);
+    // GLSL: uint flipBit = (face.word1 >> 8) & 0x1;
+    // ao[0]+ao[2]=2+3=5 > ao[1]+ao[3]=1+0=1 → flip=1
+    try std.testing.expectEqual(@as(u32, 1), (w1 >> 8) & 0x1);
+}
+
+test "packFaceData - flip bit set only when needed" {
+    // Symmetric AO → no flip (0+0 == 0+0)
+    const fd_sym = packFaceData(0, 0, 0, 0, 0, 0, .{ 0, 0, 0, 0 });
+    try std.testing.expectEqual(@as(u32, 0), (fd_sym.word1 >> 8) & 0x1);
+
+    // ao[0]+ao[2] > ao[1]+ao[3] → flip
+    const fd_flip = packFaceData(0, 0, 0, 0, 0, 0, .{ 3, 0, 3, 0 });
+    try std.testing.expectEqual(@as(u32, 1), (fd_flip.word1 >> 8) & 0x1);
+
+    // ao[0]+ao[2] < ao[1]+ao[3] → no flip
+    const fd_nf = packFaceData(0, 0, 0, 0, 0, 0, .{ 0, 3, 0, 3 });
+    try std.testing.expectEqual(@as(u32, 0), (fd_nf.word1 >> 8) & 0x1);
+
+    // ao[0]+ao[2] == ao[1]+ao[3] → no flip
+    const fd_eq = packFaceData(0, 0, 0, 0, 0, 0, .{ 1, 2, 2, 1 });
+    try std.testing.expectEqual(@as(u32, 0), (fd_eq.word1 >> 8) & 0x1);
 }
 
 const std = @import("std");
