@@ -351,8 +351,10 @@ pub const VulkanRenderer = struct {
 
         try vk.beginCommandBuffer(command_buffer, &begin_info);
 
-        // Debug line compute dispatch (before render pass)
-        self.render_state.debug_renderer.recordCompute(command_buffer);
+        const overdraw = self.game_state.overdraw_mode;
+
+        // Debug line compute dispatch (before render pass) — skip in overdraw mode
+        if (!overdraw) self.render_state.debug_renderer.recordCompute(command_buffer);
 
         // Barrier: depth image UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL
         const depth_barrier = vk.VkImageMemoryBarrier{
@@ -431,7 +433,7 @@ pub const VulkanRenderer = struct {
             .resolveImageLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
             .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = .{ .color = .{ .float32 = .{ 0.224, 0.643, 0.918, 1.0 } } },
+            .clearValue = .{ .color = .{ .float32 = if (overdraw) .{ 0.0, 0.0, 0.0, 1.0 } else .{ 0.224, 0.643, 0.918, 1.0 } } },
         };
 
         const depth_attachment = vk.VkRenderingAttachmentInfo{
@@ -485,23 +487,25 @@ pub const VulkanRenderer = struct {
         const mvp = self.game_state.camera.getViewProjectionMatrix();
 
         // Draw world chunks
-        self.render_state.world_renderer.record(command_buffer, &mvp.m);
+        self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw);
 
-        // Draw debug lines with view-space shrink
-        // Compute P * VIEW_SCALE * V so lines are pulled toward camera in view-space.
-        const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
-        const view_scale = zlm.Mat4{
-            .m = .{
-                VIEW_SHRINK, 0, 0, 0,
-                0, VIEW_SHRINK, 0, 0,
-                0, 0, VIEW_SHRINK, 0,
-                0, 0, 0, 1,
-            },
-        };
-        const view = self.game_state.camera.getViewMatrix();
-        const proj = self.game_state.camera.getProjectionMatrix();
-        const debug_mvp = zlm.Mat4.mul(proj, zlm.Mat4.mul(view_scale, view));
-        self.render_state.debug_renderer.recordDraw(command_buffer, &debug_mvp.m);
+        // Draw debug lines with view-space shrink (skip in overdraw mode)
+        if (!overdraw) {
+            // Compute P * VIEW_SCALE * V so lines are pulled toward camera in view-space.
+            const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
+            const view_scale = zlm.Mat4{
+                .m = .{
+                    VIEW_SHRINK, 0, 0, 0,
+                    0, VIEW_SHRINK, 0, 0,
+                    0, 0, VIEW_SHRINK, 0,
+                    0, 0, 0, 1,
+                },
+            };
+            const view = self.game_state.camera.getViewMatrix();
+            const proj = self.game_state.camera.getProjectionMatrix();
+            const debug_mvp = zlm.Mat4.mul(proj, zlm.Mat4.mul(view_scale, view));
+            self.render_state.debug_renderer.recordDraw(command_buffer, &debug_mvp.m);
+        }
 
         vk.cmdEndRendering(command_buffer);
 

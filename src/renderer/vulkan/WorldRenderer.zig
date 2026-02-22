@@ -26,6 +26,7 @@ pub const WorldRenderer = struct {
     texture_manager: TextureManager,
     pipeline_layout: vk.VkPipelineLayout,
     graphics_pipeline: vk.VkPipeline,
+    overdraw_pipeline: vk.VkPipeline,
 
     // Indirect draw buffers (host-visible)
     indirect_buffer: vk.VkBuffer,
@@ -75,6 +76,7 @@ pub const WorldRenderer = struct {
             .texture_manager = texture_manager,
             .pipeline_layout = null,
             .graphics_pipeline = null,
+            .overdraw_pipeline = null,
             .indirect_buffer = null,
             .indirect_buffer_memory = null,
             .indirect_count_buffer = null,
@@ -99,6 +101,7 @@ pub const WorldRenderer = struct {
 
         try self.createGraphicsPipeline(shader_compiler, ctx, swapchain_format, texture_manager.bindless_descriptor_set_layout);
         errdefer {
+            vk.destroyPipeline(ctx.device, self.overdraw_pipeline, null);
             vk.destroyPipeline(ctx.device, self.graphics_pipeline, null);
             vk.destroyPipelineLayout(ctx.device, self.pipeline_layout, null);
         }
@@ -117,6 +120,7 @@ pub const WorldRenderer = struct {
         vk.freeMemory(device, self.indirect_buffer_memory, null);
         vk.destroyBuffer(device, self.indirect_count_buffer, null);
         vk.freeMemory(device, self.indirect_count_buffer_memory, null);
+        vk.destroyPipeline(device, self.overdraw_pipeline, null);
         vk.destroyPipeline(device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
         vk.destroyBuffer(device, self.face_buffer, null);
@@ -332,10 +336,11 @@ pub const WorldRenderer = struct {
         self.draw_count = command_count;
     }
 
-    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32) void {
+    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool) void {
         if (self.draw_count == 0) return;
 
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.graphics_pipeline);
+        const pipeline = if (overdraw_active) self.overdraw_pipeline else self.graphics_pipeline;
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
         vk.cmdBindDescriptorSets(
             command_buffer,
@@ -589,7 +594,98 @@ pub const WorldRenderer = struct {
         try vk.createGraphicsPipelines(device, ctx.pipeline_cache, 1, pipeline_infos, null, &pipelines);
         self.graphics_pipeline = pipelines[0];
 
-        std.log.info("Graphics pipeline created", .{});
+        // Create overdraw pipeline: no depth test, additive blending, flat fragment shader
+        const overdraw_frag_spirv = try shader_compiler.compile("overdraw.frag", .fragment);
+        defer shader_compiler.allocator.free(overdraw_frag_spirv);
+
+        const overdraw_frag_module_info = vk.VkShaderModuleCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = overdraw_frag_spirv.len,
+            .pCode = @ptrCast(@alignCast(overdraw_frag_spirv.ptr)),
+        };
+
+        const overdraw_frag_module = try vk.createShaderModule(device, &overdraw_frag_module_info, null);
+        defer vk.destroyShaderModule(device, overdraw_frag_module, null);
+
+        const overdraw_frag_stage = vk.VkPipelineShaderStageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = overdraw_frag_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        };
+
+        const overdraw_shader_stages = [_]vk.VkPipelineShaderStageCreateInfo{ vert_stage_info, overdraw_frag_stage };
+
+        const overdraw_depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_FALSE,
+            .depthWriteEnable = vk.VK_FALSE,
+            .depthCompareOp = vk.VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
+        };
+
+        const overdraw_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        const overdraw_color_blending = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = 0,
+            .attachmentCount = 1,
+            .pAttachments = &overdraw_blend_attachment,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        const overdraw_pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &rendering_create_info,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &overdraw_shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &overdraw_depth_stencil,
+            .pColorBlendState = &overdraw_color_blending,
+            .pDynamicState = &dynamic_state_info,
+            .layout = self.pipeline_layout,
+            .renderPass = null,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        const overdraw_pipeline_infos = &[_]vk.VkGraphicsPipelineCreateInfo{overdraw_pipeline_info};
+        var overdraw_pipelines: [1]vk.VkPipeline = undefined;
+        try vk.createGraphicsPipelines(device, ctx.pipeline_cache, 1, overdraw_pipeline_infos, null, &overdraw_pipelines);
+        self.overdraw_pipeline = overdraw_pipelines[0];
+
+        std.log.info("Graphics pipelines created", .{});
     }
 
     fn createIndirectBuffer(self: *WorldRenderer, ctx: *const VulkanContext) !void {

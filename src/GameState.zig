@@ -24,6 +24,7 @@ jump_requested: bool,
 hit_result: ?Raycast.BlockHitResult,
 dirty_chunks: DirtyChunkSet,
 debug_camera_active: bool,
+overdraw_mode: bool,
 saved_camera: Camera,
 
 // Previous-tick snapshots for interpolation
@@ -74,6 +75,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
         .hit_result = null,
         .dirty_chunks = DirtyChunkSet.empty(),
         .debug_camera_active = false,
+        .overdraw_mode = false,
         .saved_camera = cam,
         .prev_entity_pos = .{ 0.0, 64.0, 0.0 },
         .prev_camera_pos = cam.position,

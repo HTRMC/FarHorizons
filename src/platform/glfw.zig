@@ -31,6 +31,7 @@ pub const GLFW_KEY_DOWN = c.GLFW_KEY_DOWN;
 pub const GLFW_KEY_LEFT = c.GLFW_KEY_LEFT;
 pub const GLFW_KEY_RIGHT = c.GLFW_KEY_RIGHT;
 pub const GLFW_KEY_P = c.GLFW_KEY_P;
+pub const GLFW_KEY_F4 = c.GLFW_KEY_F4;
 pub const GLFW_KEY_F11 = c.GLFW_KEY_F11;
 pub const GLFW_PRESS = c.GLFW_PRESS;
 pub const GLFW_RELEASE = c.GLFW_RELEASE;

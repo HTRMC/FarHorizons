@@ -22,6 +22,7 @@ const InputState = struct {
     last_space_press_time: f64 = 0.0,
     mode_toggle_requested: bool = false,
     debug_toggle_requested: bool = false,
+    overdraw_toggle_requested: bool = false,
 };
 
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
@@ -47,6 +48,10 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
 
     if (key == glfw.GLFW_KEY_P and action == glfw.GLFW_PRESS) {
         input_state.debug_toggle_requested = true;
+    }
+
+    if (key == glfw.GLFW_KEY_F4 and action == glfw.GLFW_PRESS) {
+        input_state.overdraw_toggle_requested = true;
     }
 
     if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
@@ -174,6 +179,12 @@ pub fn main() !void {
         if (input_state.debug_toggle_requested) {
             input_state.debug_toggle_requested = false;
             game_state.toggleDebugCamera();
+        }
+
+        // Consume overdraw toggle
+        if (input_state.overdraw_toggle_requested) {
+            input_state.overdraw_toggle_requested = false;
+            game_state.overdraw_mode = !game_state.overdraw_mode;
         }
 
         // Buffer movement input (read once per frame, consumed by ticks)
