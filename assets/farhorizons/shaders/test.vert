@@ -14,6 +14,7 @@ layout(push_constant) uniform PC { mat4 mvp; } pc;
 layout(location=0) out vec2 fragUV;
 layout(location=1) flat out uint fragTexIndex;
 layout(location=2) out vec3 fragLight;
+layout(location=3) flat out uint fragAoData;
 
 void main() {
     uint faceID = gl_VertexIndex >> 2;
@@ -49,9 +50,6 @@ void main() {
     uint packed = lights[chunk.lightStart + lightIdx].corners[cornerID];
     fragLight = vec3(float(packed & 0xFF), float((packed>>8)&0xFF), float((packed>>16)&0xFF)) / 255.0;
 
-    // Per-vertex ambient occlusion
-    uint aoData = face.word1;
-    uint aoLevel = (aoData >> (cornerID * 2)) & 0x3;
-    const float ao_curve[4] = float[4](1.0, 0.8, 0.6, 0.4);
-    fragLight *= ao_curve[aoLevel];
+    // Pass raw AO data to fragment shader for bilinear interpolation
+    fragAoData = face.word1;
 }
