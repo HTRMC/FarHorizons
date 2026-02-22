@@ -22,16 +22,6 @@ const INITIAL_LIGHT_CAPACITY: u32 = 4_096; // ~64 KB at 16 bytes/entry
 const MAX_FACES_PER_DRAW: u32 = 16_384; // max faces per draw (16384*4=65536 verts, u16 index limit)
 const MAX_INDIRECT_COMMANDS: u32 = WorldState.TOTAL_WORLD_CHUNKS * 6; // 96
 
-// Normal vectors for the 6 face directions (+Z, -Z, -X, +X, +Y, -Y)
-const normal_vectors = [6][3]f32{
-    .{ 0.0, 0.0, 1.0 },
-    .{ 0.0, 0.0, -1.0 },
-    .{ -1.0, 0.0, 0.0 },
-    .{ 1.0, 0.0, 0.0 },
-    .{ 0.0, 1.0, 0.0 },
-    .{ 0.0, -1.0, 0.0 },
-};
-
 pub const WorldRenderer = struct {
     texture_manager: TextureManager,
     pipeline_layout: vk.VkPipelineLayout,
@@ -279,6 +269,8 @@ pub const WorldRenderer = struct {
     }
 
     /// Build indirect draw commands with CPU-side normal culling.
+    /// Uses signed distance from camera to chunk AABB to determine which
+    /// normal groups are potentially visible (Cubyz-style approach).
     pub fn buildIndirectCommands(self: *WorldRenderer, ctx: *const VulkanContext, camera_pos: zlm.Vec3) void {
         const tz = tracy.zone(@src(), "buildIndirectCommands");
         defer tz.end();
@@ -289,6 +281,7 @@ pub const WorldRenderer = struct {
         const commands: [*]DrawCommand = @ptrCast(@alignCast(data));
 
         var command_count: u32 = 0;
+        const cs: i32 = WorldState.CHUNK_SIZE;
 
         for (0..WorldState.TOTAL_WORLD_CHUNKS) |chunk_idx| {
             const cd = self.chunk_data[chunk_idx];
@@ -298,13 +291,10 @@ pub const WorldRenderer = struct {
             for (cd.face_counts) |fc| total += fc;
             if (total == 0) continue;
 
-            const chunk_center_x: f32 = @as(f32, @floatFromInt(cd.position[0])) + @as(f32, WorldState.CHUNK_SIZE) / 2.0;
-            const chunk_center_y: f32 = @as(f32, @floatFromInt(cd.position[1])) + @as(f32, WorldState.CHUNK_SIZE) / 2.0;
-            const chunk_center_z: f32 = @as(f32, @floatFromInt(cd.position[2])) + @as(f32, WorldState.CHUNK_SIZE) / 2.0;
-
-            const to_chunk_x = chunk_center_x - camera_pos.x;
-            const to_chunk_y = chunk_center_y - camera_pos.y;
-            const to_chunk_z = chunk_center_z - camera_pos.z;
+            // Signed distance from camera to chunk AABB.
+            // When inside the chunk, all components clamp to 0 (all normals visible).
+            // When outside, only the side the camera is on passes the check.
+            const pd = aabbSignedDist(camera_pos.x, camera_pos.y, camera_pos.z, cd.position, cs);
 
             var normal_offset: u32 = 0;
             for (0..6) |normal_idx| {
@@ -313,12 +303,7 @@ pub const WorldRenderer = struct {
                     continue;
                 }
 
-                // Dot product of normal with (chunk_center - camera_pos)
-                const nv = normal_vectors[normal_idx];
-                const dot = nv[0] * to_chunk_x + nv[1] * to_chunk_y + nv[2] * to_chunk_z;
-
-                if (dot >= 0) {
-                    // Back-facing normal group, skip
+                if (!isNormalVisible(normal_idx, pd)) {
                     normal_offset += fc;
                     continue;
                 }
@@ -829,3 +814,184 @@ pub const WorldRenderer = struct {
         try vk_utils.copyBuffer(ctx, staging_buffer, self.static_index_buffer, ib_capacity);
     }
 };
+
+/// Compute signed distance from a point to a chunk AABB.
+/// Returns [3]i32 where each component is:
+///   negative → point is before the chunk min on that axis
+///   0        → point is inside the chunk on that axis
+///   positive → point is past the chunk max on that axis
+pub fn aabbSignedDist(cam_x: f32, cam_y: f32, cam_z: f32, chunk_pos: [3]i32, cs: i32) [3]i32 {
+    var pd = [3]i32{
+        @as(i32, @intFromFloat(@floor(cam_x))) - chunk_pos[0],
+        @as(i32, @intFromFloat(@floor(cam_y))) - chunk_pos[1],
+        @as(i32, @intFromFloat(@floor(cam_z))) - chunk_pos[2],
+    };
+    if (pd[0] > 0) pd[0] = @max(0, pd[0] - cs);
+    if (pd[1] > 0) pd[1] = @max(0, pd[1] - cs);
+    if (pd[2] > 0) pd[2] = @max(0, pd[2] - cs);
+    return pd;
+}
+
+/// Check if a normal group is visible given the signed AABB distance.
+/// Normal order: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
+pub fn isNormalVisible(normal_idx: usize, pd: [3]i32) bool {
+    return switch (normal_idx) {
+        0 => pd[2] >= 0, // +Z: camera at or past chunk min Z
+        1 => pd[2] <= 0, // -Z: camera at or before chunk max Z
+        2 => pd[0] <= 0, // -X: camera at or before chunk max X
+        3 => pd[0] >= 0, // +X: camera at or past chunk min X
+        4 => pd[1] >= 0, // +Y: camera at or past chunk min Y
+        5 => pd[1] <= 0, // -Y: camera at or before chunk max Y
+        else => true,
+    };
+}
+
+// --- Tests ---
+
+const testing = std.testing;
+
+fn shouldDraw(pos: [3]i32, cx: f32, cy: f32, cz: f32, n: usize) bool {
+    const pd = aabbSignedDist(cx, cy, cz, pos, WorldState.CHUNK_SIZE);
+    return isNormalVisible(n, pd);
+}
+
+test "aabbSignedDist: camera inside chunk → all zero" {
+    const pd = aabbSignedDist(16, 2, 16, .{ 0, -16, 0 }, 32);
+    try testing.expectEqual(@as(i32, 0), pd[0]);
+    try testing.expectEqual(@as(i32, 0), pd[1]);
+    try testing.expectEqual(@as(i32, 0), pd[2]);
+}
+
+test "aabbSignedDist: camera outside chunk" {
+    // Camera at (40, -20, -5), chunk from (0,-16,0) to (32,16,32)
+    const pd = aabbSignedDist(40, -20, -5, .{ 0, -16, 0 }, 32);
+    try testing.expectEqual(@as(i32, 8), pd[0]); // 40 - 0 = 40, clamped: 40 - 32 = 8
+    try testing.expectEqual(@as(i32, -4), pd[1]); // -20 - (-16) = -4, negative → no clamp
+    try testing.expectEqual(@as(i32, -5), pd[2]); // -5 - 0 = -5, negative → no clamp
+}
+
+test "aabbSignedDist: camera at chunk boundary edges" {
+    // At min corner
+    const pd_min = aabbSignedDist(0, -16, 0, .{ 0, -16, 0 }, 32);
+    try testing.expectEqual(@as(i32, 0), pd_min[0]);
+    try testing.expectEqual(@as(i32, 0), pd_min[1]);
+    try testing.expectEqual(@as(i32, 0), pd_min[2]);
+
+    // At max corner (floor(32) = 32, 32 - 0 = 32, clamped: 32 - 32 = 0)
+    const pd_max = aabbSignedDist(32, 16, 32, .{ 0, -16, 0 }, 32);
+    try testing.expectEqual(@as(i32, 0), pd_max[0]);
+    try testing.expectEqual(@as(i32, 0), pd_max[1]);
+    try testing.expectEqual(@as(i32, 0), pd_max[2]);
+}
+
+test "camera inside chunk draws all normals" {
+    const pos = [3]i32{ 0, -16, 0 };
+    for (0..6) |n| {
+        try testing.expect(shouldDraw(pos, 16, 2, 16, n));
+    }
+}
+
+test "camera at chunk boundary (edge) draws all normals" {
+    const pos = [3]i32{ 0, -16, 0 };
+    // Min corner
+    for (0..6) |n| {
+        try testing.expect(shouldDraw(pos, 0, -16, 0, n));
+    }
+    // Max corner
+    for (0..6) |n| {
+        try testing.expect(shouldDraw(pos, 32, 16, 32, n));
+    }
+}
+
+test "camera in front of chunk (+Z side)" {
+    const pos = [3]i32{ 0, -16, 0 };
+    // Camera at z=40, inside X and Y range
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 0)); // +Z: draw
+    try testing.expect(!shouldDraw(pos, 16, 0, 40, 1)); // -Z: cull
+    // Camera inside X/Y range → those normals all visible
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 2)); // -X: draw
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 3)); // +X: draw
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 4)); // +Y: draw
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 5)); // -Y: draw
+}
+
+test "camera behind chunk (-Z side)" {
+    const pos = [3]i32{ 0, -16, 0 };
+    try testing.expect(!shouldDraw(pos, 16, 0, -10, 0)); // +Z: cull
+    try testing.expect(shouldDraw(pos, 16, 0, -10, 1)); // -Z: draw
+}
+
+test "camera above chunk draws top, culls bottom" {
+    const pos = [3]i32{ 0, -16, 0 };
+    try testing.expect(shouldDraw(pos, 16, 30, 16, 4)); // +Y: draw
+    try testing.expect(!shouldDraw(pos, 16, 30, 16, 5)); // -Y: cull
+}
+
+test "camera below chunk draws bottom, culls top" {
+    const pos = [3]i32{ 0, -16, 0 };
+    try testing.expect(!shouldDraw(pos, 16, -30, 16, 4)); // +Y: cull
+    try testing.expect(shouldDraw(pos, 16, -30, 16, 5)); // -Y: draw
+}
+
+test "camera just outside chunk boundary sees near faces" {
+    const pos = [3]i32{ 0, -16, 0 };
+    // Camera at x=-1 (just outside left)
+    try testing.expect(shouldDraw(pos, -1, 0, 16, 2)); // -X: draw
+    try testing.expect(!shouldDraw(pos, -1, 0, 16, 3)); // +X: cull
+    // Camera at x=33 (just outside right)
+    try testing.expect(shouldDraw(pos, 33, 0, 16, 3)); // +X: draw
+    try testing.expect(!shouldDraw(pos, 33, 0, 16, 2)); // -X: cull
+}
+
+test "diagonal camera position" {
+    const pos = [3]i32{ 0, -16, 0 };
+    // Camera at upper-right-front corner
+    try testing.expect(shouldDraw(pos, 40, 25, 40, 0)); // +Z: draw
+    try testing.expect(shouldDraw(pos, 40, 25, 40, 3)); // +X: draw
+    try testing.expect(shouldDraw(pos, 40, 25, 40, 4)); // +Y: draw
+    try testing.expect(!shouldDraw(pos, 40, 25, 40, 1)); // -Z: cull
+    try testing.expect(!shouldDraw(pos, 40, 25, 40, 2)); // -X: cull
+    try testing.expect(!shouldDraw(pos, 40, 25, 40, 5)); // -Y: cull
+}
+
+test "camera directly above center - side faces all visible" {
+    // This was the bug with the dot-product approach:
+    // camera above center had dot=0 for side normals → incorrectly culled
+    const pos = [3]i32{ 0, -16, 0 };
+    // Camera at (16, 25, 16) - directly above center, inside X/Z range
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 0)); // +Z
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 1)); // -Z
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 2)); // -X
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 3)); // +X
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 4)); // +Y: draw
+    try testing.expect(!shouldDraw(pos, 16, 25, 16, 5)); // -Y: cull
+}
+
+test "camera at chunk Z edge sees both Z normals" {
+    // Camera at z=0, chunk from z=0 to z=32
+    // The old dot-product approach culled +Z here (center-based), but
+    // the camera IS at the chunk edge and can see blocks just inside.
+    const pos = [3]i32{ 0, -16, 0 };
+    try testing.expect(shouldDraw(pos, 16, 0, 0, 0)); // +Z: draw (camera at min Z edge)
+    try testing.expect(shouldDraw(pos, 16, 0, 0, 1)); // -Z: draw (camera at min Z edge)
+}
+
+test "typical gameplay - standing on flat terrain" {
+    // Camera at (0, 2, 0). Chunk (cx=2, cz=2) → pos (0, -16, 0)
+    // Camera inside this chunk → all normals
+    const pos_center = [3]i32{ 0, -16, 0 };
+    for (0..6) |n| {
+        try testing.expect(shouldDraw(pos_center, 0, 2, 0, n));
+    }
+
+    // Chunk to the right: pos (32, -16, 0). Camera x=0 < 32.
+    const pos_right = [3]i32{ 32, -16, 0 };
+    try testing.expect(!shouldDraw(pos_right, 0, 2, 0, 3)); // +X: cull
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 2)); // -X: draw
+    // Camera y=2 is inside Y range → both Y normals visible
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 4)); // +Y: draw
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 5)); // -Y: draw
+    // Camera z=0 is at chunk min Z → both Z normals visible
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 0)); // +Z: draw
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 1)); // -Z: draw
+}

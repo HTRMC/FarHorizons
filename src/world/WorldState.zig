@@ -425,3 +425,229 @@ pub fn affectedChunks(wx: i32, wy: i32, wz: i32) AffectedChunks {
 
     return result;
 }
+
+// --- Tests ---
+
+const testing = std.testing;
+
+fn unpackFace(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_index: u6 } {
+    return .{
+        .x = @intCast(fd.word0 & 0x1F),
+        .y = @intCast((fd.word0 >> 5) & 0x1F),
+        .z = @intCast((fd.word0 >> 10) & 0x1F),
+        .tex_index = @intCast((fd.word0 >> 15) & 0xFF),
+        .normal_index = @intCast((fd.word0 >> 23) & 0x7),
+        .light_index = @intCast((fd.word0 >> 26) & 0x3F),
+    };
+}
+
+fn makeEmptyWorld() World {
+    var world: World = undefined;
+    for (0..WORLD_CHUNKS_Y) |cy| {
+        for (0..WORLD_CHUNKS_Z) |cz| {
+            for (0..WORLD_CHUNKS_X) |cx| {
+                world[cy][cz][cx] = .{ .blocks = .{.air} ** BLOCKS_PER_CHUNK };
+            }
+        }
+    }
+    return world;
+}
+
+test "single block in air produces 6 faces" {
+    var world = makeEmptyWorld();
+    // Place a single stone block at local (5,5,5) in chunk (0,0,0)
+    world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    try testing.expectEqual(@as(u32, 6), result.total_face_count);
+
+    // Each normal direction should have exactly 1 face
+    for (0..6) |i| {
+        try testing.expectEqual(@as(u32, 1), result.face_counts[i]);
+    }
+
+    // All faces should reference position (5,5,5)
+    for (result.faces) |face| {
+        const u = unpackFace(face);
+        try testing.expectEqual(@as(u5, 5), u.x);
+        try testing.expectEqual(@as(u5, 5), u.y);
+        try testing.expectEqual(@as(u5, 5), u.z);
+        try testing.expectEqual(@as(u8, 3), u.tex_index); // stone = 3
+    }
+}
+
+test "two adjacent blocks share face - culled" {
+    var world = makeEmptyWorld();
+    // Two stone blocks adjacent in X
+    world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
+    world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .stone;
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // 2 blocks * 6 faces - 2 shared faces = 10
+    try testing.expectEqual(@as(u32, 10), result.total_face_count);
+
+    // The shared face: block(5)'s +X face (normal 3) and block(6)'s -X face (normal 2) should be culled
+    // So normal 2 (-X) should have 1 face (block 5's -X), normal 3 (+X) should have 1 face (block 6's +X)
+    try testing.expectEqual(@as(u32, 1), result.face_counts[2]); // -X: only block 5
+    try testing.expectEqual(@as(u32, 1), result.face_counts[3]); // +X: only block 6
+    // +Z, -Z, +Y, -Y each have 2 faces (one per block)
+    try testing.expectEqual(@as(u32, 2), result.face_counts[0]); // +Z
+    try testing.expectEqual(@as(u32, 2), result.face_counts[1]); // -Z
+    try testing.expectEqual(@as(u32, 2), result.face_counts[4]); // +Y
+    try testing.expectEqual(@as(u32, 2), result.face_counts[5]); // -Y
+}
+
+test "face_counts sum equals total_face_count" {
+    var world = makeEmptyWorld();
+    // Place a small cluster
+    for (3..7) |x| {
+        for (3..6) |y| {
+            world[0][0][0].blocks[chunkIndex(x, y, 4)] = .dirt;
+        }
+    }
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    var sum: u32 = 0;
+    for (result.face_counts) |fc| sum += fc;
+    try testing.expectEqual(sum, result.total_face_count);
+    try testing.expectEqual(result.total_face_count, @as(u32, @intCast(result.faces.len)));
+}
+
+test "normal indices in faces match their group" {
+    var world = makeEmptyWorld();
+    world[0][0][0].blocks[chunkIndex(10, 10, 10)] = .grass_block;
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // Faces are concatenated by normal group: first face_counts[0] faces have normal 0, etc.
+    var offset: usize = 0;
+    for (0..6) |normal_idx| {
+        const count = result.face_counts[normal_idx];
+        for (offset..offset + count) |i| {
+            const u = unpackFace(result.faces[i]);
+            try testing.expectEqual(@as(u3, @intCast(normal_idx)), u.normal_index);
+        }
+        offset += count;
+    }
+}
+
+test "cross-chunk boundary face culling" {
+    var world = makeEmptyWorld();
+    // Place blocks on both sides of the chunk boundary in X
+    // Chunk (0,0,0) block at local x=31 (rightmost)
+    world[0][0][0].blocks[chunkIndex(CHUNK_SIZE - 1, 5, 5)] = .stone;
+    // Chunk (1,0,0) block at local x=0 (leftmost)
+    world[0][0][1].blocks[chunkIndex(0, 5, 5)] = .stone;
+
+    const result0 = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result0.faces);
+    defer testing.allocator.free(result0.lights);
+
+    const result1 = try generateChunkMesh(testing.allocator, &world, .{ .cx = 1, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result1.faces);
+    defer testing.allocator.free(result1.lights);
+
+    // Each block should have 5 faces (shared +X/-X face culled)
+    try testing.expectEqual(@as(u32, 5), result0.total_face_count);
+    try testing.expectEqual(@as(u32, 5), result1.total_face_count);
+
+    // Chunk 0's +X face (normal 3) should be 0 (culled by adjacent block in chunk 1)
+    try testing.expectEqual(@as(u32, 0), result0.face_counts[3]);
+    // Chunk 1's -X face (normal 2) should be 0 (culled by adjacent block in chunk 0)
+    try testing.expectEqual(@as(u32, 0), result1.face_counts[2]);
+}
+
+test "empty chunk produces no faces" {
+    var world = makeEmptyWorld();
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    try testing.expectEqual(@as(u32, 0), result.total_face_count);
+    try testing.expectEqual(@as(usize, 0), result.faces.len);
+}
+
+test "glass does not cull adjacent non-glass" {
+    var world = makeEmptyWorld();
+    // Glass next to stone: stone face should be visible (glass is not opaque)
+    world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
+    world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .glass;
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // Stone has 6 faces (glass doesn't cull it since glass is not opaque)
+    // Glass has 5 faces (stone IS opaque, so glass's -X face facing stone is culled)
+    try testing.expectEqual(@as(u32, 11), result.total_face_count);
+}
+
+test "glass-glass adjacency culls shared face" {
+    var world = makeEmptyWorld();
+    world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .glass;
+    world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .glass;
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // Glass-glass: cullsSelf is true, so shared faces culled → 10 faces
+    try testing.expectEqual(@as(u32, 10), result.total_face_count);
+}
+
+test "light deduplication works" {
+    var world = makeEmptyWorld();
+    // Multiple blocks with the same face direction should share light entries
+    for (0..4) |x| {
+        world[0][0][0].blocks[chunkIndex(x, 5, 5)] = .stone;
+    }
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // With no AO, all faces of the same normal direction have the same light.
+    // There are 6 unique face directions = 6 unique light values.
+    // But some face directions share the same light value:
+    //   +Z/-Z both use 0.6, -X/+X both use 0.8
+    // So unique light entries should be: 0.6, 0.8, 1.0, 0.5 = 4
+    try testing.expectEqual(@as(u32, 4), result.light_count);
+}
+
+test "ChunkCoord.position returns correct world-space origin" {
+    // Chunk (0,0,0) should map to (-WORLD_SIZE_X/2, -WORLD_SIZE_Y/2, -WORLD_SIZE_Z/2)
+    const pos0 = (ChunkCoord{ .cx = 0, .cy = 0, .cz = 0 }).position();
+    try testing.expectEqual(@as(i32, -64), pos0[0]);
+    try testing.expectEqual(@as(i32, -16), pos0[1]);
+    try testing.expectEqual(@as(i32, -64), pos0[2]);
+
+    // Chunk (2,0,2) should be at (0, -16, 0)
+    const pos2 = (ChunkCoord{ .cx = 2, .cy = 0, .cz = 2 }).position();
+    try testing.expectEqual(@as(i32, 0), pos2[0]);
+    try testing.expectEqual(@as(i32, -16), pos2[1]);
+    try testing.expectEqual(@as(i32, 0), pos2[2]);
+}
+
+test "world boundary blocks have all outer faces" {
+    var world = makeEmptyWorld();
+    // Place block at corner (0,0,0) of chunk (0,0,0) — world boundary on 3 sides
+    world[0][0][0].blocks[chunkIndex(0, 0, 0)] = .stone;
+
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    defer testing.allocator.free(result.faces);
+    defer testing.allocator.free(result.lights);
+
+    // All 6 faces should be present (all neighbors are air - either in-chunk or world boundary)
+    try testing.expectEqual(@as(u32, 6), result.total_face_count);
+}
