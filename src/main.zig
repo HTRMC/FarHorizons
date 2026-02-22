@@ -21,6 +21,7 @@ const InputState = struct {
     scroll_speed_delta: f32 = 0.0,
     last_space_press_time: f64 = 0.0,
     mode_toggle_requested: bool = false,
+    debug_toggle_requested: bool = false,
 };
 
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
@@ -44,6 +45,10 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
         glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
     }
 
+    if (key == glfw.GLFW_KEY_P and action == glfw.GLFW_PRESS) {
+        input_state.debug_toggle_requested = true;
+    }
+
     if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
         const now = glfw.getTime();
         if (now - input_state.last_space_press_time < DOUBLE_TAP_THRESHOLD) {
@@ -61,13 +66,15 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
 
     if (button == glfw.GLFW_MOUSE_BUTTON_LEFT and input_state.mouse_captured) {
-        input_state.game_state.breakBlock();
+        if (!input_state.game_state.debug_camera_active) {
+            input_state.game_state.breakBlock();
+        }
     } else if (button == glfw.GLFW_MOUSE_BUTTON_RIGHT) {
         if (!input_state.mouse_captured) {
             input_state.mouse_captured = true;
             input_state.first_mouse = true;
             glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
-        } else {
+        } else if (!input_state.game_state.debug_camera_active) {
             input_state.game_state.placeBlock();
         }
     }
@@ -163,10 +170,10 @@ pub fn main() !void {
             }
         }
 
-        // Consume mode toggle
-        if (input_state.mode_toggle_requested) {
-            input_state.mode_toggle_requested = false;
-            game_state.toggleMode();
+        // Consume debug camera toggle
+        if (input_state.debug_toggle_requested) {
+            input_state.debug_toggle_requested = false;
+            game_state.toggleDebugCamera();
         }
 
         // Buffer movement input (read once per frame, consumed by ticks)
@@ -181,30 +188,44 @@ pub fn main() !void {
         if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) up_input += 1.0;
         if (glfw.getKey(window.handle, glfw.GLFW_KEY_LEFT_SHIFT) == glfw.GLFW_PRESS) up_input -= 1.0;
 
-        game_state.input_move = .{ forward_input, up_input, right_input };
+        if (game_state.debug_camera_active) {
+            // Debug camera: free-fly movement applied directly per-frame
+            const speed = input_state.move_speed * delta_time;
+            game_state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
+        } else {
+            // Consume mode toggle
+            if (input_state.mode_toggle_requested) {
+                input_state.mode_toggle_requested = false;
+                game_state.toggleMode();
+            }
 
-        if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) {
-            game_state.jump_requested = true;
+            game_state.input_move = .{ forward_input, up_input, right_input };
+
+            if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) {
+                game_state.jump_requested = true;
+            }
+
+            // Fixed timestep accumulator
+            tick_accumulator += delta_time;
+            if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
+
+            while (tick_accumulator >= GameState.TICK_INTERVAL) {
+                game_state.fixedUpdate(input_state.move_speed);
+                tick_accumulator -= GameState.TICK_INTERVAL;
+            }
+
+            // Interpolate for smooth rendering
+            const alpha = tick_accumulator / GameState.TICK_INTERVAL;
+            game_state.interpolateForRender(alpha);
         }
-
-        // Fixed timestep accumulator
-        tick_accumulator += delta_time;
-        if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
-
-        while (tick_accumulator >= GameState.TICK_INTERVAL) {
-            game_state.fixedUpdate(input_state.move_speed);
-            tick_accumulator -= GameState.TICK_INTERVAL;
-        }
-
-        // Interpolate for smooth rendering
-        const alpha = tick_accumulator / GameState.TICK_INTERVAL;
-        game_state.interpolateForRender(alpha);
 
         try renderer.beginFrame();
         try renderer.render();
         try renderer.endFrame();
 
-        game_state.restoreAfterRender();
+        if (!game_state.debug_camera_active) {
+            game_state.restoreAfterRender();
+        }
 
         tracy.frameMark();
     }

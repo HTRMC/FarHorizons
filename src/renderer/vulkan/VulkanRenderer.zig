@@ -182,14 +182,15 @@ pub const VulkanRenderer = struct {
         // are not read by the GPU while we update them on the CPU.
         try vk.waitForFences(self.ctx.device, MAX_FRAMES_IN_FLIGHT, &self.render_state.in_flight_fences, vk.VK_TRUE, std.math.maxInt(u64));
 
-        self.pollMeshWorker();
-        self.render_state.world_renderer.buildIndirectCommands(&self.ctx, self.game_state.camera.position);
+        if (!self.game_state.debug_camera_active) {
+            self.pollMeshWorker();
+            self.render_state.world_renderer.buildIndirectCommands(&self.ctx, self.game_state.camera.position);
+            self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
 
-        self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
-
-        if (self.game_state.dirty_chunks.count > 0 and self.mesh_worker.state.load(.acquire) == .idle) {
-            self.mesh_worker.startDirty(self.game_state.dirty_chunks.chunks[0..self.game_state.dirty_chunks.count]);
-            self.game_state.dirty_chunks.clear();
+            if (self.game_state.dirty_chunks.count > 0 and self.mesh_worker.state.load(.acquire) == .idle) {
+                self.mesh_worker.startDirty(self.game_state.dirty_chunks.chunks[0..self.game_state.dirty_chunks.count]);
+                self.game_state.dirty_chunks.clear();
+            }
         }
     }
 

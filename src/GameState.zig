@@ -23,6 +23,8 @@ input_move: [3]f32,
 jump_requested: bool,
 hit_result: ?Raycast.BlockHitResult,
 dirty_chunks: DirtyChunkSet,
+debug_camera_active: bool,
+saved_camera: Camera,
 
 // Previous-tick snapshots for interpolation
 prev_entity_pos: [3]f32,
@@ -71,6 +73,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
         .jump_requested = false,
         .hit_result = null,
         .dirty_chunks = DirtyChunkSet.empty(),
+        .debug_camera_active = false,
+        .saved_camera = cam,
         .prev_entity_pos = .{ 0.0, 64.0, 0.0 },
         .prev_camera_pos = cam.position,
         .tick_camera_pos = cam.position,
@@ -80,6 +84,18 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
 
 pub fn deinit(self: *GameState) void {
     self.allocator.destroy(self.world);
+}
+
+pub fn toggleDebugCamera(self: *GameState) void {
+    if (self.debug_camera_active) {
+        self.camera = self.saved_camera;
+        self.prev_camera_pos = self.camera.position;
+        self.tick_camera_pos = self.camera.position;
+        self.debug_camera_active = false;
+    } else {
+        self.saved_camera = self.camera;
+        self.debug_camera_active = true;
+    }
 }
 
 pub fn toggleMode(self: *GameState) void {
