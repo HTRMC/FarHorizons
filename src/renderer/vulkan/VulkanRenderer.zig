@@ -183,6 +183,7 @@ pub const VulkanRenderer = struct {
         try vk.waitForFences(self.ctx.device, MAX_FRAMES_IN_FLIGHT, &self.render_state.in_flight_fences, vk.VK_TRUE, std.math.maxInt(u64));
 
         self.pollMeshWorker();
+        self.render_state.world_renderer.buildIndirectCommands(&self.ctx, self.game_state.camera.position);
 
         self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
 
@@ -200,10 +201,11 @@ pub const VulkanRenderer = struct {
                 self.render_state.world_renderer.uploadChunkData(
                     &self.ctx,
                     chunk_result.coord,
-                    chunk_result.vertices,
-                    chunk_result.indices,
-                    chunk_result.vertex_count,
-                    chunk_result.index_count,
+                    chunk_result.faces,
+                    chunk_result.face_counts,
+                    chunk_result.total_face_count,
+                    chunk_result.lights,
+                    chunk_result.light_count,
                 ) catch |err| {
                     std.log.err("Failed to upload chunk ({},{},{}): {}", .{
                         chunk_result.coord.cx, chunk_result.coord.cy, chunk_result.coord.cz, err,

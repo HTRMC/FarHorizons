@@ -1,8 +1,8 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const types = @import("../renderer/vulkan/types.zig");
-const GpuVertex = types.GpuVertex;
-const DrawCommand = types.DrawCommand;
+const FaceData = types.FaceData;
+const LightEntry = types.LightEntry;
 const tracy = @import("../platform/tracy.zig");
 
 pub const MeshWorker = struct {
@@ -25,10 +25,11 @@ pub const MeshWorker = struct {
     pub const State = enum(u8) { idle, working, ready };
 
     pub const ChunkResult = struct {
-        vertices: []GpuVertex,
-        indices: []u32,
-        vertex_count: u32,
-        index_count: u32,
+        faces: []FaceData,
+        face_counts: [6]u32,
+        total_face_count: u32,
+        lights: []LightEntry,
+        light_count: u32,
         coord: WorldState.ChunkCoord,
     };
 
@@ -105,8 +106,8 @@ pub const MeshWorker = struct {
     /// Free mesh data for a specific result (caller invokes after uploading to GPU).
     pub fn freeResult(self: *MeshWorker, idx: usize) void {
         if (self.results[idx]) |r| {
-            self.allocator.free(r.vertices);
-            self.allocator.free(r.indices);
+            self.allocator.free(r.faces);
+            self.allocator.free(r.lights);
             self.results[idx] = null;
         }
     }
@@ -118,8 +119,8 @@ pub const MeshWorker = struct {
         }
         for (&self.results) |*r| {
             if (r.*) |result| {
-                self.allocator.free(result.vertices);
-                self.allocator.free(result.indices);
+                self.allocator.free(result.faces);
+                self.allocator.free(result.lights);
                 r.* = null;
             }
         }
@@ -165,10 +166,11 @@ pub const MeshWorker = struct {
         const idx = self.result_count;
         self.result_coords[idx] = coord;
         self.results[idx] = .{
-            .vertices = mesh.vertices,
-            .indices = mesh.indices,
-            .vertex_count = mesh.vertex_count,
-            .index_count = mesh.index_count,
+            .faces = mesh.faces,
+            .face_counts = mesh.face_counts,
+            .total_face_count = mesh.total_face_count,
+            .lights = mesh.lights,
+            .light_count = mesh.light_count,
             .coord = coord,
         };
         self.result_count += 1;

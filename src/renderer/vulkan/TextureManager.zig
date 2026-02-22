@@ -47,7 +47,23 @@ pub const TextureManager = struct {
         vk.freeMemory(device, self.texture_image_memory, null);
     }
 
-    pub fn updateChunkPositions(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
+    pub fn updateFaceDescriptor(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
+        self.updateStorageDescriptor(ctx, 0, buffer, size);
+    }
+
+    pub fn updateChunkDataDescriptor(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
+        self.updateStorageDescriptor(ctx, 2, buffer, size);
+    }
+
+    pub fn updateModelDescriptor(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
+        self.updateStorageDescriptor(ctx, 3, buffer, size);
+    }
+
+    pub fn updateLightDescriptor(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
+        self.updateStorageDescriptor(ctx, 4, buffer, size);
+    }
+
+    fn updateStorageDescriptor(self: *TextureManager, ctx: *const VulkanContext, binding: u32, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
         const buffer_info = vk.VkDescriptorBufferInfo{
             .buffer = buffer,
             .offset = 0,
@@ -58,35 +74,12 @@ pub const TextureManager = struct {
             .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = null,
             .dstSet = self.bindless_descriptor_set,
-            .dstBinding = 2,
+            .dstBinding = binding,
             .dstArrayElement = 0,
             .descriptorCount = 1,
             .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pImageInfo = null,
             .pBufferInfo = &buffer_info,
-            .pTexelBufferView = null,
-        };
-
-        vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
-    }
-
-    pub fn updateVertexDescriptor(self: *TextureManager, ctx: *const VulkanContext, vertex_buffer: vk.VkBuffer, vb_size: vk.VkDeviceSize) void {
-        const vertex_buffer_info = vk.VkDescriptorBufferInfo{
-            .buffer = vertex_buffer,
-            .offset = 0,
-            .range = vb_size,
-        };
-
-        const descriptor_write = vk.VkWriteDescriptorSet{
-            .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = null,
-            .dstSet = self.bindless_descriptor_set,
-            .dstBinding = 0,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pImageInfo = null,
-            .pBufferInfo = &vertex_buffer_info,
             .pTexelBufferView = null,
         };
 
@@ -387,9 +380,25 @@ pub const TextureManager = struct {
                 .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
                 .pImmutableSamplers = null,
             },
+            .{
+                .binding = 3,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 4,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = null,
+            },
         };
 
         const binding_flags = [_]c.VkDescriptorBindingFlags{
+            vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+            vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
@@ -415,7 +424,7 @@ pub const TextureManager = struct {
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .descriptorCount = 2,
+                .descriptorCount = 4,
             },
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,

@@ -5,7 +5,10 @@ const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
 const types = @import("types.zig");
-const GpuVertex = types.GpuVertex;
+const FaceData = types.FaceData;
+const ChunkData = types.ChunkData;
+const QuadModel = types.QuadModel;
+const LightEntry = types.LightEntry;
 const DrawCommand = types.DrawCommand;
 const tracy = @import("../../platform/tracy.zig");
 const zlm = @import("zlm");
@@ -13,9 +16,21 @@ const WorldState = @import("../../world/WorldState.zig");
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 
-// Initial GPU heap capacities (grown if needed, but these cover typical worlds)
-const INITIAL_VERTEX_CAPACITY: u32 = 600_000; // ~16.8 MB at 28 bytes/vert
-const INITIAL_INDEX_CAPACITY: u32 = 900_000; // ~3.6 MB at 4 bytes/index
+// Initial GPU heap capacities
+const INITIAL_FACE_CAPACITY: u32 = 400_000; // ~3.2 MB at 8 bytes/face
+const INITIAL_LIGHT_CAPACITY: u32 = 4_096; // ~64 KB at 16 bytes/entry
+const MAX_FACES_PER_DRAW: u32 = 16_384; // max faces per draw (16384*4=65536 verts, u16 index limit)
+const MAX_INDIRECT_COMMANDS: u32 = WorldState.TOTAL_WORLD_CHUNKS * 6; // 96
+
+// Normal vectors for the 6 face directions (+Z, -Z, -X, +X, +Y, -Y)
+const normal_vectors = [6][3]f32{
+    .{ 0.0, 0.0, 1.0 },
+    .{ 0.0, 0.0, -1.0 },
+    .{ -1.0, 0.0, 0.0 },
+    .{ 1.0, 0.0, 0.0 },
+    .{ 0.0, 1.0, 0.0 },
+    .{ 0.0, -1.0, 0.0 },
+};
 
 pub const WorldRenderer = struct {
     texture_manager: TextureManager,
@@ -29,24 +44,29 @@ pub const WorldRenderer = struct {
     indirect_count_buffer_memory: vk.VkDeviceMemory,
 
     // GPU heaps (device-local)
-    vertex_buffer: vk.VkBuffer,
-    vertex_buffer_memory: vk.VkDeviceMemory,
-    index_buffer: vk.VkBuffer,
-    index_buffer_memory: vk.VkDeviceMemory,
+    face_buffer: vk.VkBuffer,
+    face_buffer_memory: vk.VkDeviceMemory,
+    light_buffer: vk.VkBuffer,
+    light_buffer_memory: vk.VkDeviceMemory,
+    model_buffer: vk.VkBuffer,
+    model_buffer_memory: vk.VkDeviceMemory,
+    static_index_buffer: vk.VkBuffer,
+    static_index_buffer_memory: vk.VkDeviceMemory,
 
-    // Chunk positions SSBO (host-visible)
-    chunk_positions_buffer: vk.VkBuffer,
-    chunk_positions_buffer_memory: vk.VkDeviceMemory,
+    // Chunk data SSBO (host-visible)
+    chunk_data_buffer: vk.VkBuffer,
+    chunk_data_buffer_memory: vk.VkDeviceMemory,
 
-    // TLSF sub-allocators for vertex and index heaps
-    vertex_tlsf: TlsfAllocator,
-    index_tlsf: TlsfAllocator,
+    // TLSF sub-allocators for face and light heaps
+    face_tlsf: TlsfAllocator,
+    light_tlsf: TlsfAllocator,
 
-    // Per-chunk state: TLSF allocation info (indexed by chunk flat index)
-    chunk_vertex_alloc: [WorldState.TOTAL_WORLD_CHUNKS]?TlsfAllocator.Allocation,
-    chunk_index_alloc: [WorldState.TOTAL_WORLD_CHUNKS]?TlsfAllocator.Allocation,
+    // Per-chunk state
+    chunk_face_alloc: [WorldState.TOTAL_WORLD_CHUNKS]?TlsfAllocator.Allocation,
+    chunk_light_alloc: [WorldState.TOTAL_WORLD_CHUNKS]?TlsfAllocator.Allocation,
+    chunk_data: [WorldState.TOTAL_WORLD_CHUNKS]ChunkData,
 
-    // Draw count (number of non-empty chunks for indirect draw limit)
+    // Draw count
     draw_count: u32,
 
     pub fn init(
@@ -69,16 +89,21 @@ pub const WorldRenderer = struct {
             .indirect_buffer_memory = null,
             .indirect_count_buffer = null,
             .indirect_count_buffer_memory = null,
-            .vertex_buffer = null,
-            .vertex_buffer_memory = null,
-            .index_buffer = null,
-            .index_buffer_memory = null,
-            .chunk_positions_buffer = null,
-            .chunk_positions_buffer_memory = null,
-            .vertex_tlsf = TlsfAllocator.init(INITIAL_VERTEX_CAPACITY),
-            .index_tlsf = TlsfAllocator.init(INITIAL_INDEX_CAPACITY),
-            .chunk_vertex_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
-            .chunk_index_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
+            .face_buffer = null,
+            .face_buffer_memory = null,
+            .light_buffer = null,
+            .light_buffer_memory = null,
+            .model_buffer = null,
+            .model_buffer_memory = null,
+            .static_index_buffer = null,
+            .static_index_buffer_memory = null,
+            .chunk_data_buffer = null,
+            .chunk_data_buffer_memory = null,
+            .face_tlsf = TlsfAllocator.init(INITIAL_FACE_CAPACITY),
+            .light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY),
+            .chunk_face_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
+            .chunk_light_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
+            .chunk_data = .{std.mem.zeroes(ChunkData)} ** WorldState.TOTAL_WORLD_CHUNKS,
             .draw_count = 0,
         };
 
@@ -89,7 +114,7 @@ pub const WorldRenderer = struct {
         }
 
         try self.createIndirectBuffer(ctx);
-        try self.createPersistentMeshBuffers(ctx);
+        try self.createPersistentBuffers(ctx);
 
         return self;
     }
@@ -104,12 +129,16 @@ pub const WorldRenderer = struct {
         vk.freeMemory(device, self.indirect_count_buffer_memory, null);
         vk.destroyPipeline(device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
-        vk.destroyBuffer(device, self.vertex_buffer, null);
-        vk.freeMemory(device, self.vertex_buffer_memory, null);
-        vk.destroyBuffer(device, self.index_buffer, null);
-        vk.freeMemory(device, self.index_buffer_memory, null);
-        vk.destroyBuffer(device, self.chunk_positions_buffer, null);
-        vk.freeMemory(device, self.chunk_positions_buffer_memory, null);
+        vk.destroyBuffer(device, self.face_buffer, null);
+        vk.freeMemory(device, self.face_buffer_memory, null);
+        vk.destroyBuffer(device, self.light_buffer, null);
+        vk.freeMemory(device, self.light_buffer_memory, null);
+        vk.destroyBuffer(device, self.model_buffer, null);
+        vk.freeMemory(device, self.model_buffer_memory, null);
+        vk.destroyBuffer(device, self.static_index_buffer, null);
+        vk.freeMemory(device, self.static_index_buffer_memory, null);
+        vk.destroyBuffer(device, self.chunk_data_buffer, null);
+        vk.freeMemory(device, self.chunk_data_buffer_memory, null);
         self.texture_manager.deinit(device);
     }
 
@@ -118,68 +147,70 @@ pub const WorldRenderer = struct {
         self: *WorldRenderer,
         ctx: *const VulkanContext,
         coord: WorldState.ChunkCoord,
-        vertices: []const GpuVertex,
-        indices: []const u32,
-        vertex_count: u32,
-        index_count: u32,
+        faces: []const FaceData,
+        face_counts: [6]u32,
+        total_face_count: u32,
+        lights: []const LightEntry,
+        light_count: u32,
     ) !void {
         const tz = tracy.zone(@src(), "uploadChunkData");
         defer tz.end();
 
         const slot = coord.flatIndex();
 
-        // Free old allocation if this chunk was previously meshed
-        if (self.chunk_vertex_alloc[slot]) |va| {
-            self.vertex_tlsf.free(va.offset);
-            self.chunk_vertex_alloc[slot] = null;
+        // Free old allocations if this chunk was previously meshed
+        if (self.chunk_face_alloc[slot]) |fa| {
+            self.face_tlsf.free(fa.offset);
+            self.chunk_face_alloc[slot] = null;
         }
-        if (self.chunk_index_alloc[slot]) |ia| {
-            self.index_tlsf.free(ia.offset);
-            self.chunk_index_alloc[slot] = null;
+        if (self.chunk_light_alloc[slot]) |la| {
+            self.light_tlsf.free(la.offset);
+            self.chunk_light_alloc[slot] = null;
         }
 
-        // Empty chunk: write a zero-count draw command
-        if (vertex_count == 0 or index_count == 0) {
-            self.writeDrawCommand(ctx, slot, .{
-                .index_count = 0,
-                .instance_count = 0,
-                .first_index = 0,
-                .vertex_offset = 0,
-                .first_instance = 0,
-            });
-            self.writeChunkPosition(ctx, slot, coord.position());
-            self.recomputeDrawCount(ctx);
+        // Empty chunk
+        if (total_face_count == 0) {
+            self.chunk_data[slot] = .{
+                .position = coord.position(),
+                .light_start = 0,
+                .face_start = 0,
+                .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+            };
+            self.writeChunkData(ctx, slot);
             return;
         }
 
         // Allocate TLSF regions
-        const va = self.vertex_tlsf.alloc(vertex_count) orelse {
-            std.log.err("TLSF vertex heap full (requested {}, largest free {})", .{
-                vertex_count, self.vertex_tlsf.largestFree(),
+        const fa = self.face_tlsf.alloc(total_face_count) orelse {
+            std.log.err("TLSF face heap full (requested {}, largest free {})", .{
+                total_face_count, self.face_tlsf.largestFree(),
             });
             return error.OutOfMemory;
         };
-        errdefer self.vertex_tlsf.free(va.offset);
+        errdefer self.face_tlsf.free(fa.offset);
 
-        const ia = self.index_tlsf.alloc(index_count) orelse {
-            std.log.err("TLSF index heap full (requested {}, largest free {})", .{
-                index_count, self.index_tlsf.largestFree(),
-            });
-            self.vertex_tlsf.free(va.offset);
-            return error.OutOfMemory;
-        };
+        const la = if (light_count > 0)
+            self.light_tlsf.alloc(light_count) orelse {
+                std.log.err("TLSF light heap full (requested {}, largest free {})", .{
+                    light_count, self.light_tlsf.largestFree(),
+                });
+                self.face_tlsf.free(fa.offset);
+                return error.OutOfMemory;
+            }
+        else
+            TlsfAllocator.Allocation{ .offset = 0, .size = 0 };
 
-        self.chunk_vertex_alloc[slot] = va;
-        self.chunk_index_alloc[slot] = ia;
+        self.chunk_face_alloc[slot] = fa;
+        if (light_count > 0) self.chunk_light_alloc[slot] = la;
 
-        // Stage vertex data into GPU buffer at TLSF offset
+        // Stage face data
         {
-            const vb_size: vk.VkDeviceSize = @intCast(@as(u64, vertex_count) * @sizeOf(GpuVertex));
+            const fb_size: vk.VkDeviceSize = @intCast(@as(u64, total_face_count) * @sizeOf(FaceData));
             var staging_buffer: vk.VkBuffer = undefined;
             var staging_memory: vk.VkDeviceMemory = undefined;
             try vk_utils.createBuffer(
                 ctx,
-                vb_size,
+                fb_size,
                 vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &staging_buffer,
@@ -191,23 +222,23 @@ pub const WorldRenderer = struct {
             }
 
             var data: ?*anyopaque = null;
-            try vk.mapMemory(ctx.device, staging_memory, 0, vb_size, 0, &data);
-            const dst: [*]GpuVertex = @ptrCast(@alignCast(data));
-            @memcpy(dst[0..vertex_count], vertices[0..vertex_count]);
+            try vk.mapMemory(ctx.device, staging_memory, 0, fb_size, 0, &data);
+            const dst: [*]FaceData = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..total_face_count], faces[0..total_face_count]);
             vk.unmapMemory(ctx.device, staging_memory);
 
-            const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, va.offset) * @sizeOf(GpuVertex));
-            try vk_utils.copyBufferRegion(ctx, staging_buffer, 0, self.vertex_buffer, dst_offset, vb_size);
+            const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, fa.offset) * @sizeOf(FaceData));
+            try vk_utils.copyBufferRegion(ctx, staging_buffer, 0, self.face_buffer, dst_offset, fb_size);
         }
 
-        // Stage index data into GPU buffer at TLSF offset
-        {
-            const ib_size: vk.VkDeviceSize = @intCast(@as(u64, index_count) * @sizeOf(u32));
+        // Stage light data
+        if (light_count > 0) {
+            const lb_size: vk.VkDeviceSize = @intCast(@as(u64, light_count) * @sizeOf(LightEntry));
             var staging_buffer: vk.VkBuffer = undefined;
             var staging_memory: vk.VkDeviceMemory = undefined;
             try vk_utils.createBuffer(
                 ctx,
-                ib_size,
+                lb_size,
                 vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                 vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                 &staging_buffer,
@@ -219,57 +250,101 @@ pub const WorldRenderer = struct {
             }
 
             var data: ?*anyopaque = null;
-            try vk.mapMemory(ctx.device, staging_memory, 0, ib_size, 0, &data);
-            const dst: [*]u32 = @ptrCast(@alignCast(data));
-            @memcpy(dst[0..index_count], indices[0..index_count]);
+            try vk.mapMemory(ctx.device, staging_memory, 0, lb_size, 0, &data);
+            const dst: [*]LightEntry = @ptrCast(@alignCast(data));
+            @memcpy(dst[0..light_count], lights[0..light_count]);
             vk.unmapMemory(ctx.device, staging_memory);
 
-            const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, ia.offset) * @sizeOf(u32));
-            try vk_utils.copyBufferRegion(ctx, staging_buffer, 0, self.index_buffer, dst_offset, ib_size);
+            const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, la.offset) * @sizeOf(LightEntry));
+            try vk_utils.copyBufferRegion(ctx, staging_buffer, 0, self.light_buffer, dst_offset, lb_size);
         }
 
-        // Update this chunk's draw command: indices start at ia.offset,
-        // vertex_offset shifts chunk-local indices into the right vertex region
-        self.writeDrawCommand(ctx, slot, .{
-            .index_count = index_count,
-            .instance_count = 1,
-            .first_index = ia.offset,
-            .vertex_offset = @intCast(va.offset),
-            .first_instance = 0,
-        });
-
-        self.writeChunkPosition(ctx, slot, coord.position());
-        self.recomputeDrawCount(ctx);
+        // Update CPU-side chunk data and write to GPU
+        self.chunk_data[slot] = .{
+            .position = coord.position(),
+            .light_start = la.offset,
+            .face_start = fa.offset,
+            .face_counts = face_counts,
+        };
+        self.writeChunkData(ctx, slot);
     }
 
-    fn writeDrawCommand(self: *WorldRenderer, ctx: *const VulkanContext, slot: usize, cmd: DrawCommand) void {
-        const offset: vk.VkDeviceSize = @intCast(slot * @sizeOf(DrawCommand));
+    fn writeChunkData(self: *WorldRenderer, ctx: *const VulkanContext, slot: usize) void {
+        const offset: vk.VkDeviceSize = @intCast(slot * @sizeOf(ChunkData));
         var data: ?*anyopaque = null;
-        vk.mapMemory(ctx.device, self.indirect_buffer_memory, offset, @sizeOf(DrawCommand), 0, &data) catch return;
-        const dst: *DrawCommand = @ptrCast(@alignCast(data));
-        dst.* = cmd;
+        vk.mapMemory(ctx.device, self.chunk_data_buffer_memory, offset, @sizeOf(ChunkData), 0, &data) catch return;
+        const dst: *ChunkData = @ptrCast(@alignCast(data));
+        dst.* = self.chunk_data[slot];
+        vk.unmapMemory(ctx.device, self.chunk_data_buffer_memory);
+    }
+
+    /// Build indirect draw commands with CPU-side normal culling.
+    pub fn buildIndirectCommands(self: *WorldRenderer, ctx: *const VulkanContext, camera_pos: zlm.Vec3) void {
+        const tz = tracy.zone(@src(), "buildIndirectCommands");
+        defer tz.end();
+
+        const buffer_size: vk.VkDeviceSize = MAX_INDIRECT_COMMANDS * @sizeOf(DrawCommand);
+        var data: ?*anyopaque = null;
+        vk.mapMemory(ctx.device, self.indirect_buffer_memory, 0, buffer_size, 0, &data) catch return;
+        const commands: [*]DrawCommand = @ptrCast(@alignCast(data));
+
+        var command_count: u32 = 0;
+
+        for (0..WorldState.TOTAL_WORLD_CHUNKS) |chunk_idx| {
+            const cd = self.chunk_data[chunk_idx];
+
+            // Check if chunk has any faces
+            var total: u32 = 0;
+            for (cd.face_counts) |fc| total += fc;
+            if (total == 0) continue;
+
+            const chunk_center_x: f32 = @as(f32, @floatFromInt(cd.position[0])) + @as(f32, WorldState.CHUNK_SIZE) / 2.0;
+            const chunk_center_y: f32 = @as(f32, @floatFromInt(cd.position[1])) + @as(f32, WorldState.CHUNK_SIZE) / 2.0;
+            const chunk_center_z: f32 = @as(f32, @floatFromInt(cd.position[2])) + @as(f32, WorldState.CHUNK_SIZE) / 2.0;
+
+            const to_chunk_x = chunk_center_x - camera_pos.x;
+            const to_chunk_y = chunk_center_y - camera_pos.y;
+            const to_chunk_z = chunk_center_z - camera_pos.z;
+
+            var normal_offset: u32 = 0;
+            for (0..6) |normal_idx| {
+                const fc = cd.face_counts[normal_idx];
+                if (fc == 0) {
+                    continue;
+                }
+
+                // Dot product of normal with (chunk_center - camera_pos)
+                const nv = normal_vectors[normal_idx];
+                const dot = nv[0] * to_chunk_x + nv[1] * to_chunk_y + nv[2] * to_chunk_z;
+
+                if (dot >= 0) {
+                    // Back-facing normal group, skip
+                    normal_offset += fc;
+                    continue;
+                }
+
+                commands[command_count] = .{
+                    .index_count = fc * 6,
+                    .instance_count = 1,
+                    .first_index = 0,
+                    .vertex_offset = @intCast((cd.face_start + normal_offset) * 4),
+                    .first_instance = @intCast(chunk_idx),
+                };
+                command_count += 1;
+                normal_offset += fc;
+            }
+        }
+
         vk.unmapMemory(ctx.device, self.indirect_buffer_memory);
-    }
 
-    fn writeChunkPosition(self: *WorldRenderer, ctx: *const VulkanContext, slot: usize, pos: [4]f32) void {
-        const offset: vk.VkDeviceSize = @intCast(slot * @sizeOf([4]f32));
-        var data: ?*anyopaque = null;
-        vk.mapMemory(ctx.device, self.chunk_positions_buffer_memory, offset, @sizeOf([4]f32), 0, &data) catch return;
-        const dst: *[4]f32 = @ptrCast(@alignCast(data));
-        dst.* = pos;
-        vk.unmapMemory(ctx.device, self.chunk_positions_buffer_memory);
-    }
-
-    fn recomputeDrawCount(self: *WorldRenderer, ctx: *const VulkanContext) void {
-        // With fixed-slot indirect draws, draw_count = TOTAL_WORLD_CHUNKS.
-        // Empty chunks have index_count=0 and instance_count=0, so the GPU skips them.
-        self.draw_count = WorldState.TOTAL_WORLD_CHUNKS;
-
-        var data: ?*anyopaque = null;
-        vk.mapMemory(ctx.device, self.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &data) catch return;
-        const count_ptr: *u32 = @ptrCast(@alignCast(data));
-        count_ptr.* = self.draw_count;
+        // Write command count
+        var count_data: ?*anyopaque = null;
+        vk.mapMemory(ctx.device, self.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &count_data) catch return;
+        const count_ptr: *u32 = @ptrCast(@alignCast(count_data));
+        count_ptr.* = command_count;
         vk.unmapMemory(ctx.device, self.indirect_count_buffer_memory);
+
+        self.draw_count = command_count;
     }
 
     pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32) void {
@@ -288,7 +363,7 @@ pub const WorldRenderer = struct {
             null,
         );
 
-        vk.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, vk.VK_INDEX_TYPE_UINT32);
+        vk.cmdBindIndexBuffer(command_buffer, self.static_index_buffer, 0, vk.VK_INDEX_TYPE_UINT16);
 
         vk.cmdPushConstants(
             command_buffer,
@@ -305,7 +380,7 @@ pub const WorldRenderer = struct {
             0,
             self.indirect_count_buffer,
             0,
-            self.draw_count,
+            MAX_INDIRECT_COMMANDS,
             @sizeOf(vk.VkDrawIndexedIndirectCommand),
         );
     }
@@ -536,7 +611,7 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "createIndirectBuffer");
         defer tz.end();
 
-        const buffer_size: vk.VkDeviceSize = WorldState.TOTAL_WORLD_CHUNKS * @sizeOf(vk.VkDrawIndexedIndirectCommand);
+        const buffer_size: vk.VkDeviceSize = MAX_INDIRECT_COMMANDS * @sizeOf(vk.VkDrawIndexedIndirectCommand);
 
         try vk_utils.createBuffer(
             ctx,
@@ -547,7 +622,7 @@ pub const WorldRenderer = struct {
             &self.indirect_buffer_memory,
         );
 
-        // Zero-initialize (all chunks start with index_count=0, instance_count=0)
+        // Zero-initialize
         var data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, self.indirect_buffer_memory, 0, buffer_size, 0, &data);
         const dst: [*]u8 = @ptrCast(data.?);
@@ -594,50 +669,163 @@ pub const WorldRenderer = struct {
         count_ptr.* = 0;
         vk.unmapMemory(ctx.device, self.indirect_count_buffer_memory);
 
-        std.log.info("Indirect draw buffers created (max {} draw commands)", .{WorldState.TOTAL_WORLD_CHUNKS});
+        std.log.info("Indirect draw buffers created (max {} draw commands)", .{MAX_INDIRECT_COMMANDS});
     }
 
-    fn createPersistentMeshBuffers(self: *WorldRenderer, ctx: *const VulkanContext) !void {
-        const tz = tracy.zone(@src(), "createPersistentMeshBuffers");
+    fn createPersistentBuffers(self: *WorldRenderer, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createPersistentBuffers");
         defer tz.end();
 
-        const vb_capacity: vk.VkDeviceSize = @as(u64, INITIAL_VERTEX_CAPACITY) * @sizeOf(GpuVertex);
+        // Face buffer (device-local)
+        const fb_capacity: vk.VkDeviceSize = @as(u64, INITIAL_FACE_CAPACITY) * @sizeOf(FaceData);
         try vk_utils.createBuffer(
             ctx,
-            vb_capacity,
+            fb_capacity,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.vertex_buffer,
-            &self.vertex_buffer_memory,
+            &self.face_buffer,
+            &self.face_buffer_memory,
         );
 
-        const ib_capacity: vk.VkDeviceSize = @as(u64, INITIAL_INDEX_CAPACITY) * @sizeOf(u32);
+        // Light buffer (device-local)
+        const lb_capacity: vk.VkDeviceSize = @as(u64, INITIAL_LIGHT_CAPACITY) * @sizeOf(LightEntry);
+        try vk_utils.createBuffer(
+            ctx,
+            lb_capacity,
+            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.light_buffer,
+            &self.light_buffer_memory,
+        );
+
+        // Model buffer (device-local, static) - 6 QuadModels built from face_vertices
+        const model_size: vk.VkDeviceSize = 6 * @sizeOf(QuadModel);
+        try vk_utils.createBuffer(
+            ctx,
+            model_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            &self.model_buffer,
+            &self.model_buffer_memory,
+        );
+        try self.uploadModelBuffer(ctx, model_size);
+
+        // Static index buffer (device-local) - pattern {0,1,2,2,3,0} repeated, u16
+        const index_count: u64 = @as(u64, MAX_FACES_PER_DRAW) * 6;
+        const ib_capacity: vk.VkDeviceSize = index_count * @sizeOf(u16);
         try vk_utils.createBuffer(
             ctx,
             ib_capacity,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
             vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.index_buffer,
-            &self.index_buffer_memory,
+            &self.static_index_buffer,
+            &self.static_index_buffer_memory,
         );
+        try self.uploadStaticIndexBuffer(ctx, ib_capacity);
 
-        const cp_capacity: vk.VkDeviceSize = WorldState.TOTAL_WORLD_CHUNKS * @sizeOf([4]f32);
+        // Chunk data buffer (host-visible)
+        const cd_capacity: vk.VkDeviceSize = WorldState.TOTAL_WORLD_CHUNKS * @sizeOf(ChunkData);
         try vk_utils.createBuffer(
             ctx,
-            cp_capacity,
+            cd_capacity,
             vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &self.chunk_positions_buffer,
-            &self.chunk_positions_buffer_memory,
+            &self.chunk_data_buffer,
+            &self.chunk_data_buffer_memory,
         );
 
-        self.texture_manager.updateVertexDescriptor(ctx, self.vertex_buffer, vb_capacity);
-        self.texture_manager.updateChunkPositions(ctx, self.chunk_positions_buffer, cp_capacity);
+        // Update descriptors
+        self.texture_manager.updateFaceDescriptor(ctx, self.face_buffer, fb_capacity);
+        self.texture_manager.updateChunkDataDescriptor(ctx, self.chunk_data_buffer, cd_capacity);
+        self.texture_manager.updateModelDescriptor(ctx, self.model_buffer, model_size);
+        self.texture_manager.updateLightDescriptor(ctx, self.light_buffer, lb_capacity);
 
-        std.log.info("Persistent mesh buffers created ({}V / {}I, {:.1} MB)", .{
-            INITIAL_VERTEX_CAPACITY,
-            INITIAL_INDEX_CAPACITY,
-            @as(f64, @floatFromInt(vb_capacity + ib_capacity + cp_capacity)) / (1024.0 * 1024.0),
+        std.log.info("Persistent mesh buffers created ({}F / {}L, {:.1} MB)", .{
+            INITIAL_FACE_CAPACITY,
+            INITIAL_LIGHT_CAPACITY,
+            @as(f64, @floatFromInt(fb_capacity + lb_capacity + model_size + ib_capacity + cd_capacity)) / (1024.0 * 1024.0),
         });
+    }
+
+    fn uploadModelBuffer(self: *WorldRenderer, ctx: *const VulkanContext, model_size: vk.VkDeviceSize) !void {
+        // Build 6 QuadModels from face_vertices and face_neighbor_offsets
+        var models: [6]QuadModel = undefined;
+        for (0..6) |face| {
+            var corners: [12]f32 = undefined;
+            var uvs: [8]f32 = undefined;
+            for (0..4) |v| {
+                const fv = WorldState.face_vertices[face][v];
+                corners[v * 3 + 0] = fv.px;
+                corners[v * 3 + 1] = fv.py;
+                corners[v * 3 + 2] = fv.pz;
+                uvs[v * 2 + 0] = fv.u;
+                uvs[v * 2 + 1] = fv.v;
+            }
+            const fno = WorldState.face_neighbor_offsets[face];
+            models[face] = .{
+                .corners = corners,
+                .uvs = uvs,
+                .normal = .{
+                    @floatFromInt(fno[0]),
+                    @floatFromInt(fno[1]),
+                    @floatFromInt(fno[2]),
+                },
+            };
+        }
+
+        var staging_buffer: vk.VkBuffer = undefined;
+        var staging_memory: vk.VkDeviceMemory = undefined;
+        try vk_utils.createBuffer(
+            ctx,
+            model_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buffer,
+            &staging_memory,
+        );
+        defer {
+            vk.destroyBuffer(ctx.device, staging_buffer, null);
+            vk.freeMemory(ctx.device, staging_memory, null);
+        }
+
+        var data: ?*anyopaque = null;
+        try vk.mapMemory(ctx.device, staging_memory, 0, model_size, 0, &data);
+        const dst: [*]QuadModel = @ptrCast(@alignCast(data));
+        @memcpy(dst[0..6], &models);
+        vk.unmapMemory(ctx.device, staging_memory);
+
+        try vk_utils.copyBuffer(ctx, staging_buffer, self.model_buffer, model_size);
+    }
+
+    fn uploadStaticIndexBuffer(self: *WorldRenderer, ctx: *const VulkanContext, ib_capacity: vk.VkDeviceSize) !void {
+        var staging_buffer: vk.VkBuffer = undefined;
+        var staging_memory: vk.VkDeviceMemory = undefined;
+        try vk_utils.createBuffer(
+            ctx,
+            ib_capacity,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buffer,
+            &staging_memory,
+        );
+        defer {
+            vk.destroyBuffer(ctx.device, staging_buffer, null);
+            vk.freeMemory(ctx.device, staging_memory, null);
+        }
+
+        var data: ?*anyopaque = null;
+        try vk.mapMemory(ctx.device, staging_memory, 0, ib_capacity, 0, &data);
+        const dst: [*]u16 = @ptrCast(@alignCast(data));
+
+        const pattern = [6]u16{ 0, 1, 2, 2, 3, 0 };
+        for (0..MAX_FACES_PER_DRAW) |face| {
+            const base: u16 = @intCast(face * 4);
+            for (0..6) |i| {
+                dst[face * 6 + i] = base + pattern[i];
+            }
+        }
+
+        vk.unmapMemory(ctx.device, staging_memory);
+        try vk_utils.copyBuffer(ctx, staging_buffer, self.static_index_buffer, ib_capacity);
     }
 };

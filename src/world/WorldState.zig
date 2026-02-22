@@ -1,22 +1,20 @@
 const std = @import("std");
 const types = @import("../renderer/vulkan/types.zig");
-const GpuVertex = types.GpuVertex;
+const FaceData = types.FaceData;
+const LightEntry = types.LightEntry;
 const tracy = @import("../platform/tracy.zig");
 
-pub const CHUNK_SIZE = 16;
-pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; // 4096
-pub const VERTS_PER_BLOCK = 24;
-pub const INDICES_PER_BLOCK = 36;
-pub const CHUNK_VERTEX_COUNT = BLOCKS_PER_CHUNK * VERTS_PER_BLOCK; // 98304
-pub const CHUNK_INDEX_COUNT = BLOCKS_PER_CHUNK * INDICES_PER_BLOCK; // 147456
+pub const CHUNK_SIZE = 32;
+pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; // 32768
+pub const MAX_FACES_PER_CHUNK = BLOCKS_PER_CHUNK * 6; // 196608
 
-pub const WORLD_CHUNKS_X = 8;
-pub const WORLD_CHUNKS_Y = 2;
-pub const WORLD_CHUNKS_Z = 8;
+pub const WORLD_CHUNKS_X = 4;
+pub const WORLD_CHUNKS_Y = 1;
+pub const WORLD_CHUNKS_Z = 4;
 pub const WORLD_SIZE_X = WORLD_CHUNKS_X * CHUNK_SIZE; // 128
 pub const WORLD_SIZE_Y = WORLD_CHUNKS_Y * CHUNK_SIZE; // 32
 pub const WORLD_SIZE_Z = WORLD_CHUNKS_Z * CHUNK_SIZE; // 128
-pub const TOTAL_WORLD_CHUNKS = WORLD_CHUNKS_X * WORLD_CHUNKS_Y * WORLD_CHUNKS_Z; // 128
+pub const TOTAL_WORLD_CHUNKS = WORLD_CHUNKS_X * WORLD_CHUNKS_Y * WORLD_CHUNKS_Z; // 16
 
 // Per-face vertex template (unit cube with min corner at origin)
 pub const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }{
@@ -127,21 +125,21 @@ pub const ChunkCoord = struct {
         return a.cx == b.cx and a.cy == b.cy and a.cz == b.cz;
     }
 
-    pub fn position(self: ChunkCoord) [4]f32 {
+    pub fn position(self: ChunkCoord) [3]i32 {
         return .{
-            @as(f32, @floatFromInt(self.cx)) - @as(f32, WORLD_CHUNKS_X) / 2.0,
-            @as(f32, @floatFromInt(self.cy)) - @as(f32, WORLD_CHUNKS_Y) / 2.0,
-            @as(f32, @floatFromInt(self.cz)) - @as(f32, WORLD_CHUNKS_Z) / 2.0,
-            0.0,
+            @as(i32, @intCast(self.cx)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_X / 2),
+            @as(i32, @intCast(self.cy)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Y / 2),
+            @as(i32, @intCast(self.cz)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Z / 2),
         };
     }
 };
 
 pub const ChunkMeshResult = struct {
-    vertices: []GpuVertex,
-    indices: []u32,
-    vertex_count: u32,
-    index_count: u32,
+    faces: []FaceData,
+    face_counts: [6]u32, // per-normal count
+    total_face_count: u32,
+    lights: []LightEntry,
+    light_count: u32,
 };
 
 pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
@@ -224,8 +222,8 @@ pub fn generateSphereWorld(out: *World) void {
     }
 }
 
-/// Generate mesh data for a single chunk. Indices are chunk-local (start from 0);
-/// the caller uses DrawCommand.vertex_offset to place them in the global buffer.
+/// Generate mesh data for a single chunk. Faces are grouped by normal direction
+/// and packed into FaceData with deduplicated light entries.
 pub fn generateChunkMesh(
     allocator: std.mem.Allocator,
     world: *const World,
@@ -239,23 +237,29 @@ pub fn generateChunkMesh(
     const cz: usize = coord.cz;
     const chunk = &world[cy][cz][cx];
 
-    const vertices = try allocator.alloc(GpuVertex, CHUNK_VERTEX_COUNT);
-    errdefer allocator.free(vertices);
-    const indices = try allocator.alloc(u32, CHUNK_INDEX_COUNT);
-    errdefer allocator.free(indices);
+    // Per-normal face lists: collect faces grouped by normal index
+    var normal_faces: [6]std.ArrayList(FaceData) = undefined;
+    for (0..6) |i| {
+        normal_faces[i] = .empty;
+    }
+    errdefer for (0..6) |i| {
+        normal_faces[i].deinit(allocator);
+    };
 
-    var vert_count: u32 = 0;
-    var idx_count: u32 = 0;
+    // Light deduplication map: [4]u32 corner pattern -> light index
+    var light_map = std.AutoHashMap([4]u32, u6).init(allocator);
+    defer light_map.deinit();
+
+    var light_list: std.ArrayList(LightEntry) = .empty;
+    errdefer light_list.deinit(allocator);
+
+    const face_light_values = [6]f32{ 0.6, 0.6, 0.8, 0.8, 1.0, 0.5 };
 
     for (0..CHUNK_SIZE) |by| {
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
                 const block = chunk.blocks[chunkIndex(bx, by, bz)];
                 if (block == .air) continue;
-
-                const local_x: f32 = @floatFromInt(bx);
-                const local_y: f32 = @floatFromInt(by);
-                const local_z: f32 = @floatFromInt(bz);
 
                 for (0..6) |face| {
                     const fno = face_neighbor_offsets[face];
@@ -285,44 +289,73 @@ pub fn generateChunkMesh(
                     if (block_properties.isOpaque(neighbor)) continue;
                     if (neighbor == block and block_properties.cullsSelf(block)) continue;
 
-                    const tex_index: u32 = switch (block) {
+                    const tex_index: u8 = switch (block) {
                         .air => unreachable,
                         .glass => 0,
                         .grass_block => 1,
                         .dirt => 2,
                         .stone => 3,
                     };
-                    const face_light = [6]f32{ 0.6, 0.6, 0.8, 0.8, 1.0, 0.5 };
-                    for (0..4) |v| {
-                        const fv = face_vertices[face][v];
-                        vertices[vert_count + @as(u32, @intCast(v))] = .{
-                            .px = fv.px + local_x,
-                            .py = fv.py + local_y,
-                            .pz = fv.pz + local_z,
-                            .u = fv.u,
-                            .v = fv.v,
-                            .tex_index = tex_index,
-                            .light = face_light[face],
-                        };
-                    }
 
-                    // Chunk-local indices (vertex_offset in DrawCommand handles global offset)
-                    for (0..6) |i| {
-                        indices[idx_count + @as(u32, @intCast(i))] = vert_count + face_index_pattern[i];
-                    }
+                    // Pack light: all 4 corners get the same value (no AO yet)
+                    const light_byte: u32 = @intFromFloat(@floor(face_light_values[face] * 255.0));
+                    const packed_light: u32 = light_byte | (light_byte << 8) | (light_byte << 16);
+                    const corner_pattern = [4]u32{ packed_light, packed_light, packed_light, packed_light };
 
-                    vert_count += 4;
-                    idx_count += 6;
+                    // Deduplicate light entry
+                    const light_index: u6 = blk2: {
+                        if (light_map.get(corner_pattern)) |idx| {
+                            break :blk2 idx;
+                        }
+                        const idx: u6 = @intCast(light_list.items.len);
+                        try light_list.append(allocator, .{ .corners = corner_pattern });
+                        try light_map.put(corner_pattern, idx);
+                        break :blk2 idx;
+                    };
+
+                    const face_data = types.packFaceData(
+                        @intCast(bx),
+                        @intCast(by),
+                        @intCast(bz),
+                        tex_index,
+                        @intCast(face),
+                        light_index,
+                    );
+
+                    try normal_faces[face].append(allocator, face_data);
                 }
             }
         }
     }
 
+    // Compute per-normal face counts
+    var face_counts: [6]u32 = undefined;
+    var total_face_count: u32 = 0;
+    for (0..6) |i| {
+        face_counts[i] = @intCast(normal_faces[i].items.len);
+        total_face_count += face_counts[i];
+    }
+
+    // Concatenate all faces sorted by normal into a single slice
+    const faces = try allocator.alloc(FaceData, total_face_count);
+    errdefer allocator.free(faces);
+
+    var write_offset: usize = 0;
+    for (0..6) |i| {
+        const items = normal_faces[i].items;
+        @memcpy(faces[write_offset..][0..items.len], items);
+        write_offset += items.len;
+        normal_faces[i].deinit(allocator);
+    }
+
+    const lights = try light_list.toOwnedSlice(allocator);
+
     return .{
-        .vertices = vertices,
-        .indices = indices,
-        .vertex_count = vert_count,
-        .index_count = idx_count,
+        .faces = faces,
+        .face_counts = face_counts,
+        .total_face_count = total_face_count,
+        .lights = lights,
+        .light_count = @intCast(lights.len),
     };
 }
 
