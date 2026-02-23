@@ -31,6 +31,7 @@ pub const TextRenderer = struct {
     font_image_memory: vk.VkDeviceMemory,
     font_image_view: vk.VkImageView,
     font_sampler: vk.VkSampler,
+    glyph_widths: [256]u8,
     vertex_count: u32,
     screen_width: f32,
     screen_height: f32,
@@ -57,6 +58,7 @@ pub const TextRenderer = struct {
             .font_image_memory = null,
             .font_image_view = null,
             .font_sampler = null,
+            .glyph_widths = [_]u8{0} ** 256,
             .vertex_count = 0,
             .screen_width = 800.0,
             .screen_height = 600.0,
@@ -97,19 +99,28 @@ pub const TextRenderer = struct {
         var cursor_x = x;
 
         for (text) |ch| {
+            if (ch == ' ') {
+                cursor_x += 4 * GLYPH_SCALE;
+                continue;
+            }
+            const gw = self.glyph_widths[ch];
+            if (gw == 0) continue;
+
             if (self.vertex_count + 6 > MAX_VERTICES) break;
 
             const col: f32 = @floatFromInt(ch % ATLAS_COLS);
             const row: f32 = @floatFromInt(ch / ATLAS_COLS);
+            const glyph_w: f32 = @floatFromInt(gw);
 
             const uv_left = col / @as(f32, ATLAS_COLS);
             const uv_top = row / @as(f32, ATLAS_ROWS);
-            const uv_right = (col + 1.0) / @as(f32, ATLAS_COLS);
+            const uv_right = (col + glyph_w / @as(f32, GLYPH_SIZE)) / @as(f32, ATLAS_COLS);
             const uv_bottom = (row + 1.0) / @as(f32, ATLAS_ROWS);
 
+            const quad_w = glyph_w * GLYPH_SCALE;
             const px_left = cursor_x;
             const py_top = y;
-            const px_right = cursor_x + RENDER_SIZE;
+            const px_right = cursor_x + quad_w;
             const py_bottom = y + RENDER_SIZE;
 
             // Triangle 1: top-left, top-right, bottom-left
@@ -123,7 +134,7 @@ pub const TextRenderer = struct {
             verts[self.vertex_count + 5] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
 
             self.vertex_count += 6;
-            cursor_x += RENDER_SIZE;
+            cursor_x += quad_w + GLYPH_SCALE; // 1px gap at native scale
         }
     }
 
@@ -215,6 +226,32 @@ pub const TextRenderer = struct {
         const img_w: u32 = @intCast(tw);
         const img_h: u32 = @intCast(th);
         const image_size: vk.VkDeviceSize = @as(vk.VkDeviceSize, img_w) * img_h * 4;
+
+        // Compute per-glyph widths by scanning for rightmost opaque column
+        const pixel_data: [*]const u8 = @ptrCast(pixels);
+        for (0..256) |ch| {
+            const glyph_col = ch % ATLAS_COLS;
+            const glyph_row = ch / ATLAS_COLS;
+            const base_x = glyph_col * GLYPH_SIZE;
+            const base_y = glyph_row * GLYPH_SIZE;
+
+            var max_col: u8 = 0;
+            var found = false;
+            for (0..GLYPH_SIZE) |py| {
+                for (0..GLYPH_SIZE) |px| {
+                    const pixel_x = base_x + px;
+                    const pixel_y = base_y + py;
+                    const alpha = pixel_data[(pixel_y * img_w + pixel_x) * 4 + 3];
+                    if (alpha > 0) {
+                        if (!found or @as(u8, @intCast(px)) >= max_col) {
+                            max_col = @intCast(px + 1);
+                            found = true;
+                        }
+                    }
+                }
+            }
+            self.glyph_widths[ch] = if (found) max_col else 0;
+        }
 
         // Staging buffer
         var staging_buffer: vk.VkBuffer = undefined;
