@@ -138,6 +138,7 @@ pub const VulkanRenderer = struct {
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
         self.game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
         self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format);
+        self.render_state.text_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
 
         self.mesh_worker.startAll();
 
@@ -192,6 +193,10 @@ pub const VulkanRenderer = struct {
                 self.game_state.dirty_chunks.clear();
             }
         }
+
+        // Text rendering
+        self.render_state.text_renderer.beginFrame(self.ctx.device);
+        self.render_state.text_renderer.drawText(10.0, 10.0, "FarHorizons", .{ 1.0, 1.0, 1.0, 1.0 });
     }
 
     fn pollMeshWorker(self: *VulkanRenderer) void {
@@ -221,6 +226,7 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "endFrame");
         defer tz.end();
 
+        self.render_state.text_renderer.endFrame(self.ctx.device);
         self.render_state.current_frame = (self.render_state.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
@@ -334,6 +340,9 @@ pub const VulkanRenderer = struct {
 
         // Update camera aspect ratio
         self.game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+
+        // Update text renderer screen size
+        self.render_state.text_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
 
         std.log.info("Swapchain recreated: {}x{}", .{ self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height });
     }
@@ -506,6 +515,9 @@ pub const VulkanRenderer = struct {
             const debug_mvp = zlm.Mat4.mul(proj, zlm.Mat4.mul(view_scale, view));
             self.render_state.debug_renderer.recordDraw(command_buffer, &debug_mvp.m);
         }
+
+        // Draw text overlay (always on top, no depth test)
+        self.render_state.text_renderer.recordDraw(command_buffer);
 
         vk.cmdEndRendering(command_buffer);
 

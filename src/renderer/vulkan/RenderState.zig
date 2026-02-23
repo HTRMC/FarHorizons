@@ -5,12 +5,14 @@ const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const tracy = @import("../../platform/tracy.zig");
 pub const WorldRenderer = @import("WorldRenderer.zig").WorldRenderer;
 pub const DebugRenderer = @import("DebugRenderer.zig").DebugRenderer;
+pub const TextRenderer = @import("TextRenderer.zig").TextRenderer;
 
 pub const MAX_FRAMES_IN_FLIGHT = 2;
 
 pub const RenderState = struct {
     world_renderer: WorldRenderer,
     debug_renderer: DebugRenderer,
+    text_renderer: TextRenderer,
     // Command buffers and sync
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
@@ -30,9 +32,13 @@ pub const RenderState = struct {
         var debug_renderer = try DebugRenderer.init(&shader_compiler, ctx, swapchain_format);
         errdefer debug_renderer.deinit(ctx.device);
 
+        var text_renderer = try TextRenderer.init(allocator, &shader_compiler, ctx, swapchain_format);
+        errdefer text_renderer.deinit(ctx.device);
+
         var self = RenderState{
             .world_renderer = world_renderer,
             .debug_renderer = debug_renderer,
+            .text_renderer = text_renderer,
             .command_buffers = [_]vk.VkCommandBuffer{null} ** MAX_FRAMES_IN_FLIGHT,
             .image_available_semaphores = [_]vk.VkSemaphore{null} ** MAX_FRAMES_IN_FLIGHT,
             .in_flight_fences = [_]vk.VkFence{null} ** MAX_FRAMES_IN_FLIGHT,
@@ -56,6 +62,7 @@ pub const RenderState = struct {
 
         self.world_renderer.deinit(device);
         self.debug_renderer.deinit(device);
+        self.text_renderer.deinit(device);
     }
 
     fn createCommandBuffers(self: *RenderState, ctx: *const VulkanContext) !void {
