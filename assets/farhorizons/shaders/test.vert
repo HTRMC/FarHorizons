@@ -14,7 +14,7 @@ layout(push_constant) uniform PC { mat4 mvp; } pc;
 layout(location=0) out vec2 fragUV;
 layout(location=1) flat out uint fragTexIndex;
 layout(location=2) out vec3 fragSkyLight;
-layout(location=3) flat out uint fragAoData;
+layout(location=3) out float fragAo;
 layout(location=4) out vec3 fragBlockLight;
 layout(location=5) flat out vec3 fragNormal;
 
@@ -61,6 +61,8 @@ void main() {
     fragSkyLight = vec3(sr, sg, sb);
     fragBlockLight = vec3(br, bg, bb);
 
-    // Pass raw AO data to fragment shader for bilinear interpolation
-    fragAoData = face.word1;
+    // Per-vertex AO: extract this corner's AO level and apply curve
+    const float ao_curve[4] = float[4](1.0, 0.8, 0.6, 0.4);
+    uint aoLevel = (face.word1 >> (cornerID * 2)) & 0x3;
+    fragAo = ao_curve[aoLevel];
 }
