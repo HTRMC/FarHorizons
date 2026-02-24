@@ -29,7 +29,7 @@ pub const RegionFile = struct {
     header: FileHeader,
     cot: [CHUNKS_PER_REGION]ChunkOffsetEntry,
     allocator_bitmap: SectorAllocator,
-    rw_lock: std.Thread.RwLock,
+    rw_lock: std.Io.RwLock,
     ref_count: std.atomic.Value(u32),
     path: []const u8,
     mem_allocator: std.mem.Allocator,
@@ -71,6 +71,7 @@ pub const RegionFile = struct {
                 return createNew(mem_alloc, io, full_path, coord);
             },
             else => {
+                log.err("Failed to open region file '{s}': {}", .{ full_path, err });
                 mem_alloc.free(full_path);
                 return error.IoError;
             },
@@ -89,7 +90,8 @@ pub const RegionFile = struct {
         path: []const u8,
         coord: RegionCoord,
     ) !*RegionFile {
-        const file = Dir.createFileAbsolute(io, path, .{}) catch {
+        const file = Dir.createFileAbsolute(io, path, .{ .read = true }) catch |err| {
+            log.err("Failed to create region file '{s}': {}", .{ path, err });
             mem_alloc.free(path);
             return error.IoError;
         };
@@ -98,7 +100,10 @@ pub const RegionFile = struct {
         const self = try mem_alloc.create(RegionFile);
         errdefer mem_alloc.destroy(self);
 
-        const timestamp: u32 = @intCast(@max(0, std.time.timestamp()));
+        const c_time = struct {
+            extern "c" fn time(timer: ?*i64) i64;
+        };
+        const timestamp: u32 = @intCast(@max(0, c_time.time(null)));
 
         self.* = .{
             .file = file,
@@ -115,14 +120,17 @@ pub const RegionFile = struct {
             },
             .cot = [_]ChunkOffsetEntry{ChunkOffsetEntry.empty} ** CHUNKS_PER_REGION,
             .allocator_bitmap = SectorAllocator.init(),
-            .rw_lock = .{},
+            .rw_lock = .init,
             .ref_count = std.atomic.Value(u32).init(1),
             .path = path,
             .mem_allocator = mem_alloc,
         };
 
         // Write initial header to disk
-        try self.writeHeaderToDisk();
+        self.writeHeaderToDisk() catch |err| {
+            log.err("Failed to write initial header: {}", .{err});
+            return err;
+        };
 
         return self;
     }
@@ -144,7 +152,7 @@ pub const RegionFile = struct {
             .header = undefined,
             .cot = undefined,
             .allocator_bitmap = undefined,
-            .rw_lock = .{},
+            .rw_lock = .init,
             .ref_count = std.atomic.Value(u32).init(1),
             .path = path,
             .mem_allocator = mem_alloc,
@@ -262,8 +270,8 @@ pub const RegionFile = struct {
         if (sectors_needed == 0) return;
 
         // Step 2: Acquire write lock
-        self.rw_lock.lock();
-        defer self.rw_lock.unlock();
+        self.rw_lock.lockUncancelable(self.io);
+        defer self.rw_lock.unlock(self.io);
 
         // Step 3: Allocate new sectors
         const new_offset = self.allocator_bitmap.allocate(sectors_needed) orelse
@@ -382,22 +390,14 @@ pub const RegionFile = struct {
     // ── Low-level file I/O helpers ─────────────────────────────────
 
     fn preadAll(self: *const RegionFile, buf: []u8, offset: u64) !void {
-        var total: usize = 0;
-        while (total < buf.len) {
-            const n = self.file.pread(self.io, buf[total..], offset + total) catch
-                return error.IoError;
-            if (n == 0) return error.IoError; // unexpected EOF
-            total += n;
-        }
+        const n = self.file.readPositionalAll(self.io, buf, offset) catch
+            return error.IoError;
+        if (n < buf.len) return error.IoError; // unexpected EOF
     }
 
     fn pwriteAll(self: *const RegionFile, data: []const u8, offset: u64) !void {
-        var total: usize = 0;
-        while (total < data.len) {
-            const n = self.file.pwrite(self.io, data[total..], offset + total) catch
-                return error.IoError;
-            total += n;
-        }
+        self.file.writePositionalAll(self.io, data, offset) catch
+            return error.IoError;
     }
 
     pub fn fsync(self: *const RegionFile) !void {

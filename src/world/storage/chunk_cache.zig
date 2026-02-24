@@ -4,6 +4,7 @@ const WorldState = @import("../WorldState.zig");
 
 const ChunkKey = storage_types.ChunkKey;
 const Chunk = WorldState.Chunk;
+const Io = std.Io;
 
 const CACHE_SLOTS = 4096;
 
@@ -11,7 +12,8 @@ const CACHE_SLOTS = 4096;
 /// Returns direct pointers into the cache array — zero-copy for callers.
 /// Thread-safe via mutex.
 pub const ChunkCache = struct {
-    mutex: std.Thread.Mutex,
+    mutex: Io.Mutex,
+    io: Io,
     slots: [CACHE_SLOTS]Slot,
     clock_hand: u32,
     count: u32,
@@ -23,26 +25,23 @@ pub const ChunkCache = struct {
         referenced: bool,
     };
 
-    pub fn init() ChunkCache {
-        var cache: ChunkCache = .{
-            .mutex = .{},
-            .slots = undefined,
-            .clock_hand = 0,
-            .count = 0,
-        };
-        for (&cache.slots) |*slot| {
+    pub fn initInPlace(self: *ChunkCache) void {
+        self.mutex = .init;
+        self.io = Io.Threaded.global_single_threaded.io();
+        self.clock_hand = 0;
+        self.count = 0;
+        for (&self.slots) |*slot| {
             slot.valid = false;
             slot.referenced = false;
         }
-        return cache;
     }
 
     /// Look up a chunk in the cache by key.
     /// Returns a pointer directly into the cache slot (zero-copy).
     /// The pointer remains valid until the slot is evicted.
     pub fn get(self: *ChunkCache, key: ChunkKey) ?*const Chunk {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         const start = self.hashSlot(key);
         var probe: u32 = 0;
@@ -60,18 +59,29 @@ pub const ChunkCache = struct {
 
     /// Insert a chunk into the cache.
     /// If the key already exists, the data is updated.
-    /// If the cache is full, a slot is evicted using CLOCK.
+    /// If the probe chain has an empty slot, insert there directly.
+    /// If the chain is full, evict a slot using CLOCK within the chain.
     pub fn put(self: *ChunkCache, key: ChunkKey, chunk: *const Chunk) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
-        // Check if already present
+        // Check if already present, or find the first empty slot in the chain
         const start = self.hashSlot(key);
         var probe: u32 = 0;
         while (probe < CACHE_SLOTS) : (probe += 1) {
             const idx = (start + probe) % CACHE_SLOTS;
             const slot = &self.slots[idx];
-            if (!slot.valid) break; // Not found
+            if (!slot.valid) {
+                // Empty slot at end of probe chain — insert here
+                slot.* = .{
+                    .key = key,
+                    .chunk = chunk.*,
+                    .valid = true,
+                    .referenced = true,
+                };
+                self.count += 1;
+                return;
+            }
             if (slot.key.eql(key)) {
                 // Update existing
                 slot.chunk = chunk.*;
@@ -80,14 +90,8 @@ pub const ChunkCache = struct {
             }
         }
 
-        // Not found — evict a slot if needed and insert
+        // Probe chain is full — evict using CLOCK and insert at evicted slot
         const target = self.findEvictSlot();
-        if (self.slots[target].valid) {
-            // We're evicting
-        } else {
-            self.count += 1;
-        }
-
         self.slots[target] = .{
             .key = key,
             .chunk = chunk.*,
@@ -97,9 +101,10 @@ pub const ChunkCache = struct {
     }
 
     /// Invalidate a specific cache entry.
+    /// Uses backward-shift deletion to maintain probe chain integrity.
     pub fn invalidate(self: *ChunkCache, key: ChunkKey) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         const start = self.hashSlot(key);
         var probe: u32 = 0;
@@ -108,10 +113,35 @@ pub const ChunkCache = struct {
             const slot = &self.slots[idx];
             if (!slot.valid) return;
             if (slot.key.eql(key)) {
-                slot.valid = false;
+                // Found it — backward-shift delete to preserve probe chains
                 self.count -= 1;
+                var empty = idx;
+                var j: u32 = 1;
+                while (j < CACHE_SLOTS) : (j += 1) {
+                    const next = (idx + j) % CACHE_SLOTS;
+                    if (!self.slots[next].valid) break;
+                    const natural = self.hashSlot(self.slots[next].key);
+                    // Check if `next` belongs at or before `empty` in the probe chain
+                    if (self.shouldShift(natural, empty, next)) {
+                        self.slots[empty] = self.slots[next];
+                        empty = next;
+                    }
+                }
+                self.slots[empty].valid = false;
                 return;
             }
+        }
+    }
+
+    /// Helper for backward-shift deletion: determines if an entry at `current`
+    /// with natural hash position `natural` should be shifted to fill `empty`.
+    fn shouldShift(_: *ChunkCache, natural: u32, empty: u32, current: u32) bool {
+        // In a circular buffer, entry should shift if `empty` is between
+        // `natural` and `current` (wrapping around).
+        if (empty <= current) {
+            return natural <= empty or natural > current;
+        } else {
+            return natural <= empty and natural > current;
         }
     }
 

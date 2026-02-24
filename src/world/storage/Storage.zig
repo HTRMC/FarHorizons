@@ -34,7 +34,7 @@ default_compression: CompressionAlgo,
 
 /// Initialize the storage system for a specific world.
 /// Creates the world directory structure if it doesn't exist.
-pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !Storage {
+pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     const io = Io.Threaded.global_single_threaded.io();
     const sep = std.fs.path.sep_str;
 
@@ -56,7 +56,10 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !Storage {
     );
     errdefer allocator.free(region_dir);
 
-    // Ensure directory structure exists
+    // Ensure directory structure exists (create each level since createDirAbsolute doesn't make parents)
+    const worlds_dir = try std.fmt.allocPrint(allocator, "{s}{s}worlds", .{ base_path, sep });
+    defer allocator.free(worlds_dir);
+    ensureDirExists(io, worlds_dir);
     ensureDirExists(io, world_dir);
     ensureDirExists(io, region_dir);
 
@@ -65,17 +68,17 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !Storage {
     defer allocator.free(lod0_dir);
     ensureDirExists(io, lod0_dir);
 
-    var self: Storage = .{
-        .allocator = allocator,
-        .world_dir = world_dir,
-        .region_dir = region_dir,
-        .region_cache = RegionCache.init(allocator, region_dir),
-        .chunk_cache = ChunkCacheMod.ChunkCache.init(),
-        .io_pipeline = undefined,
-        .default_compression = .deflate,
-    };
+    const self = try allocator.create(Storage);
+    errdefer allocator.destroy(self);
 
-    self.io_pipeline = IoPipeline.init(
+    self.allocator = allocator;
+    self.world_dir = world_dir;
+    self.region_dir = region_dir;
+    self.region_cache = RegionCache.init(allocator, region_dir);
+    self.default_compression = .deflate;
+
+    self.chunk_cache.initInPlace();
+    self.io_pipeline.initInPlace(
         &self.region_cache,
         &self.chunk_cache,
         self.default_compression,
@@ -90,12 +93,14 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !Storage {
 
 /// Shut down the storage system, flushing all pending writes.
 pub fn deinit(self: *Storage) void {
-    self.flush();
-    self.io_pipeline.stop();
+    self.io_pipeline.stop(); // Drain pending saves, join workers
+    self.flush(); // Sync region files to disk
     self.region_cache.deinit();
-    self.allocator.free(self.region_dir);
-    self.allocator.free(self.world_dir);
+    const allocator = self.allocator;
+    allocator.free(self.region_dir);
+    allocator.free(self.world_dir);
     log.info("Storage shut down", .{});
+    allocator.destroy(self);
 }
 
 /// Flush all pending writes to disk.
@@ -118,12 +123,18 @@ pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chu
 
     // Load from region file
     const coord = key.regionCoord();
-    const region = self.region_cache.getOrOpen(coord) catch return null;
+    const region = self.region_cache.getOrOpen(coord) catch |err| {
+        log.err("loadChunk({d},{d},{d}): open failed: {}", .{ cx, cy, cz, err });
+        return null;
+    };
     defer self.region_cache.releaseRegion(region);
 
     const chunk_index = key.localIndex();
     var chunk: Chunk = undefined;
-    const found = region.readChunk(chunk_index, &chunk.blocks) catch return null;
+    const found = region.readChunk(chunk_index, &chunk.blocks) catch |err| {
+        log.err("loadChunk({d},{d},{d}): read failed: {}", .{ cx, cy, cz, err });
+        return null;
+    };
     if (!found) return null;
 
     // Cache the loaded chunk

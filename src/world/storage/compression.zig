@@ -80,23 +80,30 @@ fn decompressNone(input: []const u8, output: []u8, expected_size: usize) Compres
 // ── Deflate (using Zig stdlib) ─────────────────────────────────────
 
 fn compressDeflate(input: []const u8, output: []u8) CompressionError!usize {
-    var fbs = std.io.fixedBufferStream(output);
-    var comp = std.compress.flate.compressor(.raw, fbs.writer(), .{}) catch
+    const Writer = std.Io.Writer;
+    const flate = std.compress.flate;
+
+    var out_writer: Writer = .fixed(output);
+    var deflate_buf: [flate.max_window_len]u8 = undefined;
+    var comp = flate.Compress.init(&out_writer, &deflate_buf, .raw, .level_1) catch
         return error.CompressionFailed;
-    comp.write(input) catch return error.CompressionFailed;
-    comp.finish() catch return error.CompressionFailed;
-    return fbs.pos;
+    comp.writer.writeAll(input) catch return error.CompressionFailed;
+    comp.writer.flush() catch return error.CompressionFailed;
+    return out_writer.end;
 }
 
 fn decompressDeflate(input: []const u8, output: []u8) CompressionError!usize {
-    var in_stream = std.io.fixedBufferStream(input);
-    var decomp = std.compress.flate.decompressor(.raw, in_stream.reader());
-    var total: usize = 0;
-    while (total < output.len) {
-        const n = decomp.read(output[total..]) catch return error.DecompressionFailed;
-        if (n == 0) break;
-        total += n;
-    }
+    const Reader = std.Io.Reader;
+    const Writer = std.Io.Writer;
+    const flate = std.compress.flate;
+
+    var in_reader: Reader = .fixed(input);
+    var decomp_buf: [flate.max_window_len]u8 = undefined;
+    var decomp = flate.Decompress.init(&in_reader, .raw, &decomp_buf);
+
+    var out_writer: Writer = .fixed(output);
+    const total = decomp.reader.streamRemaining(&out_writer) catch
+        return error.DecompressionFailed;
     return total;
 }
 

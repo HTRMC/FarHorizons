@@ -13,7 +13,8 @@ const MAX_OPEN_REGIONS = 64;
 /// Thread-safe — protected by a mutex.
 /// Entries are ref-counted; eviction only occurs when ref_count == 0.
 pub const RegionCache = struct {
-    mutex: std.Thread.Mutex,
+    mutex: Io.Mutex,
+    io: Io,
     entries: [MAX_OPEN_REGIONS]?Entry,
     count: usize,
     clock_hand: usize,
@@ -28,7 +29,8 @@ pub const RegionCache = struct {
 
     pub fn init(allocator: std.mem.Allocator, base_dir: []const u8) RegionCache {
         return .{
-            .mutex = .{},
+            .mutex = .init,
+            .io = Io.Threaded.global_single_threaded.io(),
             .entries = [_]?Entry{null} ** MAX_OPEN_REGIONS,
             .count = 0,
             .clock_hand = 0,
@@ -38,8 +40,8 @@ pub const RegionCache = struct {
     }
 
     pub fn deinit(self: *RegionCache) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         for (&self.entries) |*slot| {
             if (slot.*) |entry| {
@@ -53,8 +55,8 @@ pub const RegionCache = struct {
     /// Get an open RegionFile for the given coordinate, opening or creating one if needed.
     /// Increments the ref count — caller must call releaseRegion when done.
     pub fn getOrOpen(self: *RegionCache, coord: RegionCoord) !*RegionFile {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // Look for existing entry
         for (&self.entries) |*slot| {
@@ -78,8 +80,8 @@ pub const RegionCache = struct {
         defer self.allocator.free(dir_path);
 
         // Ensure LOD directory exists
-        const io = std.Io.Threaded.global_single_threaded.io();
-        std.Io.Dir.createDirAbsolute(io, dir_path, .default_file) catch {};
+        const io = Io.Threaded.global_single_threaded.io();
+        Io.Dir.createDirAbsolute(io, dir_path, .default_file) catch {};
 
         // Open/create the region file
         const region = try RegionFile.open(self.allocator, dir_path, coord);
@@ -150,8 +152,8 @@ pub const RegionCache = struct {
 
     /// Flush all dirty regions (write headers to disk).
     pub fn flushAll(self: *RegionCache) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         for (self.entries) |entry_opt| {
             if (entry_opt) |entry| {

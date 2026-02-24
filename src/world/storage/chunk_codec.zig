@@ -144,7 +144,12 @@ pub fn decode(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]BlockType) Decode
     if (data.len < CODEC_HEADER_SIZE) return error.DataTruncated;
     if (data[0] != CODEC_FORMAT_VERSION) return error.InvalidFormat;
 
-    const encoding: Encoding = std.meta.intToEnum(Encoding, data[1]) catch return error.UnknownEncoding;
+    const raw_encoding = data[1];
+    const valid = inline for (@typeInfo(Encoding).@"enum".fields) |f| {
+        if (raw_encoding == f.value) break true;
+    } else false;
+    if (!valid) return error.UnknownEncoding;
+    const encoding: Encoding = @enumFromInt(raw_encoding);
 
     switch (encoding) {
         .single_block => decodeSingleBlock(data, out_blocks),

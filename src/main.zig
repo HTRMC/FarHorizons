@@ -403,5 +403,6 @@ pub fn main() !void {
         tracy.frameMark();
     }
 
+    game_state.save();
     std.log.info("Shutting down...", .{});
 }

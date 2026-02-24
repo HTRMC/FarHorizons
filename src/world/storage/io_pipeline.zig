@@ -25,13 +25,13 @@ pub const IoPipeline = struct {
     // Queue
     queue: [MAX_QUEUE_SIZE]Request,
     queue_len: u32,
-    queue_mutex: std.Thread.Mutex,
-    queue_cond: std.Thread.Condition,
+    queue_mutex: Io.Mutex,
+    queue_cond: Io.Condition,
 
     // Results
     results: [MAX_QUEUE_SIZE]RequestResult,
     results_len: u32,
-    results_mutex: std.Thread.Mutex,
+    results_mutex: Io.Mutex,
 
     // Write-behind: pending writes keyed by chunk
     pending_saves: [MAX_QUEUE_SIZE]?PendingSave,
@@ -48,6 +48,7 @@ pub const IoPipeline = struct {
     default_compression: CompressionAlgo,
 
     next_handle_id: u32,
+    io: Io,
 
     pub const Request = struct {
         kind: Kind,
@@ -71,29 +72,29 @@ pub const IoPipeline = struct {
         chunk: Chunk,
     };
 
-    pub fn init(
+    pub fn initInPlace(
+        self: *IoPipeline,
         region_cache: *RegionCache,
         chunk_cache: *ChunkCache,
         default_compression: CompressionAlgo,
-    ) IoPipeline {
-        return .{
-            .queue = undefined,
-            .queue_len = 0,
-            .queue_mutex = .{},
-            .queue_cond = .{},
-            .results = undefined,
-            .results_len = 0,
-            .results_mutex = .{},
-            .pending_saves = [_]?PendingSave{null} ** MAX_QUEUE_SIZE,
-            .pending_count = 0,
-            .workers = [_]?std.Thread{null} ** MAX_WORKERS,
-            .worker_count = 0,
-            .shutdown = std.atomic.Value(bool).init(false),
-            .region_cache = region_cache,
-            .chunk_cache = chunk_cache,
-            .default_compression = default_compression,
-            .next_handle_id = 0,
-        };
+    ) void {
+        self.queue_len = 0;
+        self.queue_mutex = .init;
+        self.queue_cond = .init;
+        self.results_len = 0;
+        self.results_mutex = .init;
+        self.pending_count = 0;
+        self.workers = [_]?std.Thread{null} ** MAX_WORKERS;
+        self.worker_count = 0;
+        self.shutdown = std.atomic.Value(bool).init(false);
+        self.region_cache = region_cache;
+        self.chunk_cache = chunk_cache;
+        self.default_compression = default_compression;
+        self.next_handle_id = 0;
+        self.io = Io.Threaded.global_single_threaded.io();
+        for (&self.pending_saves) |*slot| {
+            slot.* = null;
+        }
     }
 
     pub fn start(self: *IoPipeline) void {
@@ -112,7 +113,7 @@ pub const IoPipeline = struct {
         self.shutdown.store(true, .release);
 
         // Wake all workers
-        self.queue_cond.broadcast();
+        self.queue_cond.broadcast(self.io);
 
         for (&self.workers) |*w| {
             if (w.*) |thread| {
@@ -124,8 +125,8 @@ pub const IoPipeline = struct {
 
     /// Enqueue an async load request. Returns a handle for polling.
     pub fn requestLoad(self: *IoPipeline, key: ChunkKey, priority: Priority) AsyncHandle {
-        self.queue_mutex.lock();
-        defer self.queue_mutex.unlock();
+        self.queue_mutex.lockUncancelable(self.io);
+        defer self.queue_mutex.unlock(self.io);
 
         if (self.queue_len >= MAX_QUEUE_SIZE) {
             log.warn("I/O queue full, dropping load request", .{});
@@ -154,15 +155,15 @@ pub const IoPipeline = struct {
         };
         self.queue_len += 1;
 
-        self.queue_cond.signal();
+        self.queue_cond.signal(self.io);
         return .{ .id = handle_id };
     }
 
     /// Enqueue an async save request.
     /// If the same chunk already has a pending save, it's replaced (write-behind).
     pub fn requestSave(self: *IoPipeline, key: ChunkKey, chunk: *const Chunk) void {
-        self.queue_mutex.lock();
-        defer self.queue_mutex.unlock();
+        self.queue_mutex.lockUncancelable(self.io);
+        defer self.queue_mutex.unlock(self.io);
 
         // Write-behind: check for existing pending save for this chunk
         for (&self.pending_saves) |*slot| {
@@ -205,13 +206,13 @@ pub const IoPipeline = struct {
         };
         self.queue_len += 1;
 
-        self.queue_cond.signal();
+        self.queue_cond.signal(self.io);
     }
 
     /// Poll for a completed load request.
     pub fn pollLoad(self: *IoPipeline, handle: AsyncHandle) ?bool {
-        self.results_mutex.lock();
-        defer self.results_mutex.unlock();
+        self.results_mutex.lockUncancelable(self.io);
+        defer self.results_mutex.unlock(self.io);
 
         for (0..self.results_len) |i| {
             if (self.results[i].handle_id == handle.id) {
@@ -239,9 +240,10 @@ pub const IoPipeline = struct {
     }
 
     /// Worker thread function.
+    /// Keeps processing until shutdown is set AND the queue is empty.
     fn workerFn(self: *IoPipeline) void {
-        while (!self.shutdown.load(.acquire)) {
-            const request = self.dequeue() orelse continue;
+        while (true) {
+            const request = self.dequeue() orelse return;
 
             switch (request.kind) {
                 .load => self.executeLoad(request),
@@ -251,13 +253,12 @@ pub const IoPipeline = struct {
     }
 
     fn dequeue(self: *IoPipeline) ?Request {
-        self.queue_mutex.lock();
-        defer self.queue_mutex.unlock();
+        self.queue_mutex.lockUncancelable(self.io);
+        defer self.queue_mutex.unlock(self.io);
 
         while (self.queue_len == 0) {
             if (self.shutdown.load(.acquire)) return null;
-            self.queue_cond.wait(&self.queue_mutex);
-            if (self.shutdown.load(.acquire)) return null;
+            self.queue_cond.waitUncancelable(self.io, &self.queue_mutex);
         }
 
         // Take the highest priority request (first element)
@@ -302,8 +303,8 @@ pub const IoPipeline = struct {
         // Get chunk data from pending saves
         var chunk_data: ?Chunk = null;
         {
-            self.queue_mutex.lock();
-            defer self.queue_mutex.unlock();
+            self.queue_mutex.lockUncancelable(self.io);
+            defer self.queue_mutex.unlock(self.io);
             for (&self.pending_saves) |*slot| {
                 if (slot.*) |pending| {
                     if (pending.key.eql(key)) {
@@ -332,8 +333,8 @@ pub const IoPipeline = struct {
     }
 
     fn postResult(self: *IoPipeline, handle_id: u32, key: ChunkKey, success: bool) void {
-        self.results_mutex.lock();
-        defer self.results_mutex.unlock();
+        self.results_mutex.lockUncancelable(self.io);
+        defer self.results_mutex.unlock(self.io);
 
         if (self.results_len < MAX_QUEUE_SIZE) {
             self.results[self.results_len] = .{

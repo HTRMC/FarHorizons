@@ -30,7 +30,7 @@ overdraw_mode: bool,
 saved_camera: Camera,
 
 // World persistence
-storage: ?Storage,
+storage: ?*Storage,
 
 // Previous-tick snapshots for interpolation
 prev_entity_pos: [3]f32,
@@ -63,6 +63,8 @@ pub const DirtyChunkSet = struct {
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     const world = try allocator.create(WorldState.World);
+    // Initialize all blocks to air so unloaded chunks don't have garbage data
+    @memset(std.mem.asBytes(world), 0);
     const light_map = try allocator.create(WorldState.LightMap);
     const cam = Camera.init(width, height);
 
@@ -95,7 +97,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
         // No saved data — generate fresh world
         WorldState.generateSphereWorld(world);
 
-        // Save generated chunks to storage
+        // Persist generated world immediately
         if (storage != null) {
             for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
                 for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
@@ -103,10 +105,13 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
                         const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
                         const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
                         const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
-                        storage.?.requestSaveAsync(cx, cy, cz, 0, &world[cy_u][cz_u][cx_u]);
+                        storage.?.saveChunk(cx, cy, cz, 0, &world[cy_u][cz_u][cx_u]) catch |err| {
+                            std.log.warn("Failed to save generated chunk ({d},{d},{d}): {}", .{ cx, cy, cz, err });
+                        };
                     }
                 }
             }
+            storage.?.flush();
         }
     }
 
@@ -136,8 +141,27 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     };
 }
 
+/// Save all chunks to disk.
+pub fn save(self: *GameState) void {
+    const s = self.storage orelse return;
+    for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
+        for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
+            for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
+                const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
+                const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
+                const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
+                s.saveChunk(cx, cy, cz, 0, &self.world[cy_u][cz_u][cx_u]) catch |err| {
+                    std.log.warn("Failed to save chunk ({d},{d},{d}): {}", .{ cx, cy, cz, err });
+                };
+            }
+        }
+    }
+    s.flush();
+    std.log.info("World saved", .{});
+}
+
 pub fn deinit(self: *GameState) void {
-    if (self.storage) |*s| s.deinit();
+    if (self.storage) |s| s.deinit();
     self.allocator.destroy(self.light_map);
     self.allocator.destroy(self.world);
 }
