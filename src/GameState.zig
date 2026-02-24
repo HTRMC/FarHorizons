@@ -4,6 +4,7 @@ const Camera = @import("renderer/Camera.zig");
 const WorldState = @import("world/WorldState.zig");
 const Physics = @import("Physics.zig");
 const Raycast = @import("Raycast.zig");
+const Storage = @import("world/storage/Storage.zig");
 
 const GameState = @This();
 
@@ -27,6 +28,9 @@ dirty_chunks: DirtyChunkSet,
 debug_camera_active: bool,
 overdraw_mode: bool,
 saved_camera: Camera,
+
+// World persistence
+storage: ?Storage,
 
 // Previous-tick snapshots for interpolation
 prev_entity_pos: [3]f32,
@@ -59,12 +63,54 @@ pub const DirtyChunkSet = struct {
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     const world = try allocator.create(WorldState.World);
-    WorldState.generateSphereWorld(world);
-
     const light_map = try allocator.create(WorldState.LightMap);
-    WorldState.computeLightMap(world, light_map);
-
     const cam = Camera.init(width, height);
+
+    // Initialize storage (optional — game works without persistence)
+    var storage = Storage.init(allocator, "default") catch |err| blk: {
+        std.log.warn("Storage init failed: {}, world will not be saved", .{err});
+        break :blk null;
+    };
+
+    // Try to load world from disk, generate missing chunks procedurally
+    var any_loaded = false;
+    if (storage != null) {
+        for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
+            for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
+                for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
+                    const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
+                    const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
+                    const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
+
+                    if (storage.?.loadChunk(cx, cy, cz, 0)) |cached_chunk| {
+                        world[cy_u][cz_u][cx_u] = cached_chunk.*;
+                        any_loaded = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!any_loaded) {
+        // No saved data — generate fresh world
+        WorldState.generateSphereWorld(world);
+
+        // Save generated chunks to storage
+        if (storage != null) {
+            for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
+                for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
+                    for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
+                        const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
+                        const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
+                        const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
+                        storage.?.requestSaveAsync(cx, cy, cz, 0, &world[cy_u][cz_u][cx_u]);
+                    }
+                }
+            }
+        }
+    }
+
+    WorldState.computeLightMap(world, light_map);
 
     return .{
         .allocator = allocator,
@@ -79,6 +125,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
         .jump_requested = false,
         .hit_result = null,
         .dirty_chunks = DirtyChunkSet.empty(),
+        .storage = storage,
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
@@ -90,6 +137,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
 }
 
 pub fn deinit(self: *GameState) void {
+    if (self.storage) |*s| s.deinit();
     self.allocator.destroy(self.light_map);
     self.allocator.destroy(self.world);
 }
@@ -270,6 +318,7 @@ pub fn breakBlock(self: *GameState) void {
     WorldState.setBlock(self.world, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], .air);
     self.updateLight(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
     self.dirtyLightRadius(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    self.queueChunkSave(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 
@@ -283,7 +332,42 @@ pub fn placeBlock(self: *GameState) void {
     WorldState.setBlock(self.world, px, py, pz, .glowstone);
     self.updateLight(px, py, pz);
     self.dirtyLightRadius(px, py, pz);
+    self.queueChunkSave(px, py, pz);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
+}
+
+/// Queue an async save for the chunk containing world position (wx, wy, wz).
+fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    if (self.storage == null) return;
+
+    // Convert world position to voxel-space, then to local chunk index
+    const half_x: i32 = WorldState.WORLD_SIZE_X / 2;
+    const half_y: i32 = WorldState.WORLD_SIZE_Y / 2;
+    const half_z: i32 = WorldState.WORLD_SIZE_Z / 2;
+
+    const vx = wx + half_x;
+    const vy = wy + half_y;
+    const vz = wz + half_z;
+    if (vx < 0 or vy < 0 or vz < 0) return;
+    if (vx >= WorldState.WORLD_SIZE_X or vy >= WorldState.WORLD_SIZE_Y or vz >= WorldState.WORLD_SIZE_Z) return;
+
+    const cs: i32 = WorldState.CHUNK_SIZE;
+    const local_cx: usize = @intCast(@divFloor(vx, cs));
+    const local_cy: usize = @intCast(@divFloor(vy, cs));
+    const local_cz: usize = @intCast(@divFloor(vz, cs));
+
+    // Storage uses signed chunk coordinates (centered at world origin)
+    const storage_cx = @as(i32, @intCast(local_cx)) - WorldState.WORLD_CHUNKS_X / 2;
+    const storage_cy = @as(i32, @intCast(local_cy)) - WorldState.WORLD_CHUNKS_Y / 2;
+    const storage_cz = @as(i32, @intCast(local_cz)) - WorldState.WORLD_CHUNKS_Z / 2;
+
+    self.storage.?.requestSaveAsync(
+        storage_cx,
+        storage_cy,
+        storage_cz,
+        0,
+        &self.world[local_cy][local_cz][local_cx],
+    );
 }
 
 fn lerpVec3(a: zlm.Vec3, b: zlm.Vec3, t: f32) zlm.Vec3 {

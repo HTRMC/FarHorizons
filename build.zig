@@ -67,11 +67,23 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zlm", zlm_dep.module("zlm"));
 
     const tracy_enabled = b.option(bool, "tracy", "Enable Tracy profiling") orelse false;
-    const tracy_options = b.addOptions();
-    tracy_options.addOption(bool, "tracy_enabled", tracy_enabled);
-    exe.root_module.addOptions("build_options", tracy_options);
+    const zstd_enabled = b.option(bool, "zstd", "Enable ZSTD compression (requires lib/zstd/ source)") orelse false;
+
+    const options = b.addOptions();
+    options.addOption(bool, "tracy_enabled", tracy_enabled);
+    options.addOption(bool, "zstd_enabled", zstd_enabled);
+    exe.root_module.addOptions("build_options", options);
 
     linkDependencies(b, exe, tracy_enabled);
+
+    // ZSTD: compile the amalgamation source if enabled
+    if (zstd_enabled) {
+        exe.root_module.addIncludePath(b.path("lib/zstd"));
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("lib/zstd/zstd.c"),
+            .flags = &.{ "-DZSTD_DISABLE_ASM", "-DXXH_NAMESPACE=ZSTD_" },
+        });
+    }
 
     b.installArtifact(exe);
 
