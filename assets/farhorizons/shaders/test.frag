@@ -7,21 +7,22 @@ layout(location=1) flat in uint fragTexIndex;
 layout(location=2) in vec3 fragSkyLight;
 layout(location=3) flat in uint fragAoData;
 layout(location=4) in vec3 fragBlockLight;
-layout(location=5) flat in uint fragNormIdx;
+layout(location=5) flat in vec3 fragNormal;
+
+layout(push_constant) uniform PC { layout(offset=64) float contrast; } pc;
 
 layout(location=0) out vec4 outColor;
 
-void main() {
-    // Directional multipliers per face normal: +Z, -Z, -X, +X, +Y, -Y
-    const float dir_mult[6] = float[6](0.8, 0.8, 0.6, 0.6, 1.0, 0.5);
-    float dm = dir_mult[fragNormIdx];
+float lightVariation(vec3 normal) {
+    vec3 directionalPart = vec3(0, pc.contrast / 2.0, pc.contrast);
+    float baseLighting = 1.0 - pc.contrast;
+    return baseLighting + dot(normal, directionalPart);
+}
 
-    // Cubyz-style quadratic blend: sqrt(sky^2 + block^2) * directional
-    vec3 light = vec3(
-        min(1.0, sqrt(fragSkyLight.r * fragSkyLight.r + fragBlockLight.r * fragBlockLight.r) * dm),
-        min(1.0, sqrt(fragSkyLight.g * fragSkyLight.g + fragBlockLight.g * fragBlockLight.g) * dm),
-        min(1.0, sqrt(fragSkyLight.b * fragSkyLight.b + fragBlockLight.b * fragBlockLight.b) * dm)
-    );
+void main() {
+    // Directional shading only on sky light (sun has direction, torches don't)
+    vec3 sky = fragSkyLight * lightVariation(fragNormal);
+    vec3 light = min(vec3(1.0), sqrt(sky * sky + fragBlockLight * fragBlockLight));
 
     // Bilinear interpolation of AO across the quad using fragUV.
     // UV-to-corner mapping: (0,0)=corner3, (1,0)=corner2, (0,1)=corner0, (1,1)=corner1

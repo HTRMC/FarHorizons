@@ -358,10 +358,19 @@ pub const WorldRenderer = struct {
         vk.cmdPushConstants(
             command_buffer,
             self.pipeline_layout,
-            vk.VK_SHADER_STAGE_VERTEX_BIT,
+            vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
             0,
             @sizeOf(zlm.Mat4),
             mvp,
+        );
+        const contrast: f32 = 0.4;
+        vk.cmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+            @sizeOf(zlm.Mat4),
+            @sizeOf(f32),
+            @ptrCast(&contrast),
         );
 
         vk.cmdDrawIndexedIndirectCount(
@@ -530,9 +539,9 @@ pub const WorldRenderer = struct {
         };
 
         const push_constant_range = vk.VkPushConstantRange{
-            .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+            .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
-            .size = 64, // sizeof(mat4)
+            .size = 68, // sizeof(mat4) + sizeof(float) for contrast
         };
 
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{

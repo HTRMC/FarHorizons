@@ -16,7 +16,7 @@ layout(location=1) flat out uint fragTexIndex;
 layout(location=2) out vec3 fragSkyLight;
 layout(location=3) flat out uint fragAoData;
 layout(location=4) out vec3 fragBlockLight;
-layout(location=5) flat out uint fragNormIdx;
+layout(location=5) flat out vec3 fragNormal;
 
 void main() {
     uint faceID = gl_VertexIndex >> 2;
@@ -47,7 +47,7 @@ void main() {
 
     fragUV = vec2(model.uvs[cornerID*2], model.uvs[cornerID*2+1]);
     fragTexIndex = texIdx;
-    fragNormIdx = normIdx;
+    fragNormal = vec3(model.normal[0], model.normal[1], model.normal[2]);
 
     // Unpack 5-bit light channels: sky_r:5|sky_g:5|sky_b:5|block_r:5|block_g:5|block_b:5
     uint localFace = faceID - chunk.faceStart;
