@@ -2,7 +2,7 @@
 
 struct FaceData { uint word0; uint word1; };
 struct QuadModel { float corners[12]; float uvs[8]; float normal[3]; };
-struct ChunkData { int position[3]; uint lightStart; uint faceStart; uint faceCounts[6]; };
+struct ChunkData { int position[3]; uint lightStart; uint faceStart; uint faceCounts[6]; uint voxelSize; };
 struct LightEntry { uint corners[4]; };
 
 layout(set=0, binding=0) readonly buffer FaceBuffer { FaceData faces[]; };
@@ -38,11 +38,12 @@ void main() {
     uint normIdx = (face.word0 >> 23) & 0x7;
 
     QuadModel model = models[normIdx];
-    vec3 block_pos = vec3(float(chunk.position[0]) + float(x),
-                          float(chunk.position[1]) + float(y),
-                          float(chunk.position[2]) + float(z));
+    uint vs = chunk.voxelSize;
+    vec3 block_pos = vec3(float(chunk.position[0]) + float(x) * float(vs),
+                          float(chunk.position[1]) + float(y) * float(vs),
+                          float(chunk.position[2]) + float(z) * float(vs));
     vec3 corner = vec3(model.corners[cornerID*3], model.corners[cornerID*3+1], model.corners[cornerID*3+2]);
-    gl_Position = pc.mvp * vec4(block_pos + corner, 1.0);
+    gl_Position = pc.mvp * vec4(block_pos + corner * float(vs), 1.0);
 
     fragUV = vec2(model.uvs[cornerID*2], model.uvs[cornerID*2+1]);
     fragTexIndex = texIdx;

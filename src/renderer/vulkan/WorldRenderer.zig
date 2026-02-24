@@ -95,7 +95,13 @@ pub const WorldRenderer = struct {
             .light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY),
             .chunk_face_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
             .chunk_light_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
-            .chunk_data = .{std.mem.zeroes(ChunkData)} ** WorldState.TOTAL_WORLD_CHUNKS,
+            .chunk_data = .{ChunkData{
+                .position = .{ 0, 0, 0 },
+                .light_start = 0,
+                .face_start = 0,
+                .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+                .voxel_size = 1,
+            }} ** WorldState.TOTAL_WORLD_CHUNKS,
             .draw_count = 0,
         };
 
@@ -146,6 +152,7 @@ pub const WorldRenderer = struct {
         total_face_count: u32,
         lights: []const LightEntry,
         light_count: u32,
+        voxel_size: u32,
     ) !void {
         const tz = tracy.zone(@src(), "uploadChunkData");
         defer tz.end();
@@ -165,10 +172,11 @@ pub const WorldRenderer = struct {
         // Empty chunk
         if (total_face_count == 0) {
             self.chunk_data[slot] = .{
-                .position = coord.position(),
+                .position = coord.positionScaled(voxel_size),
                 .light_start = 0,
                 .face_start = 0,
                 .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+                .voxel_size = voxel_size,
             };
             self.writeChunkData(ctx, slot);
             return;
@@ -255,10 +263,11 @@ pub const WorldRenderer = struct {
 
         // Update CPU-side chunk data and write to GPU
         self.chunk_data[slot] = .{
-            .position = coord.position(),
+            .position = coord.positionScaled(voxel_size),
             .light_start = la.offset,
             .face_start = fa.offset,
             .face_counts = face_counts,
+            .voxel_size = voxel_size,
         };
         self.writeChunkData(ctx, slot);
     }
@@ -285,7 +294,6 @@ pub const WorldRenderer = struct {
         const commands: [*]DrawCommand = @ptrCast(@alignCast(data));
 
         var command_count: u32 = 0;
-        const cs: i32 = WorldState.CHUNK_SIZE;
 
         for (0..WorldState.TOTAL_WORLD_CHUNKS) |chunk_idx| {
             const cd = self.chunk_data[chunk_idx];
@@ -294,6 +302,9 @@ pub const WorldRenderer = struct {
             var total: u32 = 0;
             for (cd.face_counts) |fc| total += fc;
             if (total == 0) continue;
+
+            // Per-chunk scaled size for AABB culling
+            const cs: i32 = @as(i32, WorldState.CHUNK_SIZE) * @as(i32, @intCast(@max(1, cd.voxel_size)));
 
             // Signed distance from camera to chunk AABB.
             // When inside the chunk, all components clamp to 0 (all normals visible).

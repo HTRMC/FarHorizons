@@ -160,7 +160,8 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
 
     // --- Sky light ---
     // Column scan: flood sky light straight down from the top
-    var sky_queue_buf: [256 * 1024]QueueEntry = undefined;
+    // Buffer must be large enough for worst case (entire world air = WORLD_SIZE_X * Y * Z)
+    var sky_queue_buf: [WORLD_SIZE_X * WORLD_SIZE_Y * WORLD_SIZE_Z]QueueEntry = undefined;
     var sky_head: usize = 0;
     var sky_tail: usize = 0;
 
@@ -171,13 +172,15 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
                 vy -= 1;
                 if (block_properties.isOpaque(getBlockAt(world, vx, vy, vz))) break;
                 light_map.sky[vy][vz][vx] = 255;
-                sky_queue_buf[sky_tail] = .{
-                    .vx = @intCast(vx),
-                    .vy = @intCast(vy),
-                    .vz = @intCast(vz),
-                    .level = 255,
-                };
-                sky_tail += 1;
+                if (sky_tail < sky_queue_buf.len) {
+                    sky_queue_buf[sky_tail] = .{
+                        .vx = @intCast(vx),
+                        .vy = @intCast(vy),
+                        .vz = @intCast(vz),
+                        .level = 255,
+                    };
+                    sky_tail += 1;
+                }
             }
         }
     }
@@ -599,6 +602,15 @@ pub const ChunkCoord = struct {
             @as(i32, @intCast(self.cz)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Z / 2),
         };
     }
+
+    pub fn positionScaled(self: ChunkCoord, voxel_size: u32) [3]i32 {
+        const vs: i32 = @intCast(voxel_size);
+        return .{
+            @as(i32, @intCast(self.cx)) * CHUNK_SIZE * vs - @as(i32, WORLD_SIZE_X / 2),
+            @as(i32, @intCast(self.cy)) * CHUNK_SIZE * vs - @as(i32, WORLD_SIZE_Y / 2),
+            @as(i32, @intCast(self.cz)) * CHUNK_SIZE * vs - @as(i32, WORLD_SIZE_Z / 2),
+        };
+    }
 };
 
 pub const ChunkMeshResult = struct {
@@ -684,6 +696,78 @@ pub fn generateSphereWorld(out: *World) void {
                 }
 
                 out[cy][cz][cx] = .{ .blocks = blocks };
+            }
+        }
+    }
+}
+
+/// Downsample the LOD0 world into a lower-detail world for the given LOD level.
+/// lod_level 1 → scale=2, lod_level 2 → scale=4.
+/// Each LOD block represents a scale^3 region from LOD0, determined by majority vote.
+/// The destination world uses the same 4x1x4 array; LOD chunks fill the first
+/// lod_chunks_x * lod_chunks_y * lod_chunks_z slots, rest stays air.
+pub fn downsampleWorld(src: *const World, dst: *World, lod_level: u8) void {
+    // Zero out destination (all air)
+    @memset(std.mem.asBytes(dst), 0);
+
+    const scale: u32 = @as(u32, 1) << @intCast(lod_level);
+    const iscale: i32 = @intCast(scale);
+
+    // LOD grid dimensions
+    const lod_chunks_x = WORLD_CHUNKS_X / scale;
+    const lod_chunks_y = WORLD_CHUNKS_Y; // Y is already 1, can't subdivide further
+    const lod_chunks_z = WORLD_CHUNKS_Z / scale;
+
+    for (0..lod_chunks_y) |cy| {
+        for (0..lod_chunks_z) |cz| {
+            for (0..lod_chunks_x) |cx| {
+                var blocks: [BLOCKS_PER_CHUNK]BlockType = .{.air} ** BLOCKS_PER_CHUNK;
+
+                for (0..CHUNK_SIZE) |by| {
+                    for (0..CHUNK_SIZE) |bz| {
+                        for (0..CHUNK_SIZE) |bx| {
+                            // World-space origin of this LOD block's source region
+                            const src_wx: i32 = (@as(i32, @intCast(cx)) * CHUNK_SIZE + @as(i32, @intCast(bx))) * iscale - @as(i32, WORLD_SIZE_X / 2);
+                            const src_wy: i32 = (@as(i32, @intCast(cy)) * CHUNK_SIZE + @as(i32, @intCast(by))) * iscale - @as(i32, WORLD_SIZE_Y / 2);
+                            const src_wz: i32 = (@as(i32, @intCast(cz)) * CHUNK_SIZE + @as(i32, @intCast(bz))) * iscale - @as(i32, WORLD_SIZE_Z / 2);
+
+                            // Majority vote among non-air blocks in the scale^3 region
+                            var counts = [_]u32{0} ** 6; // one per BlockType
+                            var non_air_total: u32 = 0;
+
+                            var dy: i32 = 0;
+                            while (dy < iscale) : (dy += 1) {
+                                var dz: i32 = 0;
+                                while (dz < iscale) : (dz += 1) {
+                                    var dx: i32 = 0;
+                                    while (dx < iscale) : (dx += 1) {
+                                        const b = getBlock(src, src_wx + dx, src_wy + dy, src_wz + dz);
+                                        if (b != .air) {
+                                            counts[@intFromEnum(b)] += 1;
+                                            non_air_total += 1;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (non_air_total == 0) continue;
+
+                            // Find block type with highest count
+                            var best_type: BlockType = .air;
+                            var best_count: u32 = 0;
+                            for (1..counts.len) |i| {
+                                if (counts[i] > best_count) {
+                                    best_count = counts[i];
+                                    best_type = @enumFromInt(i);
+                                }
+                            }
+
+                            blocks[chunkIndex(bx, by, bz)] = best_type;
+                        }
+                    }
+                }
+
+                dst[cy][cz][cx] = .{ .blocks = blocks };
             }
         }
     }

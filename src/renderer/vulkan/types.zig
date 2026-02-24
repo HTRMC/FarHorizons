@@ -37,6 +37,7 @@ pub const ChunkData = extern struct {
     light_start: u32, // offset into global light buffer
     face_start: u32, // offset into global face buffer
     face_counts: [6]u32, // per-normal face count (+Z,-Z,-X,+X,+Y,-Y)
+    voxel_size: u32, // 1=LOD0, 2=LOD1, 4=LOD2
 };
 
 pub const DrawCommand = extern struct {

@@ -118,6 +118,9 @@ const input_log = std.log.scoped(.Input);
 
 fn keyName(key: c_int) []const u8 {
     return switch (key) {
+        glfw.GLFW_KEY_1 => "1",
+        glfw.GLFW_KEY_2 => "2",
+        glfw.GLFW_KEY_3 => "3",
         glfw.GLFW_KEY_W => "W",
         glfw.GLFW_KEY_A => "A",
         glfw.GLFW_KEY_S => "S",
@@ -170,6 +173,7 @@ const InputState = struct {
     mode_toggle_requested: bool = false,
     debug_toggle_requested: bool = false,
     overdraw_toggle_requested: bool = false,
+    lod_switch_requested: ?u8 = null,
 };
 
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
@@ -203,6 +207,10 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
         input_state.overdraw_toggle_requested = true;
     }
 
+    if (key == glfw.GLFW_KEY_1 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 0;
+    if (key == glfw.GLFW_KEY_2 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 1;
+    if (key == glfw.GLFW_KEY_3 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 2;
+
     if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
         const now = glfw.getTime();
         if (now - input_state.last_space_press_time < DOUBLE_TAP_THRESHOLD) {
@@ -221,7 +229,7 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
 
     if (button == glfw.GLFW_MOUSE_BUTTON_LEFT and input_state.mouse_captured) {
-        if (!input_state.game_state.debug_camera_active) {
+        if (!input_state.game_state.debug_camera_active and input_state.game_state.current_lod == 0) {
             input_state.game_state.breakBlock();
         }
     } else if (button == glfw.GLFW_MOUSE_BUTTON_RIGHT) {
@@ -229,7 +237,7 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
             input_state.mouse_captured = true;
             input_state.first_mouse = true;
             glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
-        } else if (!input_state.game_state.debug_camera_active) {
+        } else if (!input_state.game_state.debug_camera_active and input_state.game_state.current_lod == 0) {
             input_state.game_state.placeBlock();
         }
     }
@@ -347,6 +355,12 @@ pub fn main() !void {
         if (input_state.overdraw_toggle_requested) {
             input_state.overdraw_toggle_requested = false;
             game_state.overdraw_mode = !game_state.overdraw_mode;
+        }
+
+        // Consume LOD switch
+        if (input_state.lod_switch_requested) |lod| {
+            input_state.lod_switch_requested = null;
+            game_state.switchLod(lod);
         }
 
         // Buffer movement input (read once per frame, consumed by ticks)

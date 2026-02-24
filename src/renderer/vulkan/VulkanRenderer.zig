@@ -193,6 +193,7 @@ pub const VulkanRenderer = struct {
             self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
 
             if (self.game_state.dirty_chunks.count > 0 and self.mesh_worker.state.load(.acquire) == .idle) {
+                self.mesh_worker.world = self.game_state.world;
                 self.mesh_worker.light_map = self.game_state.light_map;
                 self.mesh_worker.startDirty(self.game_state.dirty_chunks.chunks[0..self.game_state.dirty_chunks.count]);
                 self.game_state.dirty_chunks.clear();
@@ -202,10 +203,16 @@ pub const VulkanRenderer = struct {
         // Text rendering
         self.render_state.text_renderer.beginFrame(self.ctx.device);
         self.render_state.text_renderer.drawText(10.0, 10.0, "FarHorizons", .{ 1.0, 1.0, 1.0, 1.0 });
+
+        var lod_buf: [16]u8 = undefined;
+        const lod_text = std.fmt.bufPrint(&lod_buf, "LOD {d}", .{self.game_state.current_lod}) catch "LOD ?";
+        self.render_state.text_renderer.drawText(10.0, 30.0, lod_text, .{ 1.0, 1.0, 0.0, 1.0 });
     }
 
     fn pollMeshWorker(self: *VulkanRenderer) void {
         const poll_result = self.mesh_worker.poll() orelse return;
+
+        const voxel_size: u32 = @as(u32, 1) << @intCast(self.game_state.current_lod);
 
         for (0..poll_result.count) |i| {
             if (poll_result.results[i]) |chunk_result| {
@@ -217,6 +224,7 @@ pub const VulkanRenderer = struct {
                     chunk_result.total_face_count,
                     chunk_result.lights,
                     chunk_result.light_count,
+                    voxel_size,
                 ) catch |err| {
                     std.log.err("Failed to upload chunk ({},{},{}): {}", .{
                         chunk_result.coord.cx, chunk_result.coord.cy, chunk_result.coord.cz, err,
