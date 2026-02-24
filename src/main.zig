@@ -44,22 +44,34 @@ fn logFn(
     var t = c_time.time(null);
     const tm = c_time.localtime(&t);
 
+    const level_color: std.Io.Terminal.Color = switch (level) {
+        .err => .red,
+        .warn => .yellow,
+        .info => .green,
+        .debug => .magenta,
+    };
+
     var buf: [64]u8 = undefined;
     const stderr = std.debug.lockStderr(&buf);
     defer std.debug.unlockStderr();
-    const writer = stderr.terminal().writer;
+    const term = stderr.terminal();
+    const writer = term.writer;
 
     if (tm) |local| {
-        writer.print("[{d:0>2}:{d:0>2}:{d:0>2}] [{s}/{s}]: ", .{
+        writer.print("[{d:0>2}:{d:0>2}:{d:0>2}] [", .{
             @as(u32, @intCast(local.tm_hour)),
             @as(u32, @intCast(local.tm_min)),
             @as(u32, @intCast(local.tm_sec)),
-            scope_name,
-            level_text,
         }) catch {};
     } else {
-        writer.print("[??:??:??] [{s}/{s}]: ", .{ scope_name, level_text }) catch {};
+        writer.writeAll("[??:??:??] [") catch {};
     }
+    writer.print("{s}/", .{scope_name}) catch {};
+    term.setColor(level_color) catch {};
+    term.setColor(.bold) catch {};
+    writer.writeAll(level_text) catch {};
+    term.setColor(.reset) catch {};
+    writer.writeAll("]: ") catch {};
     writer.print(format ++ "\n", args) catch {};
 }
 
