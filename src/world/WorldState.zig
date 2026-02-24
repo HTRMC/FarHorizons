@@ -138,6 +138,7 @@ pub const LightMap = struct {
 };
 
 const LIGHT_ATTENUATION: u8 = 8;
+const LIGHT_MAX_RADIUS: i32 = 255 / LIGHT_ATTENUATION; // ~31 blocks
 
 fn getBlockAt(world: *const World, vx: usize, vy: usize, vz: usize) BlockType {
     return world[vy / CHUNK_SIZE][vz / CHUNK_SIZE][vx / CHUNK_SIZE]
@@ -283,6 +284,287 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
                     .g = ng,
                     .b = nb,
                 };
+                tail += 1;
+            }
+        }
+    }
+}
+
+/// Incrementally update the light map around a changed block position.
+/// Uses destructive BFS to remove stale light, then re-propagates from nearby sources.
+/// Much faster than full recomputation for single block changes.
+pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i32, wz: i32) void {
+    const bfs_offsets = [6][3]i32{
+        .{ 1, 0, 0 },  .{ -1, 0, 0 },
+        .{ 0, 1, 0 },  .{ 0, -1, 0 },
+        .{ 0, 0, 1 },  .{ 0, 0, -1 },
+    };
+
+    const cvx = wx + @as(i32, WORLD_SIZE_X / 2);
+    const cvy = wy + @as(i32, WORLD_SIZE_Y / 2);
+    const cvz = wz + @as(i32, WORLD_SIZE_Z / 2);
+    if (cvx < 0 or cvx >= WORLD_SIZE_X or cvy < 0 or cvy >= WORLD_SIZE_Y or cvz < 0 or cvz >= WORLD_SIZE_Z) return;
+
+    // --- Destructive phase: clear light in radius and collect border sources ---
+    const radius = LIGHT_MAX_RADIUS + 1;
+
+    const min_vx: usize = @intCast(@max(0, cvx - radius));
+    const max_vx: usize = @intCast(@min(@as(i32, WORLD_SIZE_X) - 1, cvx + radius));
+    const min_vy: usize = @intCast(@max(0, cvy - radius));
+    const max_vy: usize = @intCast(@min(@as(i32, WORLD_SIZE_Y) - 1, cvy + radius));
+    const min_vz: usize = @intCast(@max(0, cvz - radius));
+    const max_vz: usize = @intCast(@min(@as(i32, WORLD_SIZE_Z) - 1, cvz + radius));
+
+    // Clear block light and sky light in the affected region, then re-propagate
+
+    // Block light: clear region
+    for (min_vy..max_vy + 1) |vy| {
+        for (min_vz..max_vz + 1) |vz| {
+            for (min_vx..max_vx + 1) |vx| {
+                light_map.block[vy][vz][vx] = .{ 0, 0, 0 };
+            }
+        }
+    }
+
+    // Sky light: clear region
+    for (min_vy..max_vy + 1) |vy| {
+        for (min_vz..max_vz + 1) |vz| {
+            for (min_vx..max_vx + 1) |vx| {
+                light_map.sky[vy][vz][vx] = 0;
+            }
+        }
+    }
+
+    // --- Re-seed sky light in region: column scan ---
+    const QueueEntry = struct { vx: u8, vy: u8, vz: u8, level: u8 };
+    const RgbQueueEntry = struct { vx: u8, vy: u8, vz: u8, r: u8, g: u8, b: u8 };
+
+    var sky_queue_buf: [128 * 1024]QueueEntry = undefined;
+    var sky_head: usize = 0;
+    var sky_tail: usize = 0;
+
+    for (min_vz..max_vz + 1) |vz| {
+        for (min_vx..max_vx + 1) |vx| {
+            // Scan column from top of world down
+            var vy: usize = WORLD_SIZE_Y;
+            while (vy > 0) {
+                vy -= 1;
+                if (block_properties.isOpaque(getBlockAt(world, vx, vy, vz))) break;
+                light_map.sky[vy][vz][vx] = 255;
+                if (vy >= min_vy and vy <= max_vy) {
+                    if (sky_tail < sky_queue_buf.len) {
+                        sky_queue_buf[sky_tail] = .{
+                            .vx = @intCast(vx),
+                            .vy = @intCast(vy),
+                            .vz = @intCast(vz),
+                            .level = 255,
+                        };
+                        sky_tail += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Also seed from border: any neighbor outside the cleared region that still has sky light
+    // Check all voxels just outside the cleared region that could propagate in
+    const border_ranges = [_][2]usize{
+        .{ min_vx, max_vx },
+        .{ min_vy, max_vy },
+        .{ min_vz, max_vz },
+    };
+    _ = border_ranges;
+
+    // Seed sky from external neighbors at region borders
+    for (min_vy..max_vy + 1) |vy| {
+        for (min_vz..max_vz + 1) |vz| {
+            for (min_vx..max_vx + 1) |vx| {
+                if (light_map.sky[vy][vz][vx] > 0) continue; // already set (column scan)
+                if (block_properties.isOpaque(getBlockAt(world, vx, vy, vz))) continue;
+
+                // Check if any neighbor outside the region has light to offer
+                for (bfs_offsets) |off| {
+                    const nx_i: i32 = @as(i32, @intCast(vx)) + off[0];
+                    const ny_i: i32 = @as(i32, @intCast(vy)) + off[1];
+                    const nz_i: i32 = @as(i32, @intCast(vz)) + off[2];
+
+                    // Only consider neighbors outside the cleared region
+                    if (nx_i >= @as(i32, @intCast(min_vx)) and nx_i <= @as(i32, @intCast(max_vx)) and
+                        ny_i >= @as(i32, @intCast(min_vy)) and ny_i <= @as(i32, @intCast(max_vy)) and
+                        nz_i >= @as(i32, @intCast(min_vz)) and nz_i <= @as(i32, @intCast(max_vz)))
+                        continue;
+
+                    if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) {
+                        // Out of world = full sky
+                        const new_level: u8 = 255 -| LIGHT_ATTENUATION;
+                        if (new_level > light_map.sky[vy][vz][vx]) {
+                            light_map.sky[vy][vz][vx] = new_level;
+                            if (sky_tail < sky_queue_buf.len) {
+                                sky_queue_buf[sky_tail] = .{ .vx = @intCast(vx), .vy = @intCast(vy), .vz = @intCast(vz), .level = new_level };
+                                sky_tail += 1;
+                            }
+                        }
+                        continue;
+                    }
+
+                    const nx: usize = @intCast(nx_i);
+                    const ny: usize = @intCast(ny_i);
+                    const nz: usize = @intCast(nz_i);
+
+                    const neighbor_sky = light_map.sky[ny][nz][nx];
+                    if (neighbor_sky > LIGHT_ATTENUATION) {
+                        const new_level = neighbor_sky - LIGHT_ATTENUATION;
+                        if (new_level > light_map.sky[vy][vz][vx]) {
+                            light_map.sky[vy][vz][vx] = new_level;
+                            if (sky_tail < sky_queue_buf.len) {
+                                sky_queue_buf[sky_tail] = .{ .vx = @intCast(vx), .vy = @intCast(vy), .vz = @intCast(vz), .level = new_level };
+                                sky_tail += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // BFS sky light within region
+    while (sky_head < sky_tail) {
+        const e = sky_queue_buf[sky_head];
+        sky_head += 1;
+
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, e.vx) + off[0];
+            const ny_i: i32 = @as(i32, e.vy) + off[1];
+            const nz_i: i32 = @as(i32, e.vz) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            if (block_properties.isOpaque(getBlockAt(world, nx, ny, nz))) continue;
+
+            const new_level = e.level -| LIGHT_ATTENUATION;
+            if (new_level == 0) continue;
+            if (new_level <= light_map.sky[ny][nz][nx]) continue;
+
+            light_map.sky[ny][nz][nx] = new_level;
+
+            if (sky_tail < sky_queue_buf.len) {
+                sky_queue_buf[sky_tail] = .{ .vx = @intCast(nx), .vy = @intCast(ny), .vz = @intCast(nz), .level = new_level };
+                sky_tail += 1;
+            }
+        }
+    }
+
+    // --- Re-seed block light: find all emitters in region + border sources ---
+    var queue_buf: [128 * 1024]RgbQueueEntry = undefined;
+    var head: usize = 0;
+    var tail: usize = 0;
+
+    // Seed emitters within region
+    for (min_vy..max_vy + 1) |vy| {
+        for (min_vz..max_vz + 1) |vz| {
+            for (min_vx..max_vx + 1) |vx| {
+                const emit = block_properties.emittedLight(getBlockAt(world, vx, vy, vz));
+                if (emit[0] > 0 or emit[1] > 0 or emit[2] > 0) {
+                    light_map.block[vy][vz][vx] = emit;
+                    if (tail < queue_buf.len) {
+                        queue_buf[tail] = .{ .vx = @intCast(vx), .vy = @intCast(vy), .vz = @intCast(vz), .r = emit[0], .g = emit[1], .b = emit[2] };
+                        tail += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Seed from border: neighbors outside region with block light
+    for (min_vy..max_vy + 1) |vy| {
+        for (min_vz..max_vz + 1) |vz| {
+            for (min_vx..max_vx + 1) |vx| {
+                if (block_properties.isOpaque(getBlockAt(world, vx, vy, vz))) continue;
+
+                for (bfs_offsets) |off| {
+                    const nx_i: i32 = @as(i32, @intCast(vx)) + off[0];
+                    const ny_i: i32 = @as(i32, @intCast(vy)) + off[1];
+                    const nz_i: i32 = @as(i32, @intCast(vz)) + off[2];
+
+                    if (nx_i >= @as(i32, @intCast(min_vx)) and nx_i <= @as(i32, @intCast(max_vx)) and
+                        ny_i >= @as(i32, @intCast(min_vy)) and ny_i <= @as(i32, @intCast(max_vy)) and
+                        nz_i >= @as(i32, @intCast(min_vz)) and nz_i <= @as(i32, @intCast(max_vz)))
+                        continue;
+
+                    if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+                    const nx: usize = @intCast(nx_i);
+                    const ny: usize = @intCast(ny_i);
+                    const nz: usize = @intCast(nz_i);
+
+                    const nb = light_map.block[ny][nz][nx];
+                    const nr = nb[0] -| LIGHT_ATTENUATION;
+                    const ng = nb[1] -| LIGHT_ATTENUATION;
+                    const nbb = nb[2] -| LIGHT_ATTENUATION;
+
+                    if (nr == 0 and ng == 0 and nbb == 0) continue;
+
+                    const existing = &light_map.block[vy][vz][vx];
+                    var changed = false;
+                    if (nr > existing[0]) {
+                        existing[0] = nr;
+                        changed = true;
+                    }
+                    if (ng > existing[1]) {
+                        existing[1] = ng;
+                        changed = true;
+                    }
+                    if (nbb > existing[2]) {
+                        existing[2] = nbb;
+                        changed = true;
+                    }
+
+                    if (changed and tail < queue_buf.len) {
+                        queue_buf[tail] = .{ .vx = @intCast(vx), .vy = @intCast(vy), .vz = @intCast(vz), .r = existing[0], .g = existing[1], .b = existing[2] };
+                        tail += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // BFS block light within region (can overflow outside, that's fine)
+    while (head < tail) {
+        const e = queue_buf[head];
+        head += 1;
+
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, e.vx) + off[0];
+            const ny_i: i32 = @as(i32, e.vy) + off[1];
+            const nz_i: i32 = @as(i32, e.vz) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            if (block_properties.isOpaque(getBlockAt(world, nx, ny, nz))) continue;
+
+            const nr = e.r -| LIGHT_ATTENUATION;
+            const ng = e.g -| LIGHT_ATTENUATION;
+            const nb = e.b -| LIGHT_ATTENUATION;
+
+            if (nr == 0 and ng == 0 and nb == 0) continue;
+
+            const existing = &light_map.block[ny][nz][nx];
+            if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
+
+            existing[0] = @max(existing[0], nr);
+            existing[1] = @max(existing[1], ng);
+            existing[2] = @max(existing[2], nb);
+
+            if (tail < queue_buf.len) {
+                queue_buf[tail] = .{ .vx = @intCast(nx), .vy = @intCast(ny), .vz = @intCast(nz), .r = existing[0], .g = existing[1], .b = existing[2] };
                 tail += 1;
             }
         }

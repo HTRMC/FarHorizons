@@ -228,10 +228,14 @@ fn recomputeLight(self: *GameState) void {
     WorldState.computeLightMap(self.world, self.light_map);
 }
 
+fn updateLight(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    WorldState.updateLightMap(self.world, self.light_map, wx, wy, wz);
+}
+
 pub fn breakBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
     WorldState.setBlock(self.world, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], .air);
-    self.recomputeLight();
+    self.updateLight(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
     self.dirtyAllChunks();
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
@@ -244,7 +248,7 @@ pub fn placeBlock(self: *GameState) void {
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(WorldState.getBlock(self.world, px, py, pz))) return;
     WorldState.setBlock(self.world, px, py, pz, .glowstone);
-    self.recomputeLight();
+    self.updateLight(px, py, pz);
     self.dirtyAllChunks();
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
