@@ -13,10 +13,9 @@ layout(push_constant) uniform PC { mat4 mvp; } pc;
 
 layout(location=0) out vec2 fragUV;
 layout(location=1) flat out uint fragTexIndex;
-layout(location=2) out vec3 fragSkyLight;
-layout(location=3) out float fragAo;
-layout(location=4) out vec3 fragBlockLight;
-layout(location=5) flat out vec3 fragNormal;
+layout(location=2) flat out uvec4 fragLightPacked;
+layout(location=3) flat out uint fragAoData;
+layout(location=4) flat out vec3 fragNormal;
 
 void main() {
     uint faceID = gl_VertexIndex >> 2;
@@ -49,20 +48,16 @@ void main() {
     fragTexIndex = texIdx;
     fragNormal = vec3(model.normal[0], model.normal[1], model.normal[2]);
 
-    // Unpack 5-bit light channels: sky_r:5|sky_g:5|sky_b:5|block_r:5|block_g:5|block_b:5
-    uint localFace = faceID - chunk.faceStart;
-    uint packed = lights[chunk.lightStart + localFace].corners[cornerID];
-    float sr = float((packed >>  0) & 0x1F) / 31.0;
-    float sg = float((packed >>  5) & 0x1F) / 31.0;
-    float sb = float((packed >> 10) & 0x1F) / 31.0;
-    float br = float((packed >> 15) & 0x1F) / 31.0;
-    float bg = float((packed >> 20) & 0x1F) / 31.0;
-    float bb = float((packed >> 25) & 0x1F) / 31.0;
-    fragSkyLight = vec3(sr, sg, sb);
-    fragBlockLight = vec3(br, bg, bb);
+    // Pass all 4 corners' packed light in UV order for fragment bilinear interpolation
+    // All faces: corner0=UV(0,1), corner1=UV(1,1), corner2=UV(1,0), corner3=UV(0,0)
+    // UV layout: [0]=UV(0,0)=c3, [1]=UV(1,0)=c2, [2]=UV(0,1)=c0, [3]=UV(1,1)=c1
+    uint lightIdx = chunk.lightStart + (faceID - chunk.faceStart);
+    fragLightPacked = uvec4(
+        lights[lightIdx].corners[3],
+        lights[lightIdx].corners[2],
+        lights[lightIdx].corners[0],
+        lights[lightIdx].corners[1]
+    );
 
-    // Per-vertex AO: extract this corner's AO level and apply curve
-    const float ao_curve[4] = float[4](1.0, 0.8, 0.6, 0.4);
-    uint aoLevel = (face.word1 >> (cornerID * 2)) & 0x3;
-    fragAo = ao_curve[aoLevel];
+    fragAoData = face.word1;
 }
