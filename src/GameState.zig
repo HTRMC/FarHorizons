@@ -232,11 +232,44 @@ fn updateLight(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     WorldState.updateLightMap(self.world, self.light_map, wx, wy, wz);
 }
 
+/// Dirty all chunks whose meshes could be affected by a light change at (wx, wy, wz).
+/// The light propagation radius determines how far light can reach.
+fn dirtyLightRadius(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    const radius = WorldState.LIGHT_MAX_RADIUS + 2; // +2 for AO sampling across boundaries
+    const cs: i32 = WorldState.CHUNK_SIZE;
+    const half_x: i32 = WorldState.WORLD_SIZE_X / 2;
+    const half_y: i32 = WorldState.WORLD_SIZE_Y / 2;
+    const half_z: i32 = WorldState.WORLD_SIZE_Z / 2;
+
+    // Convert world-space light radius to chunk range
+    const min_cx = @max(0, @divFloor(wx - radius + half_x, cs));
+    const max_cx = @min(@as(i32, WorldState.WORLD_CHUNKS_X) - 1, @divFloor(wx + radius + half_x, cs));
+    const min_cy = @max(0, @divFloor(wy - radius + half_y, cs));
+    const max_cy = @min(@as(i32, WorldState.WORLD_CHUNKS_Y) - 1, @divFloor(wy + radius + half_y, cs));
+    const min_cz = @max(0, @divFloor(wz - radius + half_z, cs));
+    const max_cz = @min(@as(i32, WorldState.WORLD_CHUNKS_Z) - 1, @divFloor(wz + radius + half_z, cs));
+
+    var cy = min_cy;
+    while (cy <= max_cy) : (cy += 1) {
+        var cz = min_cz;
+        while (cz <= max_cz) : (cz += 1) {
+            var cx = min_cx;
+            while (cx <= max_cx) : (cx += 1) {
+                self.dirty_chunks.add(.{
+                    .cx = @intCast(cx),
+                    .cy = @intCast(cy),
+                    .cz = @intCast(cz),
+                });
+            }
+        }
+    }
+}
+
 pub fn breakBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
     WorldState.setBlock(self.world, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], .air);
     self.updateLight(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
-    self.dirtyAllChunks();
+    self.dirtyLightRadius(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 
@@ -249,7 +282,7 @@ pub fn placeBlock(self: *GameState) void {
     if (WorldState.block_properties.isSolid(WorldState.getBlock(self.world, px, py, pz))) return;
     WorldState.setBlock(self.world, px, py, pz, .glowstone);
     self.updateLight(px, py, pz);
-    self.dirtyAllChunks();
+    self.dirtyLightRadius(px, py, pz);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 

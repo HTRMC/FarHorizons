@@ -138,7 +138,7 @@ pub const LightMap = struct {
 };
 
 const LIGHT_ATTENUATION: u8 = 8;
-const LIGHT_MAX_RADIUS: i32 = 255 / LIGHT_ATTENUATION; // ~31 blocks
+pub const LIGHT_MAX_RADIUS: i32 = 255 / LIGHT_ATTENUATION; // ~31 blocks
 
 fn getBlockAt(world: *const World, vx: usize, vy: usize, vz: usize) BlockType {
     return world[vy / CHUNK_SIZE][vz / CHUNK_SIZE][vx / CHUNK_SIZE]
