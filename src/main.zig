@@ -6,6 +6,102 @@ const GameState = @import("GameState.zig");
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
 
+// C time bindings for local time in log output
+const c_time = struct {
+    const Tm = extern struct {
+        tm_sec: c_int,
+        tm_min: c_int,
+        tm_hour: c_int,
+        tm_mday: c_int,
+        tm_mon: c_int,
+        tm_year: c_int,
+        tm_wday: c_int,
+        tm_yday: c_int,
+        tm_isdst: c_int,
+    };
+    extern "c" fn time(timer: ?*i64) i64;
+    extern "c" fn localtime(timer: *const i64) ?*const Tm;
+};
+
+pub const std_options: std.Options = .{
+    .logFn = logFn,
+};
+
+fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: @EnumLiteral(),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const level_text = comptime switch (level) {
+        .err => "ERROR",
+        .warn => "WARN",
+        .info => "INFO",
+        .debug => "DEBUG",
+    };
+    const scope_name = comptime if (scope == .default) "Main" else @tagName(scope);
+
+    var t = c_time.time(null);
+    const tm = c_time.localtime(&t);
+
+    var buf: [64]u8 = undefined;
+    const stderr = std.debug.lockStderr(&buf);
+    defer std.debug.unlockStderr();
+    const writer = stderr.terminal().writer;
+
+    if (tm) |local| {
+        writer.print("[{d:0>2}:{d:0>2}:{d:0>2}] [{s}/{s}]: ", .{
+            @as(u32, @intCast(local.tm_hour)),
+            @as(u32, @intCast(local.tm_min)),
+            @as(u32, @intCast(local.tm_sec)),
+            scope_name,
+            level_text,
+        }) catch {};
+    } else {
+        writer.print("[??:??:??] [{s}/{s}]: ", .{ scope_name, level_text }) catch {};
+    }
+    writer.print(format ++ "\n", args) catch {};
+}
+
+const input_log = std.log.scoped(.Input);
+
+fn keyName(key: c_int) []const u8 {
+    return switch (key) {
+        glfw.GLFW_KEY_W => "W",
+        glfw.GLFW_KEY_A => "A",
+        glfw.GLFW_KEY_S => "S",
+        glfw.GLFW_KEY_D => "D",
+        glfw.GLFW_KEY_SPACE => "Space",
+        glfw.GLFW_KEY_LEFT_SHIFT => "LShift",
+        glfw.GLFW_KEY_ESCAPE => "Escape",
+        glfw.GLFW_KEY_P => "P",
+        glfw.GLFW_KEY_F4 => "F4",
+        glfw.GLFW_KEY_F11 => "F11",
+        glfw.GLFW_KEY_UP => "Up",
+        glfw.GLFW_KEY_DOWN => "Down",
+        glfw.GLFW_KEY_LEFT => "Left",
+        glfw.GLFW_KEY_RIGHT => "Right",
+        else => "Unknown",
+    };
+}
+
+fn actionName(action: c_int) []const u8 {
+    return switch (action) {
+        glfw.GLFW_PRESS => "PRESS",
+        glfw.GLFW_RELEASE => "RELEASE",
+        glfw.GLFW_REPEAT => "REPEAT",
+        else => "UNKNOWN",
+    };
+}
+
+fn mouseButtonName(button: c_int) []const u8 {
+    return switch (button) {
+        glfw.GLFW_MOUSE_BUTTON_LEFT => "Left",
+        glfw.GLFW_MOUSE_BUTTON_RIGHT => "Right",
+        else => "Unknown",
+    };
+}
+
 const DOUBLE_TAP_THRESHOLD: f64 = 0.35;
 const MAX_ACCUMULATOR: f32 = 0.25;
 
@@ -28,6 +124,7 @@ const InputState = struct {
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
     _ = xoffset;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+    input_log.debug("Scroll y={d:.1}", .{yoffset});
     input_state.scroll_speed_delta += @floatCast(yoffset);
 }
 
@@ -35,6 +132,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
     _ = scancode;
     _ = mods;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+    input_log.debug("Key {s} {s}", .{ keyName(key), actionName(action) });
 
     if (key == glfw.GLFW_KEY_F11 and action == glfw.GLFW_RELEASE) {
         input_state.window.toggleFullscreen();
@@ -67,6 +165,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
 
 fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods: c_int) callconv(.c) void {
     _ = mods;
+    input_log.debug("Mouse {s} {s}", .{ mouseButtonName(button), actionName(action) });
     if (action != glfw.GLFW_PRESS) return;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
 

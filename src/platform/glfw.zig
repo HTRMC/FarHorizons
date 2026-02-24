@@ -35,6 +35,7 @@ pub const GLFW_KEY_F4 = c.GLFW_KEY_F4;
 pub const GLFW_KEY_F11 = c.GLFW_KEY_F11;
 pub const GLFW_PRESS = c.GLFW_PRESS;
 pub const GLFW_RELEASE = c.GLFW_RELEASE;
+pub const GLFW_REPEAT = c.GLFW_REPEAT;
 
 // Mouse / cursor constants
 pub const GLFW_MOUSE_BUTTON_LEFT = c.GLFW_MOUSE_BUTTON_LEFT;

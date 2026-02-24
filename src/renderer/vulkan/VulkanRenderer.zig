@@ -21,6 +21,8 @@ const sep = std.fs.path.sep_str;
 const enable_validation_layers = @import("builtin").mode == .Debug;
 const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 
+const vk_log = std.log.scoped(.Vulkan);
+
 fn debugCallback(
     message_severity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
     message_type: vk.VkDebugUtilsMessageTypeFlagsEXT,
@@ -34,13 +36,13 @@ fn debugCallback(
     const message = std.mem.span(data.pMessage);
 
     if (message_severity >= vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
-        std.log.err("[Vulkan] {s}", .{message});
+        vk_log.err("{s}", .{message});
     } else if (message_severity >= vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
-        std.log.warn("[Vulkan] {s}", .{message});
+        vk_log.warn("{s}", .{message});
     } else if (message_severity >= vk.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) {
-        std.log.info("[Vulkan] {s}", .{message});
+        vk_log.info("{s}", .{message});
     } else {
-        std.log.debug("[Vulkan] {s}", .{message});
+        vk_log.debug("{s}", .{message});
     }
 
     return vk.VK_FALSE;
