@@ -13,8 +13,10 @@ layout(push_constant) uniform PC { mat4 mvp; } pc;
 
 layout(location=0) out vec2 fragUV;
 layout(location=1) flat out uint fragTexIndex;
-layout(location=2) out vec3 fragLight;
+layout(location=2) out vec3 fragSkyLight;
 layout(location=3) flat out uint fragAoData;
+layout(location=4) out vec3 fragBlockLight;
+layout(location=5) flat out uint fragNormIdx;
 
 void main() {
     uint faceID = gl_VertexIndex >> 2;
@@ -35,7 +37,6 @@ void main() {
     uint z = (face.word0 >> 10) & 0x1F;
     uint texIdx = (face.word0 >> 15) & 0xFF;
     uint normIdx = (face.word0 >> 23) & 0x7;
-    uint lightIdx = (face.word0 >> 26) & 0x3F;
 
     QuadModel model = models[normIdx];
     vec3 block_pos = vec3(float(chunk.position[0]) + float(x),
@@ -46,10 +47,19 @@ void main() {
 
     fragUV = vec2(model.uvs[cornerID*2], model.uvs[cornerID*2+1]);
     fragTexIndex = texIdx;
+    fragNormIdx = normIdx;
 
+    // Unpack 5-bit light channels: sky_r:5|sky_g:5|sky_b:5|block_r:5|block_g:5|block_b:5
     uint localFace = faceID - chunk.faceStart;
     uint packed = lights[chunk.lightStart + localFace].corners[cornerID];
-    fragLight = vec3(float(packed & 0xFF), float((packed>>8)&0xFF), float((packed>>16)&0xFF)) / 255.0;
+    float sr = float((packed >>  0) & 0x1F) / 31.0;
+    float sg = float((packed >>  5) & 0x1F) / 31.0;
+    float sb = float((packed >> 10) & 0x1F) / 31.0;
+    float br = float((packed >> 15) & 0x1F) / 31.0;
+    float bg = float((packed >> 20) & 0x1F) / 31.0;
+    float bb = float((packed >> 25) & 0x1F) / 31.0;
+    fragSkyLight = vec3(sr, sg, sb);
+    fragBlockLight = vec3(br, bg, bb);
 
     // Pass raw AO data to fragment shader for bilinear interpolation
     fragAoData = face.word1;

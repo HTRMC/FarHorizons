@@ -29,7 +29,7 @@ pub const QuadModel = extern struct {
 };
 
 pub const LightEntry = extern struct {
-    corners: [4]u32, // packed R8G8B8 per corner
+    corners: [4]u32, // packed 5-bit: sky_r:5|sky_g:5|sky_b:5|block_r:5|block_g:5|block_b:5
 };
 
 pub const ChunkData = extern struct {

@@ -805,9 +805,6 @@ pub fn generateChunkMesh(
         normal_lights[i].deinit(allocator);
     };
 
-    // Directional multipliers per face normal (applied after light level)
-    const dir_multipliers = [6]f32{ 0.8, 0.8, 0.6, 0.6, 1.0, 0.5 };
-
     for (0..CHUNK_SIZE) |by| {
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
@@ -842,14 +839,17 @@ pub fn generateChunkMesh(
                         .glowstone => 4,
                     };
 
-                    // Compute per-corner smooth block light first (needed for AO reduction)
+                    // Compute per-corner sky + block light, packed as 5-bit channels
+                    // Format: sky_r:5 | sky_g:5 | sky_b:5 | block_r:5 | block_g:5 | block_b:5
                     var corner_packed: [4]u32 = undefined;
                     var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
-                    const dir_mult = dir_multipliers[face];
 
                     if (is_emitter) {
-                        // Emitters are uniformly bright at their emitted color
-                        const emit_packed: u32 = @as(u32, emits[0]) | (@as(u32, emits[1]) << 8) | (@as(u32, emits[2]) << 16);
+                        // Emitters: pack full emitted color as block light, full sky
+                        const br5: u32 = @as(u32, emits[0]) >> 3;
+                        const bg5: u32 = @as(u32, emits[1]) >> 3;
+                        const bb5: u32 = @as(u32, emits[2]) >> 3;
+                        const emit_packed: u32 = (31 << 0) | (31 << 5) | (31 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                         corner_block_brightness = .{ 255, 255, 255, 255 };
                     } else {
@@ -887,23 +887,20 @@ pub fn generateChunkMesh(
                                 for (0..3) |s| {
                                     sky_sum += lm.getSky(wx + offsets[s][0], wy + offsets[s][1], wz + offsets[s][2]);
                                 }
-                                const sky_avg: f32 = @as(f32, @floatFromInt(sky_sum)) / 4.0 / 255.0;
+                                const sky_avg: u32 = sky_sum / 4;
 
-                                // Cubyz-style quadratic blend: sqrt(sky^2 + block^2)
-                                // Block light adds to sky light rather than just replacing it
-                                const bl_r: f32 = @as(f32, @floatFromInt(avg_r)) / 255.0;
-                                const bl_g: f32 = @as(f32, @floatFromInt(avg_g)) / 255.0;
-                                const bl_b: f32 = @as(f32, @floatFromInt(avg_b)) / 255.0;
+                                // Pack as 5-bit: downsample from 8-bit by >> 3
+                                const sr5: u32 = sky_avg >> 3;
+                                const sg5: u32 = sky_avg >> 3;
+                                const sb5: u32 = sky_avg >> 3;
+                                const br5: u32 = avg_r >> 3;
+                                const bg5: u32 = avg_g >> 3;
+                                const bb5: u32 = avg_b >> 3;
 
-                                const final_r: u32 = @intFromFloat(@min(255.0, @sqrt(sky_avg * sky_avg + bl_r * bl_r) * dir_mult * 255.0));
-                                const final_g: u32 = @intFromFloat(@min(255.0, @sqrt(sky_avg * sky_avg + bl_g * bl_g) * dir_mult * 255.0));
-                                const final_b: u32 = @intFromFloat(@min(255.0, @sqrt(sky_avg * sky_avg + bl_b * bl_b) * dir_mult * 255.0));
-
-                                corner_packed[corner] = final_r | (final_g << 8) | (final_b << 16);
+                                corner_packed[corner] = sr5 | (sg5 << 5) | (sb5 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
                             } else {
-                                // No light map: fallback to full brightness * directional
-                                const light_byte: u32 = @intFromFloat(@floor(dir_mult * 255.0));
-                                corner_packed[corner] = light_byte | (light_byte << 8) | (light_byte << 16);
+                                // No light map: full sky, no block light
+                                corner_packed[corner] = 31 | (31 << 5) | (31 << 10);
                             }
                         }
                     }
