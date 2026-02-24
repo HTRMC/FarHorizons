@@ -5,6 +5,9 @@ const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRende
 const GameState = @import("GameState.zig");
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
+const Logger = @import("Logger.zig");
+
+var file_logger_instance: ?*Logger.FileLogger = null;
 
 // C time bindings for local time in log output
 const c_time = struct {
@@ -44,6 +47,42 @@ fn logFn(
     var t = c_time.time(null);
     const tm = c_time.localtime(&t);
 
+    // Format plain text into stack buffer for file logger
+    var file_buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+
+    if (tm) |local| {
+        const header = std.fmt.bufPrint(file_buf[pos..], "[{d:0>2}:{d:0>2}:{d:0>2}] [{s}/{s}]: ", .{
+            @as(u32, @intCast(local.tm_hour)),
+            @as(u32, @intCast(local.tm_min)),
+            @as(u32, @intCast(local.tm_sec)),
+            scope_name,
+            level_text,
+        }) catch "";
+        pos += header.len;
+    } else {
+        const header = std.fmt.bufPrint(file_buf[pos..], "[??:??:??] [{s}/{s}]: ", .{
+            scope_name, level_text,
+        }) catch "";
+        pos += header.len;
+    }
+
+    const msg = std.fmt.bufPrint(file_buf[pos..], format ++ "\n", args) catch blk: {
+        const truncated = "[truncated]\n";
+        if (file_buf.len - pos >= truncated.len) {
+            @memcpy(file_buf[pos..][0..truncated.len], truncated);
+            break :blk file_buf[pos..][0..truncated.len];
+        }
+        break :blk "";
+    };
+    pos += msg.len;
+
+    // Push to file logger if active
+    if (file_logger_instance) |logger| {
+        logger.push(file_buf[0..pos]);
+    }
+
+    // Write to stderr with colors
     const level_color: std.Io.Terminal.Color = switch (level) {
         .err => .red,
         .warn => .yellow,
@@ -212,6 +251,18 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    // Initialize file logger early so all subsequent logs are captured
+    const file_logger = Logger.FileLogger.init(allocator) catch null;
+    if (file_logger) |fl| {
+        file_logger_instance = fl;
+    }
+    defer {
+        file_logger_instance = null;
+        if (file_logger) |fl| {
+            fl.deinit();
+        }
+    }
 
     var window = try Window.init(.{
         .width = 1280,

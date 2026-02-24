@@ -6,8 +6,8 @@ const vk_utils = @import("vk_utils.zig");
 const app_config = @import("../../app_config.zig");
 const tracy = @import("../../platform/tracy.zig");
 
-const BLOCK_TEXTURE_COUNT = 4;
-const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{ "glass.png", "grass_block.png", "dirt.png", "stone.png" };
+const BLOCK_TEXTURE_COUNT = 5;
+const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{ "glass.png", "grass_block.png", "dirt.png", "stone.png", "glowstone.png" };
 
 pub const TextureManager = struct {
     texture_image: vk.VkImage,
