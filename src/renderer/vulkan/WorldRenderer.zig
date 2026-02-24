@@ -18,7 +18,7 @@ const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocato
 
 // Initial GPU heap capacities
 const INITIAL_FACE_CAPACITY: u32 = 400_000; // ~3.2 MB at 8 bytes/face
-const INITIAL_LIGHT_CAPACITY: u32 = 4_096; // ~64 KB at 16 bytes/entry
+const INITIAL_LIGHT_CAPACITY: u32 = 400_000; // ~6.4 MB at 16 bytes/entry (1:1 with faces)
 const MAX_FACES_PER_DRAW: u32 = 16_384; // max faces per draw (16384*4=65536 verts, u16 index limit)
 const MAX_INDIRECT_COMMANDS: u32 = WorldState.TOTAL_WORLD_CHUNKS * 6; // 96
 

@@ -136,6 +136,8 @@ pub const VulkanRenderer = struct {
             .framebuffer_resized = false,
         };
 
+        self.mesh_worker.light_map = game_state.light_map;
+
         try self.createCommandPool();
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
         self.game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
@@ -191,6 +193,7 @@ pub const VulkanRenderer = struct {
             self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
 
             if (self.game_state.dirty_chunks.count > 0 and self.mesh_worker.state.load(.acquire) == .idle) {
+                self.mesh_worker.light_map = self.game_state.light_map;
                 self.mesh_worker.startDirty(self.game_state.dirty_chunks.chunks[0..self.game_state.dirty_chunks.count]);
                 self.game_state.dirty_chunks.clear();
             }

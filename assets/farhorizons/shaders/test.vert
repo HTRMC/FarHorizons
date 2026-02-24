@@ -47,7 +47,8 @@ void main() {
     fragUV = vec2(model.uvs[cornerID*2], model.uvs[cornerID*2+1]);
     fragTexIndex = texIdx;
 
-    uint packed = lights[chunk.lightStart + lightIdx].corners[cornerID];
+    uint localFace = faceID - chunk.faceStart;
+    uint packed = lights[chunk.lightStart + localFace].corners[cornerID];
     fragLight = vec3(float(packed & 0xFF), float((packed>>8)&0xFF), float((packed>>16)&0xFF)) / 255.0;
 
     // Pass raw AO data to fragment shader for bilinear interpolation

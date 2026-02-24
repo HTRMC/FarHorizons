@@ -10,6 +10,7 @@ pub const MeshWorker = struct {
     thread: ?std.Thread,
     allocator: std.mem.Allocator,
     world: *const WorldState.World,
+    light_map: ?*const WorldState.LightMap,
 
     // Result storage (written by worker thread, consumed by poll)
     results: [WorldState.TOTAL_WORLD_CHUNKS]?ChunkResult,
@@ -46,6 +47,7 @@ pub const MeshWorker = struct {
             .thread = null,
             .allocator = allocator,
             .world = world,
+            .light_map = null,
             .results = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
             .result_coords = undefined,
             .result_count = 0,
@@ -158,7 +160,7 @@ pub const MeshWorker = struct {
     }
 
     fn meshChunk(self: *MeshWorker, coord: WorldState.ChunkCoord) void {
-        const mesh = WorldState.generateChunkMesh(self.allocator, self.world, coord) catch |err| {
+        const mesh = WorldState.generateChunkMesh(self.allocator, self.world, coord, self.light_map) catch |err| {
             std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ coord.cx, coord.cy, coord.cz, err });
             return;
         };

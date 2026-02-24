@@ -15,6 +15,7 @@ pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
 allocator: std.mem.Allocator,
 camera: Camera,
 world: *WorldState.World,
+light_map: *WorldState.LightMap,
 entity_pos: [3]f32,
 entity_vel: [3]f32,
 entity_on_ground: bool,
@@ -60,12 +61,16 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     const world = try allocator.create(WorldState.World);
     WorldState.generateSphereWorld(world);
 
+    const light_map = try allocator.create(WorldState.LightMap);
+    WorldState.computeLightMap(world, light_map);
+
     const cam = Camera.init(width, height);
 
     return .{
         .allocator = allocator,
         .camera = cam,
         .world = world,
+        .light_map = light_map,
         .entity_pos = .{ 0.0, 64.0, 0.0 },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
@@ -85,6 +90,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
 }
 
 pub fn deinit(self: *GameState) void {
+    self.allocator.destroy(self.light_map);
     self.allocator.destroy(self.world);
 }
 
@@ -204,10 +210,29 @@ fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     }
 }
 
+fn dirtyAllChunks(self: *GameState) void {
+    for (0..WorldState.WORLD_CHUNKS_Y) |cy| {
+        for (0..WorldState.WORLD_CHUNKS_Z) |cz| {
+            for (0..WorldState.WORLD_CHUNKS_X) |cx| {
+                self.dirty_chunks.add(.{
+                    .cx = @intCast(cx),
+                    .cy = @intCast(cy),
+                    .cz = @intCast(cz),
+                });
+            }
+        }
+    }
+}
+
+fn recomputeLight(self: *GameState) void {
+    WorldState.computeLightMap(self.world, self.light_map);
+}
+
 pub fn breakBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
     WorldState.setBlock(self.world, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], .air);
-    self.markDirty(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    self.recomputeLight();
+    self.dirtyAllChunks();
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 
@@ -218,8 +243,9 @@ pub fn placeBlock(self: *GameState) void {
     const py = hit.block_pos[1] + n[1];
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(WorldState.getBlock(self.world, px, py, pz))) return;
-    WorldState.setBlock(self.world, px, py, pz, .grass_block);
-    self.markDirty(px, py, pz);
+    WorldState.setBlock(self.world, px, py, pz, .glowstone);
+    self.recomputeLight();
+    self.dirtyAllChunks();
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 

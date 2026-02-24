@@ -19,5 +19,9 @@ void main() {
     float a11 = ao_curve[(fragAoData >> 2) & 0x3]; // corner 1 at UV (1,1)
     float ao = mix(mix(a00, a10, fragUV.x), mix(a01, a11, fragUV.x), fragUV.y);
 
-    outColor = texture(tex, vec3(fragUV, float(fragTexIndex))) * vec4(fragLight * ao, 1.0);
+    // Scale AO by brightness: less ambient light = less ambient to occlude
+    float brightness = max(fragLight.r, max(fragLight.g, fragLight.b));
+    float effective_ao = mix(1.0, ao, brightness);
+
+    outColor = texture(tex, vec3(fragUV, float(fragTexIndex))) * vec4(fragLight * effective_ao, 1.0);
 }

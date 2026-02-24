@@ -82,6 +82,7 @@ pub const BlockType = enum(u8) {
     grass_block,
     dirt,
     stone,
+    glowstone,
 };
 
 pub const block_properties = struct {
@@ -89,20 +90,204 @@ pub const block_properties = struct {
         return switch (block) {
             .air => false,
             .glass => false,
-            .grass_block, .dirt, .stone => true,
+            .grass_block, .dirt, .stone, .glowstone => true,
         };
     }
     pub fn cullsSelf(block: BlockType) bool {
         return switch (block) {
             .air => false,
             .glass => true,
-            .grass_block, .dirt, .stone => true,
+            .grass_block, .dirt, .stone, .glowstone => true,
         };
     }
     pub fn isSolid(block: BlockType) bool {
         return block != .air;
     }
+    pub fn emittedLight(block: BlockType) [3]u8 {
+        return switch (block) {
+            .glowstone => .{ 255, 200, 100 },
+            else => .{ 0, 0, 0 },
+        };
+    }
 };
+
+pub const LightMap = struct {
+    block: [WORLD_SIZE_Y][WORLD_SIZE_Z][WORLD_SIZE_X][3]u8, // block light RGB
+    sky: [WORLD_SIZE_Y][WORLD_SIZE_Z][WORLD_SIZE_X]u8, // sky light
+
+    pub fn getBlock(self: *const LightMap, wx: i32, wy: i32, wz: i32) [3]u8 {
+        const vx = wx + @as(i32, WORLD_SIZE_X / 2);
+        const vy = wy + @as(i32, WORLD_SIZE_Y / 2);
+        const vz = wz + @as(i32, WORLD_SIZE_Z / 2);
+        if (vx < 0 or vx >= WORLD_SIZE_X or vy < 0 or vy >= WORLD_SIZE_Y or vz < 0 or vz >= WORLD_SIZE_Z) {
+            return .{ 0, 0, 0 };
+        }
+        return self.block[@intCast(vy)][@intCast(vz)][@intCast(vx)];
+    }
+
+    pub fn getSky(self: *const LightMap, wx: i32, wy: i32, wz: i32) u8 {
+        const vx = wx + @as(i32, WORLD_SIZE_X / 2);
+        const vy = wy + @as(i32, WORLD_SIZE_Y / 2);
+        const vz = wz + @as(i32, WORLD_SIZE_Z / 2);
+        if (vx < 0 or vx >= WORLD_SIZE_X or vy < 0 or vy >= WORLD_SIZE_Y or vz < 0 or vz >= WORLD_SIZE_Z) {
+            // Out-of-world = full sky light (open sky above/beside world)
+            return 255;
+        }
+        return self.sky[@intCast(vy)][@intCast(vz)][@intCast(vx)];
+    }
+};
+
+const LIGHT_ATTENUATION: u8 = 8;
+
+fn getBlockAt(world: *const World, vx: usize, vy: usize, vz: usize) BlockType {
+    return world[vy / CHUNK_SIZE][vz / CHUNK_SIZE][vx / CHUNK_SIZE]
+        .blocks[chunkIndex(vx % CHUNK_SIZE, vy % CHUNK_SIZE, vz % CHUNK_SIZE)];
+}
+
+pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
+    @memset(std.mem.asBytes(&light_map.block), 0);
+    @memset(std.mem.asBytes(&light_map.sky), 0);
+
+    const QueueEntry = struct { vx: u8, vy: u8, vz: u8, level: u8 };
+    const RgbQueueEntry = struct { vx: u8, vy: u8, vz: u8, r: u8, g: u8, b: u8 };
+
+    const bfs_offsets = [6][3]i32{
+        .{ 1, 0, 0 },  .{ -1, 0, 0 },
+        .{ 0, 1, 0 },  .{ 0, -1, 0 },
+        .{ 0, 0, 1 },  .{ 0, 0, -1 },
+    };
+
+    // --- Sky light ---
+    // Column scan: flood sky light straight down from the top
+    var sky_queue_buf: [256 * 1024]QueueEntry = undefined;
+    var sky_head: usize = 0;
+    var sky_tail: usize = 0;
+
+    for (0..WORLD_SIZE_Z) |vz| {
+        for (0..WORLD_SIZE_X) |vx| {
+            var vy: usize = WORLD_SIZE_Y;
+            while (vy > 0) {
+                vy -= 1;
+                if (block_properties.isOpaque(getBlockAt(world, vx, vy, vz))) break;
+                light_map.sky[vy][vz][vx] = 255;
+                sky_queue_buf[sky_tail] = .{
+                    .vx = @intCast(vx),
+                    .vy = @intCast(vy),
+                    .vz = @intCast(vz),
+                    .level = 255,
+                };
+                sky_tail += 1;
+            }
+        }
+    }
+
+    // BFS: propagate sky light sideways/down with attenuation
+    while (sky_head < sky_tail) {
+        const e = sky_queue_buf[sky_head];
+        sky_head += 1;
+
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, e.vx) + off[0];
+            const ny_i: i32 = @as(i32, e.vy) + off[1];
+            const nz_i: i32 = @as(i32, e.vz) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            if (block_properties.isOpaque(getBlockAt(world, nx, ny, nz))) continue;
+
+            const new_level = e.level -| LIGHT_ATTENUATION;
+            if (new_level == 0) continue;
+            if (new_level <= light_map.sky[ny][nz][nx]) continue;
+
+            light_map.sky[ny][nz][nx] = new_level;
+
+            if (sky_tail < sky_queue_buf.len) {
+                sky_queue_buf[sky_tail] = .{
+                    .vx = @intCast(nx),
+                    .vy = @intCast(ny),
+                    .vz = @intCast(nz),
+                    .level = new_level,
+                };
+                sky_tail += 1;
+            }
+        }
+    }
+
+    // --- Block light ---
+    var queue_buf: [256 * 1024]RgbQueueEntry = undefined;
+    var head: usize = 0;
+    var tail: usize = 0;
+
+    // Seed queue with all emitting blocks
+    for (0..WORLD_SIZE_Y) |vy| {
+        for (0..WORLD_SIZE_Z) |vz| {
+            for (0..WORLD_SIZE_X) |vx| {
+                const emit = block_properties.emittedLight(getBlockAt(world, vx, vy, vz));
+                if (emit[0] > 0 or emit[1] > 0 or emit[2] > 0) {
+                    light_map.block[vy][vz][vx] = emit;
+                    queue_buf[tail] = .{
+                        .vx = @intCast(vx),
+                        .vy = @intCast(vy),
+                        .vz = @intCast(vz),
+                        .r = emit[0],
+                        .g = emit[1],
+                        .b = emit[2],
+                    };
+                    tail += 1;
+                }
+            }
+        }
+    }
+
+    // BFS flood fill for block light
+    while (head < tail) {
+        const e = queue_buf[head];
+        head += 1;
+
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, e.vx) + off[0];
+            const ny_i: i32 = @as(i32, e.vy) + off[1];
+            const nz_i: i32 = @as(i32, e.vz) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            if (block_properties.isOpaque(getBlockAt(world, nx, ny, nz))) continue;
+
+            const nr = e.r -| LIGHT_ATTENUATION;
+            const ng = e.g -| LIGHT_ATTENUATION;
+            const nb = e.b -| LIGHT_ATTENUATION;
+
+            if (nr == 0 and ng == 0 and nb == 0) continue;
+
+            const existing = &light_map.block[ny][nz][nx];
+            if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
+
+            existing[0] = @max(existing[0], nr);
+            existing[1] = @max(existing[1], ng);
+            existing[2] = @max(existing[2], nb);
+
+            if (tail < queue_buf.len) {
+                queue_buf[tail] = .{
+                    .vx = @intCast(nx),
+                    .vy = @intCast(ny),
+                    .vz = @intCast(nz),
+                    .r = nr,
+                    .g = ng,
+                    .b = nb,
+                };
+                tail += 1;
+            }
+        }
+    }
+}
 
 pub const Chunk = struct {
     blocks: [BLOCKS_PER_CHUNK]BlockType,
@@ -306,12 +491,13 @@ fn getNeighborBlock(
     return world[@intCast(ncy)][@intCast(ncz)][@intCast(ncx)].blocks[chunkIndex(flx, fly, flz)];
 }
 
-/// Generate mesh data for a single chunk. Faces are grouped by normal direction
-/// and packed into FaceData with deduplicated light entries.
+/// Generate mesh data for a single chunk. Faces are grouped by normal direction.
+/// Light entries are 1:1 with faces (one LightEntry per face).
 pub fn generateChunkMesh(
     allocator: std.mem.Allocator,
     world: *const World,
     coord: ChunkCoord,
+    light_map_ptr: ?*const LightMap,
 ) !ChunkMeshResult {
     const tz = tracy.zone(@src(), "generateChunkMesh");
     defer tz.end();
@@ -320,23 +506,25 @@ pub fn generateChunkMesh(
     const cy: usize = coord.cy;
     const cz: usize = coord.cz;
 
-    // Per-normal face lists: collect faces grouped by normal index
+    // World-space origin of this chunk
+    const chunk_origin_x: i32 = @as(i32, @intCast(cx)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_X / 2);
+    const chunk_origin_y: i32 = @as(i32, @intCast(cy)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Y / 2);
+    const chunk_origin_z: i32 = @as(i32, @intCast(cz)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Z / 2);
+
+    // Per-normal face + light lists
     var normal_faces: [6]std.ArrayList(FaceData) = undefined;
+    var normal_lights: [6]std.ArrayList(LightEntry) = undefined;
     for (0..6) |i| {
         normal_faces[i] = .empty;
+        normal_lights[i] = .empty;
     }
     errdefer for (0..6) |i| {
         normal_faces[i].deinit(allocator);
+        normal_lights[i].deinit(allocator);
     };
 
-    // Light deduplication map: [4]u32 corner pattern -> light index
-    var light_map = std.AutoHashMap([4]u32, u6).init(allocator);
-    defer light_map.deinit();
-
-    var light_list: std.ArrayList(LightEntry) = .empty;
-    errdefer light_list.deinit(allocator);
-
-    const face_light_values = [6]f32{ 0.8, 0.8, 0.6, 0.6, 1.0, 0.5 };
+    // Directional multipliers per face normal (applied after light level)
+    const dir_multipliers = [6]f32{ 0.8, 0.8, 0.6, 0.6, 1.0, 0.5 };
 
     for (0..CHUNK_SIZE) |by| {
         for (0..CHUNK_SIZE) |bz| {
@@ -347,6 +535,14 @@ pub fn generateChunkMesh(
                 const ibx: i32 = @intCast(bx);
                 const iby: i32 = @intCast(by);
                 const ibz: i32 = @intCast(bz);
+
+                // World-space position of this block
+                const wx = chunk_origin_x + ibx;
+                const wy = chunk_origin_y + iby;
+                const wz = chunk_origin_z + ibz;
+
+                const emits = block_properties.emittedLight(block);
+                const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
 
                 for (0..6) |face| {
                     const fno = face_neighbor_offsets[face];
@@ -361,36 +557,97 @@ pub fn generateChunkMesh(
                         .grass_block => 1,
                         .dirt => 2,
                         .stone => 3,
+                        .glowstone => 4,
                     };
 
-                    // Compute per-corner AO levels
-                    var ao: [4]u2 = undefined;
-                    for (0..4) |corner| {
-                        const offsets = ao_offsets[face][corner];
-                        const s1 = block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[0][0], iby + offsets[0][1], ibz + offsets[0][2]));
-                        const s2 = block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[1][0], iby + offsets[1][1], ibz + offsets[1][2]));
-                        const diag = if (s1 and s2)
-                            true
-                        else
-                            block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[2][0], iby + offsets[2][1], ibz + offsets[2][2]));
-                        ao[corner] = @intCast(@as(u3, @intFromBool(s1)) + @intFromBool(s2) + @intFromBool(diag));
+                    // Compute per-corner smooth block light first (needed for AO reduction)
+                    var corner_packed: [4]u32 = undefined;
+                    var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
+                    const dir_mult = dir_multipliers[face];
+
+                    if (is_emitter) {
+                        // Emitters are uniformly bright at their emitted color
+                        const emit_packed: u32 = @as(u32, emits[0]) | (@as(u32, emits[1]) << 8) | (@as(u32, emits[2]) << 16);
+                        corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
+                        corner_block_brightness = .{ 255, 255, 255, 255 };
+                    } else {
+                        for (0..4) |corner| {
+                            const offsets = ao_offsets[face][corner];
+
+                            if (light_map_ptr) |lm| {
+                                // Smooth block light: average 4 neighbors
+                                var sum_r: u32 = 0;
+                                var sum_g: u32 = 0;
+                                var sum_b: u32 = 0;
+
+                                const face_light = lm.getBlock(wx + fno[0], wy + fno[1], wz + fno[2]);
+                                sum_r += face_light[0];
+                                sum_g += face_light[1];
+                                sum_b += face_light[2];
+
+                                for (0..3) |s| {
+                                    const sl = lm.getBlock(wx + offsets[s][0], wy + offsets[s][1], wz + offsets[s][2]);
+                                    sum_r += sl[0];
+                                    sum_g += sl[1];
+                                    sum_b += sl[2];
+                                }
+
+                                const avg_r: u32 = sum_r / 4;
+                                const avg_g: u32 = sum_g / 4;
+                                const avg_b: u32 = sum_b / 4;
+
+                                // Track block light brightness for AO reduction
+                                corner_block_brightness[corner] = @intCast(@max(avg_r, @max(avg_g, avg_b)));
+
+                                // Smooth sky light: average same 4 neighbors
+                                var sky_sum: u32 = 0;
+                                sky_sum += lm.getSky(wx + fno[0], wy + fno[1], wz + fno[2]);
+                                for (0..3) |s| {
+                                    sky_sum += lm.getSky(wx + offsets[s][0], wy + offsets[s][1], wz + offsets[s][2]);
+                                }
+                                const sky_avg: f32 = @as(f32, @floatFromInt(sky_sum)) / 4.0 / 255.0;
+
+                                // Cubyz-style quadratic blend: sqrt(sky^2 + block^2)
+                                // Block light adds to sky light rather than just replacing it
+                                const bl_r: f32 = @as(f32, @floatFromInt(avg_r)) / 255.0;
+                                const bl_g: f32 = @as(f32, @floatFromInt(avg_g)) / 255.0;
+                                const bl_b: f32 = @as(f32, @floatFromInt(avg_b)) / 255.0;
+
+                                const final_r: u32 = @intFromFloat(@min(255.0, @sqrt(sky_avg * sky_avg + bl_r * bl_r) * dir_mult * 255.0));
+                                const final_g: u32 = @intFromFloat(@min(255.0, @sqrt(sky_avg * sky_avg + bl_g * bl_g) * dir_mult * 255.0));
+                                const final_b: u32 = @intFromFloat(@min(255.0, @sqrt(sky_avg * sky_avg + bl_b * bl_b) * dir_mult * 255.0));
+
+                                corner_packed[corner] = final_r | (final_g << 8) | (final_b << 16);
+                            } else {
+                                // No light map: fallback to full brightness * directional
+                                const light_byte: u32 = @intFromFloat(@floor(dir_mult * 255.0));
+                                corner_packed[corner] = light_byte | (light_byte << 8) | (light_byte << 16);
+                            }
+                        }
                     }
 
-                    // Pack light: all 4 corners get the same face shade value
-                    const light_byte: u32 = @intFromFloat(@floor(face_light_values[face] * 255.0));
-                    const packed_light: u32 = light_byte | (light_byte << 8) | (light_byte << 16);
-                    const corner_pattern = [4]u32{ packed_light, packed_light, packed_light, packed_light };
+                    // Compute per-corner AO, reduced by block light
+                    // AO is ambient occlusion — direct block light overrides it
+                    var ao: [4]u2 = undefined;
+                    if (is_emitter) {
+                        ao = .{ 0, 0, 0, 0 };
+                    } else {
+                        for (0..4) |corner| {
+                            const offsets = ao_offsets[face][corner];
+                            const s1 = block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[0][0], iby + offsets[0][1], ibz + offsets[0][2]));
+                            const s2 = block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[1][0], iby + offsets[1][1], ibz + offsets[1][2]));
+                            const diag = if (s1 and s2)
+                                true
+                            else
+                                block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[2][0], iby + offsets[2][1], ibz + offsets[2][2]));
+                            const raw_ao: u3 = @as(u3, @intFromBool(s1)) + @intFromBool(s2) + @intFromBool(diag);
 
-                    // Deduplicate light entry
-                    const light_index: u6 = blk2: {
-                        if (light_map.get(corner_pattern)) |idx| {
-                            break :blk2 idx;
+                            // Reduce AO based on block light: bright light cancels occlusion
+                            // brightness 0..255 maps to reduction 0..3
+                            const reduction: u3 = @intCast(@min(@as(u32, 3), @as(u32, corner_block_brightness[corner]) / 64));
+                            ao[corner] = @intCast(raw_ao -| reduction);
                         }
-                        const idx: u6 = @intCast(light_list.items.len);
-                        try light_list.append(allocator, .{ .corners = corner_pattern });
-                        try light_map.put(corner_pattern, idx);
-                        break :blk2 idx;
-                    };
+                    }
 
                     const face_data = types.packFaceData(
                         @intCast(bx),
@@ -398,11 +655,12 @@ pub fn generateChunkMesh(
                         @intCast(bz),
                         tex_index,
                         @intCast(face),
-                        light_index,
+                        0, // light_index unused with 1:1 mapping
                         ao,
                     );
 
                     try normal_faces[face].append(allocator, face_data);
+                    try normal_lights[face].append(allocator, .{ .corners = corner_packed });
                 }
             }
         }
@@ -416,26 +674,29 @@ pub fn generateChunkMesh(
         total_face_count += face_counts[i];
     }
 
-    // Concatenate all faces sorted by normal into a single slice
+    // Concatenate all faces and lights sorted by normal into single slices
     const faces = try allocator.alloc(FaceData, total_face_count);
     errdefer allocator.free(faces);
+    const lights = try allocator.alloc(LightEntry, total_face_count);
+    errdefer allocator.free(lights);
 
     var write_offset: usize = 0;
     for (0..6) |i| {
-        const items = normal_faces[i].items;
-        @memcpy(faces[write_offset..][0..items.len], items);
-        write_offset += items.len;
+        const fitems = normal_faces[i].items;
+        const litems = normal_lights[i].items;
+        @memcpy(faces[write_offset..][0..fitems.len], fitems);
+        @memcpy(lights[write_offset..][0..litems.len], litems);
+        write_offset += fitems.len;
         normal_faces[i].deinit(allocator);
+        normal_lights[i].deinit(allocator);
     }
-
-    const lights = try light_list.toOwnedSlice(allocator);
 
     return .{
         .faces = faces,
         .face_counts = face_counts,
         .total_face_count = total_face_count,
         .lights = lights,
-        .light_count = @intCast(lights.len),
+        .light_count = total_face_count, // 1:1 mapping
     };
 }
 
@@ -544,7 +805,7 @@ test "single block in air produces 6 faces" {
     // Place a single stone block at local (5,5,5) in chunk (0,0,0)
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -571,7 +832,7 @@ test "two adjacent blocks share face - culled" {
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
     world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -598,7 +859,7 @@ test "face_counts sum equals total_face_count" {
         }
     }
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -612,7 +873,7 @@ test "normal indices in faces match their group" {
     var world = makeEmptyWorld();
     world[0][0][0].blocks[chunkIndex(10, 10, 10)] = .grass_block;
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -636,11 +897,11 @@ test "cross-chunk boundary face culling" {
     // Chunk (1,0,0) block at local x=0 (leftmost)
     world[0][0][1].blocks[chunkIndex(0, 5, 5)] = .stone;
 
-    const result0 = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result0 = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result0.faces);
     defer testing.allocator.free(result0.lights);
 
-    const result1 = try generateChunkMesh(testing.allocator, &world, .{ .cx = 1, .cy = 0, .cz = 0 });
+    const result1 = try generateChunkMesh(testing.allocator, &world, .{ .cx = 1, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result1.faces);
     defer testing.allocator.free(result1.lights);
 
@@ -656,7 +917,7 @@ test "cross-chunk boundary face culling" {
 
 test "empty chunk produces no faces" {
     var world = makeEmptyWorld();
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -670,7 +931,7 @@ test "glass does not cull adjacent non-glass" {
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
     world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .glass;
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -684,7 +945,7 @@ test "glass-glass adjacency culls shared face" {
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .glass;
     world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .glass;
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -692,22 +953,19 @@ test "glass-glass adjacency culls shared face" {
     try testing.expectEqual(@as(u32, 10), result.total_face_count);
 }
 
-test "light deduplication works" {
+test "light count equals face count (1:1 mapping)" {
     var world = makeEmptyWorld();
-    // Multiple blocks with the same face direction should share light entries
     for (0..4) |x| {
         world[0][0][0].blocks[chunkIndex(x, 5, 5)] = .stone;
     }
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // All faces of the same normal direction have the same light.
-    // Some face directions share the same light value:
-    //   +Z/-Z both use 0.8, -X/+X both use 0.6
-    // So unique light entries should be: 0.8, 0.6, 1.0, 0.5 = 4
-    try testing.expectEqual(@as(u32, 4), result.light_count);
+    // With 1:1 face-to-light mapping, light_count == total_face_count
+    try testing.expectEqual(result.total_face_count, result.light_count);
+    try testing.expectEqual(result.faces.len, result.lights.len);
 }
 
 test "ChunkCoord.position returns correct world-space origin" {
@@ -729,7 +987,7 @@ test "world boundary blocks have all outer faces" {
     // Place block at corner (0,0,0) of chunk (0,0,0) — world boundary on 3 sides
     world[0][0][0].blocks[chunkIndex(0, 0, 0)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -767,7 +1025,7 @@ test "AO: single block in air has no occlusion" {
     var world = makeEmptyWorld();
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -786,7 +1044,7 @@ test "AO: block on flat surface has correct top face AO" {
         }
     }
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -822,7 +1080,7 @@ test "AO: block in corner has maximum occlusion on enclosed corner" {
     world[0][0][0].blocks[chunkIndex(5, 6, 5)] = .stone; // +Y
     world[0][0][0].blocks[chunkIndex(5, 5, 6)] = .stone; // +Z
 
-    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 });
+    const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
