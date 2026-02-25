@@ -34,6 +34,7 @@ pub const UiManager = struct {
     last_mouse_x: f32 = 0,
     last_mouse_y: f32 = 0,
     pressed_widget: WidgetId = NULL_WIDGET,
+    text_renderer: ?*const TextRenderer = null,
 
     /// Push a new screen onto the stack. Returns the screen index for building.
     pub fn pushScreen(self: *UiManager) ?*Screen {
@@ -65,6 +66,7 @@ pub const UiManager = struct {
 
     /// Run layout on all active screens.
     pub fn layout(self: *UiManager, text_renderer: *const TextRenderer) void {
+        self.text_renderer = text_renderer;
         for (0..self.screen_count) |i| {
             if (self.screens[i].active) {
                 Layout.layoutTree(&self.screens[i].tree, self.screen_width, self.screen_height, text_renderer);
@@ -98,12 +100,16 @@ pub const UiManager = struct {
 
         const tree = self.topTree() orelse return false;
 
-        // Handle slider drag
+        // Handle drag on pressed widget
         if (self.pressed_widget != NULL_WIDGET) {
             const pw = tree.getWidgetConst(self.pressed_widget);
             if (pw) |w| {
                 if (w.kind == .slider) {
                     self.updateSliderDrag(tree, self.pressed_widget, x);
+                    return true;
+                } else if (w.kind == .text_input) {
+                    // Drag-to-select: update cursor_pos (selection_start stays at click origin)
+                    self.extendTextSelection(tree, self.pressed_widget, x);
                     return true;
                 }
             }
@@ -133,9 +139,11 @@ pub const UiManager = struct {
 
             const consumed = EventDispatch.dispatchMousePress(tree, target, &self.registry);
 
-            // Update slider value immediately on click (not just on drag)
+            // Position cursor in text_input on click
             if (tree.getWidgetConst(target)) |w| {
-                if (w.kind == .slider) {
+                if (w.kind == .text_input) {
+                    self.positionTextCursor(tree, target, x);
+                } else if (w.kind == .slider) {
                     self.updateSliderDrag(tree, target, x);
                 }
             }
@@ -161,7 +169,7 @@ pub const UiManager = struct {
             return true;
         }
 
-        return EventDispatch.dispatchKey(tree, key, action, &self.registry);
+        return EventDispatch.dispatchKey(tree, key, action, mods, &self.registry);
     }
 
     /// Handle character input. Returns true if consumed.
@@ -195,6 +203,59 @@ pub const UiManager = struct {
         const screen = self.topScreen() orelse return null;
         if (!screen.active) return null;
         return &screen.tree;
+    }
+
+    /// Compute the character index in a text_input closest to the given x position.
+    fn textCursorFromX(self: *const UiManager, tree: *const WidgetTree, widget_id: WidgetId, mouse_x: f32) u8 {
+        const tr = self.text_renderer orelse return 0;
+        const w = tree.getWidgetConst(widget_id) orelse return 0;
+        const data = tree.getDataConst(widget_id) orelse return 0;
+        const ti = &data.text_input;
+        const text = ti.getText();
+        if (text.len == 0) return 0;
+
+        const text_x = w.computed_rect.x + 4; // 4px padding matches WidgetOps draw
+        const rel_x = mouse_x - text_x;
+        if (rel_x <= 0) return 0;
+
+        // Find which character boundary is closest
+        var best: u8 = @intCast(text.len);
+        var i: u8 = 0;
+        while (i <= text.len) : (i += 1) {
+            const char_x = tr.measureText(text[0..i]);
+            if (char_x >= rel_x) {
+                // Check if closer to this boundary or previous
+                if (i > 0) {
+                    const prev_x = tr.measureText(text[0 .. i - 1]);
+                    if (rel_x - prev_x < char_x - rel_x) {
+                        best = i - 1;
+                    } else {
+                        best = i;
+                    }
+                } else {
+                    best = 0;
+                }
+                break;
+            }
+        }
+        return best;
+    }
+
+    /// Position cursor at mouse click location and clear selection.
+    fn positionTextCursor(self: *const UiManager, tree: *WidgetTree, widget_id: WidgetId, mouse_x: f32) void {
+        const data = tree.getData(widget_id) orelse return;
+        const pos = self.textCursorFromX(tree, widget_id, mouse_x);
+        data.text_input.cursor_pos = pos;
+        data.text_input.selection_start = pos;
+        data.text_input.cursor_blink_counter = 0;
+    }
+
+    /// Extend selection by updating cursor_pos to mouse position (selection_start stays).
+    fn extendTextSelection(self: *const UiManager, tree: *WidgetTree, widget_id: WidgetId, mouse_x: f32) void {
+        const data = tree.getData(widget_id) orelse return;
+        const pos = self.textCursorFromX(tree, widget_id, mouse_x);
+        data.text_input.cursor_pos = pos;
+        data.text_input.cursor_blink_counter = 0;
     }
 
     fn updateSliderDrag(self: *UiManager, tree: *WidgetTree, slider_id: WidgetId, mouse_x: f32) void {

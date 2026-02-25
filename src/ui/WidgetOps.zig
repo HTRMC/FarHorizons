@@ -85,10 +85,19 @@ pub fn drawWidget(
             if (text.len > 0) {
                 const tx = r.x + 4;
                 const ty = r.y + (r.h - 16.0) / 2.0;
+
+                // Draw selection highlight behind text
+                if (w.focused and ti.hasSelection()) {
+                    const sel = ti.selectionRange();
+                    const sel_x = tx + tr.measureText(text[0..sel.start]);
+                    const sel_w = tr.measureText(text[0..sel.end]) - tr.measureText(text[0..sel.start]);
+                    ui.drawRect(sel_x, ty, sel_w, 16, Color.fromHex(0x3366AA88).toArray());
+                }
+
                 tr.drawText(tx, ty, text, ti.text_color.toArray());
 
                 // Draw cursor
-                if (w.focused and (ti.cursor_blink_counter / 30) % 2 == 0) {
+                if (w.focused and (ti.cursor_blink_counter / 90) % 2 == 0) {
                     const cursor_x = tx + tr.measureText(text[0..ti.cursor_pos]);
                     ui.drawRect(cursor_x, ty, 1, 16, Color.white.toArray());
                 }
@@ -97,7 +106,7 @@ pub fn drawWidget(
                 const ty = r.y + (r.h - 16.0) / 2.0;
                 tr.drawText(tx, ty, ti.placeholder[0..ti.placeholder_len], ti.placeholder_color.toArray());
 
-                if (w.focused and (ti.cursor_blink_counter / 30) % 2 == 0) {
+                if (w.focused and (ti.cursor_blink_counter / 90) % 2 == 0) {
                     ui.drawRect(r.x + 4, ty, 1, 16, Color.white.toArray());
                 }
             }

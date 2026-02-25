@@ -57,7 +57,10 @@ pub const GLFW_MOUSE_BUTTON_MIDDLE = c.GLFW_MOUSE_BUTTON_MIDDLE;
 
 // Keyboard extras
 pub const GLFW_KEY_TAB = c.GLFW_KEY_TAB;
+pub const GLFW_KEY_HOME = c.GLFW_KEY_HOME;
+pub const GLFW_KEY_END = c.GLFW_KEY_END;
 pub const GLFW_MOD_SHIFT = c.GLFW_MOD_SHIFT;
+pub const GLFW_MOD_CONTROL = c.GLFW_MOD_CONTROL;
 
 // Error type
 pub const GlfwError = error{

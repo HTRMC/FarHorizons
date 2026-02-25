@@ -73,6 +73,7 @@ pub const TextInputData = struct {
     buffer: [MAX_TEXT_LEN]u8 = .{0} ** MAX_TEXT_LEN,
     buffer_len: u8 = 0,
     cursor_pos: u8 = 0,
+    selection_start: u8 = 0,
     placeholder: [MAX_TEXT_LEN]u8 = .{0} ** MAX_TEXT_LEN,
     placeholder_len: u8 = 0,
     text_color: Color = Color.white,
@@ -84,7 +85,39 @@ pub const TextInputData = struct {
         return self.buffer[0..self.buffer_len];
     }
 
+    pub fn hasSelection(self: *const TextInputData) bool {
+        return self.selection_start != self.cursor_pos;
+    }
+
+    pub fn selectionRange(self: *const TextInputData) struct { start: u8, end: u8 } {
+        return .{
+            .start = @min(self.selection_start, self.cursor_pos),
+            .end = @max(self.selection_start, self.cursor_pos),
+        };
+    }
+
+    pub fn deleteSelection(self: *TextInputData) void {
+        if (!self.hasSelection()) return;
+        const sel = self.selectionRange();
+        const tail_len = self.buffer_len - sel.end;
+        if (tail_len > 0) {
+            var i: u8 = 0;
+            while (i < tail_len) : (i += 1) {
+                self.buffer[sel.start + i] = self.buffer[sel.end + i];
+            }
+        }
+        self.buffer_len -= (sel.end - sel.start);
+        self.cursor_pos = sel.start;
+        self.selection_start = sel.start;
+    }
+
+    pub fn selectAll(self: *TextInputData) void {
+        self.selection_start = 0;
+        self.cursor_pos = self.buffer_len;
+    }
+
     pub fn insertChar(self: *TextInputData, ch: u8) void {
+        if (self.hasSelection()) self.deleteSelection();
         if (self.buffer_len >= self.max_len) return;
         if (self.cursor_pos < self.buffer_len) {
             // Shift right
@@ -96,9 +129,14 @@ pub const TextInputData = struct {
         self.buffer[self.cursor_pos] = ch;
         self.buffer_len += 1;
         self.cursor_pos += 1;
+        self.selection_start = self.cursor_pos;
     }
 
     pub fn deleteBack(self: *TextInputData) void {
+        if (self.hasSelection()) {
+            self.deleteSelection();
+            return;
+        }
         if (self.cursor_pos == 0) return;
         self.cursor_pos -= 1;
         if (self.cursor_pos < self.buffer_len - 1) {
@@ -108,6 +146,7 @@ pub const TextInputData = struct {
             }
         }
         self.buffer_len -= 1;
+        self.selection_start = self.cursor_pos;
     }
 };
 

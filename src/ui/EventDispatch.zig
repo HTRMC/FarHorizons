@@ -150,6 +150,7 @@ pub fn dispatchChar(tree: *WidgetTree, codepoint: u32) bool {
     // Accept printable ASCII
     if (codepoint >= 0x20 and codepoint <= 0x7E) {
         const data = tree.getData(focused_id) orelse return false;
+        // insertChar already handles deleteSelection if selection active
         data.text_input.insertChar(@intCast(codepoint));
         data.text_input.cursor_blink_counter = 0;
         return true;
@@ -159,32 +160,95 @@ pub fn dispatchChar(tree: *WidgetTree, codepoint: u32) bool {
 }
 
 /// Route key input to the focused widget. Returns true if consumed.
-pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, registry: *const ActionRegistry) bool {
+pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, registry: *const ActionRegistry) bool {
     if (action != glfw.GLFW_PRESS and action != glfw.GLFW_REPEAT) return false;
 
     const focused_id = findFocused(tree);
     if (focused_id == NULL_WIDGET) return false;
 
     const w = tree.getWidgetConst(focused_id) orelse return false;
+    const shift = (mods & glfw.GLFW_MOD_SHIFT) != 0;
+    const ctrl = (mods & glfw.GLFW_MOD_CONTROL) != 0;
 
     switch (w.kind) {
         .text_input => {
             const data = tree.getData(focused_id) orelse return false;
+            const ti = &data.text_input;
+
+            // Ctrl+A: select all
+            if (ctrl and key == glfw.GLFW_KEY_A) {
+                ti.selectAll();
+                ti.cursor_blink_counter = 0;
+                return true;
+            }
+
             if (key == glfw.GLFW_KEY_BACKSPACE) {
-                data.text_input.deleteBack();
-                data.text_input.cursor_blink_counter = 0;
+                // deleteBack already handles selection
+                ti.deleteBack();
+                ti.cursor_blink_counter = 0;
+                return true;
+            } else if (key == glfw.GLFW_KEY_DELETE) {
+                if (ti.hasSelection()) {
+                    ti.deleteSelection();
+                } else if (ti.cursor_pos < ti.buffer_len) {
+                    // Delete forward: move cursor right then deleteBack
+                    ti.cursor_pos += 1;
+                    ti.selection_start = ti.cursor_pos;
+                    ti.deleteBack();
+                }
+                ti.cursor_blink_counter = 0;
                 return true;
             } else if (key == glfw.GLFW_KEY_LEFT) {
-                if (data.text_input.cursor_pos > 0) {
-                    data.text_input.cursor_pos -= 1;
-                    data.text_input.cursor_blink_counter = 0;
+                if (shift) {
+                    // Extend selection left
+                    if (ti.cursor_pos > 0) {
+                        ti.cursor_pos -= 1;
+                    }
+                } else if (ti.hasSelection()) {
+                    // Collapse to start of selection
+                    const sel = ti.selectionRange();
+                    ti.cursor_pos = sel.start;
+                    ti.selection_start = sel.start;
+                } else if (ti.cursor_pos > 0) {
+                    ti.cursor_pos -= 1;
+                    ti.selection_start = ti.cursor_pos;
                 }
+                ti.cursor_blink_counter = 0;
                 return true;
             } else if (key == glfw.GLFW_KEY_RIGHT) {
-                if (data.text_input.cursor_pos < data.text_input.buffer_len) {
-                    data.text_input.cursor_pos += 1;
-                    data.text_input.cursor_blink_counter = 0;
+                if (shift) {
+                    // Extend selection right
+                    if (ti.cursor_pos < ti.buffer_len) {
+                        ti.cursor_pos += 1;
+                    }
+                } else if (ti.hasSelection()) {
+                    // Collapse to end of selection
+                    const sel = ti.selectionRange();
+                    ti.cursor_pos = sel.end;
+                    ti.selection_start = sel.end;
+                } else if (ti.cursor_pos < ti.buffer_len) {
+                    ti.cursor_pos += 1;
+                    ti.selection_start = ti.cursor_pos;
                 }
+                ti.cursor_blink_counter = 0;
+                return true;
+            } else if (key == glfw.GLFW_KEY_HOME) {
+                if (shift) {
+                    ti.cursor_pos = 0;
+                } else {
+                    ti.cursor_pos = 0;
+                    ti.selection_start = 0;
+                }
+                ti.cursor_blink_counter = 0;
+                return true;
+            } else if (key == glfw.GLFW_KEY_END) {
+                if (shift) {
+                    ti.cursor_pos = ti.buffer_len;
+                } else {
+                    ti.cursor_pos = ti.buffer_len;
+                    ti.selection_start = ti.buffer_len;
+                }
+                ti.cursor_blink_counter = 0;
                 return true;
             }
             return false;
