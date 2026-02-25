@@ -16,6 +16,7 @@ pub const Menu = struct {
     delete_confirm: bool = false,
     pause_selection: u8 = 0,
     action: ?Action = null,
+    cursor_blink_counter: u16 = 0,
 
     pub const MAX_WORLDS: u8 = 32;
     pub const MAX_NAME_LEN: u8 = 32;
@@ -78,6 +79,7 @@ pub const Menu = struct {
                 self.input_len = 0;
             } else if (key == glfw.GLFW_KEY_BACKSPACE) {
                 if (self.input_len > 0) self.input_len -= 1;
+                self.cursor_blink_counter = 0;
             }
             return;
         }
@@ -92,6 +94,7 @@ pub const Menu = struct {
             self.input_active = true;
             self.input_skip_char = true;
             self.input_len = 0;
+            self.cursor_blink_counter = 0;
         } else if (key == glfw.GLFW_KEY_DELETE) {
             if (self.world_count > 0) self.delete_confirm = true;
         } else if (key == glfw.GLFW_KEY_ESCAPE) {
@@ -123,11 +126,13 @@ pub const Menu = struct {
         }
         if (self.input_len >= MAX_NAME_LEN) return;
 
-        // Only accept [a-zA-Z0-9_-]
-        const ch: u8 = if (codepoint <= 127) @intCast(codepoint) else return;
-        if (std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-' or ch == ' ') {
+        // Accept printable ASCII (space through ~)
+        const ch: u8 = if (codepoint >= 0x20 and codepoint <= 0x7E) @intCast(codepoint) else return;
+        // Reject characters that are invalid in directory names
+        if (ch != '/' and ch != '\\' and ch != ':' and ch != '*' and ch != '?' and ch != '"' and ch != '<' and ch != '>' and ch != '|') {
             self.input_buf[self.input_len] = ch;
             self.input_len += 1;
+            self.cursor_blink_counter = 0;
         }
     }
 
@@ -140,7 +145,7 @@ pub const Menu = struct {
         return self.input_buf[0..self.input_len];
     }
 
-    pub fn draw(self: *const Menu, tr: *TextRenderer, screen_w: f32, screen_h: f32) void {
+    pub fn draw(self: *Menu, tr: *TextRenderer, screen_w: f32, screen_h: f32) void {
         switch (self.app_state) {
             .title_menu => self.drawTitleMenu(tr, screen_w, screen_h),
             .pause_menu => self.drawPauseMenu(tr, screen_w, screen_h),
@@ -148,7 +153,7 @@ pub const Menu = struct {
         }
     }
 
-    fn drawTitleMenu(self: *const Menu, tr: *TextRenderer, screen_w: f32, screen_h: f32) void {
+    fn drawTitleMenu(self: *Menu, tr: *TextRenderer, screen_w: f32, screen_h: f32) void {
         _ = screen_h;
         const white = [4]f32{ 1.0, 1.0, 1.0, 1.0 };
         const yellow = [4]f32{ 1.0, 1.0, 0.0, 1.0 };
@@ -203,12 +208,22 @@ pub const Menu = struct {
             const input_y = list_y + @as(f32, @floatFromInt(self.world_count)) * line_height + 20.0;
             const label = "Name: ";
             const input_text = self.input_buf[0..self.input_len];
-            const cursor = "_";
-            const full_w = tr.measureText(label) + tr.measureText(input_text) + tr.measureText(cursor);
+            const label_w = tr.measureText(label);
+            const text_w = tr.measureText(input_text);
+
+            // Blinking cursor (~90 frames on, ~90 frames off)
+            const show_cursor = (self.cursor_blink_counter / 90) % 2 == 0;
+            self.cursor_blink_counter +%= 1;
+
+            // Always include cursor width in centering so text doesn't shift
+            const cursor_w = tr.measureText("|");
+            const full_w = label_w + text_w + cursor_w;
             const x = (screen_w - full_w) / 2.0;
             tr.drawText(x, input_y, label, gray);
-            tr.drawText(x + tr.measureText(label), input_y, input_text, white);
-            tr.drawText(x + tr.measureText(label) + tr.measureText(input_text), input_y, cursor, yellow);
+            tr.drawText(x + label_w, input_y, input_text, white);
+            if (show_cursor) {
+                tr.drawText(x + label_w + text_w, input_y, "|", white);
+            }
             return;
         }
 
