@@ -3,7 +3,7 @@ const Window = @import("platform/Window.zig").Window;
 const Renderer = @import("renderer/Renderer.zig").Renderer;
 const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRenderer;
 const GameState = @import("GameState.zig");
-const Menu = @import("ui/Menu.zig").Menu;
+const MenuController = @import("ui/MenuController.zig").MenuController;
 const UiManager = @import("ui/UiManager.zig").UiManager;
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
@@ -118,16 +118,6 @@ fn logFn(
 }
 
 const input_log = std.log.scoped(.Input);
-const ui_log = std.log.scoped(.UI);
-
-fn testPlayAction(_: ?*anyopaque) void {
-    ui_log.info("Test 'Play' button clicked!", .{});
-}
-
-fn testQuitAction(_: ?*anyopaque) void {
-    ui_log.info("Test 'Quit' button clicked!", .{});
-}
-
 fn keyName(key: c_int) []const u8 {
     return switch (key) {
         glfw.GLFW_KEY_1 => "1",
@@ -180,7 +170,7 @@ const InputState = struct {
     window: *Window,
     framebuffer_resized: *bool,
     game_state: ?*GameState = null,
-    menu: *Menu,
+    menu_ctrl: *MenuController,
     ui_manager: *UiManager,
     mouse_captured: bool = false,
     last_cursor_x: f64 = 0.0,
@@ -198,7 +188,8 @@ const InputState = struct {
 fn cursorPosCallback(window: ?*glfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
     if (input_state.mouse_captured) return;
-    _ = input_state.ui_manager.handleMouseMove(@floatCast(xpos), @floatCast(ypos));
+    const scale: f64 = input_state.ui_manager.ui_scale;
+    _ = input_state.ui_manager.handleMouseMove(@floatCast(xpos / scale), @floatCast(ypos / scale));
 }
 
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
@@ -214,7 +205,7 @@ fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c
         )) return;
     }
 
-    if (input_state.menu.app_state != .playing) return;
+    if (input_state.menu_ctrl.app_state != .playing) return;
     input_log.debug("Scroll y={d:.1}", .{yoffset});
     input_state.scroll_speed_delta += @floatCast(yoffset);
 }
@@ -228,17 +219,15 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
         input_state.window.toggleFullscreen();
     }
 
-    switch (input_state.menu.app_state) {
+    switch (input_state.menu_ctrl.app_state) {
         .title_menu, .pause_menu => {
-            // Try UI system first, fall through to Menu if not consumed
-            if (input_state.ui_manager.handleKey(key, action, mods)) return;
-            input_state.menu.handleKey(key, action);
+            // UI system handles all menu input
+            _ = input_state.ui_manager.handleKey(key, action, mods);
         },
         .playing => {
             // ESC opens pause menu
             if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
-                input_state.menu.app_state = .pause_menu;
-                input_state.menu.pause_selection = 0;
+                input_state.menu_ctrl.showPauseMenu();
                 input_state.mouse_captured = false;
                 input_state.first_mouse = true;
                 glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
@@ -274,9 +263,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
 
 fn charCallback(window: ?*glfw.Window, codepoint: c_uint) callconv(.c) void {
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
-    // Try UI system first, fall through to Menu if not consumed
-    if (input_state.ui_manager.handleChar(codepoint)) return;
-    input_state.menu.handleChar(codepoint);
+    _ = input_state.ui_manager.handleChar(codepoint);
 }
 
 fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods: c_int) callconv(.c) void {
@@ -288,10 +275,11 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
         var mx: f64 = 0;
         var my: f64 = 0;
         glfw.getCursorPos(window.?, &mx, &my);
-        if (input_state.ui_manager.handleMouseButton(button, action, @floatCast(mx), @floatCast(my))) return;
+        const scale: f64 = input_state.ui_manager.ui_scale;
+        if (input_state.ui_manager.handleMouseButton(button, action, @floatCast(mx / scale), @floatCast(my / scale))) return;
     }
 
-    if (input_state.menu.app_state != .playing) return;
+    if (input_state.menu_ctrl.app_state != .playing) return;
 
     input_log.debug("Mouse {s} {s}", .{ mouseButtonName(button), actionName(action) });
     if (action != glfw.GLFW_PRESS) return;
@@ -349,12 +337,8 @@ pub fn main() !void {
     });
     defer window.deinit();
 
-    // Initialize menu
-    var menu = Menu.init();
-    menu.refreshWorldList(allocator);
-
     // Initialize renderer with no game state (title screen)
-    var renderer = try Renderer.init(allocator, &window, &VulkanRenderer.vtable, @ptrCast(&menu));
+    var renderer = try Renderer.init(allocator, &window, &VulkanRenderer.vtable, null);
     defer renderer.deinit();
 
     const framebuffer_resized = renderer.getFramebufferResizedPtr();
@@ -363,13 +347,12 @@ pub fn main() !void {
     const ui_manager = try allocator.create(UiManager);
     defer allocator.destroy(ui_manager);
     ui_manager.* = .{};
-    if (!ui_manager.loadScreenFromFile("test_advanced.xml", allocator)) {
-        ui_manager.buildTestScreen(); // fallback
-    }
-    // Register test actions for UI buttons
-    ui_manager.registry.register("ui_play", testPlayAction, null);
-    ui_manager.registry.register("ui_quit", testQuitAction, null);
     renderer.setUiManager(@ptrCast(ui_manager));
+
+    // Initialize menu controller (loads title_menu.xml)
+    var menu_ctrl = MenuController.init(ui_manager, allocator);
+    // Register actions after init so callbacks capture the final address of menu_ctrl
+    menu_ctrl.registerActions();
 
     // Game state (created on demand when a world is loaded)
     var game_state: ?GameState = null;
@@ -384,7 +367,7 @@ pub fn main() !void {
         .window = &window,
         .framebuffer_resized = framebuffer_resized,
         .game_state = null,
-        .menu = &menu,
+        .menu_ctrl = &menu_ctrl,
         .ui_manager = ui_manager,
     };
     glfw.setWindowUserPointer(window.handle, &input_state);
@@ -412,14 +395,14 @@ pub fn main() !void {
         last_time = current_time;
 
         // Process menu actions
-        if (menu.action) |action| {
-            menu.action = null;
+        if (menu_ctrl.action) |action| {
+            menu_ctrl.action = null;
             switch (action) {
                 .load_world, .create_world => {
                     const world_name = if (action == .create_world)
-                        menu.getInputName()
+                        menu_ctrl.getInputName()
                     else
-                        menu.getSelectedWorldName();
+                        menu_ctrl.getSelectedWorldName();
 
                     if (world_name.len > 0) {
                         game_state = GameState.init(allocator, 1280, 720, world_name) catch |err| blk: {
@@ -429,7 +412,8 @@ pub fn main() !void {
                         if (game_state) |*gs| {
                             renderer.setGameState(@ptrCast(gs));
                             input_state.game_state = gs;
-                            menu.app_state = .playing;
+                            menu_ctrl.hideTitleMenu();
+                            menu_ctrl.app_state = .playing;
                             input_state.mouse_captured = true;
                             input_state.first_mouse = true;
                             glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
@@ -438,16 +422,16 @@ pub fn main() !void {
                     }
                 },
                 .delete_world => {
-                    const name = menu.getSelectedWorldName();
+                    const name = menu_ctrl.getSelectedWorldName();
                     if (name.len > 0) {
                         app_config.deleteWorld(allocator, name) catch |err| {
                             std.log.err("Failed to delete world '{s}': {}", .{ name, err });
                         };
-                        menu.refreshWorldList(allocator);
+                        menu_ctrl.refreshWorldList();
                     }
                 },
                 .resume_game => {
-                    menu.app_state = .playing;
+                    // hidePauseMenu already sets app_state = .playing
                     input_state.mouse_captured = true;
                     input_state.first_mouse = true;
                     glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
@@ -460,8 +444,7 @@ pub fn main() !void {
                         gs.deinit();
                         game_state = null;
                     }
-                    menu.refreshWorldList(allocator);
-                    menu.app_state = .title_menu;
+                    menu_ctrl.showTitleMenu();
                 },
                 .quit => {
                     break;
@@ -470,7 +453,7 @@ pub fn main() !void {
         }
 
         // Game update (only when playing)
-        if (menu.app_state == .playing) {
+        if (menu_ctrl.app_state == .playing) {
             if (game_state) |*gs| {
                 // Adjust move speed via scroll
                 if (input_state.scroll_speed_delta != 0.0) {
@@ -579,7 +562,7 @@ pub fn main() !void {
         try renderer.render();
         try renderer.endFrame();
 
-        if (menu.app_state == .playing) {
+        if (menu_ctrl.app_state == .playing) {
             if (game_state) |*gs| {
                 if (!gs.debug_camera_active) {
                     gs.restoreAfterRender();

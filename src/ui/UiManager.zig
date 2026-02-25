@@ -2,7 +2,6 @@ const std = @import("std");
 const Widget = @import("Widget.zig");
 const WidgetId = Widget.WidgetId;
 const NULL_WIDGET = Widget.NULL_WIDGET;
-const Color = Widget.Color;
 const WidgetTree = @import("WidgetTree.zig").WidgetTree;
 const Layout = @import("Layout.zig");
 const WidgetOps = @import("WidgetOps.zig");
@@ -33,6 +32,7 @@ pub const UiManager = struct {
     screen_count: u8 = 0,
     screen_width: f32 = 800.0,
     screen_height: f32 = 600.0,
+    ui_scale: f32 = 1.0,
 
     // Event state
     registry: ActionRegistry = .{},
@@ -50,7 +50,7 @@ pub const UiManager = struct {
         if (self.screen_count >= MAX_SCREEN_STACK) return null;
         const idx = self.screen_count;
         self.screen_count += 1;
-        self.screens[idx] = .{ .active = true, .fade = 0, .fading = .in };
+        self.screens[idx] = .{ .active = true, .fade = 1.0, .fading = .none };
         return &self.screens[idx];
     }
 
@@ -63,7 +63,7 @@ pub const UiManager = struct {
     }
 
     /// Immediately remove a screen without fade.
-    fn removeTopScreen(self: *UiManager) void {
+    pub fn removeTopScreen(self: *UiManager) void {
         if (self.screen_count == 0) return;
         self.screen_count -= 1;
         self.screens[self.screen_count].active = false;
@@ -518,124 +518,4 @@ pub const UiManager = struct {
         return true;
     }
 
-    /// Build the hardcoded test screen (fallback if XML loading fails).
-    pub fn buildTestScreen(self: *UiManager) void {
-        const screen = self.pushScreen() orelse return;
-        var tree = &screen.tree;
-
-        // Root panel — centered, semi-transparent dark background
-        const root = tree.addWidget(.panel, NULL_WIDGET) orelse return;
-        var root_w = tree.getWidget(root).?;
-        root_w.width = .{ .px = 320 };
-        root_w.height = .auto;
-        root_w.background = Color.fromHex(0x1A1A2ECC);
-        root_w.padding = Widget.Edges.uniform(16);
-        root_w.layout_mode = .flex;
-        root_w.flex_direction = .column;
-        root_w.cross_align = .center;
-        root_w.justify = .center;
-        root_w.gap = 8;
-        // Anchor root to center of screen
-        root_w.anchor_x = .center;
-        root_w.anchor_y = .center;
-
-        // We need the root to be positioned by anchor on the implicit screen container.
-        // Since root IS the tree root, layout handles it specially.
-        // Instead, let's make a real screen-root that uses anchor layout.
-        tree.clear();
-        const screen_root = tree.addWidget(.panel, NULL_WIDGET) orelse return;
-        var sr = tree.getWidget(screen_root).?;
-        sr.width = .fill;
-        sr.height = .fill;
-        sr.layout_mode = .anchor;
-        sr.background = Color.transparent;
-
-        // Centered panel
-        const panel = tree.addWidget(.panel, screen_root) orelse return;
-        var p = tree.getWidget(panel).?;
-        p.width = .{ .px = 320 };
-        p.height = .auto;
-        p.background = Color.fromHex(0x1A1A2ECC);
-        p.padding = Widget.Edges.uniform(16);
-        p.layout_mode = .flex;
-        p.flex_direction = .column;
-        p.cross_align = .center;
-        p.justify = .center;
-        p.gap = 8;
-        p.anchor_x = .center;
-        p.anchor_y = .center;
-        p.border_width = 1;
-        p.border_color = Color.fromHex(0x444466FF);
-
-        // Title label
-        const title = tree.addWidget(.label, panel) orelse return;
-        tree.getWidget(title).?.width = .auto;
-        tree.getWidget(title).?.height = .auto;
-        var title_data = &tree.getData(title).?.label;
-        title_data.setText("UI System Test");
-        title_data.color = Color.fromHex(0xFFCC00FF);
-        title_data.font_size = 2;
-
-        // Subtitle
-        const subtitle = tree.addWidget(.label, panel) orelse return;
-        tree.getWidget(subtitle).?.width = .auto;
-        tree.getWidget(subtitle).?.height = .auto;
-        var sub_data = &tree.getData(subtitle).?.label;
-        sub_data.setText("Phase 2 - Events");
-        sub_data.color = Color.fromHex(0xAAAAAAFF);
-
-        // Button row
-        const btn_row = tree.addWidget(.panel, panel) orelse return;
-        var br = tree.getWidget(btn_row).?;
-        br.layout_mode = .flex;
-        br.flex_direction = .row;
-        br.gap = 8;
-        br.width = .auto;
-        br.height = .auto;
-        br.cross_align = .center;
-
-        // Button 1
-        const btn1 = tree.addWidget(.button, btn_row) orelse return;
-        var b1 = tree.getWidget(btn1).?;
-        b1.width = .{ .px = 80 };
-        b1.height = .{ .px = 28 };
-        b1.background = Color.fromHex(0x335588FF);
-        var b1d = &tree.getData(btn1).?.button;
-        b1d.setText("Play");
-        b1d.setAction("ui_play");
-
-        // Button 2
-        const btn2 = tree.addWidget(.button, btn_row) orelse return;
-        var b2 = tree.getWidget(btn2).?;
-        b2.width = .{ .px = 80 };
-        b2.height = .{ .px = 28 };
-        b2.background = Color.fromHex(0x553333FF);
-        var b2d = &tree.getData(btn2).?.button;
-        b2d.setText("Quit");
-        b2d.setAction("ui_quit");
-
-        // Text input
-        const ti = tree.addWidget(.text_input, panel) orelse return;
-        var tiw = tree.getWidget(ti).?;
-        tiw.width = .fill;
-        tiw.height = .{ .px = 28 };
-        var tid = &tree.getData(ti).?.text_input;
-        const ph = "Type here...";
-        @memcpy(tid.placeholder[0..ph.len], ph);
-        tid.placeholder_len = ph.len;
-
-        // Slider
-        const sl = tree.addWidget(.slider, panel) orelse return;
-        var slw = tree.getWidget(sl).?;
-        slw.width = .fill;
-        slw.height = .{ .px = 20 };
-
-        // Progress bar
-        const pb = tree.addWidget(.progress_bar, panel) orelse return;
-        var pbw = tree.getWidget(pb).?;
-        pbw.width = .fill;
-        pbw.height = .{ .px = 12 };
-        tree.getData(pb).?.progress_bar.value = 0.65;
-        tree.getData(pb).?.progress_bar.fill_color = Color.fromHex(0x44AA44FF);
-    }
 };

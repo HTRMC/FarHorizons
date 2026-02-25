@@ -10,7 +10,6 @@ const RenderState = render_state_mod.RenderState;
 const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
-const Menu = @import("../../ui/Menu.zig").Menu;
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
 const app_config = @import("../../app_config.zig");
 const zlm = @import("zlm");
@@ -63,11 +62,10 @@ pub const VulkanRenderer = struct {
     pipeline_cache_path: []const u8,
     mesh_worker: ?MeshWorker,
     game_state: ?*GameState,
-    menu: ?*Menu,
     ui_manager: ?*UiManager,
     framebuffer_resized: bool,
 
-    pub fn init(allocator: std.mem.Allocator, window: *const Window, game_state: ?*GameState, menu: ?*Menu) !*VulkanRenderer {
+    pub fn init(allocator: std.mem.Allocator, window: *const Window, game_state: ?*GameState) !*VulkanRenderer {
         const init_zone = tracy.zone(@src(), "VulkanRenderer.init");
         defer init_zone.end();
 
@@ -137,7 +135,6 @@ pub const VulkanRenderer = struct {
             .render_state = undefined,
             .mesh_worker = null,
             .game_state = game_state,
-            .menu = menu,
             .ui_manager = null,
             .framebuffer_resized = false,
         };
@@ -145,8 +142,14 @@ pub const VulkanRenderer = struct {
         try self.createCommandPool();
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
         self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format);
-        self.render_state.text_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
-        self.render_state.ui_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        // Compute UI scale for resolution-independent layout (reference: 720p)
+        const actual_w = self.surface_state.swapchain_extent.width;
+        const actual_h = self.surface_state.swapchain_extent.height;
+        const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
+        const virtual_w: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_w)) / ui_scale);
+        const virtual_h: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_h)) / ui_scale);
+        self.render_state.text_renderer.updateScreenSize(virtual_w, virtual_h);
+        self.render_state.ui_renderer.updateScreenSize(virtual_w, virtual_h);
 
         // Initialize mesh worker and camera if game_state is provided
         if (game_state) |gs| {
@@ -247,15 +250,6 @@ pub const VulkanRenderer = struct {
             var lod_buf: [16]u8 = undefined;
             const lod_text = std.fmt.bufPrint(&lod_buf, "LOD {d}", .{gs.current_lod}) catch "LOD ?";
             self.render_state.text_renderer.drawText(10.0, 30.0, lod_text, .{ 1.0, 1.0, 0.0, 1.0 });
-        }
-
-        // Draw menu overlay if active
-        if (self.menu) |m| {
-            m.draw(
-                &self.render_state.text_renderer,
-                @floatFromInt(self.surface_state.swapchain_extent.width),
-                @floatFromInt(self.surface_state.swapchain_extent.height),
-            );
         }
 
         // Draw UI widget screens
@@ -414,12 +408,18 @@ pub const VulkanRenderer = struct {
             gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
         }
 
-        // Update renderer screen sizes
-        self.render_state.text_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
-        self.render_state.ui_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        // Compute UI scale for resolution-independent layout (reference: 720p)
+        const actual_w = self.surface_state.swapchain_extent.width;
+        const actual_h = self.surface_state.swapchain_extent.height;
+        const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
+        const virtual_w: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_w)) / ui_scale);
+        const virtual_h: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_h)) / ui_scale);
+        self.render_state.text_renderer.updateScreenSize(virtual_w, virtual_h);
+        self.render_state.ui_renderer.updateScreenSize(virtual_w, virtual_h);
 
         if (self.ui_manager) |um| {
-            um.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+            um.updateScreenSize(virtual_w, virtual_h);
+            um.ui_scale = ui_scale;
         }
 
         std.log.info("Swapchain recreated: {}x{}", .{ self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height });
@@ -930,8 +930,8 @@ pub const VulkanRenderer = struct {
     }
 
     fn initVTable(allocator: std.mem.Allocator, window: *const Window, user_data: ?*anyopaque) anyerror!*anyopaque {
-        const menu: *Menu = if (user_data) |p| @ptrCast(@alignCast(p)) else unreachable;
-        const self = try init(allocator, window, null, menu);
+        _ = user_data;
+        const self = try init(allocator, window, null);
         return @ptrCast(self);
     }
 
@@ -970,7 +970,13 @@ pub const VulkanRenderer = struct {
         const self: *VulkanRenderer = @ptrCast(@alignCast(ptr));
         self.ui_manager = if (ui_manager_ptr) |p| @ptrCast(@alignCast(p)) else null;
         if (self.ui_manager) |um| {
-            um.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+            const actual_w = self.surface_state.swapchain_extent.width;
+            const actual_h = self.surface_state.swapchain_extent.height;
+            const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
+            const virtual_w: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_w)) / ui_scale);
+            const virtual_h: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_h)) / ui_scale);
+            um.updateScreenSize(virtual_w, virtual_h);
+            um.ui_scale = ui_scale;
         }
     }
 

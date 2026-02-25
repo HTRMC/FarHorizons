@@ -107,6 +107,30 @@ pub const WidgetTree = struct {
         self.root = NULL_WIDGET;
     }
 
+    /// Deactivate all children (and grandchildren recursively) of a widget.
+    /// Detaches them from the parent's child list but does NOT reclaim IDs.
+    pub fn clearChildren(self: *WidgetTree, parent_id: WidgetId) void {
+        const parent = self.getWidget(parent_id) orelse return;
+        var child_id = parent.first_child;
+        while (child_id != NULL_WIDGET) {
+            const next = self.widgets[child_id].next_sibling;
+            self.deactivateRecursive(child_id);
+            child_id = next;
+        }
+        parent.first_child = NULL_WIDGET;
+    }
+
+    fn deactivateRecursive(self: *WidgetTree, id: WidgetId) void {
+        // Deactivate children first
+        var child_id = self.widgets[id].first_child;
+        while (child_id != NULL_WIDGET) {
+            const next = self.widgets[child_id].next_sibling;
+            self.deactivateRecursive(child_id);
+            child_id = next;
+        }
+        self.widgets[id].active = false;
+    }
+
     // ── Child iteration ──
 
     pub const ChildIterator = struct {
@@ -173,6 +197,23 @@ test "find by id hash" {
     const found = tree.findById("myPanel");
     try std.testing.expectEqual(root, found.?);
     try std.testing.expectEqual(@as(?WidgetId, null), tree.findById("notExist"));
+}
+
+test "clearChildren deactivates children recursively" {
+    var tree = WidgetTree{};
+    const root = tree.addWidget(.panel, NULL_WIDGET).?;
+    const child1 = tree.addWidget(.label, root).?;
+    const grandchild = tree.addWidget(.label, child1).?;
+    const child2 = tree.addWidget(.button, root).?;
+
+    tree.clearChildren(root);
+
+    // Parent still active, children deactivated
+    try std.testing.expect(tree.widgets[root].active);
+    try std.testing.expect(!tree.widgets[child1].active);
+    try std.testing.expect(!tree.widgets[grandchild].active);
+    try std.testing.expect(!tree.widgets[child2].active);
+    try std.testing.expectEqual(NULL_WIDGET, tree.widgets[root].first_child);
 }
 
 test "widget data access" {

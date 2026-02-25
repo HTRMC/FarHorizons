@@ -1,0 +1,13 @@
+<screen>
+  <panel width="fill" height="fill" layout="anchor">
+    <panel width="300" height="auto" anchor_x="center" anchor_y="center"
+           background="#1A1A2ECC" padding="16" direction="column"
+           cross_align="center" gap="12" border_width="1" border_color="#444466FF">
+      <label text="--- Paused ---" color="#999999FF" width="fill"/>
+      <button id="resume_btn" text="Resume" width="200" height="32"
+              background="#335588FF" on_click="resume_game"/>
+      <button id="title_btn" text="Return to Title" width="200" height="32"
+              background="#553333FF" on_click="return_to_title"/>
+    </panel>
+  </panel>
+</screen>
