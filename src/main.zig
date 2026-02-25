@@ -363,7 +363,9 @@ pub fn main() !void {
     const ui_manager = try allocator.create(UiManager);
     defer allocator.destroy(ui_manager);
     ui_manager.* = .{};
-    ui_manager.buildTestScreen();
+    if (!ui_manager.loadScreenFromFile("test_screen.xml", allocator)) {
+        ui_manager.buildTestScreen(); // fallback
+    }
     // Register test actions for UI buttons
     ui_manager.registry.register("ui_play", testPlayAction, null);
     ui_manager.registry.register("ui_quit", testQuitAction, null);

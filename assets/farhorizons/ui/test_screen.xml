@@ -1,0 +1,19 @@
+<screen>
+  <panel width="fill" height="fill" layout="anchor" background="#00000000">
+    <panel id="main_panel" width="320" height="auto"
+           background="#1A1A2ECC" padding="16" layout="flex"
+           direction="column" cross_align="center" justify="center" gap="8"
+           anchor_x="center" anchor_y="center"
+           border_width="1" border_color="#444466FF">
+      <label text="UI System Test" color="#FFCC00FF" font_size="2" />
+      <label text="Phase 2 - Events" color="#AAAAAAFF" />
+      <panel direction="row" gap="8" cross_align="center">
+        <button text="Play" width="80" height="28" background="#335588FF" on_click="ui_play" />
+        <button text="Quit" width="80" height="28" background="#553333FF" on_click="ui_quit" />
+      </panel>
+      <text_input width="fill" height="28" placeholder="Type here..." />
+      <slider width="fill" height="20" />
+      <progress_bar width="fill" height="12" value="0.65" fill_color="#44AA44FF" />
+    </panel>
+  </panel>
+</screen>

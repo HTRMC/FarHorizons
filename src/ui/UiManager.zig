@@ -11,6 +11,7 @@ const TextRenderer = @import("../renderer/vulkan/TextRenderer.zig").TextRenderer
 const ActionRegistry = @import("ActionRegistry.zig").ActionRegistry;
 const EventDispatch = @import("EventDispatch.zig");
 const Focus = @import("Focus.zig");
+const ScreenLoader = @import("ScreenLoader.zig");
 const glfw = @import("../platform/glfw.zig");
 
 const log = std.log.scoped(.UI);
@@ -270,7 +271,17 @@ pub const UiManager = struct {
         data.slider.value = data.slider.min_value + frac * (data.slider.max_value - data.slider.min_value);
     }
 
-    /// Build the hardcoded test screen (temporary, will be replaced by XML loading).
+    /// Load a UI screen from an XML file. Returns true on success.
+    pub fn loadScreenFromFile(self: *UiManager, filename: []const u8, allocator: std.mem.Allocator) bool {
+        const screen = self.pushScreen() orelse return false;
+        if (!ScreenLoader.loadScreen(&screen.tree, &screen.passthrough, filename, allocator)) {
+            self.popScreen();
+            return false;
+        }
+        return true;
+    }
+
+    /// Build the hardcoded test screen (fallback if XML loading fails).
     pub fn buildTestScreen(self: *UiManager) void {
         const screen = self.pushScreen() orelse return;
         var tree = &screen.tree;
