@@ -7,21 +7,21 @@
 
       <!-- Title row -->
       <panel direction="row" gap="12" cross_align="start" width="auto" height="auto">
-        <label text="FARHORIZONS" color="#FFCC00FF" font_size="3"/>
-        <label text="ALPHA" color="#AAAAAAFF" font_size="1"/>
+        <label text="FARHORIZONS" color="#FFCC00FF" font_size="3" shadow="true" shadow_color="#CC880066"/>
+        <label text="ALPHA" color="#AAAAAAFF" font_size="1" shadow="true" shadow_color="#66666666"/>
       </panel>
 
       <!-- Button stack -->
       <panel direction="column" gap="8" width="280" cross_align="stretch">
-        <button text="Singleplayer" width="fill" height="40" background="#335588FF"
+        <button text="Singleplayer" width="fill" height="40" background="#335588FF" shadow="true"
                 on_click="show_singleplayer"/>
-        <button text="Multiplayer" width="fill" height="40" background="#335588FF"
+        <button text="Multiplayer" width="fill" height="40" background="#335588FF" shadow="true"
                 on_click="show_coming_soon"/>
-        <button text="Options" width="fill" height="40" background="#335588FF"
+        <button text="Options" width="fill" height="40" background="#335588FF" shadow="true"
                 on_click="show_coming_soon"/>
-        <button text="Credits" width="fill" height="40" background="#335588FF"
+        <button text="Credits" width="fill" height="40" background="#335588FF" shadow="true"
                 on_click="show_coming_soon"/>
-        <button text="Quit" width="fill" height="40" background="#442222FF"
+        <button text="Touch Grass" width="fill" height="40" background="#335588FF" shadow="true"
                 on_click="quit_game"/>
       </panel>
     </panel>
@@ -36,8 +36,8 @@
       <panel width="300" height="auto" anchor_x="center" anchor_y="center"
              background="#1A1A2ECC" padding="16" direction="column"
              cross_align="center" gap="12" border_width="1" border_color="#444466FF">
-        <label text="Coming Soon" color="#FFFFFFFF" font_size="2"/>
-        <button text="OK" width="120" height="32" background="#335588FF"
+        <label text="Coming Soon" color="#FFFFFFFF"/>
+        <button text="OK" width="120" height="32" background="#335588FF" shadow="true"
                 on_click="dismiss_modal"/>
       </panel>
     </panel>

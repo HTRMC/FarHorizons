@@ -46,6 +46,9 @@ pub fn drawWidget(
                     const avail_w = r.w - w.padding.horizontal();
                     const tx = r.x + w.padding.left;
                     const ty = r.y + w.padding.top;
+                    if (label.shadow) {
+                        _ = tr.drawTextWrapped(tx + 2, ty + 2, text, avail_w, label.shadow_color.toArray());
+                    }
                     _ = tr.drawTextWrapped(tx, ty, text, avail_w, label.color.toArray());
                 } else {
                     const scale: f32 = @floatFromInt(label.font_size);
@@ -54,6 +57,9 @@ pub fn drawWidget(
                     // Center text within the widget
                     const tx = r.x + w.padding.left + (r.w - w.padding.horizontal() - text_w) / 2.0;
                     const ty = r.y + w.padding.top + (r.h - w.padding.vertical() - text_h) / 2.0;
+                    if (label.shadow) {
+                        tr.drawTextScaled(tx + 2 * scale, ty + 2 * scale, text, label.shadow_color.toArray(), scale);
+                    }
                     tr.drawTextScaled(tx, ty, text, label.color.toArray(), scale);
                 }
 
@@ -82,6 +88,9 @@ pub fn drawWidget(
                 const text_w = tr.measureText(text);
                 const tx = r.x + (r.w - text_w) / 2.0;
                 const ty = r.y + (r.h - 16.0) / 2.0;
+                if (btn.shadow) {
+                    tr.drawText(tx + 2, ty + 2, text, btn.shadow_color.toArray());
+                }
                 tr.drawText(tx, ty, text, btn.text_color.toArray());
             }
         },

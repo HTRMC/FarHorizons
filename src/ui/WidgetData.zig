@@ -29,6 +29,8 @@ pub const LabelData = struct {
     color: Color = Color.white,
     font_size: u8 = 1, // multiplier (1 = default 16px, 2 = 32px)
     wrap: bool = false,
+    shadow: bool = false,
+    shadow_color: Color = Color.fromHex(0x000000AA),
 
     pub fn setText(self: *LabelData, str: []const u8) void {
         const len: u8 = @intCast(@min(str.len, MAX_TEXT_LEN));
@@ -47,6 +49,8 @@ pub const ButtonData = struct {
     text_color: Color = Color.white,
     hover_color: Color = Color.fromHex(0x444444FF),
     press_color: Color = Color.fromHex(0x222222FF),
+    shadow: bool = false,
+    shadow_color: Color = Color.fromHex(0x000000AA),
     on_click_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
     on_click_action_len: u8 = 0,
 

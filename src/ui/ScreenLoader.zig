@@ -199,6 +199,10 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.label.font_size = parseInt(attr.value);
                 } else if (eql(attr.name, "wrap")) {
                     data.label.wrap = parseBool(attr.value);
+                } else if (eql(attr.name, "shadow")) {
+                    data.label.shadow = parseBool(attr.value);
+                } else if (eql(attr.name, "shadow_color")) {
+                    data.label.shadow_color = parseColor(attr.value);
                 }
             }
         },
@@ -214,6 +218,10 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.button.press_color = parseColor(attr.value);
                 } else if (eql(attr.name, "on_click")) {
                     data.button.setAction(attr.value);
+                } else if (eql(attr.name, "shadow")) {
+                    data.button.shadow = parseBool(attr.value);
+                } else if (eql(attr.name, "shadow_color")) {
+                    data.button.shadow_color = parseColor(attr.value);
                 }
             }
         },
