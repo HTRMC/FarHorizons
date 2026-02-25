@@ -4,6 +4,7 @@ const Renderer = @import("renderer/Renderer.zig").Renderer;
 const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRenderer;
 const GameState = @import("GameState.zig");
 const Menu = @import("ui/Menu.zig").Menu;
+const UiManager = @import("ui/UiManager.zig").UiManager;
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
 const Logger = @import("Logger.zig");
@@ -319,6 +320,13 @@ pub fn main() !void {
     defer renderer.deinit();
 
     const framebuffer_resized = renderer.getFramebufferResizedPtr();
+
+    // Initialize UI system (heap-allocated due to large widget arrays)
+    const ui_manager = try allocator.create(UiManager);
+    defer allocator.destroy(ui_manager);
+    ui_manager.* = .{};
+    ui_manager.buildTestScreen();
+    renderer.setUiManager(@ptrCast(ui_manager));
 
     // Game state (created on demand when a world is loaded)
     var game_state: ?GameState = null;

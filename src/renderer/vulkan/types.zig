@@ -69,6 +69,17 @@ pub const TextVertex = extern struct {
     a: f32,
 };
 
+pub const UiVertex = extern struct {
+    px: f32,
+    py: f32,
+    u: f32,
+    v: f32,
+    r: f32,
+    g: f32,
+    b: f32,
+    a: f32,
+};
+
 // --- Tests ---
 
 fn unpackFaceData(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_index: u6 } {

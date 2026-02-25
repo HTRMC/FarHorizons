@@ -11,6 +11,7 @@ const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
 const Menu = @import("../../ui/Menu.zig").Menu;
+const UiManager = @import("../../ui/UiManager.zig").UiManager;
 const app_config = @import("../../app_config.zig");
 const zlm = @import("zlm");
 const tracy = @import("../../platform/tracy.zig");
@@ -63,6 +64,7 @@ pub const VulkanRenderer = struct {
     mesh_worker: ?MeshWorker,
     game_state: ?*GameState,
     menu: ?*Menu,
+    ui_manager: ?*UiManager,
     framebuffer_resized: bool,
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window, game_state: ?*GameState, menu: ?*Menu) !*VulkanRenderer {
@@ -136,6 +138,7 @@ pub const VulkanRenderer = struct {
             .mesh_worker = null,
             .game_state = game_state,
             .menu = menu,
+            .ui_manager = null,
             .framebuffer_resized = false,
         };
 
@@ -143,6 +146,7 @@ pub const VulkanRenderer = struct {
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
         self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format);
         self.render_state.text_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        self.render_state.ui_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
 
         // Initialize mesh worker and camera if game_state is provided
         if (game_state) |gs| {
@@ -230,6 +234,9 @@ pub const VulkanRenderer = struct {
             }
         }
 
+        // UI rendering (backgrounds/panels before text)
+        self.render_state.ui_renderer.beginFrame(self.ctx.device);
+
         // Text rendering
         self.render_state.text_renderer.beginFrame(self.ctx.device);
 
@@ -249,6 +256,12 @@ pub const VulkanRenderer = struct {
                 @floatFromInt(self.surface_state.swapchain_extent.width),
                 @floatFromInt(self.surface_state.swapchain_extent.height),
             );
+        }
+
+        // Draw UI widget screens
+        if (self.ui_manager) |um| {
+            um.layout(&self.render_state.text_renderer);
+            um.draw(&self.render_state.ui_renderer, &self.render_state.text_renderer);
         }
     }
 
@@ -283,6 +296,7 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "endFrame");
         defer tz.end();
 
+        self.render_state.ui_renderer.endFrame(self.ctx.device);
         self.render_state.text_renderer.endFrame(self.ctx.device);
         self.render_state.current_frame = (self.render_state.current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
@@ -400,8 +414,13 @@ pub const VulkanRenderer = struct {
             gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
         }
 
-        // Update text renderer screen size
+        // Update renderer screen sizes
         self.render_state.text_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        self.render_state.ui_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+
+        if (self.ui_manager) |um| {
+            um.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        }
 
         std.log.info("Swapchain recreated: {}x{}", .{ self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height });
     }
@@ -586,6 +605,9 @@ pub const VulkanRenderer = struct {
                 self.render_state.debug_renderer.recordDraw(command_buffer, &debug_mvp.m);
             }
         }
+
+        // Draw UI backgrounds/panels (before text)
+        self.render_state.ui_renderer.recordDraw(command_buffer);
 
         // Draw text overlay (always on top, no depth test)
         self.render_state.text_renderer.recordDraw(command_buffer);
@@ -944,6 +966,14 @@ pub const VulkanRenderer = struct {
         self.setGameState(gs);
     }
 
+    fn setUiManagerVTable(ptr: *anyopaque, ui_manager_ptr: ?*anyopaque) void {
+        const self: *VulkanRenderer = @ptrCast(@alignCast(ptr));
+        self.ui_manager = if (ui_manager_ptr) |p| @ptrCast(@alignCast(p)) else null;
+        if (self.ui_manager) |um| {
+            um.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        }
+    }
+
     pub const vtable: Renderer.VTable = .{
         .init = initVTable,
         .deinit = deinitVTable,
@@ -952,5 +982,6 @@ pub const VulkanRenderer = struct {
         .render = renderVTable,
         .get_framebuffer_resized_ptr = getFramebufferResizedPtrVTable,
         .set_game_state = setGameStateVTable,
+        .set_ui_manager = setUiManagerVTable,
     };
 };
