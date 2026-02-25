@@ -8,6 +8,12 @@ const Layout = @import("Layout.zig");
 const WidgetOps = @import("WidgetOps.zig");
 const UiRenderer = @import("../renderer/vulkan/UiRenderer.zig").UiRenderer;
 const TextRenderer = @import("../renderer/vulkan/TextRenderer.zig").TextRenderer;
+const ActionRegistry = @import("ActionRegistry.zig").ActionRegistry;
+const EventDispatch = @import("EventDispatch.zig");
+const Focus = @import("Focus.zig");
+const glfw = @import("../platform/glfw.zig");
+
+const log = std.log.scoped(.UI);
 
 const MAX_SCREEN_STACK = 4;
 
@@ -22,6 +28,12 @@ pub const UiManager = struct {
     screen_count: u8 = 0,
     screen_width: f32 = 800.0,
     screen_height: f32 = 600.0,
+
+    // Event state
+    registry: ActionRegistry = .{},
+    last_mouse_x: f32 = 0,
+    last_mouse_y: f32 = 0,
+    pressed_widget: WidgetId = NULL_WIDGET,
 
     /// Push a new screen onto the stack. Returns the screen index for building.
     pub fn pushScreen(self: *UiManager) ?*Screen {
@@ -75,6 +87,126 @@ pub const UiManager = struct {
     pub fn blocksInput(self: *const UiManager) bool {
         if (self.screen_count == 0) return false;
         return !self.screens[self.screen_count - 1].passthrough;
+    }
+
+    // ── Event handling ──
+
+    /// Handle mouse movement. Returns true if UI consumed the event.
+    pub fn handleMouseMove(self: *UiManager, x: f32, y: f32) bool {
+        self.last_mouse_x = x;
+        self.last_mouse_y = y;
+
+        const tree = self.topTree() orelse return false;
+
+        // Handle slider drag
+        if (self.pressed_widget != NULL_WIDGET) {
+            const pw = tree.getWidgetConst(self.pressed_widget);
+            if (pw) |w| {
+                if (w.kind == .slider) {
+                    self.updateSliderDrag(tree, self.pressed_widget, x);
+                    return true;
+                }
+            }
+        }
+
+        const target = EventDispatch.hitTest(tree, x, y);
+        EventDispatch.updateHoverState(tree, target);
+
+        return target != NULL_WIDGET;
+    }
+
+    /// Handle mouse button press/release. Returns true if consumed.
+    pub fn handleMouseButton(self: *UiManager, button: c_int, action: c_int, x: f32, y: f32) bool {
+        _ = button; // Only handle left button for now
+
+        const tree = self.topTree() orelse return false;
+        const target = EventDispatch.hitTest(tree, x, y);
+
+        if (action == glfw.GLFW_PRESS) {
+            self.pressed_widget = target;
+
+            if (target == NULL_WIDGET) {
+                // Click on empty space — clear focus
+                EventDispatch.clearFocus(tree);
+                return false;
+            }
+
+            const consumed = EventDispatch.dispatchMousePress(tree, target, &self.registry);
+
+            // Update slider value immediately on click (not just on drag)
+            if (tree.getWidgetConst(target)) |w| {
+                if (w.kind == .slider) {
+                    self.updateSliderDrag(tree, target, x);
+                }
+            }
+
+            return consumed;
+        } else if (action == glfw.GLFW_RELEASE) {
+            const consumed = EventDispatch.dispatchMouseRelease(tree, target, self.pressed_widget, &self.registry);
+            self.pressed_widget = NULL_WIDGET;
+            return consumed;
+        }
+
+        return false;
+    }
+
+    /// Handle key press/release. Returns true if consumed.
+    pub fn handleKey(self: *UiManager, key: c_int, action: c_int, mods: c_int) bool {
+        const tree = self.topTree() orelse return false;
+
+        // Tab cycles focus
+        if (key == glfw.GLFW_KEY_TAB and (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT)) {
+            const reverse = (mods & glfw.GLFW_MOD_SHIFT) != 0;
+            Focus.cycleFocus(tree, reverse);
+            return true;
+        }
+
+        return EventDispatch.dispatchKey(tree, key, action, &self.registry);
+    }
+
+    /// Handle character input. Returns true if consumed.
+    pub fn handleChar(self: *UiManager, codepoint: u32) bool {
+        const tree = self.topTree() orelse return false;
+        return EventDispatch.dispatchChar(tree, codepoint);
+    }
+
+    /// Handle scroll input. Returns true if consumed.
+    pub fn handleScroll(_: *UiManager, _: f32, _: f32, _: f32, _: f32) bool {
+        // Future: scroll_view support
+        return false;
+    }
+
+    /// Tick cursor blink counter on focused text_input widgets.
+    pub fn tickCursorBlink(self: *UiManager) void {
+        const tree = self.topTree() orelse return;
+        const focused_id = EventDispatch.findFocused(tree);
+        if (focused_id == NULL_WIDGET) return;
+
+        const w = tree.getWidgetConst(focused_id) orelse return;
+        if (w.kind == .text_input) {
+            const data = tree.getData(focused_id) orelse return;
+            data.text_input.cursor_blink_counter +%= 1;
+        }
+    }
+
+    // ── Internal helpers ──
+
+    fn topTree(self: *UiManager) ?*WidgetTree {
+        const screen = self.topScreen() orelse return null;
+        if (!screen.active) return null;
+        return &screen.tree;
+    }
+
+    fn updateSliderDrag(self: *UiManager, tree: *WidgetTree, slider_id: WidgetId, mouse_x: f32) void {
+        _ = self;
+        const w = tree.getWidgetConst(slider_id) orelse return;
+        const data = tree.getData(slider_id) orelse return;
+
+        const rect = w.computed_rect;
+        if (rect.w <= 0) return;
+
+        const frac = std.math.clamp((mouse_x - rect.x) / rect.w, 0.0, 1.0);
+        data.slider.value = data.slider.min_value + frac * (data.slider.max_value - data.slider.min_value);
     }
 
     /// Build the hardcoded test screen (temporary, will be replaced by XML loading).
@@ -140,7 +272,7 @@ pub const UiManager = struct {
         tree.getWidget(subtitle).?.width = .auto;
         tree.getWidget(subtitle).?.height = .auto;
         var sub_data = &tree.getData(subtitle).?.label;
-        sub_data.setText("Phase 1 - Foundation");
+        sub_data.setText("Phase 2 - Events");
         sub_data.color = Color.fromHex(0xAAAAAAFF);
 
         // Button row
@@ -161,6 +293,7 @@ pub const UiManager = struct {
         b1.background = Color.fromHex(0x335588FF);
         var b1d = &tree.getData(btn1).?.button;
         b1d.setText("Play");
+        b1d.setAction("ui_play");
 
         // Button 2
         const btn2 = tree.addWidget(.button, btn_row) orelse return;
@@ -170,6 +303,23 @@ pub const UiManager = struct {
         b2.background = Color.fromHex(0x553333FF);
         var b2d = &tree.getData(btn2).?.button;
         b2d.setText("Quit");
+        b2d.setAction("ui_quit");
+
+        // Text input
+        const ti = tree.addWidget(.text_input, panel) orelse return;
+        var tiw = tree.getWidget(ti).?;
+        tiw.width = .fill;
+        tiw.height = .{ .px = 28 };
+        var tid = &tree.getData(ti).?.text_input;
+        const ph = "Type here...";
+        @memcpy(tid.placeholder[0..ph.len], ph);
+        tid.placeholder_len = ph.len;
+
+        // Slider
+        const sl = tree.addWidget(.slider, panel) orelse return;
+        var slw = tree.getWidget(sl).?;
+        slw.width = .fill;
+        slw.height = .{ .px = 20 };
 
         // Progress bar
         const pb = tree.addWidget(.progress_bar, panel) orelse return;

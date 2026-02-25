@@ -53,6 +53,11 @@ pub const GLFW_MOUSE_BUTTON_RIGHT = c.GLFW_MOUSE_BUTTON_RIGHT;
 pub const GLFW_CURSOR = c.GLFW_CURSOR;
 pub const GLFW_CURSOR_DISABLED = c.GLFW_CURSOR_DISABLED;
 pub const GLFW_CURSOR_NORMAL = c.GLFW_CURSOR_NORMAL;
+pub const GLFW_MOUSE_BUTTON_MIDDLE = c.GLFW_MOUSE_BUTTON_MIDDLE;
+
+// Keyboard extras
+pub const GLFW_KEY_TAB = c.GLFW_KEY_TAB;
+pub const GLFW_MOD_SHIFT = c.GLFW_MOD_SHIFT;
 
 // Error type
 pub const GlfwError = error{
@@ -141,6 +146,10 @@ pub fn setCharCallback(window: *Window, callback: ?*const fn (?*Window, c_uint) 
 
 pub fn setMouseButtonCallback(window: *Window, callback: ?*const fn (?*Window, c_int, c_int, c_int) callconv(.c) void) void {
     _ = c.glfwSetMouseButtonCallback(window, callback);
+}
+
+pub fn setCursorPosCallback(window: *Window, callback: ?*const fn (?*Window, f64, f64) callconv(.c) void) void {
+    _ = c.glfwSetCursorPosCallback(window, callback);
 }
 
 pub fn getCursorPos(window: *Window, xpos: *f64, ypos: *f64) void {

@@ -118,6 +118,15 @@ fn logFn(
 }
 
 const input_log = std.log.scoped(.Input);
+const ui_log = std.log.scoped(.UI);
+
+fn testPlayAction(_: ?*anyopaque) void {
+    ui_log.info("Test 'Play' button clicked!", .{});
+}
+
+fn testQuitAction(_: ?*anyopaque) void {
+    ui_log.info("Test 'Quit' button clicked!", .{});
+}
 
 fn keyName(key: c_int) []const u8 {
     return switch (key) {
@@ -172,6 +181,7 @@ const InputState = struct {
     framebuffer_resized: *bool,
     game_state: ?*GameState = null,
     menu: *Menu,
+    ui_manager: *UiManager,
     mouse_captured: bool = false,
     last_cursor_x: f64 = 0.0,
     last_cursor_y: f64 = 0.0,
@@ -185,9 +195,25 @@ const InputState = struct {
     lod_switch_requested: ?u8 = null,
 };
 
-fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
-    _ = xoffset;
+fn cursorPosCallback(window: ?*glfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+    if (input_state.mouse_captured) return;
+    _ = input_state.ui_manager.handleMouseMove(@floatCast(xpos), @floatCast(ypos));
+}
+
+fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
+    const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+
+    // Try UI first when mouse is not captured
+    if (!input_state.mouse_captured) {
+        if (input_state.ui_manager.handleScroll(
+            input_state.ui_manager.last_mouse_x,
+            input_state.ui_manager.last_mouse_y,
+            @floatCast(xoffset),
+            @floatCast(yoffset),
+        )) return;
+    }
+
     if (input_state.menu.app_state != .playing) return;
     input_log.debug("Scroll y={d:.1}", .{yoffset});
     input_state.scroll_speed_delta += @floatCast(yoffset);
@@ -195,7 +221,6 @@ fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c
 
 fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.c) void {
     _ = scancode;
-    _ = mods;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
     input_log.debug("Key {s} {s}", .{ keyName(key), actionName(action) });
 
@@ -205,6 +230,8 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
 
     switch (input_state.menu.app_state) {
         .title_menu, .pause_menu => {
+            // Try UI system first, fall through to Menu if not consumed
+            if (input_state.ui_manager.handleKey(key, action, mods)) return;
             input_state.menu.handleKey(key, action);
         },
         .playing => {
@@ -247,12 +274,23 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
 
 fn charCallback(window: ?*glfw.Window, codepoint: c_uint) callconv(.c) void {
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+    // Try UI system first, fall through to Menu if not consumed
+    if (input_state.ui_manager.handleChar(codepoint)) return;
     input_state.menu.handleChar(codepoint);
 }
 
 fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods: c_int) callconv(.c) void {
     _ = mods;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+
+    // Try UI system first when mouse is not captured
+    if (!input_state.mouse_captured) {
+        var mx: f64 = 0;
+        var my: f64 = 0;
+        glfw.getCursorPos(window.?, &mx, &my);
+        if (input_state.ui_manager.handleMouseButton(button, action, @floatCast(mx), @floatCast(my))) return;
+    }
+
     if (input_state.menu.app_state != .playing) return;
 
     input_log.debug("Mouse {s} {s}", .{ mouseButtonName(button), actionName(action) });
@@ -326,6 +364,9 @@ pub fn main() !void {
     defer allocator.destroy(ui_manager);
     ui_manager.* = .{};
     ui_manager.buildTestScreen();
+    // Register test actions for UI buttons
+    ui_manager.registry.register("ui_play", testPlayAction, null);
+    ui_manager.registry.register("ui_quit", testQuitAction, null);
     renderer.setUiManager(@ptrCast(ui_manager));
 
     // Game state (created on demand when a world is loaded)
@@ -342,8 +383,10 @@ pub fn main() !void {
         .framebuffer_resized = framebuffer_resized,
         .game_state = null,
         .menu = &menu,
+        .ui_manager = ui_manager,
     };
     glfw.setWindowUserPointer(window.handle, &input_state);
+    glfw.setCursorPosCallback(window.handle, cursorPosCallback);
     glfw.setScrollCallback(window.handle, scrollCallback);
     glfw.setKeyCallback(window.handle, keyCallback);
     glfw.setCharCallback(window.handle, charCallback);
@@ -525,6 +568,9 @@ pub fn main() !void {
                 }
             }
         }
+
+        // Tick UI cursor blink
+        ui_manager.tickCursorBlink();
 
         // Render (always — works in all states)
         try renderer.beginFrame();
