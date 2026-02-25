@@ -67,6 +67,10 @@ pub const TextVertex = extern struct {
     g: f32,
     b: f32,
     a: f32,
+    clip_min_x: f32 = -1e9,
+    clip_min_y: f32 = -1e9,
+    clip_max_x: f32 = 1e9,
+    clip_max_y: f32 = 1e9,
 };
 
 pub const UiVertex = extern struct {
@@ -78,6 +82,10 @@ pub const UiVertex = extern struct {
     g: f32,
     b: f32,
     a: f32,
+    clip_min_x: f32 = -1e9,
+    clip_min_y: f32 = -1e9,
+    clip_max_x: f32 = 1e9,
+    clip_max_y: f32 = 1e9,
 };
 
 // --- Tests ---

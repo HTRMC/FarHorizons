@@ -36,6 +36,7 @@ pub const TextRenderer = struct {
     screen_width: f32,
     screen_height: f32,
     mapped_vertices: ?[*]TextVertex,
+    clip_rect: [4]f32 = .{ -1e9, -1e9, 1e9, 1e9 },
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -94,6 +95,14 @@ pub const TextRenderer = struct {
         self.vertex_count = 0;
     }
 
+    pub fn setClipRect(self: *TextRenderer, x: f32, y: f32, w: f32, h: f32) void {
+        self.clip_rect = .{ x, y, x + w, y + h };
+    }
+
+    pub fn clearClipRect(self: *TextRenderer) void {
+        self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
+    }
+
     pub fn drawText(self: *TextRenderer, x: f32, y: f32, text: []const u8, color: [4]f32) void {
         const verts = self.mapped_vertices orelse return;
         var cursor_x = x;
@@ -124,14 +133,15 @@ pub const TextRenderer = struct {
             const py_bottom = y + RENDER_SIZE;
 
             // Triangle 1: top-left, top-right, bottom-left
-            verts[self.vertex_count + 0] = .{ .px = px_left, .py = py_top, .u = uv_left, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-            verts[self.vertex_count + 1] = .{ .px = px_right, .py = py_top, .u = uv_right, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-            verts[self.vertex_count + 2] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
+            const cr = self.clip_rect;
+            verts[self.vertex_count + 0] = .{ .px = px_left, .py = py_top, .u = uv_left, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+            verts[self.vertex_count + 1] = .{ .px = px_right, .py = py_top, .u = uv_right, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+            verts[self.vertex_count + 2] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
 
             // Triangle 2: top-right, bottom-right, bottom-left
-            verts[self.vertex_count + 3] = .{ .px = px_right, .py = py_top, .u = uv_right, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-            verts[self.vertex_count + 4] = .{ .px = px_right, .py = py_bottom, .u = uv_right, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-            verts[self.vertex_count + 5] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
+            verts[self.vertex_count + 3] = .{ .px = px_right, .py = py_top, .u = uv_right, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+            verts[self.vertex_count + 4] = .{ .px = px_right, .py = py_bottom, .u = uv_right, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+            verts[self.vertex_count + 5] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
 
             self.vertex_count += 6;
             cursor_x += quad_w + GLYPH_SCALE; // 1px gap at native scale

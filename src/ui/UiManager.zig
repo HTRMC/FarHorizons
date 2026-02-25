@@ -215,7 +215,7 @@ pub const UiManager = struct {
         if (text.len == 0) return 0;
 
         const text_x = w.computed_rect.x + 4; // 4px padding matches WidgetOps draw
-        const rel_x = mouse_x - text_x;
+        const rel_x = mouse_x - text_x + ti.scroll_offset;
         if (rel_x <= 0) return 0;
 
         // Find which character boundary is closest

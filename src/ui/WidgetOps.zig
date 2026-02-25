@@ -74,16 +74,36 @@ pub fn drawWidget(
         },
 
         .text_input => {
-            const ti = &data.text_input;
+            const ti = @constCast(&data.text_input);
             // Draw input background
             ui.drawRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, Color.fromHex(0x222222FF).toArray());
             // Draw border
             const border_color = if (w.focused) Color.fromHex(0xFFCC00FF) else Color.fromHex(0x666666FF);
             ui.drawRectOutline(r.x, r.y, r.w, r.h, 1.0, border_color.toArray());
 
+            const padding: f32 = 4;
+            const content_area = r.w - padding * 2;
+
+            // Set clip rect to content area for text/selection/cursor
+            ui.setClipRect(r.x + padding, r.y, content_area, r.h);
+            tr.setClipRect(r.x + padding, r.y, content_area, r.h);
+
             const text = ti.getText();
             if (text.len > 0) {
-                const tx = r.x + 4;
+                const full_text_width = tr.measureText(text);
+                const cursor_x_abs = tr.measureText(text[0..ti.cursor_pos]);
+
+                // Auto-scroll so cursor stays visible
+                if (cursor_x_abs - ti.scroll_offset > content_area) {
+                    ti.scroll_offset = cursor_x_abs - content_area;
+                }
+                if (cursor_x_abs < ti.scroll_offset) {
+                    ti.scroll_offset = cursor_x_abs;
+                }
+                const max_scroll = @max(full_text_width - content_area, 0);
+                ti.scroll_offset = std.math.clamp(ti.scroll_offset, 0, max_scroll);
+
+                const tx = r.x + padding - ti.scroll_offset;
                 const ty = r.y + (r.h - 16.0) / 2.0;
 
                 // Draw selection highlight behind text
@@ -98,18 +118,24 @@ pub fn drawWidget(
 
                 // Draw cursor
                 if (w.focused and (ti.cursor_blink_counter / 90) % 2 == 0) {
-                    const cursor_x = tx + tr.measureText(text[0..ti.cursor_pos]);
+                    const cursor_x = tx + cursor_x_abs;
                     ui.drawRect(cursor_x, ty, 1, 16, Color.white.toArray());
                 }
-            } else if (ti.placeholder_len > 0) {
-                const tx = r.x + 4;
-                const ty = r.y + (r.h - 16.0) / 2.0;
-                tr.drawText(tx, ty, ti.placeholder[0..ti.placeholder_len], ti.placeholder_color.toArray());
+            } else {
+                ti.scroll_offset = 0;
+                if (ti.placeholder_len > 0) {
+                    const tx = r.x + padding;
+                    const ty = r.y + (r.h - 16.0) / 2.0;
+                    tr.drawText(tx, ty, ti.placeholder[0..ti.placeholder_len], ti.placeholder_color.toArray());
 
-                if (w.focused and (ti.cursor_blink_counter / 90) % 2 == 0) {
-                    ui.drawRect(r.x + 4, ty, 1, 16, Color.white.toArray());
+                    if (w.focused and (ti.cursor_blink_counter / 90) % 2 == 0) {
+                        ui.drawRect(r.x + padding, ty, 1, 16, Color.white.toArray());
+                    }
                 }
             }
+
+            ui.clearClipRect();
+            tr.clearClipRect();
         },
 
         .progress_bar => {

@@ -23,6 +23,7 @@ pub const UiRenderer = struct {
     screen_width: f32,
     screen_height: f32,
     mapped_vertices: ?[*]UiVertex,
+    clip_rect: [4]f32 = .{ -1e9, -1e9, 1e9, 1e9 },
 
     pub fn init(
         shader_compiler: *ShaderCompiler,
@@ -109,6 +110,16 @@ pub const UiRenderer = struct {
         self.screen_height = @floatFromInt(height);
     }
 
+    // ── Clip rect ──
+
+    pub fn setClipRect(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32) void {
+        self.clip_rect = .{ x, y, x + w, y + h };
+    }
+
+    pub fn clearClipRect(self: *UiRenderer) void {
+        self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
+    }
+
     // ── Drawing primitives ──
 
     /// Draw a solid-color rectangle.
@@ -123,12 +134,13 @@ pub const UiRenderer = struct {
         const y1 = y + h;
 
         // UV = (0,0) signals solid color in fragment shader
-        verts[self.vertex_count + 0] = .{ .px = x0, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-        verts[self.vertex_count + 1] = .{ .px = x1, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-        verts[self.vertex_count + 2] = .{ .px = x0, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-        verts[self.vertex_count + 3] = .{ .px = x1, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-        verts[self.vertex_count + 4] = .{ .px = x1, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
-        verts[self.vertex_count + 5] = .{ .px = x0, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3] };
+        const cr = self.clip_rect;
+        verts[self.vertex_count + 0] = .{ .px = x0, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 1] = .{ .px = x1, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 2] = .{ .px = x0, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 3] = .{ .px = x1, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 4] = .{ .px = x1, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 5] = .{ .px = x0, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
 
         self.vertex_count += 6;
     }

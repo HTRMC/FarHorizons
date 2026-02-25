@@ -80,6 +80,7 @@ pub const TextInputData = struct {
     placeholder_color: Color = Color.fromHex(0x888888FF),
     cursor_blink_counter: u16 = 0,
     max_len: u8 = MAX_TEXT_LEN,
+    scroll_offset: f32 = 0,
 
     pub fn getText(self: *const TextInputData) []const u8 {
         return self.buffer[0..self.buffer_len];
