@@ -39,6 +39,9 @@ pub fn drawWidget(
             const label = &data.label;
             const text = label.getText();
             if (text.len > 0) {
+                ui.pushClipRect(r.x, r.y, r.w, r.h);
+                tr.pushClipRect(r.x, r.y, r.w, r.h);
+
                 if (label.wrap) {
                     const avail_w = r.w - w.padding.horizontal();
                     const tx = r.x + w.padding.left;
@@ -53,6 +56,9 @@ pub fn drawWidget(
                     const ty = r.y + w.padding.top + (r.h - w.padding.vertical() - text_h) / 2.0;
                     tr.drawText(tx, ty, text, label.color.toArray());
                 }
+
+                ui.popClipRect();
+                tr.popClipRect();
             }
         },
 
