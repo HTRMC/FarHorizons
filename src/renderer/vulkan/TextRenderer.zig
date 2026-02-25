@@ -357,7 +357,7 @@ pub const TextRenderer = struct {
 
         const texture_path = try std.fmt.allocPrintSentinel(
             allocator,
-            "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "font.png",
+            "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "font" ++ sep ++ "ascii.png",
             .{base_path},
             0,
         );
