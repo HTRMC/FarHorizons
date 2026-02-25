@@ -9,7 +9,8 @@
       <!-- World list (children added at runtime) -->
       <list_view id="world_list" width="fill" height="200"
                  background="#222233FF" item_height="28"
-                 selection_color="#3366AAFF" on_change="world_select"/>
+                 selection_color="#3366AAFF" on_change="world_select"
+                 on_double_click="play_world"/>
 
       <!-- Empty state label (shown when no worlds) -->
       <label id="no_worlds_label" text="No worlds yet. Create one below."

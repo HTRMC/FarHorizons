@@ -182,6 +182,8 @@ pub const ListViewData = struct {
     selection_color: Color = Color.fromHex(0x3366AAFF),
     on_change_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
     on_change_action_len: u8 = 0,
+    on_double_click_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
+    on_double_click_action_len: u8 = 0,
 };
 
 pub const ProgressBarData = struct {

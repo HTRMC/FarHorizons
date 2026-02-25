@@ -313,6 +313,10 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     const len: u8 = @intCast(@min(attr.value.len, WidgetData.MAX_ACTION_LEN));
                     @memcpy(data.list_view.on_change_action[0..len], attr.value[0..len]);
                     data.list_view.on_change_action_len = len;
+                } else if (eql(attr.name, "on_double_click")) {
+                    const len: u8 = @intCast(@min(attr.value.len, WidgetData.MAX_ACTION_LEN));
+                    @memcpy(data.list_view.on_double_click_action[0..len], attr.value[0..len]);
+                    data.list_view.on_double_click_action_len = len;
                 }
             }
         },

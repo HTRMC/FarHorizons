@@ -45,6 +45,11 @@ pub const UiManager = struct {
     hover_widget: WidgetId = NULL_WIDGET,
     hover_timer: u16 = 0,
 
+    // Double-click state
+    last_click_widget: WidgetId = NULL_WIDGET,
+    last_click_index: u16 = 0xFFFF,
+    last_click_time: f64 = 0,
+
     /// Push a new screen onto the stack. Returns the screen index for building.
     pub fn pushScreen(self: *UiManager) ?*Screen {
         if (self.screen_count >= MAX_SCREEN_STACK) return null;
@@ -295,6 +300,7 @@ pub const UiManager = struct {
             self.hover_timer +|= 1;
         }
 
+
         // Screen fade
         self.tickFade();
     }
@@ -470,7 +476,7 @@ pub const UiManager = struct {
         }
     }
 
-    fn handleListViewClick(self: *const UiManager, tree: *WidgetTree, target: WidgetId, mouse_y: f32) void {
+    fn handleListViewClick(self: *UiManager, tree: *WidgetTree, target: WidgetId, mouse_y: f32) void {
         // Walk up from target to find list_view ancestor
         var id = target;
         while (id != NULL_WIDGET) {
@@ -483,6 +489,20 @@ pub const UiManager = struct {
                 if (clicked_f >= 0) {
                     const clicked_idx: u16 = @intFromFloat(clicked_f);
                     if (clicked_idx < lv.item_count) {
+                        // Double-click detection: same list_view, same item, within 500ms
+                        const now = glfw.getTime();
+                        if (self.last_click_widget == id and self.last_click_index == clicked_idx and (now - self.last_click_time) < 0.5) {
+                            const dbl_action = lv.on_double_click_action[0..lv.on_double_click_action_len];
+                            if (dbl_action.len > 0) {
+                                _ = self.registry.dispatch(dbl_action);
+                            }
+                            self.last_click_widget = NULL_WIDGET;
+                        } else {
+                            self.last_click_widget = id;
+                            self.last_click_index = clicked_idx;
+                            self.last_click_time = now;
+                        }
+
                         lv.selected_index = clicked_idx;
                         const action_name = lv.on_change_action[0..lv.on_change_action_len];
                         if (action_name.len > 0) {
