@@ -20,6 +20,7 @@ pub const WidgetKind = enum(u8) {
     checkbox,
     slider,
     grid,
+    dropdown,
 };
 
 pub const LayoutMode = enum(u8) {
@@ -177,6 +178,10 @@ pub const Widget = struct {
     hovered: bool = false,
     pressed: bool = false,
     focused: bool = false,
+
+    // Tooltip
+    tooltip: [64]u8 = .{0} ** 64,
+    tooltip_len: u8 = 0,
 
     // Computed (set by layout)
     computed_rect: Rect = .{},

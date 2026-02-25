@@ -18,10 +18,14 @@ const log = std.log.scoped(.UI);
 
 const MAX_SCREEN_STACK = 4;
 
+pub const FadeState = enum { none, in, out };
+
 pub const Screen = struct {
     tree: WidgetTree = .{},
     passthrough: bool = false,
     active: bool = false,
+    fade: f32 = 1.0,
+    fading: FadeState = .none,
 };
 
 pub const UiManager = struct {
@@ -37,21 +41,35 @@ pub const UiManager = struct {
     pressed_widget: WidgetId = NULL_WIDGET,
     text_renderer: ?*const TextRenderer = null,
 
+    // Tooltip state
+    hover_widget: WidgetId = NULL_WIDGET,
+    hover_timer: u16 = 0,
+
     /// Push a new screen onto the stack. Returns the screen index for building.
     pub fn pushScreen(self: *UiManager) ?*Screen {
         if (self.screen_count >= MAX_SCREEN_STACK) return null;
         const idx = self.screen_count;
         self.screen_count += 1;
-        self.screens[idx] = .{ .active = true };
+        self.screens[idx] = .{ .active = true, .fade = 0, .fading = .in };
         return &self.screens[idx];
     }
 
-    /// Pop the top screen from the stack.
+    /// Pop the top screen from the stack (starts fade-out).
     pub fn popScreen(self: *UiManager) void {
+        if (self.screen_count == 0) return;
+        const screen = &self.screens[self.screen_count - 1];
+        if (screen.fading == .out) return; // Already fading out
+        screen.fading = .out;
+    }
+
+    /// Immediately remove a screen without fade.
+    fn removeTopScreen(self: *UiManager) void {
         if (self.screen_count == 0) return;
         self.screen_count -= 1;
         self.screens[self.screen_count].active = false;
         self.screens[self.screen_count].tree.clear();
+        self.screens[self.screen_count].fading = .none;
+        self.screens[self.screen_count].fade = 1.0;
     }
 
     /// Get the top screen (if any).
@@ -82,6 +100,31 @@ pub const UiManager = struct {
             if (!screen.active) continue;
             if (screen.tree.root != NULL_WIDGET) {
                 WidgetOps.drawWidget(&screen.tree, screen.tree.root, ui, tr);
+            }
+
+            // Draw fade overlay if fading
+            if (screen.fading != .none) {
+                const alpha = 1.0 - screen.fade;
+                if (alpha > 0.01) {
+                    ui.drawRect(0, 0, self.screen_width, self.screen_height, .{ 0, 0, 0, alpha });
+                }
+            }
+        }
+
+        // Draw overlays (dropdowns, tooltips) for top screen
+        if (self.topScreen()) |screen| {
+            if (screen.active) {
+                const tooltip_id = if (self.hover_timer >= 30) self.hover_widget else NULL_WIDGET;
+                WidgetOps.drawOverlays(
+                    &screen.tree,
+                    ui,
+                    tr,
+                    tooltip_id,
+                    self.last_mouse_x,
+                    self.last_mouse_y,
+                    self.screen_width,
+                    self.screen_height,
+                );
             }
         }
     }
@@ -119,6 +162,15 @@ pub const UiManager = struct {
         const target = EventDispatch.hitTest(tree, x, y);
         EventDispatch.updateHoverState(tree, target);
 
+        // Update dropdown hovered item
+        self.updateDropdownHover(tree, x, y);
+
+        // Track hover for tooltips
+        if (target != self.hover_widget) {
+            self.hover_widget = target;
+            self.hover_timer = 0;
+        }
+
         return target != NULL_WIDGET;
     }
 
@@ -127,9 +179,17 @@ pub const UiManager = struct {
         _ = button; // Only handle left button for now
 
         const tree = self.topTree() orelse return false;
+
+        // Check if click is on an open dropdown's option list
+        if (action == glfw.GLFW_PRESS) {
+            if (self.handleDropdownClick(tree, x, y)) return true;
+        }
+
         const target = EventDispatch.hitTest(tree, x, y);
 
         if (action == glfw.GLFW_PRESS) {
+            // Close any open dropdown if clicking elsewhere
+            self.closeOpenDropdowns(tree, target);
             self.pressed_widget = target;
 
             if (target == NULL_WIDGET) {
@@ -148,6 +208,9 @@ pub const UiManager = struct {
                     self.updateSliderDrag(tree, target, x);
                 }
             }
+
+            // Check if click is on a list_view item (click might be on child widget)
+            self.handleListViewClick(tree, target, y);
 
             return consumed;
         } else if (action == glfw.GLFW_RELEASE) {
@@ -180,22 +243,65 @@ pub const UiManager = struct {
     }
 
     /// Handle scroll input. Returns true if consumed.
-    pub fn handleScroll(_: *UiManager, _: f32, _: f32, _: f32, _: f32) bool {
-        // Future: scroll_view support
+    pub fn handleScroll(self: *UiManager, mouse_x: f32, mouse_y: f32, _: f32, y_delta: f32) bool {
+        const tree = self.topTree() orelse return false;
+
+        // Find widget under cursor
+        const target = EventDispatch.hitTest(tree, mouse_x, mouse_y);
+        if (target == NULL_WIDGET) return false;
+
+        // Walk up ancestors to find a scroll_view or list_view
+        var id = target;
+        while (id != NULL_WIDGET) {
+            const w = tree.getWidgetConst(id) orelse break;
+            if (w.kind == .scroll_view) {
+                const data = tree.getData(id) orelse break;
+                const sv = &data.scroll_view;
+                const vp_h = w.computed_rect.h - w.padding.vertical();
+                const max_scroll = @max(sv.content_height - vp_h, 0);
+                sv.scroll_y = std.math.clamp(sv.scroll_y - y_delta * 24.0, 0, max_scroll);
+                return true;
+            } else if (w.kind == .list_view) {
+                const data = tree.getData(id) orelse break;
+                const lv = &data.list_view;
+                const vp_h = w.computed_rect.h - w.padding.vertical();
+                const total_h = @as(f32, @floatFromInt(lv.item_count)) * lv.item_height;
+                const max_scroll = @max(total_h - vp_h, 0);
+                lv.scroll_offset = std.math.clamp(lv.scroll_offset - y_delta * lv.item_height, 0, max_scroll);
+                return true;
+            }
+            id = w.parent;
+        }
+
         return false;
     }
 
-    /// Tick cursor blink counter on focused text_input widgets.
-    pub fn tickCursorBlink(self: *UiManager) void {
-        const tree = self.topTree() orelse return;
-        const focused_id = EventDispatch.findFocused(tree);
-        if (focused_id == NULL_WIDGET) return;
-
-        const w = tree.getWidgetConst(focused_id) orelse return;
-        if (w.kind == .text_input) {
-            const data = tree.getData(focused_id) orelse return;
-            data.text_input.cursor_blink_counter +%= 1;
+    /// Tick cursor blink counter on focused text_input widgets, tooltip timer, and screen fades.
+    pub fn tick(self: *UiManager) void {
+        // Cursor blink
+        if (self.topTree()) |tree| {
+            const focused_id = EventDispatch.findFocused(tree);
+            if (focused_id != NULL_WIDGET) {
+                const w = tree.getWidgetConst(focused_id) orelse return;
+                if (w.kind == .text_input) {
+                    const data = tree.getData(focused_id) orelse return;
+                    data.text_input.cursor_blink_counter +%= 1;
+                }
+            }
         }
+
+        // Tooltip timer
+        if (self.hover_widget != NULL_WIDGET and self.hover_timer < 60000) {
+            self.hover_timer +|= 1;
+        }
+
+        // Screen fade
+        self.tickFade();
+    }
+
+    /// Legacy alias — some callers may still use this
+    pub fn tickCursorBlink(self: *UiManager) void {
+        self.tick();
     }
 
     // ── Internal helpers ──
@@ -257,6 +363,137 @@ pub const UiManager = struct {
         const pos = self.textCursorFromX(tree, widget_id, mouse_x);
         data.text_input.cursor_pos = pos;
         data.text_input.cursor_blink_counter = 0;
+    }
+
+    fn tickFade(self: *UiManager) void {
+        var i: u8 = 0;
+        while (i < self.screen_count) {
+            const screen = &self.screens[i];
+            switch (screen.fading) {
+                .in => {
+                    screen.fade += 0.05;
+                    if (screen.fade >= 1.0) {
+                        screen.fade = 1.0;
+                        screen.fading = .none;
+                    }
+                },
+                .out => {
+                    screen.fade -= 0.05;
+                    if (screen.fade <= 0) {
+                        // Remove this screen
+                        self.removeTopScreen();
+                        // Don't increment i — screen shifted
+                        continue;
+                    }
+                },
+                .none => {},
+            }
+            i += 1;
+        }
+    }
+
+    fn updateDropdownHover(self: *const UiManager, tree: *WidgetTree, x: f32, y: f32) void {
+        for (0..tree.count) |i| {
+            const id: WidgetId = @intCast(i);
+            const w = tree.getWidgetConst(id) orelse continue;
+            if (w.kind != .dropdown or !w.visible) continue;
+
+            const data = tree.getData(id) orelse continue;
+            const dd = &data.dropdown;
+            if (!dd.open) {
+                dd.hovered_item = 0xFF;
+                continue;
+            }
+
+            const r = w.computed_rect;
+            const item_h: f32 = 28;
+            const list_h = @as(f32, @floatFromInt(dd.item_count)) * item_h;
+            var list_y = r.y + r.h;
+            if (list_y + list_h > self.screen_height) {
+                list_y = r.y - list_h;
+            }
+
+            if (x >= r.x and x < r.x + r.w and y >= list_y and y < list_y + list_h) {
+                const idx: u8 = @intFromFloat((y - list_y) / item_h);
+                dd.hovered_item = if (idx < dd.item_count) idx else 0xFF;
+            } else {
+                dd.hovered_item = 0xFF;
+            }
+        }
+    }
+
+    /// Check if a click hits an open dropdown's option list. Returns true if consumed.
+    fn handleDropdownClick(self: *const UiManager, tree: *WidgetTree, x: f32, y: f32) bool {
+        for (0..tree.count) |i| {
+            const id: WidgetId = @intCast(i);
+            const w = tree.getWidgetConst(id) orelse continue;
+            if (w.kind != .dropdown or !w.visible) continue;
+
+            const data = tree.getData(id) orelse continue;
+            const dd = &data.dropdown;
+            if (!dd.open) continue;
+
+            const r = w.computed_rect;
+            const item_h: f32 = 28;
+            const list_h = @as(f32, @floatFromInt(dd.item_count)) * item_h;
+            var list_y = r.y + r.h;
+            if (list_y + list_h > self.screen_height) {
+                list_y = r.y - list_h;
+            }
+
+            // Check if click is in option list area
+            if (x >= r.x and x < r.x + r.w and y >= list_y and y < list_y + list_h) {
+                const clicked_idx: u8 = @intFromFloat((y - list_y) / item_h);
+                if (clicked_idx < dd.item_count) {
+                    dd.selected = clicked_idx;
+                    dd.open = false;
+                    const action_name = dd.on_change_action[0..dd.on_change_action_len];
+                    if (action_name.len > 0) {
+                        _ = self.registry.dispatch(action_name);
+                    }
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// Close any open dropdown except the one being clicked.
+    fn closeOpenDropdowns(_: *const UiManager, tree: *WidgetTree, clicked_target: WidgetId) void {
+        for (0..tree.count) |i| {
+            const id: WidgetId = @intCast(i);
+            if (id == clicked_target) continue;
+            const w = tree.getWidgetConst(id) orelse continue;
+            if (w.kind != .dropdown) continue;
+            const data = tree.getData(id) orelse continue;
+            data.dropdown.open = false;
+        }
+    }
+
+    fn handleListViewClick(self: *const UiManager, tree: *WidgetTree, target: WidgetId, mouse_y: f32) void {
+        // Walk up from target to find list_view ancestor
+        var id = target;
+        while (id != NULL_WIDGET) {
+            const w = tree.getWidgetConst(id) orelse break;
+            if (w.kind == .list_view) {
+                const data = tree.getData(id) orelse break;
+                const lv = &data.list_view;
+                const vp_y = w.computed_rect.y + w.padding.top;
+                const clicked_f = (mouse_y - vp_y + lv.scroll_offset) / lv.item_height;
+                if (clicked_f >= 0) {
+                    const clicked_idx: u16 = @intFromFloat(clicked_f);
+                    if (clicked_idx < lv.item_count) {
+                        lv.selected_index = clicked_idx;
+                        const action_name = lv.on_change_action[0..lv.on_change_action_len];
+                        if (action_name.len > 0) {
+                            _ = self.registry.dispatch(action_name);
+                        }
+                    }
+                }
+                return;
+            }
+            id = w.parent;
+        }
     }
 
     fn updateSliderDrag(self: *UiManager, tree: *WidgetTree, slider_id: WidgetId, mouse_x: f32) void {

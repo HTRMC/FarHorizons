@@ -37,6 +37,8 @@ pub const TextRenderer = struct {
     screen_height: f32,
     mapped_vertices: ?[*]TextVertex,
     clip_rect: [4]f32 = .{ -1e9, -1e9, 1e9, 1e9 },
+    clip_stack: [8][4]f32 = undefined,
+    clip_depth: u8 = 0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -101,6 +103,31 @@ pub const TextRenderer = struct {
 
     pub fn clearClipRect(self: *TextRenderer) void {
         self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
+    }
+
+    /// Push a clip rect that intersects with the current one.
+    pub fn pushClipRect(self: *TextRenderer, x: f32, y: f32, w: f32, h: f32) void {
+        if (self.clip_depth < 8) {
+            self.clip_stack[self.clip_depth] = self.clip_rect;
+            self.clip_depth += 1;
+        }
+        const new = [4]f32{
+            @max(self.clip_rect[0], x),
+            @max(self.clip_rect[1], y),
+            @min(self.clip_rect[2], x + w),
+            @min(self.clip_rect[3], y + h),
+        };
+        self.clip_rect = new;
+    }
+
+    /// Restore the previous clip rect from the stack.
+    pub fn popClipRect(self: *TextRenderer) void {
+        if (self.clip_depth > 0) {
+            self.clip_depth -= 1;
+            self.clip_rect = self.clip_stack[self.clip_depth];
+        } else {
+            self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
+        }
     }
 
     pub fn drawText(self: *TextRenderer, x: f32, y: f32, text: []const u8, color: [4]f32) void {
@@ -196,6 +223,102 @@ pub const TextRenderer = struct {
         // Remove trailing gap if we drew anything
         if (width > 0) width -= GLYPH_SCALE;
         return width;
+    }
+
+    /// Measure text with word wrapping at max_width. Returns (width, height).
+    pub fn measureTextWrapped(self: *const TextRenderer, text: []const u8, max_width: f32) struct { width: f32, height: f32 } {
+        if (text.len == 0 or max_width <= 0) return .{ .width = 0, .height = 0 };
+
+        const line_height: f32 = RENDER_SIZE;
+        var line_count: f32 = 1;
+        var line_w: f32 = 0;
+        var max_line_w: f32 = 0;
+        var word_start: usize = 0;
+
+        var i: usize = 0;
+        while (i <= text.len) {
+            const at_end = i == text.len;
+            const is_space = if (!at_end) text[i] == ' ' else true;
+
+            if (is_space or at_end) {
+                // Measure the word
+                const word = text[word_start..i];
+                const word_w = self.measureText(word);
+                const space_w: f32 = if (line_w > 0) 4 * GLYPH_SCALE else 0;
+
+                if (line_w > 0 and line_w + space_w + word_w > max_width) {
+                    // Word doesn't fit — wrap
+                    max_line_w = @max(max_line_w, line_w);
+                    line_count += 1;
+                    line_w = word_w;
+                } else {
+                    line_w += space_w + word_w;
+                }
+
+                // Handle the case of a single word exceeding max_width
+                if (word_w > max_width and line_w == word_w) {
+                    max_line_w = @max(max_line_w, line_w);
+                }
+
+                if (!at_end) {
+                    word_start = i + 1;
+                }
+            }
+            i += 1;
+        }
+        max_line_w = @max(max_line_w, line_w);
+
+        return .{ .width = @min(max_line_w, max_width), .height = line_count * line_height };
+    }
+
+    /// Draw text with word wrapping. Returns total height drawn.
+    pub fn drawTextWrapped(self: *TextRenderer, x: f32, y: f32, text: []const u8, max_width: f32, color: [4]f32) f32 {
+        if (text.len == 0 or max_width <= 0) return 0;
+
+        const line_height: f32 = RENDER_SIZE;
+        var line_y = y;
+        var line_w: f32 = 0;
+        var word_start: usize = 0;
+        var line_start: usize = 0;
+        var last_space: usize = 0;
+        var has_space = false;
+
+        var i: usize = 0;
+        while (i <= text.len) {
+            const at_end = i == text.len;
+            const is_space = if (!at_end) text[i] == ' ' else true;
+
+            if (is_space or at_end) {
+                const word = text[word_start..i];
+                const word_w = self.measureText(word);
+                const space_w: f32 = if (line_w > 0) 4 * GLYPH_SCALE else 0;
+
+                if (line_w > 0 and line_w + space_w + word_w > max_width) {
+                    // Draw current line
+                    self.drawText(x, line_y, text[line_start..if (has_space) last_space else i], color);
+                    line_y += line_height;
+                    line_start = if (has_space) last_space + 1 else word_start;
+                    line_w = self.measureText(text[line_start..i]);
+                } else {
+                    line_w += space_w + word_w;
+                }
+
+                if (!at_end) {
+                    last_space = i;
+                    has_space = true;
+                    word_start = i + 1;
+                }
+            }
+            i += 1;
+        }
+
+        // Draw remaining line
+        if (line_start < text.len) {
+            self.drawText(x, line_y, text[line_start..], color);
+            line_y += line_height;
+        }
+
+        return line_y - y;
     }
 
     pub fn updateScreenSize(self: *TextRenderer, width: u32, height: u32) void {

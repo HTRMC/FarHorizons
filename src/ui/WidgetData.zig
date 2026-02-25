@@ -16,6 +16,7 @@ pub const WidgetData = union(Widget.WidgetKind) {
     checkbox: CheckboxData,
     slider: SliderData,
     grid: GridData,
+    dropdown: DropdownData,
 };
 
 pub const PanelData = struct {
@@ -27,6 +28,7 @@ pub const LabelData = struct {
     text_len: u8 = 0,
     color: Color = Color.white,
     font_size: u8 = 1, // multiplier (1 = default 16px, 2 = 32px)
+    wrap: bool = false,
 
     pub fn setText(self: *LabelData, str: []const u8) void {
         const len: u8 = @intCast(@min(str.len, MAX_TEXT_LEN));
@@ -161,6 +163,7 @@ pub const ImageData = struct {
     atlas_w: f32 = 0,
     atlas_h: f32 = 0,
     tint: Color = Color.white,
+    nine_slice_border: f32 = 0, // 0 = stretch, >0 = 9-slice inset
 };
 
 pub const ScrollViewData = struct {
@@ -177,6 +180,8 @@ pub const ListViewData = struct {
     selected_index: u16 = 0,
     scroll_offset: f32 = 0,
     selection_color: Color = Color.fromHex(0x3366AAFF),
+    on_change_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
+    on_change_action_len: u8 = 0,
 };
 
 pub const ProgressBarData = struct {
@@ -210,4 +215,31 @@ pub const GridData = struct {
     rows: u8 = 1,
     cell_size: f32 = 32,
     cell_gap: f32 = 2,
+};
+
+pub const DropdownData = struct {
+    items: [8][32]u8 = .{.{0} ** 32} ** 8,
+    item_lens: [8]u8 = .{0} ** 8,
+    item_count: u8 = 0,
+    selected: u8 = 0,
+    open: bool = false,
+    text_color: Color = Color.white,
+    item_bg: Color = Color.fromHex(0x2A2A3EFF),
+    hover_color: Color = Color.fromHex(0x444466FF),
+    on_change_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
+    on_change_action_len: u8 = 0,
+    hovered_item: u8 = 0xFF, // 0xFF = none
+
+    pub fn getSelectedText(self: *const DropdownData) []const u8 {
+        if (self.selected >= self.item_count) return "";
+        return self.items[self.selected][0..self.item_lens[self.selected]];
+    }
+
+    pub fn addItem(self: *DropdownData, text: []const u8) void {
+        if (self.item_count >= 8) return;
+        const len: u8 = @intCast(@min(text.len, 32));
+        @memcpy(self.items[self.item_count][0..len], text[0..len]);
+        self.item_lens[self.item_count] = len;
+        self.item_count += 1;
+    }
 };

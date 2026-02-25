@@ -24,6 +24,14 @@ pub const UiRenderer = struct {
     screen_height: f32,
     mapped_vertices: ?[*]UiVertex,
     clip_rect: [4]f32 = .{ -1e9, -1e9, 1e9, 1e9 },
+    clip_stack: [8][4]f32 = undefined,
+    clip_depth: u8 = 0,
+
+    // Atlas texture (1x1 white fallback if no real atlas)
+    atlas_image: vk.VkImage,
+    atlas_image_memory: vk.VkDeviceMemory,
+    atlas_image_view: vk.VkImageView,
+    atlas_sampler: vk.VkSampler,
 
     pub fn init(
         shader_compiler: *ShaderCompiler,
@@ -45,9 +53,14 @@ pub const UiRenderer = struct {
             .screen_width = 800.0,
             .screen_height = 600.0,
             .mapped_vertices = null,
+            .atlas_image = null,
+            .atlas_image_memory = null,
+            .atlas_image_view = null,
+            .atlas_sampler = null,
         };
 
         try self.createVertexBuffer(ctx);
+        try self.createFallbackAtlas(ctx);
         try self.createDescriptors(ctx);
         try self.createPipeline(shader_compiler, ctx, swapchain_format);
 
@@ -62,6 +75,10 @@ pub const UiRenderer = struct {
         vk.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
         vk.destroyBuffer(device, self.vertex_buffer, null);
         vk.freeMemory(device, self.vertex_buffer_memory, null);
+        vk.destroySampler(device, self.atlas_sampler, null);
+        vk.destroyImageView(device, self.atlas_image_view, null);
+        vk.destroyImage(device, self.atlas_image, null);
+        vk.freeMemory(device, self.atlas_image_memory, null);
     }
 
     pub fn beginFrame(self: *UiRenderer, device: vk.VkDevice) void {
@@ -120,6 +137,32 @@ pub const UiRenderer = struct {
         self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
     }
 
+    /// Push a clip rect that intersects with the current one.
+    pub fn pushClipRect(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32) void {
+        if (self.clip_depth < 8) {
+            self.clip_stack[self.clip_depth] = self.clip_rect;
+            self.clip_depth += 1;
+        }
+        // Intersect with current clip rect
+        const new = [4]f32{
+            @max(self.clip_rect[0], x),
+            @max(self.clip_rect[1], y),
+            @min(self.clip_rect[2], x + w),
+            @min(self.clip_rect[3], y + h),
+        };
+        self.clip_rect = new;
+    }
+
+    /// Restore the previous clip rect from the stack.
+    pub fn popClipRect(self: *UiRenderer) void {
+        if (self.clip_depth > 0) {
+            self.clip_depth -= 1;
+            self.clip_rect = self.clip_stack[self.clip_depth];
+        } else {
+            self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
+        }
+    }
+
     // ── Drawing primitives ──
 
     /// Draw a solid-color rectangle.
@@ -143,6 +186,61 @@ pub const UiRenderer = struct {
         verts[self.vertex_count + 5] = .{ .px = x0, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
 
         self.vertex_count += 6;
+    }
+
+    /// Draw a textured rectangle with UV coordinates and tint color.
+    pub fn drawTexturedRect(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, uv_left: f32, uv_top: f32, uv_right: f32, uv_bottom: f32, tint: [4]f32) void {
+        if (w <= 0 or h <= 0 or tint[3] < 0.01) return;
+        const verts = self.mapped_vertices orelse return;
+        if (self.vertex_count + 6 > MAX_VERTICES) return;
+
+        const x0 = x;
+        const y0 = y;
+        const x1 = x + w;
+        const y1 = y + h;
+
+        const cr = self.clip_rect;
+        verts[self.vertex_count + 0] = .{ .px = x0, .py = y0, .u = uv_left, .v = uv_top, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 1] = .{ .px = x1, .py = y0, .u = uv_right, .v = uv_top, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 2] = .{ .px = x0, .py = y1, .u = uv_left, .v = uv_bottom, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 3] = .{ .px = x1, .py = y0, .u = uv_right, .v = uv_top, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 4] = .{ .px = x1, .py = y1, .u = uv_right, .v = uv_bottom, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 5] = .{ .px = x0, .py = y1, .u = uv_left, .v = uv_bottom, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+
+        self.vertex_count += 6;
+    }
+
+    /// Draw a 9-slice textured rectangle. border = inset in pixels for corners/edges.
+    pub fn drawNineSlice(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, border: f32, uv_l: f32, uv_t: f32, uv_r: f32, uv_b: f32, atlas_w: f32, atlas_h: f32, tint: [4]f32) void {
+        if (w <= 0 or h <= 0 or border <= 0) {
+            self.drawTexturedRect(x, y, w, h, uv_l, uv_t, uv_r, uv_b, tint);
+            return;
+        }
+
+        const bu = border / atlas_w; // border in UV space
+        const bv = border / atlas_h;
+        const b = border; // border in pixel space
+
+        // Clamp border to half the size
+        const bx = @min(b, w / 2);
+        const by = @min(b, h / 2);
+        const bux = @min(bu, (uv_r - uv_l) / 2);
+        const bvy = @min(bv, (uv_b - uv_t) / 2);
+
+        // Top-left, top-center, top-right
+        self.drawTexturedRect(x, y, bx, by, uv_l, uv_t, uv_l + bux, uv_t + bvy, tint);
+        self.drawTexturedRect(x + bx, y, w - bx * 2, by, uv_l + bux, uv_t, uv_r - bux, uv_t + bvy, tint);
+        self.drawTexturedRect(x + w - bx, y, bx, by, uv_r - bux, uv_t, uv_r, uv_t + bvy, tint);
+
+        // Middle-left, center, middle-right
+        self.drawTexturedRect(x, y + by, bx, h - by * 2, uv_l, uv_t + bvy, uv_l + bux, uv_b - bvy, tint);
+        self.drawTexturedRect(x + bx, y + by, w - bx * 2, h - by * 2, uv_l + bux, uv_t + bvy, uv_r - bux, uv_b - bvy, tint);
+        self.drawTexturedRect(x + w - bx, y + by, bx, h - by * 2, uv_r - bux, uv_t + bvy, uv_r, uv_b - bvy, tint);
+
+        // Bottom-left, bottom-center, bottom-right
+        self.drawTexturedRect(x, y + h - by, bx, by, uv_l, uv_b - bvy, uv_l + bux, uv_b, tint);
+        self.drawTexturedRect(x + bx, y + h - by, w - bx * 2, by, uv_l + bux, uv_b - bvy, uv_r - bux, uv_b, tint);
+        self.drawTexturedRect(x + w - bx, y + h - by, bx, by, uv_r - bux, uv_b - bvy, uv_r, uv_b, tint);
     }
 
     /// Draw a rectangle outline (border).
@@ -172,14 +270,229 @@ pub const UiRenderer = struct {
         );
     }
 
+    /// Create a 1x1 white pixel as fallback atlas (avoids null descriptor).
+    fn createFallbackAtlas(self: *UiRenderer, ctx: *const VulkanContext) !void {
+        // Create 1x1 RGBA image
+        const image_info = vk.VkImageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .imageType = vk.VK_IMAGE_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
+            .extent = .{ .width = 1, .height = 1, .depth = 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
+            .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+
+        self.atlas_image = try vk.createImage(ctx.device, &image_info, null);
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vk.getImageMemoryRequirements(ctx.device, self.atlas_image, &mem_requirements);
+
+        const memory_type_index = try vk_utils.findMemoryType(
+            ctx.physical_device,
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        );
+
+        const alloc_info = vk.VkMemoryAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = memory_type_index,
+        };
+
+        self.atlas_image_memory = try vk.allocateMemory(ctx.device, &alloc_info, null);
+        try vk.bindImageMemory(ctx.device, self.atlas_image, self.atlas_image_memory, 0);
+
+        // Upload 1x1 white pixel via staging buffer
+        var staging_buffer: vk.VkBuffer = undefined;
+        var staging_memory: vk.VkDeviceMemory = undefined;
+        try vk_utils.createBuffer(
+            ctx,
+            4,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buffer,
+            &staging_memory,
+        );
+
+        {
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, staging_memory, 0, 4, 0, &data);
+            const dst: [*]u8 = @ptrCast(data.?);
+            dst[0] = 0xFF;
+            dst[1] = 0xFF;
+            dst[2] = 0xFF;
+            dst[3] = 0xFF;
+            vk.unmapMemory(ctx.device, staging_memory);
+        }
+
+        // Upload via command buffer
+        const cmd_alloc_info2 = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = ctx.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var cmd_buffers: [1]vk.VkCommandBuffer = undefined;
+        try vk.allocateCommandBuffers(ctx.device, &cmd_alloc_info2, &cmd_buffers);
+        const cmd = cmd_buffers[0];
+
+        try vk.beginCommandBuffer(cmd, &.{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        });
+
+        const to_transfer = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.atlas_image,
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_transfer});
+
+        const region = vk.VkBufferImageCopy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
+            .imageExtent = .{ .width = 1, .height = 1, .depth = 1 },
+        };
+        vk.cmdCopyBufferToImage(cmd, staging_buffer, self.atlas_image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &[_]vk.VkBufferImageCopy{region});
+
+        const to_shader = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.atlas_image,
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_shader});
+
+        try vk.endCommandBuffer(cmd);
+
+        const submit_infos = [_]vk.VkSubmitInfo{.{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        }};
+        try vk.queueSubmit(ctx.graphics_queue, 1, &submit_infos, null);
+        try vk.queueWaitIdle(ctx.graphics_queue);
+        vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd_buffers);
+
+        vk.destroyBuffer(ctx.device, staging_buffer, null);
+        vk.freeMemory(ctx.device, staging_memory, null);
+
+        // Image view
+        self.atlas_image_view = try vk.createImageView(ctx.device, &.{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .image = self.atlas_image,
+            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
+            .components = .{
+                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = .{
+                .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        }, null);
+
+        // Sampler (nearest-neighbor)
+        self.atlas_sampler = try vk.createSampler(ctx.device, &.{
+            .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .magFilter = vk.VK_FILTER_NEAREST,
+            .minFilter = vk.VK_FILTER_NEAREST,
+            .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
+            .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .mipLodBias = 0.0,
+            .anisotropyEnable = vk.VK_FALSE,
+            .maxAnisotropy = 1.0,
+            .compareEnable = vk.VK_FALSE,
+            .compareOp = 0,
+            .minLod = 0.0,
+            .maxLod = 0.0,
+            .borderColor = vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+            .unnormalizedCoordinates = vk.VK_FALSE,
+        }, null);
+
+        std.log.info("UI atlas fallback created (1x1 white)", .{});
+    }
+
     fn createDescriptors(self: *UiRenderer, ctx: *const VulkanContext) !void {
-        // Single binding: vertex SSBO
+        // Binding 0: vertex SSBO, Binding 1: atlas sampler
         const bindings = [_]vk.VkDescriptorSetLayoutBinding{
             .{
                 .binding = 0,
                 .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .descriptorCount = 1,
                 .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
                 .pImmutableSamplers = null,
             },
         };
@@ -196,6 +509,7 @@ pub const UiRenderer = struct {
 
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
             .{ .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1 },
+            .{ .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1 },
         };
 
         const pool_info = vk.VkDescriptorPoolCreateInfo{
@@ -228,6 +542,13 @@ pub const UiRenderer = struct {
             .range = MAX_VERTICES * @sizeOf(UiVertex),
         };
 
+        // Write binding 1: atlas sampler
+        const image_info = vk.VkDescriptorImageInfo{
+            .sampler = self.atlas_sampler,
+            .imageView = self.atlas_image_view,
+            .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+
         const writes = [_]vk.VkWriteDescriptorSet{
             .{
                 .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -239,6 +560,18 @@ pub const UiRenderer = struct {
                 .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                 .pImageInfo = null,
                 .pBufferInfo = &buffer_info,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &image_info,
+                .pBufferInfo = null,
                 .pTexelBufferView = null,
             },
         };

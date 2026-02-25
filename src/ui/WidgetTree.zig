@@ -36,11 +36,12 @@ pub const WidgetTree = struct {
             .checkbox => .{ .checkbox = .{} },
             .slider => .{ .slider = .{} },
             .grid => .{ .grid = .{} },
+            .dropdown => .{ .dropdown = .{} },
         };
 
         // Set default focusability
         switch (kind) {
-            .button, .text_input, .checkbox, .slider => self.widgets[id].focusable = true,
+            .button, .text_input, .checkbox, .slider, .dropdown => self.widgets[id].focusable = true,
             else => {},
         }
 

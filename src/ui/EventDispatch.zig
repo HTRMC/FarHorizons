@@ -91,7 +91,7 @@ pub fn dispatchMousePress(tree: *WidgetTree, target: WidgetId, registry: *const 
 
     // Consume if the widget is interactive
     return switch (w.kind) {
-        .button, .text_input, .checkbox, .slider => true,
+        .button, .text_input, .checkbox, .slider, .dropdown => true,
         else => false,
     };
 }
@@ -134,6 +134,9 @@ pub fn fireWidgetAction(tree: *WidgetTree, id: WidgetId, registry: *const Action
                 log.info("Checkbox action: '{s}' checked={}", .{ action_name, data.checkbox.checked });
                 _ = registry.dispatch(action_name);
             }
+        },
+        .dropdown => {
+            data.dropdown.open = !data.dropdown.open;
         },
         else => {},
     }
@@ -275,6 +278,46 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
                 return true;
             } else if (key == glfw.GLFW_KEY_RIGHT) {
                 data.slider.value = @min(data.slider.max_value, data.slider.value + step);
+                return true;
+            }
+            return false;
+        },
+        .dropdown => {
+            const data = tree.getData(focused_id) orelse return false;
+            const dd = &data.dropdown;
+            if (key == glfw.GLFW_KEY_ENTER or key == glfw.GLFW_KEY_SPACE) {
+                if (dd.open) {
+                    // Select current item and close
+                    dd.open = false;
+                    const action_name = dd.on_change_action[0..dd.on_change_action_len];
+                    if (action_name.len > 0) {
+                        _ = registry.dispatch(action_name);
+                    }
+                } else {
+                    dd.open = true;
+                }
+                return true;
+            } else if (key == glfw.GLFW_KEY_ESCAPE) {
+                if (dd.open) {
+                    dd.open = false;
+                    return true;
+                }
+                return false;
+            } else if (key == glfw.GLFW_KEY_DOWN or key == glfw.GLFW_KEY_RIGHT) {
+                if (dd.open) {
+                    if (dd.selected < dd.item_count -| 1) {
+                        dd.selected += 1;
+                    }
+                } else {
+                    dd.open = true;
+                }
+                return true;
+            } else if (key == glfw.GLFW_KEY_UP or key == glfw.GLFW_KEY_LEFT) {
+                if (dd.open) {
+                    if (dd.selected > 0) {
+                        dd.selected -= 1;
+                    }
+                }
                 return true;
             }
             return false;

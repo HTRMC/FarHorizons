@@ -116,6 +116,7 @@ fn tagToKind(tag: []const u8) ?WidgetKind {
         .{ "checkbox", WidgetKind.checkbox },
         .{ "slider", WidgetKind.slider },
         .{ "grid", WidgetKind.grid },
+        .{ "dropdown", WidgetKind.dropdown },
     };
     inline for (map) |entry| {
         if (eql(tag, entry[0])) return entry[1];
@@ -176,6 +177,10 @@ fn applyWidgetAttrs(tree: *WidgetTree, id: WidgetId, event: *const XmlEvent) voi
             w.visible = parseBool(val);
         } else if (eql(name, "focusable")) {
             w.focusable = parseBool(val);
+        } else if (eql(name, "tooltip")) {
+            const len: u8 = @intCast(@min(val.len, 64));
+            @memcpy(w.tooltip[0..len], val[0..len]);
+            w.tooltip_len = len;
         }
     }
 }
@@ -192,6 +197,8 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.label.color = parseColor(attr.value);
                 } else if (eql(attr.name, "font_size")) {
                     data.label.font_size = parseInt(attr.value);
+                } else if (eql(attr.name, "wrap")) {
+                    data.label.wrap = parseBool(attr.value);
                 }
             }
         },
@@ -280,6 +287,8 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.image.src_len = len;
                 } else if (eql(attr.name, "tint")) {
                     data.image.tint = parseColor(attr.value);
+                } else if (eql(attr.name, "nine_slice_border")) {
+                    data.image.nine_slice_border = parseFloat(attr.value);
                 }
             }
         },
@@ -300,6 +309,10 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.list_view.selected_index = std.fmt.parseInt(u16, attr.value, 10) catch 0;
                 } else if (eql(attr.name, "selection_color")) {
                     data.list_view.selection_color = parseColor(attr.value);
+                } else if (eql(attr.name, "on_change")) {
+                    const len: u8 = @intCast(@min(attr.value.len, WidgetData.MAX_ACTION_LEN));
+                    @memcpy(data.list_view.on_change_action[0..len], attr.value[0..len]);
+                    data.list_view.on_change_action_len = len;
                 }
             }
         },
@@ -313,6 +326,35 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.grid.cell_size = parseFloat(attr.value);
                 } else if (eql(attr.name, "cell_gap")) {
                     data.grid.cell_gap = parseFloat(attr.value);
+                }
+            }
+        },
+        .dropdown => {
+            for (event.attrs[0..event.attr_count]) |attr| {
+                if (eql(attr.name, "items")) {
+                    // Parse comma-separated items
+                    var start: usize = 0;
+                    for (attr.value, 0..) |ch, j| {
+                        if (ch == ',') {
+                            data.dropdown.addItem(attr.value[start..j]);
+                            start = j + 1;
+                        }
+                    }
+                    if (start < attr.value.len) {
+                        data.dropdown.addItem(attr.value[start..]);
+                    }
+                } else if (eql(attr.name, "selected")) {
+                    data.dropdown.selected = parseInt(attr.value);
+                } else if (eql(attr.name, "text_color")) {
+                    data.dropdown.text_color = parseColor(attr.value);
+                } else if (eql(attr.name, "item_bg")) {
+                    data.dropdown.item_bg = parseColor(attr.value);
+                } else if (eql(attr.name, "hover_color")) {
+                    data.dropdown.hover_color = parseColor(attr.value);
+                } else if (eql(attr.name, "on_change")) {
+                    const len: u8 = @intCast(@min(attr.value.len, WidgetData.MAX_ACTION_LEN));
+                    @memcpy(data.dropdown.on_change_action[0..len], attr.value[0..len]);
+                    data.dropdown.on_change_action_len = len;
                 }
             }
         },

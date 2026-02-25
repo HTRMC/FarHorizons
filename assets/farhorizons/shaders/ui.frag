@@ -4,6 +4,8 @@ layout(location = 0) in vec2 fragUV;
 layout(location = 1) in vec4 fragColor;
 layout(location = 2) flat in vec4 fragClipRect;
 
+layout(set = 0, binding = 1) uniform sampler2D uiAtlas;
+
 layout(location = 0) out vec4 outColor;
 
 void main() {
@@ -13,7 +15,12 @@ void main() {
         discard;
     }
     // UV of (0,0) signals a solid-color quad (no texture sampling)
-    // Non-zero UV would sample from a UI atlas (Phase 4)
-    outColor = fragColor;
+    if (fragUV.x == 0.0 && fragUV.y == 0.0) {
+        outColor = fragColor;
+    } else {
+        // Sample atlas and multiply by tint color
+        vec4 texel = texture(uiAtlas, fragUV);
+        outColor = texel * fragColor;
+    }
     if (outColor.a < 0.01) discard;
 }
