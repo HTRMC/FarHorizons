@@ -220,7 +220,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
     }
 
     switch (input_state.menu_ctrl.app_state) {
-        .title_menu, .pause_menu => {
+        .title_menu, .singleplayer_menu, .pause_menu => {
             // UI system handles all menu input
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },

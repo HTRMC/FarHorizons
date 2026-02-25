@@ -26,6 +26,7 @@ pub const UiRenderer = struct {
     clip_rect: [4]f32 = .{ -1e9, -1e9, 1e9, 1e9 },
     clip_stack: [8][4]f32 = undefined,
     clip_depth: u8 = 0,
+    clip_scale: f32 = 1.0,
 
     // Atlas texture (1x1 white fallback if no real atlas)
     atlas_image: vk.VkImage,
@@ -122,9 +123,10 @@ pub const UiRenderer = struct {
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
     }
 
-    pub fn updateScreenSize(self: *UiRenderer, width: u32, height: u32) void {
+    pub fn updateScreenSize(self: *UiRenderer, width: u32, height: u32, scale: f32) void {
         self.screen_width = @floatFromInt(width);
         self.screen_height = @floatFromInt(height);
+        self.clip_scale = scale;
     }
 
     // ── Clip rect ──
@@ -177,7 +179,8 @@ pub const UiRenderer = struct {
         const y1 = y + h;
 
         // UV = (0,0) signals solid color in fragment shader
-        const cr = self.clip_rect;
+        const s = self.clip_scale;
+        const cr = [4]f32{ self.clip_rect[0] * s, self.clip_rect[1] * s, self.clip_rect[2] * s, self.clip_rect[3] * s };
         verts[self.vertex_count + 0] = .{ .px = x0, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
         verts[self.vertex_count + 1] = .{ .px = x1, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
         verts[self.vertex_count + 2] = .{ .px = x0, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
@@ -199,7 +202,8 @@ pub const UiRenderer = struct {
         const x1 = x + w;
         const y1 = y + h;
 
-        const cr = self.clip_rect;
+        const s2 = self.clip_scale;
+        const cr = [4]f32{ self.clip_rect[0] * s2, self.clip_rect[1] * s2, self.clip_rect[2] * s2, self.clip_rect[3] * s2 };
         verts[self.vertex_count + 0] = .{ .px = x0, .py = y0, .u = uv_left, .v = uv_top, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
         verts[self.vertex_count + 1] = .{ .px = x1, .py = y0, .u = uv_right, .v = uv_top, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
         verts[self.vertex_count + 2] = .{ .px = x0, .py = y1, .u = uv_left, .v = uv_bottom, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };

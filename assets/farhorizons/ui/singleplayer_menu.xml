@@ -1,0 +1,50 @@
+<screen>
+  <panel width="fill" height="fill" layout="anchor">
+    <panel width="400" height="auto" anchor_x="center" anchor_y="center"
+           background="#1A1A2ECC" padding="16" direction="column"
+           cross_align="stretch" gap="8" border_width="1" border_color="#444466FF">
+
+      <label text="Singleplayer" color="#FFCC00FF" font_size="2" width="fill"/>
+
+      <!-- World list (children added at runtime) -->
+      <list_view id="world_list" width="fill" height="200"
+                 background="#222233FF" item_height="28"
+                 selection_color="#3366AAFF" on_change="world_select"
+                 on_double_click="play_world"/>
+
+      <!-- Empty state label (shown when no worlds) -->
+      <label id="no_worlds_label" text="No worlds yet. Create one below."
+             color="#999999FF" width="fill" visible="false"/>
+
+      <!-- New world input -->
+      <panel direction="row" gap="8" width="fill" height="auto" cross_align="center">
+        <text_input id="world_name_input" placeholder="New world name..."
+                    width="fill" height="28" max_len="32" flex_grow="1"/>
+        <button text="Create" width="80" height="28" background="#338833FF"
+                on_click="create_world"/>
+      </panel>
+
+      <!-- Action buttons -->
+      <panel direction="row" gap="8" width="fill" height="auto" cross_align="center">
+        <button id="play_btn" text="Play" width="fill" height="32" flex_grow="1"
+                background="#335588FF" on_click="play_world"/>
+        <button id="delete_btn" text="Delete" width="80" height="32"
+                background="#553333FF" on_click="delete_world"/>
+      </panel>
+
+      <!-- Delete confirmation (hidden by default) -->
+      <panel id="delete_confirm" direction="row" gap="8" width="fill" height="auto"
+             cross_align="center" visible="false">
+        <label id="delete_label" text="Delete world?" color="#FF5555FF"
+               width="fill" flex_grow="1"/>
+        <button text="Yes" width="60" height="28" background="#AA3333FF"
+                on_click="confirm_delete"/>
+        <button text="No" width="60" height="28" background="#555555FF"
+                on_click="cancel_delete"/>
+      </panel>
+
+      <button text="Back" width="fill" height="28" background="#555555FF"
+              on_click="back_to_title"/>
+    </panel>
+  </panel>
+</screen>

@@ -39,6 +39,7 @@ pub const TextRenderer = struct {
     clip_rect: [4]f32 = .{ -1e9, -1e9, 1e9, 1e9 },
     clip_stack: [8][4]f32 = undefined,
     clip_depth: u8 = 0,
+    clip_scale: f32 = 1.0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -131,12 +132,18 @@ pub const TextRenderer = struct {
     }
 
     pub fn drawText(self: *TextRenderer, x: f32, y: f32, text: []const u8, color: [4]f32) void {
+        self.drawTextScaled(x, y, text, color, 1.0);
+    }
+
+    pub fn drawTextScaled(self: *TextRenderer, x: f32, y: f32, text: []const u8, color: [4]f32, scale: f32) void {
         const verts = self.mapped_vertices orelse return;
         var cursor_x = x;
+        const gs: f32 = GLYPH_SCALE * scale;
+        const rs: f32 = RENDER_SIZE * scale;
 
         for (text) |ch| {
             if (ch == ' ') {
-                cursor_x += 4 * GLYPH_SCALE;
+                cursor_x += 4 * gs;
                 continue;
             }
             const gw = self.glyph_widths[ch];
@@ -153,14 +160,15 @@ pub const TextRenderer = struct {
             const uv_right = (col + glyph_w / @as(f32, GLYPH_SIZE)) / @as(f32, ATLAS_COLS);
             const uv_bottom = (row + 1.0) / @as(f32, ATLAS_ROWS);
 
-            const quad_w = glyph_w * GLYPH_SCALE;
+            const quad_w = glyph_w * gs;
             const px_left = cursor_x;
             const py_top = y;
             const px_right = cursor_x + quad_w;
-            const py_bottom = y + RENDER_SIZE;
+            const py_bottom = y + rs;
 
             // Triangle 1: top-left, top-right, bottom-left
-            const cr = self.clip_rect;
+            const s = self.clip_scale;
+            const cr = [4]f32{ self.clip_rect[0] * s, self.clip_rect[1] * s, self.clip_rect[2] * s, self.clip_rect[3] * s };
             verts[self.vertex_count + 0] = .{ .px = px_left, .py = py_top, .u = uv_left, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
             verts[self.vertex_count + 1] = .{ .px = px_right, .py = py_top, .u = uv_right, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
             verts[self.vertex_count + 2] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
@@ -171,7 +179,7 @@ pub const TextRenderer = struct {
             verts[self.vertex_count + 5] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
 
             self.vertex_count += 6;
-            cursor_x += quad_w + GLYPH_SCALE; // 1px gap at native scale
+            cursor_x += quad_w + gs; // 1px gap at native scale
         }
     }
 
@@ -321,9 +329,10 @@ pub const TextRenderer = struct {
         return line_y - y;
     }
 
-    pub fn updateScreenSize(self: *TextRenderer, width: u32, height: u32) void {
+    pub fn updateScreenSize(self: *TextRenderer, width: u32, height: u32, scale: f32) void {
         self.screen_width = @floatFromInt(width);
         self.screen_height = @floatFromInt(height);
+        self.clip_scale = scale;
     }
 
     fn orthoMatrix(w: f32, h: f32) [16]f32 {

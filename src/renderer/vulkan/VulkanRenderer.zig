@@ -148,8 +148,8 @@ pub const VulkanRenderer = struct {
         const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
         const virtual_w: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_w)) / ui_scale);
         const virtual_h: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_h)) / ui_scale);
-        self.render_state.text_renderer.updateScreenSize(virtual_w, virtual_h);
-        self.render_state.ui_renderer.updateScreenSize(virtual_w, virtual_h);
+        self.render_state.text_renderer.updateScreenSize(virtual_w, virtual_h, ui_scale);
+        self.render_state.ui_renderer.updateScreenSize(virtual_w, virtual_h, ui_scale);
 
         // Initialize mesh worker and camera if game_state is provided
         if (game_state) |gs| {
@@ -414,8 +414,8 @@ pub const VulkanRenderer = struct {
         const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
         const virtual_w: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_w)) / ui_scale);
         const virtual_h: u32 = @intFromFloat(@as(f32, @floatFromInt(actual_h)) / ui_scale);
-        self.render_state.text_renderer.updateScreenSize(virtual_w, virtual_h);
-        self.render_state.ui_renderer.updateScreenSize(virtual_w, virtual_h);
+        self.render_state.text_renderer.updateScreenSize(virtual_w, virtual_h, ui_scale);
+        self.render_state.ui_renderer.updateScreenSize(virtual_w, virtual_h, ui_scale);
 
         if (self.ui_manager) |um| {
             um.updateScreenSize(virtual_w, virtual_h);

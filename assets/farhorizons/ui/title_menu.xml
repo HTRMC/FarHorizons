@@ -1,50 +1,46 @@
 <screen>
   <panel width="fill" height="fill" layout="anchor">
-    <panel width="400" height="auto" anchor_x="center" anchor_y="center"
-           background="#1A1A2ECC" padding="16" direction="column"
-           cross_align="stretch" gap="8" border_width="1" border_color="#444466FF">
 
-      <label text="FARHORIZONS" color="#FFCC00FF" width="fill"/>
+    <!-- Center area: title + buttons -->
+    <panel anchor_x="start" anchor_y="center" offset_x="64" direction="column"
+           cross_align="start" gap="32" width="auto" height="auto">
 
-      <!-- World list (children added at runtime) -->
-      <list_view id="world_list" width="fill" height="200"
-                 background="#222233FF" item_height="28"
-                 selection_color="#3366AAFF" on_change="world_select"
-                 on_double_click="play_world"/>
-
-      <!-- Empty state label (shown when no worlds) -->
-      <label id="no_worlds_label" text="No worlds yet. Create one below."
-             color="#999999FF" width="fill" visible="false"/>
-
-      <!-- New world input -->
-      <panel direction="row" gap="8" width="fill" height="auto" cross_align="center">
-        <text_input id="world_name_input" placeholder="New world name..."
-                    width="fill" height="28" max_len="32" flex_grow="1"/>
-        <button text="Create" width="80" height="28" background="#338833FF"
-                on_click="create_world"/>
+      <!-- Title row -->
+      <panel direction="row" gap="12" cross_align="start" width="auto" height="auto">
+        <label text="FARHORIZONS" color="#FFCC00FF" font_size="3"/>
+        <label text="ALPHA" color="#AAAAAAFF" font_size="1"/>
       </panel>
 
-      <!-- Action buttons -->
-      <panel direction="row" gap="8" width="fill" height="auto" cross_align="center">
-        <button id="play_btn" text="Play" width="fill" height="32" flex_grow="1"
-                background="#335588FF" on_click="play_world"/>
-        <button id="delete_btn" text="Delete" width="80" height="32"
-                background="#553333FF" on_click="delete_world"/>
+      <!-- Button stack -->
+      <panel direction="column" gap="8" width="280" cross_align="stretch">
+        <button text="Singleplayer" width="fill" height="40" background="#335588FF"
+                on_click="show_singleplayer"/>
+        <button text="Multiplayer" width="fill" height="40" background="#335588FF"
+                on_click="show_coming_soon"/>
+        <button text="Options" width="fill" height="40" background="#335588FF"
+                on_click="show_coming_soon"/>
+        <button text="Credits" width="fill" height="40" background="#335588FF"
+                on_click="show_coming_soon"/>
+        <button text="Quit" width="fill" height="40" background="#442222FF"
+                on_click="quit_game"/>
       </panel>
-
-      <!-- Delete confirmation (hidden by default, shown by code) -->
-      <panel id="delete_confirm" direction="row" gap="8" width="fill" height="auto"
-             cross_align="center" visible="false">
-        <label id="delete_label" text="Delete world?" color="#FF5555FF"
-               width="fill" flex_grow="1"/>
-        <button text="Yes" width="60" height="28" background="#AA3333FF"
-                on_click="confirm_delete"/>
-        <button text="No" width="60" height="28" background="#555555FF"
-                on_click="cancel_delete"/>
-      </panel>
-
-      <button text="Quit" width="fill" height="28" background="#442222FF"
-              on_click="quit_game"/>
     </panel>
+
+    <!-- Bottom-left version info -->
+    <label text="FARHORIZONS Alpha 0.1.0 (c)2026 HTRMC" color="#666666FF"
+           anchor_x="start" anchor_y="end" offset_x="8" offset_y="-8"/>
+
+    <!-- Coming Soon modal (hidden by default) -->
+    <panel id="coming_soon_modal" width="fill" height="fill" layout="anchor"
+           visible="false" background="#00000088">
+      <panel width="300" height="auto" anchor_x="center" anchor_y="center"
+             background="#1A1A2ECC" padding="16" direction="column"
+             cross_align="center" gap="12" border_width="1" border_color="#444466FF">
+        <label text="Coming Soon" color="#FFCC00FF" font_size="2"/>
+        <button text="OK" width="120" height="32" background="#335588FF"
+                on_click="dismiss_modal"/>
+      </panel>
+    </panel>
+
   </panel>
 </screen>

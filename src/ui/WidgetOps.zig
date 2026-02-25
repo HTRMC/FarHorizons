@@ -54,7 +54,7 @@ pub fn drawWidget(
                     // Center text within the widget
                     const tx = r.x + w.padding.left + (r.w - w.padding.horizontal() - text_w) / 2.0;
                     const ty = r.y + w.padding.top + (r.h - w.padding.vertical() - text_h) / 2.0;
-                    tr.drawText(tx, ty, text, label.color.toArray());
+                    tr.drawTextScaled(tx, ty, text, label.color.toArray(), scale);
                 }
 
                 ui.popClipRect();

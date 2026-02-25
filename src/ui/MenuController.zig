@@ -12,7 +12,7 @@ const log = std.log.scoped(.UI);
 pub const MAX_WORLDS: u8 = 32;
 pub const MAX_NAME_LEN: u8 = 32;
 
-pub const AppState = enum { title_menu, playing, pause_menu };
+pub const AppState = enum { title_menu, singleplayer_menu, playing, pause_menu };
 pub const Action = enum { load_world, create_world, delete_world, resume_game, return_to_title, quit };
 
 pub const MenuController = struct {
@@ -29,9 +29,13 @@ pub const MenuController = struct {
 
     // Screen tracking
     title_screen_loaded: bool = false,
+    singleplayer_screen_loaded: bool = false,
     pause_screen_loaded: bool = false,
 
-    // Cached widget IDs (in title screen tree)
+    // Cached widget IDs (title screen)
+    coming_soon_modal_id: WidgetId = NULL_WIDGET,
+
+    // Cached widget IDs (singleplayer screen)
     world_list_id: WidgetId = NULL_WIDGET,
     no_worlds_label_id: WidgetId = NULL_WIDGET,
     delete_confirm_id: WidgetId = NULL_WIDGET,
@@ -50,8 +54,7 @@ pub const MenuController = struct {
         // Load title screen
         if (ui_manager.loadScreenFromFile("title_menu.xml", allocator)) {
             self.title_screen_loaded = true;
-            self.cacheWidgetIds();
-            self.refreshWorldList();
+            self.cacheTitleWidgetIds();
         } else {
             log.err("Failed to load title_menu.xml", .{});
         }
@@ -59,8 +62,13 @@ pub const MenuController = struct {
         return self;
     }
 
-    fn cacheWidgetIds(self: *MenuController) void {
+    fn cacheTitleWidgetIds(self: *MenuController) void {
         const tree = self.titleTree() orelse return;
+        self.coming_soon_modal_id = tree.findById("coming_soon_modal") orelse NULL_WIDGET;
+    }
+
+    fn cacheSingleplayerWidgetIds(self: *MenuController) void {
+        const tree = self.singleplayerTree() orelse return;
         self.world_list_id = tree.findById("world_list") orelse NULL_WIDGET;
         self.no_worlds_label_id = tree.findById("no_worlds_label") orelse NULL_WIDGET;
         self.delete_confirm_id = tree.findById("delete_confirm") orelse NULL_WIDGET;
@@ -70,10 +78,16 @@ pub const MenuController = struct {
 
     fn titleTree(self: *MenuController) ?*WidgetTree {
         if (!self.title_screen_loaded) return null;
-        // Title screen is always at index 0
         if (self.ui_manager.screen_count == 0) return null;
         if (!self.ui_manager.screens[0].active) return null;
         return &self.ui_manager.screens[0].tree;
+    }
+
+    fn singleplayerTree(self: *MenuController) ?*WidgetTree {
+        if (!self.singleplayer_screen_loaded) return null;
+        if (self.ui_manager.screen_count < 2) return null;
+        if (!self.ui_manager.screens[1].active) return null;
+        return &self.ui_manager.screens[1].tree;
     }
 
     pub fn registerActions(self: *MenuController) void {
@@ -88,6 +102,10 @@ pub const MenuController = struct {
         reg.register("return_to_title", actionReturnToTitle, ctx);
         reg.register("quit_game", actionQuitGame, ctx);
         reg.register("world_select", actionWorldSelect, ctx);
+        reg.register("show_singleplayer", actionShowSingleplayer, ctx);
+        reg.register("back_to_title", actionBackToTitle, ctx);
+        reg.register("show_coming_soon", actionShowComingSoon, ctx);
+        reg.register("dismiss_modal", actionDismissModal, ctx);
     }
 
     pub fn refreshWorldList(self: *MenuController) void {
@@ -112,7 +130,7 @@ pub const MenuController = struct {
     }
 
     fn populateWorldListWidget(self: *MenuController) void {
-        const tree = self.titleTree() orelse return;
+        const tree = self.singleplayerTree() orelse return;
 
         // Update list_view item_count
         if (self.world_list_id != NULL_WIDGET) {
@@ -172,7 +190,13 @@ pub const MenuController = struct {
     }
 
     pub fn showTitleMenu(self: *MenuController) void {
-        // Remove pause screen immediately if still on stack
+        // Remove singleplayer screen if loaded
+        if (self.singleplayer_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.singleplayer_screen_loaded = false;
+            self.resetSingleplayerWidgetIds();
+        }
+        // Remove pause screen if still on stack
         if (self.pause_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.pause_screen_loaded = false;
@@ -181,15 +205,20 @@ pub const MenuController = struct {
         if (!self.title_screen_loaded or self.ui_manager.screen_count == 0) {
             if (self.ui_manager.loadScreenFromFile("title_menu.xml", self.allocator)) {
                 self.title_screen_loaded = true;
-                self.cacheWidgetIds();
+                self.cacheTitleWidgetIds();
             }
         }
-        self.refreshWorldList();
         self.app_state = .title_menu;
     }
 
     /// Hide the title screen (when entering gameplay).
     pub fn hideTitleMenu(self: *MenuController) void {
+        // Remove singleplayer screen first if loaded
+        if (self.singleplayer_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.singleplayer_screen_loaded = false;
+            self.resetSingleplayerWidgetIds();
+        }
         if (self.title_screen_loaded and self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
             self.title_screen_loaded = false;
@@ -204,13 +233,21 @@ pub const MenuController = struct {
     }
 
     pub fn getInputName(self: *const MenuController) []const u8 {
-        const tree: *const WidgetTree = if (self.title_screen_loaded and self.ui_manager.screen_count > 0)
-            &self.ui_manager.screens[0].tree
+        const tree: *const WidgetTree = if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 1)
+            &self.ui_manager.screens[1].tree
         else
             return "";
         if (self.world_name_input_id == NULL_WIDGET) return "";
         const data = tree.getDataConst(self.world_name_input_id) orelse return "";
         return data.text_input.getText();
+    }
+
+    fn resetSingleplayerWidgetIds(self: *MenuController) void {
+        self.world_list_id = NULL_WIDGET;
+        self.no_worlds_label_id = NULL_WIDGET;
+        self.delete_confirm_id = NULL_WIDGET;
+        self.delete_label_id = NULL_WIDGET;
+        self.world_name_input_id = NULL_WIDGET;
     }
 
     // ── Action callbacks ──
@@ -235,7 +272,7 @@ pub const MenuController = struct {
         if (self.world_count == 0) return;
 
         // Show delete confirmation panel
-        const tree = self.titleTree() orelse return;
+        const tree = self.singleplayerTree() orelse return;
         if (self.delete_confirm_id != NULL_WIDGET) {
             if (tree.getWidget(self.delete_confirm_id)) |w| {
                 w.visible = true;
@@ -256,7 +293,7 @@ pub const MenuController = struct {
         const self = getSelf(ctx);
         self.action = .delete_world;
         // Hide confirm panel
-        const tree = self.titleTree() orelse return;
+        const tree = self.singleplayerTree() orelse return;
         if (self.delete_confirm_id != NULL_WIDGET) {
             if (tree.getWidget(self.delete_confirm_id)) |w| {
                 w.visible = false;
@@ -266,7 +303,7 @@ pub const MenuController = struct {
 
     fn actionCancelDelete(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
-        const tree = self.titleTree() orelse return;
+        const tree = self.singleplayerTree() orelse return;
         if (self.delete_confirm_id != NULL_WIDGET) {
             if (tree.getWidget(self.delete_confirm_id)) |w| {
                 w.visible = false;
@@ -292,13 +329,56 @@ pub const MenuController = struct {
 
     fn actionWorldSelect(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
-        const tree = self.titleTree() orelse return;
+        const tree = self.singleplayerTree() orelse return;
         if (self.world_list_id != NULL_WIDGET) {
             if (tree.getDataConst(self.world_list_id)) |data| {
                 const idx = data.list_view.selected_index;
                 if (idx < self.world_count) {
                     self.selection = @intCast(idx);
                 }
+            }
+        }
+    }
+
+    fn actionShowSingleplayer(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        if (self.singleplayer_screen_loaded) return;
+        if (self.ui_manager.loadScreenFromFile("singleplayer_menu.xml", self.allocator)) {
+            self.singleplayer_screen_loaded = true;
+            self.cacheSingleplayerWidgetIds();
+            self.refreshWorldList();
+            self.app_state = .singleplayer_menu;
+        } else {
+            log.err("Failed to load singleplayer_menu.xml", .{});
+        }
+    }
+
+    fn actionBackToTitle(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        if (self.singleplayer_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.singleplayer_screen_loaded = false;
+            self.resetSingleplayerWidgetIds();
+        }
+        self.app_state = .title_menu;
+    }
+
+    fn actionShowComingSoon(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const tree = self.titleTree() orelse return;
+        if (self.coming_soon_modal_id != NULL_WIDGET) {
+            if (tree.getWidget(self.coming_soon_modal_id)) |w| {
+                w.visible = true;
+            }
+        }
+    }
+
+    fn actionDismissModal(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const tree = self.titleTree() orelse return;
+        if (self.coming_soon_modal_id != NULL_WIDGET) {
+            if (tree.getWidget(self.coming_soon_modal_id)) |w| {
+                w.visible = false;
             }
         }
     }
