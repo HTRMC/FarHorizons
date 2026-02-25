@@ -5,6 +5,7 @@ const RegionFile = @import("region_file.zig").RegionFile;
 const RegionCache = @import("region_cache.zig").RegionCache;
 const ChunkCacheMod = @import("chunk_cache.zig");
 const IoPipeline = @import("io_pipeline.zig").IoPipeline;
+const dirty_set_mod = @import("dirty_set.zig");
 const app_config = @import("../../app_config.zig");
 
 const Io = std.Io;
@@ -15,6 +16,9 @@ const RegionCoord = storage_types.RegionCoord;
 const CompressionAlgo = storage_types.CompressionAlgo;
 const Priority = storage_types.Priority;
 const AsyncHandle = storage_types.AsyncHandle;
+
+const DirtySet = dirty_set_mod.DirtySet;
+const BatchSaveData = IoPipeline.BatchSaveData;
 
 const Chunk = WorldState.Chunk;
 
@@ -29,6 +33,8 @@ region_cache: RegionCache,
 chunk_cache: ChunkCacheMod.ChunkCache,
 io_pipeline: IoPipeline,
 default_compression: CompressionAlgo,
+dirty_set: DirtySet,
+dirty_mutex: Io.Mutex,
 
 // ── Lifecycle ──────────────────────────────────────────────────────
 
@@ -62,11 +68,7 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     ensureDirExists(io, worlds_dir);
     ensureDirExists(io, world_dir);
     ensureDirExists(io, region_dir);
-
-    // Create LOD 0 directory
-    const lod0_dir = try std.fmt.allocPrint(allocator, "{s}{s}lod0", .{ region_dir, sep });
-    defer allocator.free(lod0_dir);
-    ensureDirExists(io, lod0_dir);
+    // LOD directories (lod0, lod1, lod2) are created on demand by region cache
 
     const self = try allocator.create(Storage);
     errdefer allocator.destroy(self);
@@ -76,6 +78,8 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     self.region_dir = region_dir;
     self.region_cache = RegionCache.init(allocator, region_dir);
     self.default_compression = .deflate;
+    self.dirty_set = DirtySet.init(allocator);
+    self.dirty_mutex = .init;
 
     self.chunk_cache.initInPlace();
     self.io_pipeline.initInPlace(
@@ -93,8 +97,10 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
 
 /// Shut down the storage system, flushing all pending writes.
 pub fn deinit(self: *Storage) void {
+    self.saveAllDirty();
     self.io_pipeline.stop(); // Drain pending saves, join workers
     self.flush(); // Sync region files to disk
+    self.dirty_set.deinit();
     self.region_cache.deinit();
     const allocator = self.allocator;
     allocator.free(self.region_dir);
@@ -106,6 +112,124 @@ pub fn deinit(self: *Storage) void {
 /// Flush all pending writes to disk.
 pub fn flush(self: *Storage) void {
     self.region_cache.flushAll();
+}
+
+// ── Dirty Chunk Tracking ──────────────────────────────────────────
+
+/// Mark a chunk as dirty. Snapshots chunk data. Thread-safe.
+pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *const Chunk) void {
+    const io = Io.Threaded.global_single_threaded.io();
+    const key = ChunkKey.init(cx, cy, cz, lod);
+    self.dirty_mutex.lockUncancelable(io);
+    defer self.dirty_mutex.unlock(io);
+    self.dirty_set.markDirty(key, chunk);
+}
+
+/// Run one tick of the adaptive save scheduler. Call once per frame.
+pub fn tick(self: *Storage) void {
+    const io = Io.Threaded.global_single_threaded.io();
+
+    self.dirty_mutex.lockUncancelable(io);
+    const dirty_count = self.dirty_set.count();
+    if (dirty_count == 0) {
+        self.dirty_mutex.unlock(io);
+        return;
+    }
+
+    // Check if loads should take priority
+    const load_depth = self.io_pipeline.getLoadQueueDepth();
+    if (load_depth > 32) {
+        self.dirty_mutex.unlock(io);
+        return;
+    }
+
+    const urgency = self.dirty_set.urgencyCounts();
+    const urgent_critical = @min(urgency.urgent + urgency.critical, 8);
+    const budget = std.math.clamp(4 + dirty_count / 256 + urgent_critical, 4, 20);
+
+    const drain_result = self.dirty_set.drainBatch(budget);
+    self.dirty_mutex.unlock(io);
+
+    const result = drain_result orelse return;
+
+    // Submit batches to I/O pipeline (outside dirty_mutex)
+    for (0..result.batch_count) |bi| {
+        const batch = &result.batches[bi];
+        const batch_data = self.allocator.create(BatchSaveData) catch {
+            // Free leaked chunk pointers on alloc failure
+            for (batch.chunks[0..batch.count]) |chunk_ptr| {
+                self.allocator.destroy(chunk_ptr);
+            }
+            continue;
+        };
+        batch_data.* = .{
+            .region_coord = batch.region_coord,
+            .count = batch.count,
+            .indices = batch.indices,
+            .chunks = batch.chunks,
+            .keys = batch.keys,
+            .allocator = self.allocator,
+        };
+        self.io_pipeline.submitBatchSave(batch_data);
+    }
+}
+
+/// Force-save all remaining dirty chunks. For shutdown.
+pub fn saveAllDirty(self: *Storage) void {
+    const io = Io.Threaded.global_single_threaded.io();
+
+    self.dirty_mutex.lockUncancelable(io);
+    const dirty_count = self.dirty_set.count();
+    if (dirty_count == 0) {
+        self.dirty_mutex.unlock(io);
+        return;
+    }
+
+    log.info("Saving {d} dirty chunks...", .{dirty_count});
+
+    // Drain everything
+    const drain_result = self.dirty_set.drainBatch(dirty_count);
+    self.dirty_mutex.unlock(io);
+
+    const result = drain_result orelse return;
+
+    // Write all batches synchronously (shutdown path)
+    for (0..result.batch_count) |bi| {
+        const batch = &result.batches[bi];
+        const coord = batch.region_coord;
+        const region = self.region_cache.getOrOpen(coord) catch {
+            log.err("Failed to open region for shutdown save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
+            // Free chunk pointers we own
+            for (batch.chunks[0..batch.count]) |chunk_ptr| {
+                self.allocator.destroy(chunk_ptr);
+            }
+            continue;
+        };
+        defer self.region_cache.releaseRegion(region);
+
+        // Build slice arrays for writeChunkBatch
+        var indices: [dirty_set_mod.MAX_BATCH_SIZE]u9 = undefined;
+        var block_ptrs: [dirty_set_mod.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType = undefined;
+        for (0..batch.count) |i| {
+            indices[i] = batch.indices[i];
+            block_ptrs[i] = &batch.chunks[i].blocks;
+        }
+
+        region.writeChunkBatch(
+            indices[0..batch.count],
+            block_ptrs[0..batch.count],
+            self.default_compression,
+        ) catch |err| {
+            log.err("Shutdown batch save failed: {}", .{err});
+        };
+
+        // Free chunk snapshots
+        for (batch.chunks[0..batch.count]) |chunk_ptr| {
+            self.allocator.destroy(chunk_ptr);
+        }
+    }
+
+    log.info("All dirty chunks saved", .{});
 }
 
 // ── Synchronous API ────────────────────────────────────────────────
@@ -190,19 +314,6 @@ pub fn requestLoadAsync(
     }
 
     return self.io_pipeline.requestLoad(key, priority);
-}
-
-/// Request an asynchronous chunk save.
-pub fn requestSaveAsync(
-    self: *Storage,
-    cx: i32,
-    cy: i32,
-    cz: i32,
-    lod: u8,
-    chunk: *const Chunk,
-) void {
-    const key = ChunkKey.init(cx, cy, cz, lod);
-    self.io_pipeline.requestSave(key, chunk);
 }
 
 /// Poll a previously requested async load.

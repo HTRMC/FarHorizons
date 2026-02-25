@@ -148,62 +148,66 @@ pub const SectorAllocator = struct {
 
 test "init reserves header sectors" {
     const alloc = SectorAllocator.init();
-    // Sectors 0 and 1 should be used
+    // Sectors 0-3 should be used (4 header sectors for shadow paging)
     try std.testing.expect(alloc.isUsed(0));
     try std.testing.expect(alloc.isUsed(1));
-    // Sector 2 should be free
-    try std.testing.expect(!alloc.isUsed(2));
+    try std.testing.expect(alloc.isUsed(2));
+    try std.testing.expect(alloc.isUsed(3));
+    // Sector 4 should be free
+    try std.testing.expect(!alloc.isUsed(4));
 }
 
 test "allocate and free" {
     var alloc = SectorAllocator.init();
 
-    // Allocate 3 sectors — should start at sector 2
+    // Allocate 3 sectors — should start at sector 4 (after 4 header sectors)
     const offset1 = alloc.allocate(3) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u24, 2), offset1);
+    try std.testing.expectEqual(@as(u24, 4), offset1);
 
-    // Next allocation should start at sector 5
+    // Next allocation should start at sector 7
     const offset2 = alloc.allocate(2) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u24, 5), offset2);
+    try std.testing.expectEqual(@as(u24, 7), offset2);
 
     // Free first allocation
     alloc.free(offset1, 3);
 
-    // Should be able to reuse sectors 2-4
+    // Should be able to reuse sectors 4-6
     const offset3 = alloc.allocate(3) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u24, 2), offset3);
+    try std.testing.expectEqual(@as(u24, 4), offset3);
 }
 
 test "rebuildFromCot" {
     var cot: [CHUNKS_PER_REGION]ChunkOffsetEntry = undefined;
     @memset(&cot, ChunkOffsetEntry.empty);
 
-    // Set a few entries
-    cot[0] = @bitCast(@as(u64, 0) | (@as(u64, 2) << 0) | // sector_offset = 2
+    // Set a few entries (offsets must be >= HEADER_SECTORS=4)
+    cot[0] = @bitCast(@as(u64, 0) | (@as(u64, 4) << 0) | // sector_offset = 4
         (@as(u64, 3) << 24) | // sector_count = 3
         (@as(u64, 1000) << 32) | // compressed_size
         (@as(u64, 1) << 56)); // compression = deflate
-    cot[1] = @bitCast(@as(u64, 0) | (@as(u64, 5) << 0) | // sector_offset = 5
+    cot[1] = @bitCast(@as(u64, 0) | (@as(u64, 7) << 0) | // sector_offset = 7
         (@as(u64, 1) << 24) | // sector_count = 1
         (@as(u64, 500) << 32) | // compressed_size
         (@as(u64, 1) << 56));
 
     const alloc = SectorAllocator.rebuildFromCot(&cot);
 
-    // Header sectors used
+    // Header sectors 0-3 used
     try std.testing.expect(alloc.isUsed(0));
     try std.testing.expect(alloc.isUsed(1));
-
-    // Sectors 2-4 used by entry 0
     try std.testing.expect(alloc.isUsed(2));
     try std.testing.expect(alloc.isUsed(3));
+
+    // Sectors 4-6 used by entry 0
     try std.testing.expect(alloc.isUsed(4));
-
-    // Sector 5 used by entry 1
     try std.testing.expect(alloc.isUsed(5));
+    try std.testing.expect(alloc.isUsed(6));
 
-    // Sector 6 should be free
-    try std.testing.expect(!alloc.isUsed(6));
+    // Sector 7 used by entry 1
+    try std.testing.expect(alloc.isUsed(7));
 
-    try std.testing.expectEqual(@as(u32, 6), alloc.total_sectors);
+    // Sector 8 should be free
+    try std.testing.expect(!alloc.isUsed(8));
+
+    try std.testing.expectEqual(@as(u32, 8), alloc.total_sectors);
 }

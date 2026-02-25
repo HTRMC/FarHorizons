@@ -21,7 +21,8 @@ const ChunkKey = storage_types.ChunkKey;
 const log = std.log.scoped(.region_file);
 
 /// A region file manages 512 chunks (8x8x8) in a single .fhr file.
-/// Supports concurrent readers via COW writes — readers never see partial writes.
+/// Uses shadow-paged headers for crash safety — two alternating meta pages
+/// where each meta page fits in a single 4KB OS page (atomic on modern hardware).
 pub const RegionFile = struct {
     file: File,
     io: Io,
@@ -29,6 +30,7 @@ pub const RegionFile = struct {
     header: FileHeader,
     cot: [CHUNKS_PER_REGION]ChunkOffsetEntry,
     allocator_bitmap: SectorAllocator,
+    active_slot: u1, // 0 = slot A, 1 = slot B
     rw_lock: std.Io.RwLock,
     ref_count: std.atomic.Value(u32),
     path: []const u8,
@@ -120,17 +122,23 @@ pub const RegionFile = struct {
             },
             .cot = [_]ChunkOffsetEntry{ChunkOffsetEntry.empty} ** CHUNKS_PER_REGION,
             .allocator_bitmap = SectorAllocator.init(),
+            .active_slot = 0,
             .rw_lock = .init,
             .ref_count = std.atomic.Value(u32).init(1),
             .path = path,
             .mem_allocator = mem_alloc,
         };
 
-        // Write initial header to disk
-        self.writeHeaderToDisk() catch |err| {
-            log.err("Failed to write initial header: {}", .{err});
+        // Write identical slot A and slot B (generation=0)
+        self.writeSlot(0) catch |err| {
+            log.err("Failed to write initial slot A: {}", .{err});
             return err;
         };
+        self.writeSlot(1) catch |err| {
+            log.err("Failed to write initial slot B: {}", .{err});
+            return err;
+        };
+        self.fsync() catch {};
 
         return self;
     }
@@ -152,6 +160,7 @@ pub const RegionFile = struct {
             .header = undefined,
             .cot = undefined,
             .allocator_bitmap = undefined,
+            .active_slot = 0,
             .rw_lock = .init,
             .ref_count = std.atomic.Value(u32).init(1),
             .path = path,
@@ -159,16 +168,6 @@ pub const RegionFile = struct {
         };
 
         try self.readHeader();
-
-        // Validate header
-        if (!self.header.validate()) {
-            return error.InvalidMagic;
-        }
-
-        // Verify CRC32
-        if (!self.verifyCrc()) {
-            log.warn("CRC32 mismatch for region file {s}, rebuilding from COT", .{path});
-        }
 
         // Rebuild sector allocator from COT (the COT is the source of truth)
         self.allocator_bitmap = SectorAllocator.rebuildFromCot(&self.cot);
@@ -285,10 +284,7 @@ pub const RegionFile = struct {
             return error.IoError;
         };
 
-        // Step 5: Sync data to disk
-        self.fsync() catch {};
-
-        // Step 6: Update COT entry + free old sectors
+        // Step 5: Update COT entry + free old sectors
         const old_entry = self.cot[chunk_index];
         if (old_entry.isPresent()) {
             self.allocator_bitmap.free(old_entry.sector_offset, old_entry.sector_count);
@@ -305,11 +301,97 @@ pub const RegionFile = struct {
         self.header.generation += 1;
         self.header.total_sectors = self.allocator_bitmap.total_sectors;
 
-        // Step 7: Write header (2 sectors)
-        try self.writeHeaderToDisk();
+        // Step 6: Commit via shadow paging (data+COT fsync, then meta fsync)
+        try self.commitHeader();
+    }
 
-        // Step 8: Sync header to disk
-        self.fsync() catch {};
+    /// Write multiple chunks in a single batch with only 2 fsyncs (data + header)
+    /// instead of 2N fsyncs for N individual writes.
+    pub fn writeChunkBatch(
+        self: *RegionFile,
+        chunk_indices: []const u9,
+        block_arrays: []const *const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType,
+        algo: CompressionAlgo,
+    ) !void {
+        if (chunk_indices.len == 0) return;
+        std.debug.assert(chunk_indices.len == block_arrays.len);
+
+        // Acquire write lock ONCE for the entire batch
+        self.rw_lock.lockUncancelable(self.io);
+        defer self.rw_lock.unlock(self.io);
+
+        // Track old entries for deferred free
+        var old_entries: [20]struct { offset: u24, count: u8 } = undefined;
+        var old_count: usize = 0;
+
+        var compressed_buf: [256 * 1024]u8 = undefined;
+
+        for (0..chunk_indices.len) |i| {
+            const chunk_index = chunk_indices[i];
+            const blocks = block_arrays[i];
+
+            // Encode + compress (reuses same stack buffer per iteration)
+            var encoded = chunk_codec.encode(self.mem_allocator, blocks) catch |err| {
+                log.err("Batch encode failed for chunk {d}: {}", .{ chunk_index, err });
+                continue;
+            };
+            defer encoded.deinit();
+
+            const compressed_data: []const u8 = if (algo == .none)
+                encoded.data
+            else blk: {
+                const len = compression.compress(algo, encoded.data, &compressed_buf) catch |err| {
+                    log.err("Batch compress failed for chunk {d}: {}", .{ chunk_index, err });
+                    continue;
+                };
+                break :blk compressed_buf[0..len];
+            };
+
+            const sectors_needed = storage_types.sectorsNeeded(compressed_data.len);
+            if (sectors_needed == 0) continue;
+
+            // Allocate new sectors
+            const new_offset = self.allocator_bitmap.allocate(sectors_needed) orelse {
+                log.err("Batch: out of space for chunk {d}", .{chunk_index});
+                continue;
+            };
+
+            // Write compressed data to new sectors
+            const file_offset: u64 = @as(u64, new_offset) * SECTOR_SIZE;
+            self.pwriteAll(compressed_data, file_offset) catch {
+                self.allocator_bitmap.free(new_offset, sectors_needed);
+                log.err("Batch: write failed for chunk {d}", .{chunk_index});
+                continue;
+            };
+
+            // Track old entry for deferred free
+            const old_entry = self.cot[chunk_index];
+            if (old_entry.isPresent() and old_count < old_entries.len) {
+                old_entries[old_count] = .{ .offset = old_entry.sector_offset, .count = old_entry.sector_count };
+                old_count += 1;
+            }
+
+            // Update COT entry in memory
+            self.cot[chunk_index] = .{
+                .sector_offset = new_offset,
+                .sector_count = sectors_needed,
+                .compressed_size = @intCast(compressed_data.len),
+                .compression = @intFromEnum(algo),
+                .flags = 0,
+            };
+        }
+
+        // Free all old sectors
+        for (old_entries[0..old_count]) |old| {
+            self.allocator_bitmap.free(old.offset, old.count);
+        }
+
+        // Update header
+        self.header.generation += 1;
+        self.header.total_sectors = self.allocator_bitmap.total_sectors;
+
+        // Commit via shadow paging (data+COT fsync, then meta fsync)
+        try self.commitHeader();
     }
 
     /// Check if a chunk exists in this region file.
@@ -317,74 +399,142 @@ pub const RegionFile = struct {
         return self.cot[chunk_index].isPresent();
     }
 
-    // ── Header I/O ─────────────────────────────────────────────────
+    // ── Header I/O (shadow-paged) ───────────────────────────────────
 
+    /// Read all 4 header sectors. CRC-check both meta pages.
+    /// Pick the valid one with higher generation. Set active_slot.
     fn readHeader(self: *RegionFile) !void {
-        // Read both header sectors (8192 bytes total)
-        var header_buf: [HEADER_SECTORS * SECTOR_SIZE]u8 = undefined;
-        self.preadAll(&header_buf, 0) catch return error.IoError;
+        var buf: [HEADER_SECTORS * SECTOR_SIZE]u8 = undefined;
+        self.preadAll(&buf, 0) catch return error.IoError;
 
-        // Parse file header (first 32 bytes)
-        self.header = @as(*const FileHeader, @ptrCast(@alignCast(header_buf[0..@sizeOf(FileHeader)]))).*;
+        const valid_a = verifyMetaPage(buf[storage_types.OFFSET_META_A..][0..SECTOR_SIZE]);
+        const valid_b = verifyMetaPage(buf[storage_types.OFFSET_META_B..][0..SECTOR_SIZE]);
 
-        // Parse COT entries 0..507 from sector 0
-        const cot_first_bytes = header_buf[storage_types.OFFSET_COT_FIRST..][0 .. storage_types.COT_SPLIT_FIRST * 8];
-        const cot_first: [*]const ChunkOffsetEntry = @ptrCast(@alignCast(cot_first_bytes.ptr));
-        @memcpy(self.cot[0..storage_types.COT_SPLIT_FIRST], cot_first[0..storage_types.COT_SPLIT_FIRST]);
+        if (!valid_a and !valid_b) {
+            log.err("Both meta pages have bad CRC — corrupt region file {s}", .{self.path});
+            return error.CorruptHeader;
+        }
 
-        // Parse COT entries 508..511 from sector 1
-        const cot_second_bytes = header_buf[storage_types.OFFSET_COT_SECOND..][0 .. storage_types.COT_SPLIT_SECOND * 8];
-        const cot_second: [*]const ChunkOffsetEntry = @ptrCast(@alignCast(cot_second_bytes.ptr));
-        @memcpy(
-            self.cot[storage_types.COT_SPLIT_FIRST..][0..storage_types.COT_SPLIT_SECOND],
-            cot_second[0..storage_types.COT_SPLIT_SECOND],
+        // Pick slot: both valid → higher generation wins; one valid → use that one
+        const use_slot: u1 = if (valid_a and valid_b) blk: {
+            const gen_a = parseMetaGeneration(buf[storage_types.OFFSET_META_A..][0..SECTOR_SIZE]);
+            const gen_b = parseMetaGeneration(buf[storage_types.OFFSET_META_B..][0..SECTOR_SIZE]);
+            break :blk if (gen_b > gen_a) @as(u1, 1) else @as(u1, 0);
+        } else if (valid_a) @as(u1, 0) else @as(u1, 1);
+
+        self.active_slot = use_slot;
+
+        // Parse chosen meta page
+        const meta_offset: usize = if (use_slot == 0) storage_types.OFFSET_META_A else storage_types.OFFSET_META_B;
+        const meta_page = buf[meta_offset..][0..SECTOR_SIZE];
+        self.header = @as(*const FileHeader, @ptrCast(@alignCast(meta_page[storage_types.META_OFFSET_HEADER..][0..@sizeOf(FileHeader)]))).*;
+
+        if (!self.header.validate()) {
+            return error.InvalidMagic;
+        }
+
+        // Load bitmap from meta page
+        self.allocator_bitmap.loadBitmap(
+            @ptrCast(meta_page[storage_types.META_OFFSET_BITMAP..][0..storage_types.BITMAP_BYTES]),
         );
+
+        // Parse paired COT sector
+        const cot_offset: usize = if (use_slot == 0) storage_types.OFFSET_COT_A else storage_types.OFFSET_COT_B;
+        const cot_bytes = buf[cot_offset..][0 .. CHUNKS_PER_REGION * @sizeOf(ChunkOffsetEntry)];
+        const cot_entries: [*]const ChunkOffsetEntry = @ptrCast(@alignCast(cot_bytes.ptr));
+        @memcpy(&self.cot, cot_entries[0..CHUNKS_PER_REGION]);
+
+        log.info("Opened region file {s} (slot {c}, gen {d})", .{
+            self.path,
+            @as(u8, if (use_slot == 0) 'A' else 'B'),
+            self.header.generation,
+        });
     }
 
-    fn writeHeaderToDisk(self: *RegionFile) !void {
-        var header_buf: [HEADER_SECTORS * SECTOR_SIZE]u8 = [_]u8{0} ** (HEADER_SECTORS * SECTOR_SIZE);
+    /// Commit header using shadow paging:
+    /// 1. Write COT to inactive slot's COT sector
+    /// 2. Write data+COT fsync
+    /// 3. Write meta page to inactive slot's meta sector (atomic 4KB)
+    /// 4. Meta fsync (this is the commit point)
+    /// 5. Flip active_slot
+    fn commitHeader(self: *RegionFile) !void {
+        const inactive: u1 = self.active_slot ^ 1;
 
-        // Write file header
+        // Step 1: Write COT to inactive slot's COT sector
+        const cot_offset: u64 = if (inactive == 0) storage_types.OFFSET_COT_A else storage_types.OFFSET_COT_B;
+        const cot_data: [*]const u8 = @ptrCast(&self.cot);
+        self.pwriteAll(cot_data[0 .. CHUNKS_PER_REGION * @sizeOf(ChunkOffsetEntry)], cot_offset) catch
+            return error.IoError;
+
+        // Step 2: Fsync data + COT
+        self.fsync() catch {};
+
+        // Step 3: Build and write meta page to inactive slot
+        var meta_page: [SECTOR_SIZE]u8 = [_]u8{0} ** SECTOR_SIZE;
+
+        // FileHeader
         const header_bytes: [*]const u8 = @ptrCast(&self.header);
-        @memcpy(header_buf[0..@sizeOf(FileHeader)], header_bytes[0..@sizeOf(FileHeader)]);
+        @memcpy(meta_page[storage_types.META_OFFSET_HEADER..][0..@sizeOf(FileHeader)], header_bytes[0..@sizeOf(FileHeader)]);
 
-        // Write COT entries 0..507
-        const cot_first: [*]const u8 = @ptrCast(&self.cot[0]);
+        // Bitmap
         @memcpy(
-            header_buf[storage_types.OFFSET_COT_FIRST..][0 .. storage_types.COT_SPLIT_FIRST * 8],
-            cot_first[0 .. storage_types.COT_SPLIT_FIRST * 8],
-        );
-
-        // Write COT entries 508..511
-        const cot_second: [*]const u8 = @ptrCast(&self.cot[storage_types.COT_SPLIT_FIRST]);
-        @memcpy(
-            header_buf[storage_types.OFFSET_COT_SECOND..][0 .. storage_types.COT_SPLIT_SECOND * 8],
-            cot_second[0 .. storage_types.COT_SPLIT_SECOND * 8],
-        );
-
-        // Compute and write CRC32 (covers bytes 0x0000..0x101F)
-        const crc = storage_types.crc32(header_buf[0..storage_types.OFFSET_CRC32]);
-        const crc_bytes: [4]u8 = @bitCast(crc);
-        @memcpy(header_buf[storage_types.OFFSET_CRC32..][0..4], &crc_bytes);
-
-        // Write bitmap
-        @memcpy(
-            header_buf[storage_types.OFFSET_BITMAP..][0..storage_types.BITMAP_BYTES],
+            meta_page[storage_types.META_OFFSET_BITMAP..][0..storage_types.BITMAP_BYTES],
             self.allocator_bitmap.getBitmap(),
         );
 
-        // Write both sectors
-        self.pwriteAll(&header_buf, 0) catch return error.IoError;
+        // CRC32 over bytes 0x000..0xFFB
+        const crc = storage_types.crc32(meta_page[0..storage_types.META_OFFSET_CRC]);
+        const crc_bytes: [4]u8 = @bitCast(crc);
+        @memcpy(meta_page[storage_types.META_OFFSET_CRC..][0..4], &crc_bytes);
+
+        const meta_offset: u64 = if (inactive == 0) storage_types.OFFSET_META_A else storage_types.OFFSET_META_B;
+        self.pwriteAll(&meta_page, meta_offset) catch return error.IoError;
+
+        // Step 4: Fsync meta (commit point)
+        self.fsync() catch {};
+
+        // Step 5: Flip active slot
+        self.active_slot = inactive;
     }
 
-    fn verifyCrc(self: *const RegionFile) bool {
-        // Re-read header from disk and verify CRC
-        var header_buf: [storage_types.OFFSET_CRC32 + 4]u8 = undefined;
-        self.preadAll(&header_buf, 0) catch return false;
+    /// Write a single slot (meta + COT) — used only during createNew for initial identical slots.
+    fn writeSlot(self: *RegionFile, slot: u1) !void {
+        // Build COT sector
+        const cot_offset: u64 = if (slot == 0) storage_types.OFFSET_COT_A else storage_types.OFFSET_COT_B;
+        const cot_data: [*]const u8 = @ptrCast(&self.cot);
+        self.pwriteAll(cot_data[0 .. CHUNKS_PER_REGION * @sizeOf(ChunkOffsetEntry)], cot_offset) catch
+            return error.IoError;
 
-        const stored_crc = std.mem.readInt(u32, header_buf[storage_types.OFFSET_CRC32..][0..4], .little);
-        const computed_crc = storage_types.crc32(header_buf[0..storage_types.OFFSET_CRC32]);
+        // Build meta page
+        var meta_page: [SECTOR_SIZE]u8 = [_]u8{0} ** SECTOR_SIZE;
+
+        const header_bytes: [*]const u8 = @ptrCast(&self.header);
+        @memcpy(meta_page[storage_types.META_OFFSET_HEADER..][0..@sizeOf(FileHeader)], header_bytes[0..@sizeOf(FileHeader)]);
+
+        @memcpy(
+            meta_page[storage_types.META_OFFSET_BITMAP..][0..storage_types.BITMAP_BYTES],
+            self.allocator_bitmap.getBitmap(),
+        );
+
+        const crc = storage_types.crc32(meta_page[0..storage_types.META_OFFSET_CRC]);
+        const crc_bytes: [4]u8 = @bitCast(crc);
+        @memcpy(meta_page[storage_types.META_OFFSET_CRC..][0..4], &crc_bytes);
+
+        const meta_offset: u64 = if (slot == 0) storage_types.OFFSET_META_A else storage_types.OFFSET_META_B;
+        self.pwriteAll(&meta_page, meta_offset) catch return error.IoError;
+    }
+
+    /// Verify a meta page's CRC32. Returns true if valid.
+    fn verifyMetaPage(page: *const [SECTOR_SIZE]u8) bool {
+        const stored_crc = std.mem.readInt(u32, page[storage_types.META_OFFSET_CRC..][0..4], .little);
+        const computed_crc = storage_types.crc32(page[0..storage_types.META_OFFSET_CRC]);
         return stored_crc == computed_crc;
+    }
+
+    /// Extract the generation counter from a meta page (without full parse).
+    fn parseMetaGeneration(page: *const [SECTOR_SIZE]u8) u32 {
+        const hdr = @as(*const FileHeader, @ptrCast(@alignCast(page[0..@sizeOf(FileHeader)])));
+        return hdr.generation;
     }
 
     // ── Low-level file I/O helpers ─────────────────────────────────

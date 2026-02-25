@@ -129,11 +129,60 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     const lod2_world = try allocator.create(WorldState.World);
     const lod2_light_map = try allocator.create(WorldState.LightMap);
 
-    // Generate LOD data
-    WorldState.downsampleWorld(world, lod1_world, 1);
-    WorldState.computeLightMap(lod1_world, lod1_light_map);
-    WorldState.downsampleWorld(world, lod2_world, 2);
-    WorldState.computeLightMap(lod2_world, lod2_light_map);
+    // Initialize LOD worlds to air so unloaded chunks don't have garbage
+    @memset(std.mem.asBytes(lod1_world), 0);
+    @memset(std.mem.asBytes(lod2_world), 0);
+
+    // Try to load LOD data from disk, fall back to downsampling
+    const lod_worlds_arr = [3]*WorldState.World{ world, lod1_world, lod2_world };
+    const lod_light_maps_arr = [3]*WorldState.LightMap{ light_map, lod1_light_map, lod2_light_map };
+
+    for (1..3) |lod_level_usize| {
+        const lod_level: u8 = @intCast(lod_level_usize);
+        var lod_any_loaded = false;
+
+        if (storage != null) {
+            for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
+                for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
+                    for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
+                        const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
+                        const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
+                        const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
+
+                        if (storage.?.loadChunk(cx, cy, cz, lod_level)) |cached_chunk| {
+                            lod_worlds_arr[lod_level_usize][cy_u][cz_u][cx_u] = cached_chunk.*;
+                            lod_any_loaded = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!lod_any_loaded) {
+            // No saved LOD — downsample from LOD0 and persist
+            WorldState.downsampleWorld(world, lod_worlds_arr[lod_level_usize], lod_level);
+            WorldState.computeLightMap(lod_worlds_arr[lod_level_usize], lod_light_maps_arr[lod_level_usize]);
+
+            if (storage != null) {
+                for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
+                    for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
+                        for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
+                            const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
+                            const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
+                            const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
+                            storage.?.saveChunk(cx, cy, cz, lod_level, &lod_worlds_arr[lod_level_usize][cy_u][cz_u][cx_u]) catch |err| {
+                                std.log.warn("Failed to save LOD{d} chunk ({d},{d},{d}): {}", .{ lod_level, cx, cy, cz, err });
+                            };
+                        }
+                    }
+                }
+                storage.?.flush();
+            }
+        } else {
+            // Loaded from disk — compute light map
+            WorldState.computeLightMap(lod_worlds_arr[lod_level_usize], lod_light_maps_arr[lod_level_usize]);
+        }
+    }
 
     return .{
         .allocator = allocator,
@@ -163,21 +212,35 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     };
 }
 
-/// Save all chunks to disk.
+/// Save all dirty chunks to disk. Persists stale LODs before flushing.
 pub fn save(self: *GameState) void {
     const s = self.storage orelse return;
-    for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
-        for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
-            for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
-                const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
-                const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
-                const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
-                s.saveChunk(cx, cy, cz, 0, &self.world[cy_u][cz_u][cx_u]) catch |err| {
-                    std.log.warn("Failed to save chunk ({d},{d},{d}): {}", .{ cx, cy, cz, err });
-                };
+
+    // Persist stale LOD worlds
+    for (1..3) |lod_level_usize| {
+        const lod_level: u8 = @intCast(lod_level_usize);
+        if (self.lod_stale[lod_level_usize]) {
+            WorldState.downsampleWorld(self.lod_worlds[0], self.lod_worlds[lod_level_usize], lod_level);
+            WorldState.computeLightMap(self.lod_worlds[lod_level_usize], self.lod_light_maps[lod_level_usize]);
+            self.lod_stale[lod_level_usize] = false;
+
+            for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
+                for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
+                    for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
+                        const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
+                        const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
+                        const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
+                        s.saveChunk(cx, cy, cz, lod_level, &self.lod_worlds[lod_level_usize][cy_u][cz_u][cx_u]) catch |err| {
+                            std.log.warn("Failed to save LOD{d} chunk ({d},{d},{d}): {}", .{ lod_level, cx, cy, cz, err });
+                        };
+                    }
+                }
             }
         }
     }
+
+    // Save LOD0 dirty chunks
+    s.saveAllDirty();
     s.flush();
     std.log.info("World saved", .{});
 }
@@ -433,7 +496,7 @@ fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     const storage_cy = @as(i32, @intCast(local_cy)) - WorldState.WORLD_CHUNKS_Y / 2;
     const storage_cz = @as(i32, @intCast(local_cz)) - WorldState.WORLD_CHUNKS_Z / 2;
 
-    self.storage.?.requestSaveAsync(
+    self.storage.?.markDirty(
         storage_cx,
         storage_cy,
         storage_cz,

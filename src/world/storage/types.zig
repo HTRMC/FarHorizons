@@ -6,9 +6,9 @@ const WorldState = @import("../WorldState.zig");
 pub const SECTOR_SIZE = 4096;
 pub const REGION_DIM = 8; // 8x8x8 chunks per region
 pub const CHUNKS_PER_REGION = REGION_DIM * REGION_DIM * REGION_DIM; // 512
-pub const HEADER_SECTORS = 2; // Sectors 0-1 are header + COT + bitmap
+pub const HEADER_SECTORS = 4; // Sectors 0-3: dual meta+COT slots (shadow paging)
 pub const MAGIC = [4]u8{ 'F', 'H', 'R', 0x01 };
-pub const FORMAT_VERSION: u16 = 1;
+pub const FORMAT_VERSION: u16 = 2;
 pub const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
 
 // Bitmap: 4060 bytes = 32480 bits → max sectors in a region file
@@ -75,20 +75,23 @@ pub const FileHeader = extern struct {
     }
 };
 
-// ── Sector 1 layout ───────────────────────────────────────────────
-// Offset 0x1000: COT entries 508..511 (32 bytes)
-// Offset 0x1020: Header CRC32 (4 bytes)
-// Offset 0x1024: Sector allocation bitmap (4060 bytes)
+// ── Shadow-paged dual-slot layout ─────────────────────────────────
+// Each slot = 1 meta sector (4096B) + 1 COT sector (4096B).
+// Meta page: FileHeader(32B) + Bitmap(4060B) + CRC32(4B) = 4096B exactly.
+// COT sector: 512 × ChunkOffsetEntry(8B) = 4096B exactly.
+// A single 4KB meta-page write is the atomic commit point.
 
-pub const COT_SPLIT_FIRST = 508; // Entries 0..507 in sector 0
-pub const COT_SPLIT_SECOND = 4; // Entries 508..511 in sector 1
+// Slot A (sectors 0-1)
+pub const OFFSET_META_A = 0x0000; // sector 0
+pub const OFFSET_COT_A = 0x1000; // sector 1
+// Slot B (sectors 2-3)
+pub const OFFSET_META_B = 0x2000; // sector 2
+pub const OFFSET_COT_B = 0x3000; // sector 3
 
-// Byte offsets within the file
-pub const OFFSET_HEADER = 0x0000;
-pub const OFFSET_COT_FIRST = 0x0020; // After 32-byte header
-pub const OFFSET_COT_SECOND = 0x1000; // Start of sector 1
-pub const OFFSET_CRC32 = 0x1020; // After last 4 COT entries in sector 1
-pub const OFFSET_BITMAP = 0x1024; // After CRC32
+// Offsets within a 4096-byte meta page
+pub const META_OFFSET_HEADER = 0x00; // FileHeader, 32 bytes
+pub const META_OFFSET_BITMAP = 0x20; // Bitmap, 4060 bytes
+pub const META_OFFSET_CRC = 0xFFC; // CRC32, 4 bytes (covers 0x000..0xFFB)
 
 // ── Region Coordinate ──────────────────────────────────────────────
 
