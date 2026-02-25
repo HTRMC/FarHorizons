@@ -6,8 +6,10 @@ const ChunkCache = @import("chunk_cache.zig").ChunkCache;
 const chunk_codec = @import("chunk_codec.zig");
 const compression = @import("compression.zig");
 const WorldState = @import("../WorldState.zig");
+const dirty_set_mod = @import("dirty_set.zig");
 
 const ChunkKey = storage_types.ChunkKey;
+const RegionCoord = storage_types.RegionCoord;
 const Priority = storage_types.Priority;
 const AsyncHandle = storage_types.AsyncHandle;
 const CompressionAlgo = storage_types.CompressionAlgo;
@@ -33,10 +35,6 @@ pub const IoPipeline = struct {
     results_len: u32,
     results_mutex: Io.Mutex,
 
-    // Write-behind: pending writes keyed by chunk
-    pending_saves: [MAX_QUEUE_SIZE]?PendingSave,
-    pending_count: u32,
-
     // Workers
     workers: [MAX_WORKERS]?std.Thread,
     worker_count: u32,
@@ -57,8 +55,10 @@ pub const IoPipeline = struct {
         handle_id: u32,
         // For save requests
         chunk_data: ?*const Chunk,
+        // For batch save requests
+        batch: ?*BatchSaveData,
 
-        const Kind = enum { load, save };
+        const Kind = enum { load, save, batch_save };
     };
 
     pub const RequestResult = struct {
@@ -67,9 +67,24 @@ pub const IoPipeline = struct {
         success: bool,
     };
 
-    const PendingSave = struct {
-        key: ChunkKey,
-        chunk: Chunk,
+    pub const BatchSaveData = struct {
+        region_coord: RegionCoord,
+        count: u32,
+        indices: [MAX_BATCH_SIZE]u9,
+        chunks: [MAX_BATCH_SIZE]*Chunk, // pointers to DirtyEntry's heap chunks
+        keys: [MAX_BATCH_SIZE]ChunkKey, // for cleanup after save
+        allocator: std.mem.Allocator,
+
+        pub const MAX_BATCH_SIZE = dirty_set_mod.MAX_BATCH_SIZE;
+
+        pub fn deinit(self: *BatchSaveData) void {
+            // Free the heap-allocated chunk snapshots
+            for (self.chunks[0..self.count]) |chunk_ptr| {
+                self.allocator.destroy(chunk_ptr);
+            }
+            // Free self
+            self.allocator.destroy(self);
+        }
     };
 
     pub fn initInPlace(
@@ -83,7 +98,6 @@ pub const IoPipeline = struct {
         self.queue_cond = .init;
         self.results_len = 0;
         self.results_mutex = .init;
-        self.pending_count = 0;
         self.workers = [_]?std.Thread{null} ** MAX_WORKERS;
         self.worker_count = 0;
         self.shutdown = std.atomic.Value(bool).init(false);
@@ -92,9 +106,6 @@ pub const IoPipeline = struct {
         self.default_compression = default_compression;
         self.next_handle_id = 0;
         self.io = Io.Threaded.global_single_threaded.io();
-        for (&self.pending_saves) |*slot| {
-            slot.* = null;
-        }
     }
 
     pub fn start(self: *IoPipeline) void {
@@ -152,6 +163,7 @@ pub const IoPipeline = struct {
             .priority = priority,
             .handle_id = handle_id,
             .chunk_data = null,
+            .batch = null,
         };
         self.queue_len += 1;
 
@@ -159,54 +171,45 @@ pub const IoPipeline = struct {
         return .{ .id = handle_id };
     }
 
-    /// Enqueue an async save request.
-    /// If the same chunk already has a pending save, it's replaced (write-behind).
-    pub fn requestSave(self: *IoPipeline, key: ChunkKey, chunk: *const Chunk) void {
+    /// Submit a batch save request. The BatchSaveData is heap-allocated and
+    /// ownership transfers to the pipeline (freed after execution).
+    pub fn submitBatchSave(self: *IoPipeline, batch: *BatchSaveData) void {
         self.queue_mutex.lockUncancelable(self.io);
         defer self.queue_mutex.unlock(self.io);
 
-        // Write-behind: check for existing pending save for this chunk
-        for (&self.pending_saves) |*slot| {
-            if (slot.*) |*pending| {
-                if (pending.key.eql(key)) {
-                    // Replace with latest data
-                    pending.chunk = chunk.*;
-                    return;
-                }
-            }
-        }
-
-        // Store in pending saves buffer
-        for (&self.pending_saves) |*slot| {
-            if (slot.* == null) {
-                slot.* = .{
-                    .key = key,
-                    .chunk = chunk.*,
-                };
-                self.pending_count += 1;
-                break;
-            }
-        }
-
         if (self.queue_len >= MAX_QUEUE_SIZE) {
-            log.warn("I/O queue full, save will be deferred", .{});
+            log.warn("I/O queue full, batch save deferred", .{});
+            batch.deinit();
             return;
         }
 
         const handle_id = self.next_handle_id;
         self.next_handle_id +%= 1;
 
-        // Saves go at the end (lowest priority)
+        // Batch saves go at the end (lowest priority)
         self.queue[self.queue_len] = .{
-            .kind = .save,
-            .key = key,
+            .kind = .batch_save,
+            .key = ChunkKey.init(0, 0, 0, 0), // unused for batch
             .priority = .save,
             .handle_id = handle_id,
-            .chunk_data = null, // Data will be read from pending_saves
+            .chunk_data = null,
+            .batch = batch,
         };
         self.queue_len += 1;
 
         self.queue_cond.signal(self.io);
+    }
+
+    /// Count pending load requests (for I/O budget decisions).
+    pub fn getLoadQueueDepth(self: *IoPipeline) u32 {
+        self.queue_mutex.lockUncancelable(self.io);
+        defer self.queue_mutex.unlock(self.io);
+
+        var load_count: u32 = 0;
+        for (self.queue[0..self.queue_len]) |req| {
+            if (req.kind == .load) load_count += 1;
+        }
+        return load_count;
     }
 
     /// Poll for a completed load request.
@@ -248,6 +251,7 @@ pub const IoPipeline = struct {
             switch (request.kind) {
                 .load => self.executeLoad(request),
                 .save => self.executeSave(request),
+                .batch_save => self.executeBatchSave(request),
             }
         }
     }
@@ -299,26 +303,7 @@ pub const IoPipeline = struct {
 
     fn executeSave(self: *IoPipeline, request: Request) void {
         const key = request.key;
-
-        // Get chunk data from pending saves
-        var chunk_data: ?Chunk = null;
-        {
-            self.queue_mutex.lockUncancelable(self.io);
-            defer self.queue_mutex.unlock(self.io);
-            for (&self.pending_saves) |*slot| {
-                if (slot.*) |pending| {
-                    if (pending.key.eql(key)) {
-                        chunk_data = pending.chunk;
-                        slot.* = null;
-                        self.pending_count -= 1;
-                        break;
-                    }
-                }
-            }
-        }
-
-        const chunk = chunk_data orelse return;
-
+        const chunk = request.chunk_data orelse return;
         const coord = key.regionCoord();
         const region = self.region_cache.getOrOpen(coord) catch {
             log.err("Failed to open region for save", .{});
@@ -329,6 +314,36 @@ pub const IoPipeline = struct {
         const chunk_index = key.localIndex();
         region.writeChunk(chunk_index, &chunk.blocks, self.default_compression) catch |err| {
             log.err("Failed to save chunk: {}", .{err});
+        };
+    }
+
+    fn executeBatchSave(self: *IoPipeline, request: Request) void {
+        const batch = request.batch orelse return;
+        defer batch.deinit();
+
+        const coord = batch.region_coord;
+        const region = self.region_cache.getOrOpen(coord) catch {
+            log.err("Failed to open region for batch save", .{});
+            return;
+        };
+        defer self.region_cache.releaseRegion(region);
+
+        // Build slice arrays for writeChunkBatch
+        var indices: [BatchSaveData.MAX_BATCH_SIZE]u9 = undefined;
+        var block_ptrs: [BatchSaveData.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType = undefined;
+        for (0..batch.count) |i| {
+            indices[i] = batch.indices[i];
+            block_ptrs[i] = &batch.chunks[i].blocks;
+        }
+
+        region.writeChunkBatch(
+            indices[0..batch.count],
+            block_ptrs[0..batch.count],
+            self.default_compression,
+        ) catch |err| {
+            log.err("Batch save failed for region ({d},{d},{d}): {}", .{
+                coord.rx, coord.ry, coord.rz, err,
+            });
         };
     }
 
