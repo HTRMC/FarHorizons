@@ -210,6 +210,8 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
     if (key == glfw.GLFW_KEY_1 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 0;
     if (key == glfw.GLFW_KEY_2 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 1;
     if (key == glfw.GLFW_KEY_3 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 2;
+    if (key == glfw.GLFW_KEY_4 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 3;
+    if (key == glfw.GLFW_KEY_5 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 4;
 
     if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
         const now = glfw.getTime();
@@ -404,6 +406,11 @@ pub fn main() !void {
             // Interpolate for smooth rendering
             const alpha = tick_accumulator / GameState.TICK_INTERVAL;
             game_state.interpolateForRender(alpha);
+        }
+
+        // Run save scheduler (every frame, time-based urgency handles rate)
+        if (game_state.storage) |s| {
+            s.tick();
         }
 
         try renderer.beginFrame();

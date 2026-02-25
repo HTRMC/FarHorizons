@@ -713,10 +713,10 @@ pub fn downsampleWorld(src: *const World, dst: *World, lod_level: u8) void {
     const scale: u32 = @as(u32, 1) << @intCast(lod_level);
     const iscale: i32 = @intCast(scale);
 
-    // LOD grid dimensions
-    const lod_chunks_x = WORLD_CHUNKS_X / scale;
-    const lod_chunks_y = WORLD_CHUNKS_Y; // Y is already 1, can't subdivide further
-    const lod_chunks_z = WORLD_CHUNKS_Z / scale;
+    // LOD grid dimensions (minimum 1 chunk — high LODs fit in a single chunk)
+    const lod_chunks_x = @max(1, WORLD_CHUNKS_X / scale);
+    const lod_chunks_y = @max(1, WORLD_CHUNKS_Y / scale);
+    const lod_chunks_z = @max(1, WORLD_CHUNKS_Z / scale);
 
     for (0..lod_chunks_y) |cy| {
         for (0..lod_chunks_z) |cz| {

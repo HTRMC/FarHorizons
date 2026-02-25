@@ -12,6 +12,7 @@ pub const MovementMode = enum { flying, walking };
 pub const EYE_OFFSET: f32 = 1.62;
 pub const TICK_RATE: f32 = 30.0;
 pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
+pub const MAX_LOD: u8 = 5;
 
 allocator: std.mem.Allocator,
 camera: Camera,
@@ -31,9 +32,9 @@ saved_camera: Camera,
 
 // LOD state
 current_lod: u8,
-lod_worlds: [3]*WorldState.World,
-lod_light_maps: [3]*WorldState.LightMap,
-lod_stale: [3]bool,
+lod_worlds: [MAX_LOD]*WorldState.World,
+lod_light_maps: [MAX_LOD]*WorldState.LightMap,
+lod_stale: [MAX_LOD]bool,
 
 // World persistence
 storage: ?*Storage,
@@ -123,21 +124,20 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
 
     WorldState.computeLightMap(world, light_map);
 
-    // Allocate LOD1 and LOD2 worlds and light maps
-    const lod1_world = try allocator.create(WorldState.World);
-    const lod1_light_map = try allocator.create(WorldState.LightMap);
-    const lod2_world = try allocator.create(WorldState.World);
-    const lod2_light_map = try allocator.create(WorldState.LightMap);
+    // Allocate LOD1-4 worlds and light maps
+    var lod_worlds_arr: [MAX_LOD]*WorldState.World = undefined;
+    var lod_light_maps_arr: [MAX_LOD]*WorldState.LightMap = undefined;
+    lod_worlds_arr[0] = world;
+    lod_light_maps_arr[0] = light_map;
 
-    // Initialize LOD worlds to air so unloaded chunks don't have garbage
-    @memset(std.mem.asBytes(lod1_world), 0);
-    @memset(std.mem.asBytes(lod2_world), 0);
+    for (1..MAX_LOD) |i| {
+        lod_worlds_arr[i] = try allocator.create(WorldState.World);
+        @memset(std.mem.asBytes(lod_worlds_arr[i]), 0);
+        lod_light_maps_arr[i] = try allocator.create(WorldState.LightMap);
+    }
 
     // Try to load LOD data from disk, fall back to downsampling
-    const lod_worlds_arr = [3]*WorldState.World{ world, lod1_world, lod2_world };
-    const lod_light_maps_arr = [3]*WorldState.LightMap{ light_map, lod1_light_map, lod2_light_map };
-
-    for (1..3) |lod_level_usize| {
+    for (1..MAX_LOD) |lod_level_usize| {
         const lod_level: u8 = @intCast(lod_level_usize);
         var lod_any_loaded = false;
 
@@ -198,9 +198,9 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
         .hit_result = null,
         .dirty_chunks = DirtyChunkSet.empty(),
         .current_lod = 0,
-        .lod_worlds = .{ world, lod1_world, lod2_world },
-        .lod_light_maps = .{ light_map, lod1_light_map, lod2_light_map },
-        .lod_stale = .{ false, false, false },
+        .lod_worlds = lod_worlds_arr,
+        .lod_light_maps = lod_light_maps_arr,
+        .lod_stale = .{false} ** MAX_LOD,
         .storage = storage,
         .debug_camera_active = false,
         .overdraw_mode = false,
@@ -217,7 +217,7 @@ pub fn save(self: *GameState) void {
     const s = self.storage orelse return;
 
     // Persist stale LOD worlds
-    for (1..3) |lod_level_usize| {
+    for (1..MAX_LOD) |lod_level_usize| {
         const lod_level: u8 = @intCast(lod_level_usize);
         if (self.lod_stale[lod_level_usize]) {
             WorldState.downsampleWorld(self.lod_worlds[0], self.lod_worlds[lod_level_usize], lod_level);
@@ -247,11 +247,11 @@ pub fn save(self: *GameState) void {
 
 pub fn deinit(self: *GameState) void {
     if (self.storage) |s| s.deinit();
-    // Free LOD1 and LOD2 (LOD0 is the main world/light_map, freed below)
-    self.allocator.destroy(self.lod_worlds[1]);
-    self.allocator.destroy(self.lod_worlds[2]);
-    self.allocator.destroy(self.lod_light_maps[1]);
-    self.allocator.destroy(self.lod_light_maps[2]);
+    // Free LOD1-4 (LOD0 is the main world/light_map, freed last)
+    for (1..MAX_LOD) |i| {
+        self.allocator.destroy(self.lod_worlds[i]);
+        self.allocator.destroy(self.lod_light_maps[i]);
+    }
     self.allocator.destroy(self.lod_light_maps[0]);
     self.allocator.destroy(self.lod_worlds[0]);
 }
@@ -293,7 +293,7 @@ pub fn toggleMode(self: *GameState) void {
 }
 
 pub fn switchLod(self: *GameState, lod: u8) void {
-    if (lod >= 3 or lod == self.current_lod) return;
+    if (lod >= MAX_LOD or lod == self.current_lod) return;
 
     // Re-downsample if LOD data is stale (block edits since last downsample)
     if (lod > 0 and self.lod_stale[lod]) {
@@ -451,8 +451,7 @@ pub fn breakBlock(self: *GameState) void {
     self.dirtyLightRadius(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
     self.queueChunkSave(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
-    self.lod_stale[1] = true;
-    self.lod_stale[2] = true;
+    for (1..MAX_LOD) |i| self.lod_stale[i] = true;
 }
 
 pub fn placeBlock(self: *GameState) void {
@@ -467,8 +466,7 @@ pub fn placeBlock(self: *GameState) void {
     self.dirtyLightRadius(px, py, pz);
     self.queueChunkSave(px, py, pz);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
-    self.lod_stale[1] = true;
-    self.lod_stale[2] = true;
+    for (1..MAX_LOD) |i| self.lod_stale[i] = true;
 }
 
 /// Queue an async save for the chunk containing world position (wx, wy, wz).
