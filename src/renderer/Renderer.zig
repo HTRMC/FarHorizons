@@ -13,6 +13,7 @@ pub const Renderer = struct {
         end_frame: *const fn (self: *anyopaque) anyerror!void,
         render: *const fn (self: *anyopaque) anyerror!void,
         get_framebuffer_resized_ptr: *const fn (self: *anyopaque) *bool,
+        set_game_state: *const fn (self: *anyopaque, game_state: ?*anyopaque) void,
     };
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window, backend: *const VTable, user_data: ?*anyopaque) !Renderer {
@@ -42,5 +43,9 @@ pub const Renderer = struct {
 
     pub fn getFramebufferResizedPtr(self: *Renderer) *bool {
         return self.vtable.get_framebuffer_resized_ptr(self.impl);
+    }
+
+    pub fn setGameState(self: *Renderer, game_state: ?*anyopaque) void {
+        self.vtable.set_game_state(self.impl, game_state);
     }
 };

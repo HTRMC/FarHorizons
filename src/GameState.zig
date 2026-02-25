@@ -68,7 +68,7 @@ pub const DirtyChunkSet = struct {
     }
 };
 
-pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
+pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8) !GameState {
     const world = try allocator.create(WorldState.World);
     // Initialize all blocks to air so unloaded chunks don't have garbage data
     @memset(std.mem.asBytes(world), 0);
@@ -76,7 +76,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) !GameState {
     const cam = Camera.init(width, height);
 
     // Initialize storage (optional — game works without persistence)
-    var storage = Storage.init(allocator, "default") catch |err| blk: {
+    var storage = Storage.init(allocator, world_name) catch |err| blk: {
         std.log.warn("Storage init failed: {}, world will not be saved", .{err});
         break :blk null;
     };

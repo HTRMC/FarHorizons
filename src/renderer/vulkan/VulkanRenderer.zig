@@ -10,6 +10,7 @@ const RenderState = render_state_mod.RenderState;
 const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
+const Menu = @import("../../ui/Menu.zig").Menu;
 const app_config = @import("../../app_config.zig");
 const zlm = @import("zlm");
 const tracy = @import("../../platform/tracy.zig");
@@ -59,11 +60,12 @@ pub const VulkanRenderer = struct {
     surface_state: SurfaceState,
     render_state: RenderState,
     pipeline_cache_path: []const u8,
-    mesh_worker: MeshWorker,
-    game_state: *GameState,
+    mesh_worker: ?MeshWorker,
+    game_state: ?*GameState,
+    menu: ?*Menu,
     framebuffer_resized: bool,
 
-    pub fn init(allocator: std.mem.Allocator, window: *const Window, game_state: *GameState) !*VulkanRenderer {
+    pub fn init(allocator: std.mem.Allocator, window: *const Window, game_state: ?*GameState, menu: ?*Menu) !*VulkanRenderer {
         const init_zone = tracy.zone(@src(), "VulkanRenderer.init");
         defer init_zone.end();
 
@@ -131,20 +133,24 @@ pub const VulkanRenderer = struct {
             .pipeline_cache_path = pipeline_cache_path,
             .surface_state = undefined,
             .render_state = undefined,
-            .mesh_worker = MeshWorker.init(allocator, game_state.world),
+            .mesh_worker = null,
             .game_state = game_state,
+            .menu = menu,
             .framebuffer_resized = false,
         };
 
-        self.mesh_worker.light_map = game_state.light_map;
-
         try self.createCommandPool();
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
-        self.game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
         self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format);
         self.render_state.text_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
 
-        self.mesh_worker.startAll();
+        // Initialize mesh worker and camera if game_state is provided
+        if (game_state) |gs| {
+            gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+            self.mesh_worker = MeshWorker.init(allocator, gs.world);
+            self.mesh_worker.?.light_map = gs.light_map;
+            self.mesh_worker.?.startAll();
+        }
 
         std.log.info("VulkanRenderer initialized", .{});
         return self;
@@ -158,7 +164,7 @@ pub const VulkanRenderer = struct {
             std.log.err("vkDeviceWaitIdle failed: {}", .{err});
         };
 
-        self.mesh_worker.deinit();
+        if (self.mesh_worker) |*mw| mw.deinit();
         self.render_state.deinit(self.ctx.device);
         vk.destroyCommandPool(self.ctx.device, self.ctx.command_pool, null);
         self.surface_state.deinit(self.allocator, self.ctx.device);
@@ -179,6 +185,24 @@ pub const VulkanRenderer = struct {
         self.allocator.destroy(self);
     }
 
+    pub fn setGameState(self: *VulkanRenderer, gs: ?*GameState) void {
+        // Tear down existing mesh worker
+        if (self.mesh_worker) |*mw| {
+            mw.deinit();
+            self.mesh_worker = null;
+        }
+
+        self.game_state = gs;
+
+        // Set up new mesh worker if we have a game state
+        if (gs) |game_state| {
+            game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+            self.mesh_worker = MeshWorker.init(self.allocator, game_state.world);
+            self.mesh_worker.?.light_map = game_state.light_map;
+            self.mesh_worker.?.startAll();
+        }
+    }
+
     pub fn beginFrame(self: *VulkanRenderer) !void {
         const tz = tracy.zone(@src(), "beginFrame");
         defer tz.end();
@@ -187,32 +211,52 @@ pub const VulkanRenderer = struct {
         // are not read by the GPU while we update them on the CPU.
         try vk.waitForFences(self.ctx.device, MAX_FRAMES_IN_FLIGHT, &self.render_state.in_flight_fences, vk.VK_TRUE, std.math.maxInt(u64));
 
-        if (!self.game_state.debug_camera_active) {
-            self.pollMeshWorker();
-            self.render_state.world_renderer.buildIndirectCommands(&self.ctx, self.game_state.camera.position);
-            self.render_state.debug_renderer.updateVertices(self.ctx.device, self.game_state);
+        if (self.game_state) |gs| {
+            if (!gs.debug_camera_active) {
+                self.pollMeshWorker(gs);
+                self.render_state.world_renderer.buildIndirectCommands(&self.ctx, gs.camera.position);
+                self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
 
-            if (self.game_state.dirty_chunks.count > 0 and self.mesh_worker.state.load(.acquire) == .idle) {
-                self.mesh_worker.world = self.game_state.world;
-                self.mesh_worker.light_map = self.game_state.light_map;
-                self.mesh_worker.startDirty(self.game_state.dirty_chunks.chunks[0..self.game_state.dirty_chunks.count]);
-                self.game_state.dirty_chunks.clear();
+                if (gs.dirty_chunks.count > 0) {
+                    if (self.mesh_worker) |*mw| {
+                        if (mw.state.load(.acquire) == .idle) {
+                            mw.world = gs.world;
+                            mw.light_map = gs.light_map;
+                            mw.startDirty(gs.dirty_chunks.chunks[0..gs.dirty_chunks.count]);
+                            gs.dirty_chunks.clear();
+                        }
+                    }
+                }
             }
         }
 
         // Text rendering
         self.render_state.text_renderer.beginFrame(self.ctx.device);
-        self.render_state.text_renderer.drawText(10.0, 10.0, "FarHorizons", .{ 1.0, 1.0, 1.0, 1.0 });
 
-        var lod_buf: [16]u8 = undefined;
-        const lod_text = std.fmt.bufPrint(&lod_buf, "LOD {d}", .{self.game_state.current_lod}) catch "LOD ?";
-        self.render_state.text_renderer.drawText(10.0, 30.0, lod_text, .{ 1.0, 1.0, 0.0, 1.0 });
+        if (self.game_state) |gs| {
+            // In-game HUD
+            self.render_state.text_renderer.drawText(10.0, 10.0, "FarHorizons", .{ 1.0, 1.0, 1.0, 1.0 });
+
+            var lod_buf: [16]u8 = undefined;
+            const lod_text = std.fmt.bufPrint(&lod_buf, "LOD {d}", .{gs.current_lod}) catch "LOD ?";
+            self.render_state.text_renderer.drawText(10.0, 30.0, lod_text, .{ 1.0, 1.0, 0.0, 1.0 });
+        }
+
+        // Draw menu overlay if active
+        if (self.menu) |m| {
+            m.draw(
+                &self.render_state.text_renderer,
+                @floatFromInt(self.surface_state.swapchain_extent.width),
+                @floatFromInt(self.surface_state.swapchain_extent.height),
+            );
+        }
     }
 
-    fn pollMeshWorker(self: *VulkanRenderer) void {
-        const poll_result = self.mesh_worker.poll() orelse return;
+    fn pollMeshWorker(self: *VulkanRenderer, gs: *GameState) void {
+        const mw = &(self.mesh_worker orelse return);
+        const poll_result = mw.poll() orelse return;
 
-        const voxel_size: u32 = @as(u32, 1) << @intCast(self.game_state.current_lod);
+        const voxel_size: u32 = @as(u32, 1) << @intCast(gs.current_lod);
 
         for (0..poll_result.count) |i| {
             if (poll_result.results[i]) |chunk_result| {
@@ -230,7 +274,7 @@ pub const VulkanRenderer = struct {
                         chunk_result.coord.cx, chunk_result.coord.cy, chunk_result.coord.cz, err,
                     });
                 };
-                self.mesh_worker.freeResult(i);
+                mw.freeResult(i);
             }
         }
     }
@@ -351,8 +395,10 @@ pub const VulkanRenderer = struct {
         // Recreate depth buffer at new size
         try self.surface_state.createDepthBuffer(&self.ctx);
 
-        // Update camera aspect ratio
-        self.game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        // Update camera aspect ratio if game is active
+        if (self.game_state) |gs| {
+            gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        }
 
         // Update text renderer screen size
         self.render_state.text_renderer.updateScreenSize(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
@@ -373,10 +419,11 @@ pub const VulkanRenderer = struct {
 
         try vk.beginCommandBuffer(command_buffer, &begin_info);
 
-        const overdraw = self.game_state.overdraw_mode;
+        const has_game = self.game_state != null;
+        const overdraw = if (self.game_state) |gs| gs.overdraw_mode else false;
 
-        // Debug line compute dispatch (before render pass) — skip in overdraw mode
-        if (!overdraw) self.render_state.debug_renderer.recordCompute(command_buffer);
+        // Debug line compute dispatch (before render pass) — skip in overdraw mode or no game
+        if (has_game and !overdraw) self.render_state.debug_renderer.recordCompute(command_buffer);
 
         // Barrier: depth image UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL
         const depth_barrier = vk.VkImageMemoryBarrier{
@@ -444,6 +491,14 @@ pub const VulkanRenderer = struct {
             &[_]vk.VkImageMemoryBarrier{color_barrier},
         );
 
+        // Choose clear color: dark for menus, sky blue for gameplay
+        const clear_color: [4]f32 = if (!has_game)
+            .{ 0.05, 0.05, 0.1, 1.0 }
+        else if (overdraw)
+            .{ 0.0, 0.0, 0.0, 1.0 }
+        else
+            .{ 0.224, 0.643, 0.918, 1.0 };
+
         // Dynamic rendering
         const color_attachment = vk.VkRenderingAttachmentInfo{
             .sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -455,7 +510,7 @@ pub const VulkanRenderer = struct {
             .resolveImageLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
             .loadOp = vk.VK_ATTACHMENT_LOAD_OP_CLEAR,
             .storeOp = vk.VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue = .{ .color = .{ .float32 = if (overdraw) .{ 0.0, 0.0, 0.0, 1.0 } else .{ 0.224, 0.643, 0.918, 1.0 } } },
+            .clearValue = .{ .color = .{ .float32 = clear_color } },
         };
 
         const depth_attachment = vk.VkRenderingAttachmentInfo{
@@ -506,27 +561,30 @@ pub const VulkanRenderer = struct {
         };
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
 
-        const mvp = self.game_state.camera.getViewProjectionMatrix();
+        // Draw world and debug lines only if game is active
+        if (self.game_state) |gs| {
+            const mvp = gs.camera.getViewProjectionMatrix();
 
-        // Draw world chunks
-        self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw);
+            // Draw world chunks
+            self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw);
 
-        // Draw debug lines with view-space shrink (skip in overdraw mode)
-        if (!overdraw) {
-            // Compute P * VIEW_SCALE * V so lines are pulled toward camera in view-space.
-            const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
-            const view_scale = zlm.Mat4{
-                .m = .{
-                    VIEW_SHRINK, 0, 0, 0,
-                    0, VIEW_SHRINK, 0, 0,
-                    0, 0, VIEW_SHRINK, 0,
-                    0, 0, 0, 1,
-                },
-            };
-            const view = self.game_state.camera.getViewMatrix();
-            const proj = self.game_state.camera.getProjectionMatrix();
-            const debug_mvp = zlm.Mat4.mul(proj, zlm.Mat4.mul(view_scale, view));
-            self.render_state.debug_renderer.recordDraw(command_buffer, &debug_mvp.m);
+            // Draw debug lines with view-space shrink (skip in overdraw mode)
+            if (!overdraw) {
+                // Compute P * VIEW_SCALE * V so lines are pulled toward camera in view-space.
+                const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
+                const view_scale = zlm.Mat4{
+                    .m = .{
+                        VIEW_SHRINK, 0, 0, 0,
+                        0, VIEW_SHRINK, 0, 0,
+                        0, 0, VIEW_SHRINK, 0,
+                        0, 0, 0, 1,
+                    },
+                };
+                const view = gs.camera.getViewMatrix();
+                const proj = gs.camera.getProjectionMatrix();
+                const debug_mvp = zlm.Mat4.mul(proj, zlm.Mat4.mul(view_scale, view));
+                self.render_state.debug_renderer.recordDraw(command_buffer, &debug_mvp.m);
+            }
         }
 
         // Draw text overlay (always on top, no depth test)
@@ -850,8 +908,8 @@ pub const VulkanRenderer = struct {
     }
 
     fn initVTable(allocator: std.mem.Allocator, window: *const Window, user_data: ?*anyopaque) anyerror!*anyopaque {
-        const game_state: *GameState = @ptrCast(@alignCast(user_data.?));
-        const self = try init(allocator, window, game_state);
+        const menu: *Menu = if (user_data) |p| @ptrCast(@alignCast(p)) else unreachable;
+        const self = try init(allocator, window, null, menu);
         return @ptrCast(self);
     }
 
@@ -880,6 +938,12 @@ pub const VulkanRenderer = struct {
         return &self.framebuffer_resized;
     }
 
+    fn setGameStateVTable(ptr: *anyopaque, game_state_ptr: ?*anyopaque) void {
+        const self: *VulkanRenderer = @ptrCast(@alignCast(ptr));
+        const gs: ?*GameState = if (game_state_ptr) |p| @ptrCast(@alignCast(p)) else null;
+        self.setGameState(gs);
+    }
+
     pub const vtable: Renderer.VTable = .{
         .init = initVTable,
         .deinit = deinitVTable,
@@ -887,5 +951,6 @@ pub const VulkanRenderer = struct {
         .end_frame = endFrameVTable,
         .render = renderVTable,
         .get_framebuffer_resized_ptr = getFramebufferResizedPtrVTable,
+        .set_game_state = setGameStateVTable,
     };
 };

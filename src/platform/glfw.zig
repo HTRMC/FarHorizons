@@ -35,7 +35,12 @@ pub const GLFW_KEY_2 = c.GLFW_KEY_2;
 pub const GLFW_KEY_3 = c.GLFW_KEY_3;
 pub const GLFW_KEY_4 = c.GLFW_KEY_4;
 pub const GLFW_KEY_5 = c.GLFW_KEY_5;
+pub const GLFW_KEY_N = c.GLFW_KEY_N;
 pub const GLFW_KEY_P = c.GLFW_KEY_P;
+pub const GLFW_KEY_Y = c.GLFW_KEY_Y;
+pub const GLFW_KEY_ENTER = c.GLFW_KEY_ENTER;
+pub const GLFW_KEY_BACKSPACE = c.GLFW_KEY_BACKSPACE;
+pub const GLFW_KEY_DELETE = c.GLFW_KEY_DELETE;
 pub const GLFW_KEY_F4 = c.GLFW_KEY_F4;
 pub const GLFW_KEY_F11 = c.GLFW_KEY_F11;
 pub const GLFW_PRESS = c.GLFW_PRESS;
@@ -128,6 +133,10 @@ pub fn getWindowUserPointer(window: *Window, comptime T: type) ?*T {
 
 pub fn setScrollCallback(window: *Window, callback: ?*const fn (?*Window, f64, f64) callconv(.c) void) void {
     _ = c.glfwSetScrollCallback(window, callback);
+}
+
+pub fn setCharCallback(window: *Window, callback: ?*const fn (?*Window, c_uint) callconv(.c) void) void {
+    _ = c.glfwSetCharCallback(window, callback);
 }
 
 pub fn setMouseButtonCallback(window: *Window, callback: ?*const fn (?*Window, c_int, c_int, c_int) callconv(.c) void) void {

@@ -172,6 +172,22 @@ pub const TextRenderer = struct {
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
     }
 
+    pub fn measureText(self: *const TextRenderer, text: []const u8) f32 {
+        var width: f32 = 0;
+        for (text) |ch| {
+            if (ch == ' ') {
+                width += 4 * GLYPH_SCALE;
+                continue;
+            }
+            const gw = self.glyph_widths[ch];
+            if (gw == 0) continue;
+            width += @as(f32, @floatFromInt(gw)) * GLYPH_SCALE + GLYPH_SCALE;
+        }
+        // Remove trailing gap if we drew anything
+        if (width > 0) width -= GLYPH_SCALE;
+        return width;
+    }
+
     pub fn updateScreenSize(self: *TextRenderer, width: u32, height: u32) void {
         self.screen_width = @floatFromInt(width);
         self.screen_height = @floatFromInt(height);
