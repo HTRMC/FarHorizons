@@ -36,7 +36,7 @@
       <panel width="300" height="auto" anchor_x="center" anchor_y="center"
              background="#1A1A2ECC" padding="16" direction="column"
              cross_align="center" gap="12" border_width="1" border_color="#444466FF">
-        <label text="Coming Soon" color="#FFCC00FF" font_size="2"/>
+        <label text="Coming Soon" color="#FFFFFFFF" font_size="2"/>
         <button text="OK" width="120" height="32" background="#335588FF"
                 on_click="dismiss_modal"/>
       </panel>
