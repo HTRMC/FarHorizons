@@ -1,35 +1,43 @@
 <screen>
   <panel width="fill" height="fill" layout="anchor">
-    <panel width="400" height="auto" anchor_x="center" anchor_y="center"
-           background="#1A1A2ECC" padding="16" direction="column"
-           cross_align="stretch" gap="8" border_width="1" border_color="#444466FF">
 
-      <label text="Singleplayer" color="#FFCC00FF" font_size="2" width="fill"/>
+    <!-- Centered column, full height -->
+    <panel anchor_x="center" anchor_y="center" direction="column"
+           cross_align="stretch" gap="8" width="800" height="fill"
+           padding_top="32" padding_bottom="32">
+
+      <!-- Search bar -->
+      <text_input id="world_name_input" placeholder="Search worlds..."
+                  width="fill" height="32" max_len="32"/>
 
       <!-- World list (children added at runtime) -->
-      <list_view id="world_list" width="fill" height="200"
-                 background="#222233FF" item_height="28"
+      <list_view id="world_list" width="fill" height="fill" flex_grow="1"
+                 background="#222233FF" item_height="72"
                  selection_color="#3366AAFF" on_change="world_select"
                  on_double_click="play_world"/>
 
       <!-- Empty state label (shown when no worlds) -->
-      <label id="no_worlds_label" text="No worlds yet. Create one below."
+      <label id="no_worlds_label" text="No worlds yet — create one below."
              color="#999999FF" width="fill" visible="false"/>
 
-      <!-- New world input -->
+      <!-- Row 1: Play World | Create World -->
       <panel direction="row" gap="8" width="fill" height="auto" cross_align="center">
-        <text_input id="world_name_input" placeholder="New world name..."
-                    width="fill" height="28" max_len="32" flex_grow="1"/>
-        <button text="Create" width="80" height="28" background="#338833FF"
-                on_click="create_world"/>
+        <button text="Play World" width="fill" height="40" flex_grow="1"
+                background="#335588FF" shadow="true" on_click="play_world"/>
+        <button text="Create World" width="fill" height="40" flex_grow="1"
+                background="#338833FF" shadow="true" on_click="create_world"/>
       </panel>
 
-      <!-- Action buttons -->
+      <!-- Row 2: Edit | Delete | Backup | Back -->
       <panel direction="row" gap="8" width="fill" height="auto" cross_align="center">
-        <button id="play_btn" text="Play" width="fill" height="32" flex_grow="1"
-                background="#335588FF" on_click="play_world"/>
-        <button id="delete_btn" text="Delete" width="80" height="32"
-                background="#553333FF" on_click="delete_world"/>
+        <button text="Edit" width="fill" height="40" flex_grow="1"
+                background="#335588FF" shadow="true" on_click="show_coming_soon"/>
+        <button text="Delete" width="fill" height="40" flex_grow="1"
+                background="#553333FF" shadow="true" on_click="delete_world"/>
+        <button text="Backup" width="fill" height="40" flex_grow="1"
+                background="#335588FF" shadow="true" on_click="show_coming_soon"/>
+        <button text="Back" width="fill" height="40" flex_grow="1"
+                background="#555555FF" shadow="true" on_click="back_to_title"/>
       </panel>
 
       <!-- Delete confirmation (hidden by default) -->
@@ -37,14 +45,13 @@
              cross_align="center" visible="false">
         <label id="delete_label" text="Delete world?" color="#FF5555FF"
                width="fill" flex_grow="1"/>
-        <button text="Yes" width="60" height="28" background="#AA3333FF"
+        <button text="Yes" width="60" height="28" background="#AA3333FF" shadow="true"
                 on_click="confirm_delete"/>
-        <button text="No" width="60" height="28" background="#555555FF"
+        <button text="No" width="60" height="28" background="#555555FF" shadow="true"
                 on_click="cancel_delete"/>
       </panel>
 
-      <button text="Back" width="fill" height="28" background="#555555FF"
-              on_click="back_to_title"/>
     </panel>
+
   </panel>
 </screen>

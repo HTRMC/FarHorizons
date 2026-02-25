@@ -85,9 +85,9 @@ pub const MenuController = struct {
 
     fn singleplayerTree(self: *MenuController) ?*WidgetTree {
         if (!self.singleplayer_screen_loaded) return null;
-        if (self.ui_manager.screen_count < 2) return null;
-        if (!self.ui_manager.screens[1].active) return null;
-        return &self.ui_manager.screens[1].tree;
+        if (self.ui_manager.screen_count == 0) return null;
+        if (!self.ui_manager.screens[0].active) return null;
+        return &self.ui_manager.screens[0].tree;
     }
 
     pub fn registerActions(self: *MenuController) void {
@@ -140,19 +140,70 @@ pub const MenuController = struct {
                 data.list_view.scroll_offset = 0;
             }
 
-            // Clear existing children and add label for each world
+            // Clear existing children and build rich items for each world
             tree.clearChildren(self.world_list_id);
             for (0..self.world_count) |i| {
                 const name = self.world_names[i][0..self.world_name_lens[i]];
-                const label_id = tree.addWidget(.label, self.world_list_id) orelse break;
-                if (tree.getWidget(label_id)) |w| {
+
+                // Row container: [image] [text column]
+                const row_id = tree.addWidget(.panel, self.world_list_id) orelse break;
+                if (tree.getWidget(row_id)) |w| {
                     w.width = .fill;
-                    w.height = .{ .px = 28 };
+                    w.height = .{ .px = 72 };
+                    w.flex_direction = .row;
+                    w.gap = 8;
+                    w.cross_align = .center;
                     w.padding = .{ .top = 4, .right = 8, .bottom = 4, .left = 8 };
                 }
-                if (tree.getData(label_id)) |data| {
+
+                // Image placeholder
+                const img_id = tree.addWidget(.panel, row_id) orelse break;
+                if (tree.getWidget(img_id)) |w| {
+                    w.width = .{ .px = 56 };
+                    w.height = .{ .px = 56 };
+                    w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 1.0 };
+                }
+
+                // Text column: title, last played, version
+                const col_id = tree.addWidget(.panel, row_id) orelse break;
+                if (tree.getWidget(col_id)) |w| {
+                    w.width = .fill;
+                    w.height = .auto;
+                    w.flex_direction = .column;
+                    w.gap = 2;
+                }
+
+                // Title
+                const title_id = tree.addWidget(.label, col_id) orelse break;
+                if (tree.getWidget(title_id)) |w| {
+                    w.width = .fill;
+                    w.height = .auto;
+                }
+                if (tree.getData(title_id)) |data| {
                     data.label.setText(name);
                     data.label.color = Widget.Color.white;
+                }
+
+                // Last played
+                const date_id = tree.addWidget(.label, col_id) orelse break;
+                if (tree.getWidget(date_id)) |w| {
+                    w.width = .fill;
+                    w.height = .auto;
+                }
+                if (tree.getData(date_id)) |data| {
+                    data.label.setText("Last played: Unknown");
+                    data.label.color = .{ .r = 0.6, .g = 0.6, .b = 0.6, .a = 1.0 };
+                }
+
+                // Version
+                const ver_id = tree.addWidget(.label, col_id) orelse break;
+                if (tree.getWidget(ver_id)) |w| {
+                    w.width = .fill;
+                    w.height = .auto;
+                }
+                if (tree.getData(ver_id)) |data| {
+                    data.label.setText("Version: Alpha 0.1.0");
+                    data.label.color = .{ .r = 0.6, .g = 0.6, .b = 0.6, .a = 1.0 };
                 }
             }
         }
@@ -190,16 +241,16 @@ pub const MenuController = struct {
     }
 
     pub fn showTitleMenu(self: *MenuController) void {
-        // Remove singleplayer screen if loaded
-        if (self.singleplayer_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.singleplayer_screen_loaded = false;
-            self.resetSingleplayerWidgetIds();
-        }
         // Remove pause screen if still on stack
         if (self.pause_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.pause_screen_loaded = false;
+        }
+        // Remove singleplayer screen if loaded (it's at screens[0])
+        if (self.singleplayer_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.singleplayer_screen_loaded = false;
+            self.resetSingleplayerWidgetIds();
         }
         // If title screen was removed, reload it
         if (!self.title_screen_loaded or self.ui_manager.screen_count == 0) {
@@ -211,10 +262,10 @@ pub const MenuController = struct {
         self.app_state = .title_menu;
     }
 
-    /// Hide the title screen (when entering gameplay).
+    /// Hide all menu screens (when entering gameplay).
     pub fn hideTitleMenu(self: *MenuController) void {
-        // Remove singleplayer screen first if loaded
-        if (self.singleplayer_screen_loaded) {
+        // Singleplayer and title are mutually exclusive at screens[0]
+        if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
             self.singleplayer_screen_loaded = false;
             self.resetSingleplayerWidgetIds();
@@ -233,8 +284,8 @@ pub const MenuController = struct {
     }
 
     pub fn getInputName(self: *const MenuController) []const u8 {
-        const tree: *const WidgetTree = if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 1)
-            &self.ui_manager.screens[1].tree
+        const tree: *const WidgetTree = if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0)
+            &self.ui_manager.screens[0].tree
         else
             return "";
         if (self.world_name_input_id == NULL_WIDGET) return "";
@@ -343,6 +394,11 @@ pub const MenuController = struct {
     fn actionShowSingleplayer(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
         if (self.singleplayer_screen_loaded) return;
+        // Remove title screen first so singleplayer becomes screens[0]
+        if (self.title_screen_loaded and self.ui_manager.screen_count > 0) {
+            self.ui_manager.removeTopScreen();
+            self.title_screen_loaded = false;
+        }
         if (self.ui_manager.loadScreenFromFile("singleplayer_menu.xml", self.allocator)) {
             self.singleplayer_screen_loaded = true;
             self.cacheSingleplayerWidgetIds();
@@ -355,10 +411,17 @@ pub const MenuController = struct {
 
     fn actionBackToTitle(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
+        // Remove singleplayer screen, then reload title as screens[0]
         if (self.singleplayer_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.singleplayer_screen_loaded = false;
             self.resetSingleplayerWidgetIds();
+        }
+        if (self.ui_manager.loadScreenFromFile("title_menu.xml", self.allocator)) {
+            self.title_screen_loaded = true;
+            self.cacheTitleWidgetIds();
+        } else {
+            log.err("Failed to load title_menu.xml", .{});
         }
         self.app_state = .title_menu;
     }
