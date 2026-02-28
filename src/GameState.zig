@@ -102,7 +102,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
 
     if (!any_loaded) {
         // No saved data — generate fresh world
-        WorldState.generateSphereWorld(world);
+        WorldState.generateTerrainWorld(world);
 
         // Persist generated world immediately
         if (storage != null) {

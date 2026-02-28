@@ -153,9 +153,9 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
     const RgbQueueEntry = struct { vx: u8, vy: u8, vz: u8, r: u8, g: u8, b: u8 };
 
     const bfs_offsets = [6][3]i32{
-        .{ 1, 0, 0 },  .{ -1, 0, 0 },
-        .{ 0, 1, 0 },  .{ 0, -1, 0 },
-        .{ 0, 0, 1 },  .{ 0, 0, -1 },
+        .{ 1, 0, 0 }, .{ -1, 0, 0 },
+        .{ 0, 1, 0 }, .{ 0, -1, 0 },
+        .{ 0, 0, 1 }, .{ 0, 0, -1 },
     };
 
     // --- Sky light ---
@@ -298,9 +298,9 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
 /// Much faster than full recomputation for single block changes.
 pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i32, wz: i32) void {
     const bfs_offsets = [6][3]i32{
-        .{ 1, 0, 0 },  .{ -1, 0, 0 },
-        .{ 0, 1, 0 },  .{ 0, -1, 0 },
-        .{ 0, 0, 1 },  .{ 0, 0, -1 },
+        .{ 1, 0, 0 }, .{ -1, 0, 0 },
+        .{ 0, 1, 0 }, .{ 0, -1, 0 },
+        .{ 0, 0, 1 }, .{ 0, 0, -1 },
     };
 
     const cvx = wx + @as(i32, WORLD_SIZE_X / 2);
@@ -664,7 +664,7 @@ pub fn getBlock(world: *const World, wx: i32, wy: i32, wz: i32) BlockType {
     return world[cy][cz][cx].blocks[chunkIndex(lx, ly, lz)];
 }
 
-pub fn generateSphereWorld(out: *World) void {
+pub fn generateTerrainWorld(out: *World) void {
     const half_y: i32 = WORLD_SIZE_Y / 2;
 
     // Flat terrain: surface at world Y=0
