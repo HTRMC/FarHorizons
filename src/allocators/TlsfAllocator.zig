@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const TlsfAllocator = struct {
-    pub const FL_MAX = 24;
+    pub const FL_MAX = 32;
     pub const SL_BITS = 4;
     pub const SL_COUNT = 1 << SL_BITS;
 
@@ -99,6 +99,76 @@ pub const TlsfAllocator = struct {
 
         block.free = false;
         return .{ .offset = block.offset, .size = block.size };
+    }
+
+    pub fn allocAligned(self: *TlsfAllocator, size: u32, alignment: u32) ?Allocation {
+        if (size == 0 or alignment == 0) return null;
+
+        // If alignment is 1, no padding needed
+        if (alignment == 1) return self.alloc(size);
+
+        // Over-allocate to guarantee we can find an aligned offset within
+        const worst_case = size + alignment - 1;
+        const suitable = self.searchSuitableBlock(worst_case) orelse return null;
+        const handle = self.free_lists[suitable.fl][suitable.sl];
+        if (handle == null_handle) return null;
+
+        self.removeFreeBlock(handle);
+
+        const block = &self.blocks[handle];
+        const aligned_offset = alignUp(block.offset, alignment);
+        const front_waste = aligned_offset - block.offset;
+
+        // Split off front waste as a free block
+        if (front_waste > 0) {
+            if (self.newBlock()) |front_handle| {
+                self.blocks[front_handle] = .{
+                    .offset = block.offset,
+                    .size = front_waste,
+                    .free = true,
+                    .prev_phys = block.prev_phys,
+                    .next_phys = handle,
+                    .prev_free = null_handle,
+                    .next_free = null_handle,
+                };
+                if (block.prev_phys != null_handle) {
+                    self.blocks[block.prev_phys].next_phys = front_handle;
+                }
+                block.prev_phys = front_handle;
+                block.offset = aligned_offset;
+                block.size -= front_waste;
+                self.insertFreeBlock(front_handle);
+            }
+        }
+
+        // Split off back remainder
+        const remainder = block.size - size;
+        if (remainder > 0) {
+            if (self.newBlock()) |split_handle| {
+                self.blocks[split_handle] = .{
+                    .offset = block.offset + size,
+                    .size = remainder,
+                    .free = true,
+                    .prev_phys = handle,
+                    .next_phys = block.next_phys,
+                    .prev_free = null_handle,
+                    .next_free = null_handle,
+                };
+                if (block.next_phys != null_handle) {
+                    self.blocks[block.next_phys].prev_phys = split_handle;
+                }
+                block.next_phys = split_handle;
+                block.size = size;
+                self.insertFreeBlock(split_handle);
+            }
+        }
+
+        block.free = false;
+        return .{ .offset = block.offset, .size = block.size };
+    }
+
+    pub fn alignUp(offset: u32, alignment: u32) u32 {
+        return (offset + alignment - 1) & ~(alignment - 1);
     }
 
     pub fn free(self: *TlsfAllocator, offset: u32) void {
@@ -453,4 +523,55 @@ test "searchMapping rounds up to guarantee block >= requested size" {
             try std.testing.expect(result.size >= req);
         }
     }
+}
+
+test "allocAligned basic alignment" {
+    var a = TlsfAllocator.init(4096);
+
+    const r1 = a.allocAligned(100, 256).?;
+    try std.testing.expectEqual(0, r1.offset % 256);
+    try std.testing.expectEqual(100, r1.size);
+
+    const r2 = a.allocAligned(200, 256).?;
+    try std.testing.expectEqual(0, r2.offset % 256);
+    try std.testing.expectEqual(200, r2.size);
+
+    a.free(r1.offset);
+    a.free(r2.offset);
+    try std.testing.expectEqual(4096, a.totalFree());
+}
+
+test "allocAligned returns null for zero" {
+    var a = TlsfAllocator.init(1024);
+    try std.testing.expect(a.allocAligned(0, 256) == null);
+    try std.testing.expect(a.allocAligned(100, 0) == null);
+}
+
+test "allocAligned alignment 1 is same as alloc" {
+    var a = TlsfAllocator.init(1024);
+    const r = a.allocAligned(100, 1).?;
+    try std.testing.expectEqual(0, r.offset);
+    try std.testing.expectEqual(100, r.size);
+}
+
+test "allocAligned front waste is reusable" {
+    var a = TlsfAllocator.init(4096);
+
+    // Allocate a small block to misalign the next free block
+    const small = a.alloc(10).?;
+    _ = small;
+
+    const aligned = a.allocAligned(100, 256).?;
+    try std.testing.expectEqual(0, aligned.offset % 256);
+
+    // The waste between offset 10 and 256 should be free
+    const waste = a.alloc(100).?;
+    try std.testing.expectEqual(10, waste.offset);
+}
+
+test "alignUp" {
+    try std.testing.expectEqual(0, TlsfAllocator.alignUp(0, 256));
+    try std.testing.expectEqual(256, TlsfAllocator.alignUp(1, 256));
+    try std.testing.expectEqual(256, TlsfAllocator.alignUp(256, 256));
+    try std.testing.expectEqual(512, TlsfAllocator.alignUp(257, 256));
 }

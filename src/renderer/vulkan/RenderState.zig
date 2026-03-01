@@ -3,6 +3,7 @@ const vk = @import("../../platform/volk.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const tracy = @import("../../platform/tracy.zig");
+const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
 pub const WorldRenderer = @import("WorldRenderer.zig").WorldRenderer;
 pub const DebugRenderer = @import("DebugRenderer.zig").DebugRenderer;
 pub const TextRenderer = @import("TextRenderer.zig").TextRenderer;
@@ -20,23 +21,23 @@ pub const RenderState = struct {
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence,
     current_frame: u32,
 
-    pub fn create(allocator: std.mem.Allocator, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !RenderState {
+    pub fn create(allocator: std.mem.Allocator, ctx: *const VulkanContext, swapchain_format: vk.VkFormat, gpu_alloc: *GpuAllocator) !RenderState {
         const create_zone = tracy.zone(@src(), "RenderState.create");
         defer create_zone.end();
 
         var shader_compiler = try ShaderCompiler.init(allocator);
         defer shader_compiler.deinit();
 
-        var world_renderer = try WorldRenderer.init(allocator, &shader_compiler, ctx, swapchain_format);
+        var world_renderer = try WorldRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer world_renderer.deinit(ctx.device);
 
-        var debug_renderer = try DebugRenderer.init(&shader_compiler, ctx, swapchain_format);
+        var debug_renderer = try DebugRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer debug_renderer.deinit(ctx.device);
 
-        var text_renderer = try TextRenderer.init(allocator, &shader_compiler, ctx, swapchain_format);
+        var text_renderer = try TextRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer text_renderer.deinit(ctx.device);
 
-        var ui_renderer = try UiRenderer.init(&shader_compiler, ctx, swapchain_format);
+        var ui_renderer = try UiRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer ui_renderer.deinit(ctx.device);
 
         var self = RenderState{

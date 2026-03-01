@@ -9,6 +9,7 @@ const render_state_mod = @import("RenderState.zig");
 const RenderState = render_state_mod.RenderState;
 const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 const vk_utils = @import("vk_utils.zig");
+const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
@@ -58,6 +59,7 @@ pub const VulkanRenderer = struct {
     validation_enabled: bool,
     surface: vk.VkSurfaceKHR,
     ctx: VulkanContext,
+    gpu_allocator: *GpuAllocator,
     surface_state: SurfaceState,
     render_state: RenderState,
     pipeline_cache_path: []const u8,
@@ -128,6 +130,7 @@ pub const VulkanRenderer = struct {
             .validation_enabled = validation_enabled,
             .surface = surface,
             .ctx = ctx,
+            .gpu_allocator = undefined,
             .pipeline_cache_path = pipeline_cache_path,
             .surface_state = undefined,
             .render_state = undefined,
@@ -138,8 +141,9 @@ pub const VulkanRenderer = struct {
         };
 
         try self.createCommandPool();
+        self.gpu_allocator = try GpuAllocator.init(allocator, &self.ctx);
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
-        self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format);
+        self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format, self.gpu_allocator);
         const actual_w = self.surface_state.swapchain_extent.width;
         const actual_h = self.surface_state.swapchain_extent.height;
         const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
@@ -173,6 +177,7 @@ pub const VulkanRenderer = struct {
 
         if (self.mesh_worker) |*mw| mw.deinit();
         self.render_state.deinit(self.ctx.device);
+        self.gpu_allocator.deinit();
         vk.destroyCommandPool(self.ctx.device, self.ctx.command_pool, null);
         self.surface_state.deinit(self.allocator, self.ctx.device);
 
@@ -255,7 +260,7 @@ pub const VulkanRenderer = struct {
         const mw = &(self.mesh_worker orelse return);
         const poll_result = mw.poll() orelse return;
 
-        var batch = vk_utils.TransferBatch.begin(&self.ctx) catch |err| {
+        var batch = vk_utils.TransferBatch.begin(&self.ctx, self.gpu_allocator) catch |err| {
             std.log.err("Failed to begin transfer batch: {}", .{err});
             return;
         };
@@ -265,7 +270,6 @@ pub const VulkanRenderer = struct {
         for (0..poll_result.count) |i| {
             if (poll_result.results[i]) |chunk_result| {
                 self.render_state.world_renderer.uploadChunkData(
-                    &self.ctx,
                     &batch,
                     chunk_result.coord,
                     chunk_result.faces,

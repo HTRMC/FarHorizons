@@ -8,6 +8,9 @@ const types = @import("types.zig");
 const TextVertex = types.TextVertex;
 const tracy = @import("../../platform/tracy.zig");
 const app_config = @import("../../app_config.zig");
+const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
+const GpuAllocator = gpu_alloc_mod.GpuAllocator;
+const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
 const ATLAS_COLS = 16;
 const ATLAS_ROWS = 16;
@@ -25,8 +28,8 @@ pub const TextRenderer = struct {
     descriptor_set_layout: vk.VkDescriptorSetLayout,
     descriptor_pool: vk.VkDescriptorPool,
     descriptor_set: vk.VkDescriptorSet,
-    vertex_buffer: vk.VkBuffer,
-    vertex_buffer_memory: vk.VkDeviceMemory,
+    vertex_alloc: BufferAllocation,
+    gpu_alloc: *GpuAllocator,
     font_image: vk.VkImage,
     font_image_memory: vk.VkDeviceMemory,
     font_image_view: vk.VkImageView,
@@ -46,6 +49,7 @@ pub const TextRenderer = struct {
         shader_compiler: *ShaderCompiler,
         ctx: *const VulkanContext,
         swapchain_format: vk.VkFormat,
+        gpu_alloc: *GpuAllocator,
     ) !TextRenderer {
         const tz = tracy.zone(@src(), "TextRenderer.init");
         defer tz.end();
@@ -56,8 +60,8 @@ pub const TextRenderer = struct {
             .descriptor_set_layout = null,
             .descriptor_pool = null,
             .descriptor_set = null,
-            .vertex_buffer = null,
-            .vertex_buffer_memory = null,
+            .vertex_alloc = undefined,
+            .gpu_alloc = gpu_alloc,
             .font_image = null,
             .font_image_memory = null,
             .font_image_view = null,
@@ -69,7 +73,7 @@ pub const TextRenderer = struct {
             .mapped_vertices = null,
         };
 
-        try self.createVertexBuffer(ctx);
+        try self.createVertexBuffer(gpu_alloc);
         try self.createFontImage(allocator, ctx);
         try self.createDescriptors(ctx);
         try self.createPipeline(shader_compiler, ctx, swapchain_format);
@@ -83,8 +87,7 @@ pub const TextRenderer = struct {
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
         vk.destroyDescriptorPool(device, self.descriptor_pool, null);
         vk.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
-        vk.destroyBuffer(device, self.vertex_buffer, null);
-        vk.freeMemory(device, self.vertex_buffer_memory, null);
+        self.gpu_alloc.destroyBuffer(self.vertex_alloc);
         vk.destroySampler(device, self.font_sampler, null);
         vk.destroyImageView(device, self.font_image_view, null);
         vk.destroyImage(device, self.font_image, null);
@@ -92,9 +95,8 @@ pub const TextRenderer = struct {
     }
 
     pub fn beginFrame(self: *TextRenderer, device: vk.VkDevice) void {
-        var data: ?*anyopaque = null;
-        vk.mapMemory(device, self.vertex_buffer_memory, 0, MAX_VERTICES * @sizeOf(TextVertex), 0, &data) catch return;
-        self.mapped_vertices = @ptrCast(@alignCast(data));
+        _ = device;
+        self.mapped_vertices = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr));
         self.vertex_count = 0;
     }
 
@@ -180,10 +182,8 @@ pub const TextRenderer = struct {
     }
 
     pub fn endFrame(self: *TextRenderer, device: vk.VkDevice) void {
-        if (self.mapped_vertices != null) {
-            vk.unmapMemory(device, self.vertex_buffer_memory);
-            self.mapped_vertices = null;
-        }
+        _ = device;
+        self.mapped_vertices = null;
     }
 
     pub fn recordDraw(self: *const TextRenderer, command_buffer: vk.VkCommandBuffer) void {
@@ -332,15 +332,12 @@ pub const TextRenderer = struct {
         };
     }
 
-    fn createVertexBuffer(self: *TextRenderer, ctx: *const VulkanContext) !void {
+    fn createVertexBuffer(self: *TextRenderer, gpu_alloc: *GpuAllocator) !void {
         const buffer_size: vk.VkDeviceSize = MAX_VERTICES * @sizeOf(TextVertex);
-        try vk_utils.createBuffer(
-            ctx,
+        self.vertex_alloc = try gpu_alloc.createBuffer(
             buffer_size,
             vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &self.vertex_buffer,
-            &self.vertex_buffer_memory,
+            .host_visible,
         );
     }
 
@@ -662,7 +659,7 @@ pub const TextRenderer = struct {
         self.descriptor_set = sets[0];
 
         const buffer_info = vk.VkDescriptorBufferInfo{
-            .buffer = self.vertex_buffer,
+            .buffer = self.vertex_alloc.buffer,
             .offset = 0,
             .range = MAX_VERTICES * @sizeOf(TextVertex),
         };

@@ -15,6 +15,9 @@ const zlm = @import("zlm");
 const WorldState = @import("../../world/WorldState.zig");
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
+const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
+const GpuAllocator = gpu_alloc_mod.GpuAllocator;
+const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
 const INITIAL_FACE_CAPACITY: u32 = 400_000;
 const INITIAL_LIGHT_CAPACITY: u32 = 400_000;
@@ -23,26 +26,20 @@ const MAX_INDIRECT_COMMANDS: u32 = WorldState.TOTAL_WORLD_CHUNKS * 6;
 
 pub const WorldRenderer = struct {
     texture_manager: TextureManager,
+    gpu_alloc: *GpuAllocator,
     pipeline_layout: vk.VkPipelineLayout,
     graphics_pipeline: vk.VkPipeline,
     overdraw_pipeline: vk.VkPipeline,
 
-    indirect_buffer: vk.VkBuffer,
-    indirect_buffer_memory: vk.VkDeviceMemory,
-    indirect_count_buffer: vk.VkBuffer,
-    indirect_count_buffer_memory: vk.VkDeviceMemory,
+    indirect_alloc: BufferAllocation,
+    indirect_count_alloc: BufferAllocation,
 
-    face_buffer: vk.VkBuffer,
-    face_buffer_memory: vk.VkDeviceMemory,
-    light_buffer: vk.VkBuffer,
-    light_buffer_memory: vk.VkDeviceMemory,
-    model_buffer: vk.VkBuffer,
-    model_buffer_memory: vk.VkDeviceMemory,
-    static_index_buffer: vk.VkBuffer,
-    static_index_buffer_memory: vk.VkDeviceMemory,
+    face_alloc: BufferAllocation,
+    light_alloc: BufferAllocation,
+    model_alloc: BufferAllocation,
+    static_index_alloc: BufferAllocation,
 
-    chunk_data_buffer: vk.VkBuffer,
-    chunk_data_buffer_memory: vk.VkDeviceMemory,
+    chunk_data_alloc: BufferAllocation,
 
     face_tlsf: TlsfAllocator,
     light_tlsf: TlsfAllocator,
@@ -58,6 +55,7 @@ pub const WorldRenderer = struct {
         shader_compiler: *ShaderCompiler,
         ctx: *const VulkanContext,
         swapchain_format: vk.VkFormat,
+        gpu_alloc: *GpuAllocator,
     ) !WorldRenderer {
         const tz = tracy.zone(@src(), "WorldRenderer.init");
         defer tz.end();
@@ -67,23 +65,17 @@ pub const WorldRenderer = struct {
 
         var self = WorldRenderer{
             .texture_manager = texture_manager,
+            .gpu_alloc = gpu_alloc,
             .pipeline_layout = null,
             .graphics_pipeline = null,
             .overdraw_pipeline = null,
-            .indirect_buffer = null,
-            .indirect_buffer_memory = null,
-            .indirect_count_buffer = null,
-            .indirect_count_buffer_memory = null,
-            .face_buffer = null,
-            .face_buffer_memory = null,
-            .light_buffer = null,
-            .light_buffer_memory = null,
-            .model_buffer = null,
-            .model_buffer_memory = null,
-            .static_index_buffer = null,
-            .static_index_buffer_memory = null,
-            .chunk_data_buffer = null,
-            .chunk_data_buffer_memory = null,
+            .indirect_alloc = undefined,
+            .indirect_count_alloc = undefined,
+            .face_alloc = undefined,
+            .light_alloc = undefined,
+            .model_alloc = undefined,
+            .static_index_alloc = undefined,
+            .chunk_data_alloc = undefined,
             .face_tlsf = TlsfAllocator.init(INITIAL_FACE_CAPACITY),
             .light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY),
             .chunk_face_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
@@ -105,8 +97,8 @@ pub const WorldRenderer = struct {
             vk.destroyPipelineLayout(ctx.device, self.pipeline_layout, null);
         }
 
-        try self.createIndirectBuffer(ctx);
-        try self.createPersistentBuffers(ctx);
+        try self.createIndirectBuffer(ctx, gpu_alloc);
+        try self.createPersistentBuffers(ctx, gpu_alloc);
 
         return self;
     }
@@ -115,29 +107,21 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "WorldRenderer.deinit");
         defer tz.end();
 
-        vk.destroyBuffer(device, self.indirect_buffer, null);
-        vk.freeMemory(device, self.indirect_buffer_memory, null);
-        vk.destroyBuffer(device, self.indirect_count_buffer, null);
-        vk.freeMemory(device, self.indirect_count_buffer_memory, null);
+        self.gpu_alloc.destroyBuffer(self.indirect_alloc);
+        self.gpu_alloc.destroyBuffer(self.indirect_count_alloc);
         vk.destroyPipeline(device, self.overdraw_pipeline, null);
         vk.destroyPipeline(device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
-        vk.destroyBuffer(device, self.face_buffer, null);
-        vk.freeMemory(device, self.face_buffer_memory, null);
-        vk.destroyBuffer(device, self.light_buffer, null);
-        vk.freeMemory(device, self.light_buffer_memory, null);
-        vk.destroyBuffer(device, self.model_buffer, null);
-        vk.freeMemory(device, self.model_buffer_memory, null);
-        vk.destroyBuffer(device, self.static_index_buffer, null);
-        vk.freeMemory(device, self.static_index_buffer_memory, null);
-        vk.destroyBuffer(device, self.chunk_data_buffer, null);
-        vk.freeMemory(device, self.chunk_data_buffer_memory, null);
+        self.gpu_alloc.destroyBuffer(self.face_alloc);
+        self.gpu_alloc.destroyBuffer(self.light_alloc);
+        self.gpu_alloc.destroyBuffer(self.model_alloc);
+        self.gpu_alloc.destroyBuffer(self.static_index_alloc);
+        self.gpu_alloc.destroyBuffer(self.chunk_data_alloc);
         self.texture_manager.deinit(device);
     }
 
     pub fn uploadChunkData(
         self: *WorldRenderer,
-        ctx: *const VulkanContext,
         batch: *vk_utils.TransferBatch,
         coord: WorldState.ChunkCoord,
         faces: []const FaceData,
@@ -169,7 +153,7 @@ pub const WorldRenderer = struct {
                 .face_counts = .{ 0, 0, 0, 0, 0, 0 },
                 .voxel_size = voxel_size,
             };
-            self.writeChunkData(ctx, slot);
+            self.writeChunkData(slot);
             return;
         }
 
@@ -196,50 +180,24 @@ pub const WorldRenderer = struct {
 
         {
             const fb_size: vk.VkDeviceSize = @intCast(@as(u64, total_face_count) * @sizeOf(FaceData));
-            var staging_buffer: vk.VkBuffer = undefined;
-            var staging_memory: vk.VkDeviceMemory = undefined;
-            try vk_utils.createBuffer(
-                ctx,
-                fb_size,
-                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &staging_buffer,
-                &staging_memory,
-            );
-            batch.addStaging(staging_buffer, staging_memory);
+            const staging = try batch.allocStaging(fb_size);
 
-            var data: ?*anyopaque = null;
-            try vk.mapMemory(ctx.device, staging_memory, 0, fb_size, 0, &data);
-            const dst: [*]FaceData = @ptrCast(@alignCast(data));
+            const dst: [*]FaceData = @ptrCast(@alignCast(staging.mapped_ptr.?));
             @memcpy(dst[0..total_face_count], faces[0..total_face_count]);
-            vk.unmapMemory(ctx.device, staging_memory);
 
             const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, fa.offset) * @sizeOf(FaceData));
-            batch.copyRegion(staging_buffer, 0, self.face_buffer, dst_offset, fb_size);
+            batch.copyRegion(staging.buffer, 0, self.face_alloc.buffer, dst_offset, fb_size);
         }
 
         if (light_count > 0) {
             const lb_size: vk.VkDeviceSize = @intCast(@as(u64, light_count) * @sizeOf(LightEntry));
-            var staging_buffer: vk.VkBuffer = undefined;
-            var staging_memory: vk.VkDeviceMemory = undefined;
-            try vk_utils.createBuffer(
-                ctx,
-                lb_size,
-                vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                &staging_buffer,
-                &staging_memory,
-            );
-            batch.addStaging(staging_buffer, staging_memory);
+            const staging = try batch.allocStaging(lb_size);
 
-            var data: ?*anyopaque = null;
-            try vk.mapMemory(ctx.device, staging_memory, 0, lb_size, 0, &data);
-            const dst: [*]LightEntry = @ptrCast(@alignCast(data));
+            const dst: [*]LightEntry = @ptrCast(@alignCast(staging.mapped_ptr.?));
             @memcpy(dst[0..light_count], lights[0..light_count]);
-            vk.unmapMemory(ctx.device, staging_memory);
 
             const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, la.offset) * @sizeOf(LightEntry));
-            batch.copyRegion(staging_buffer, 0, self.light_buffer, dst_offset, lb_size);
+            batch.copyRegion(staging.buffer, 0, self.light_alloc.buffer, dst_offset, lb_size);
         }
 
         self.chunk_data[slot] = .{
@@ -249,26 +207,22 @@ pub const WorldRenderer = struct {
             .face_counts = face_counts,
             .voxel_size = voxel_size,
         };
-        self.writeChunkData(ctx, slot);
+        self.writeChunkData(slot);
     }
 
-    fn writeChunkData(self: *WorldRenderer, ctx: *const VulkanContext, slot: usize) void {
-        const offset: vk.VkDeviceSize = @intCast(slot * @sizeOf(ChunkData));
-        var data: ?*anyopaque = null;
-        vk.mapMemory(ctx.device, self.chunk_data_buffer_memory, offset, @sizeOf(ChunkData), 0, &data) catch return;
-        const dst: *ChunkData = @ptrCast(@alignCast(data));
+    fn writeChunkData(self: *WorldRenderer, slot: usize) void {
+        const base_ptr = self.chunk_data_alloc.mapped_ptr orelse return;
+        const offset = slot * @sizeOf(ChunkData);
+        const dst: *ChunkData = @ptrCast(@alignCast(base_ptr + offset));
         dst.* = self.chunk_data[slot];
-        vk.unmapMemory(ctx.device, self.chunk_data_buffer_memory);
     }
 
     pub fn buildIndirectCommands(self: *WorldRenderer, ctx: *const VulkanContext, camera_pos: zlm.Vec3) void {
+        _ = ctx;
         const tz = tracy.zone(@src(), "buildIndirectCommands");
         defer tz.end();
 
-        const buffer_size: vk.VkDeviceSize = MAX_INDIRECT_COMMANDS * @sizeOf(DrawCommand);
-        var data: ?*anyopaque = null;
-        vk.mapMemory(ctx.device, self.indirect_buffer_memory, 0, buffer_size, 0, &data) catch return;
-        const commands: [*]DrawCommand = @ptrCast(@alignCast(data));
+        const commands: [*]DrawCommand = @ptrCast(@alignCast(self.indirect_alloc.mapped_ptr orelse return));
 
         var command_count: u32 = 0;
 
@@ -307,13 +261,8 @@ pub const WorldRenderer = struct {
             }
         }
 
-        vk.unmapMemory(ctx.device, self.indirect_buffer_memory);
-
-        var count_data: ?*anyopaque = null;
-        vk.mapMemory(ctx.device, self.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &count_data) catch return;
-        const count_ptr: *u32 = @ptrCast(@alignCast(count_data));
+        const count_ptr: *u32 = @ptrCast(@alignCast(self.indirect_count_alloc.mapped_ptr orelse return));
         count_ptr.* = command_count;
-        vk.unmapMemory(ctx.device, self.indirect_count_buffer_memory);
 
         self.draw_count = command_count;
     }
@@ -335,7 +284,7 @@ pub const WorldRenderer = struct {
             null,
         );
 
-        vk.cmdBindIndexBuffer(command_buffer, self.static_index_buffer, 0, vk.VK_INDEX_TYPE_UINT16);
+        vk.cmdBindIndexBuffer(command_buffer, self.static_index_alloc.buffer, 0, vk.VK_INDEX_TYPE_UINT16);
 
         vk.cmdPushConstants(
             command_buffer,
@@ -357,9 +306,9 @@ pub const WorldRenderer = struct {
 
         vk.cmdDrawIndexedIndirectCount(
             command_buffer,
-            self.indirect_buffer,
+            self.indirect_alloc.buffer,
             0,
-            self.indirect_count_buffer,
+            self.indirect_count_alloc.buffer,
             0,
             MAX_INDIRECT_COMMANDS,
             @sizeOf(vk.VkDrawIndexedIndirectCommand),
@@ -678,130 +627,80 @@ pub const WorldRenderer = struct {
         std.log.info("Graphics pipelines created", .{});
     }
 
-    fn createIndirectBuffer(self: *WorldRenderer, ctx: *const VulkanContext) !void {
+    fn createIndirectBuffer(self: *WorldRenderer, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {
+        _ = ctx;
         const tz = tracy.zone(@src(), "createIndirectBuffer");
         defer tz.end();
 
         const buffer_size: vk.VkDeviceSize = MAX_INDIRECT_COMMANDS * @sizeOf(vk.VkDrawIndexedIndirectCommand);
 
-        try vk_utils.createBuffer(
-            ctx,
+        self.indirect_alloc = try gpu_alloc.createBuffer(
             buffer_size,
             vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &self.indirect_buffer,
-            &self.indirect_buffer_memory,
+            .host_visible,
         );
 
-        var data: ?*anyopaque = null;
-        try vk.mapMemory(ctx.device, self.indirect_buffer_memory, 0, buffer_size, 0, &data);
-        const dst: [*]u8 = @ptrCast(data.?);
+        const dst: [*]u8 = self.indirect_alloc.mapped_ptr.?;
         @memset(dst[0..@intCast(buffer_size)], 0);
-        vk.unmapMemory(ctx.device, self.indirect_buffer_memory);
 
-        const count_buffer_size = @sizeOf(u32);
-        const count_buffer_info = vk.VkBufferCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .size = count_buffer_size,
-            .usage = vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0,
-            .pQueueFamilyIndices = null,
-        };
-
-        self.indirect_count_buffer = try vk.createBuffer(ctx.device, &count_buffer_info, null);
-
-        var count_mem_requirements: vk.VkMemoryRequirements = undefined;
-        vk.getBufferMemoryRequirements(ctx.device, self.indirect_count_buffer, &count_mem_requirements);
-
-        const count_memory_type_index = try vk_utils.findMemoryType(
-            ctx.physical_device,
-            count_mem_requirements.memoryTypeBits,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        self.indirect_count_alloc = try gpu_alloc.createBuffer(
+            @sizeOf(u32),
+            vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            .host_visible,
         );
 
-        const count_alloc_info = vk.VkMemoryAllocateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = null,
-            .allocationSize = count_mem_requirements.size,
-            .memoryTypeIndex = count_memory_type_index,
-        };
-
-        self.indirect_count_buffer_memory = try vk.allocateMemory(ctx.device, &count_alloc_info, null);
-        try vk.bindBufferMemory(ctx.device, self.indirect_count_buffer, self.indirect_count_buffer_memory, 0);
-
-        var count_data: ?*anyopaque = null;
-        try vk.mapMemory(ctx.device, self.indirect_count_buffer_memory, 0, count_buffer_size, 0, &count_data);
-        const count_ptr: *u32 = @ptrCast(@alignCast(count_data));
+        const count_ptr: *u32 = @ptrCast(@alignCast(self.indirect_count_alloc.mapped_ptr.?));
         count_ptr.* = 0;
-        vk.unmapMemory(ctx.device, self.indirect_count_buffer_memory);
 
         std.log.info("Indirect draw buffers created (max {} draw commands)", .{MAX_INDIRECT_COMMANDS});
     }
 
-    fn createPersistentBuffers(self: *WorldRenderer, ctx: *const VulkanContext) !void {
+    fn createPersistentBuffers(self: *WorldRenderer, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {
         const tz = tracy.zone(@src(), "createPersistentBuffers");
         defer tz.end();
 
         const fb_capacity: vk.VkDeviceSize = @as(u64, INITIAL_FACE_CAPACITY) * @sizeOf(FaceData);
-        try vk_utils.createBuffer(
-            ctx,
+        self.face_alloc = try gpu_alloc.createBuffer(
             fb_capacity,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.face_buffer,
-            &self.face_buffer_memory,
+            .device_local,
         );
 
         const lb_capacity: vk.VkDeviceSize = @as(u64, INITIAL_LIGHT_CAPACITY) * @sizeOf(LightEntry);
-        try vk_utils.createBuffer(
-            ctx,
+        self.light_alloc = try gpu_alloc.createBuffer(
             lb_capacity,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.light_buffer,
-            &self.light_buffer_memory,
+            .device_local,
         );
 
         const model_size: vk.VkDeviceSize = 6 * @sizeOf(QuadModel);
-        try vk_utils.createBuffer(
-            ctx,
+        self.model_alloc = try gpu_alloc.createBuffer(
             model_size,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.model_buffer,
-            &self.model_buffer_memory,
+            .device_local,
         );
         try self.uploadModelBuffer(ctx, model_size);
 
         const index_count: u64 = @as(u64, MAX_FACES_PER_DRAW) * 6;
         const ib_capacity: vk.VkDeviceSize = index_count * @sizeOf(u16);
-        try vk_utils.createBuffer(
-            ctx,
+        self.static_index_alloc = try gpu_alloc.createBuffer(
             ib_capacity,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.static_index_buffer,
-            &self.static_index_buffer_memory,
+            .device_local,
         );
         try self.uploadStaticIndexBuffer(ctx, ib_capacity);
 
         const cd_capacity: vk.VkDeviceSize = WorldState.TOTAL_WORLD_CHUNKS * @sizeOf(ChunkData);
-        try vk_utils.createBuffer(
-            ctx,
+        self.chunk_data_alloc = try gpu_alloc.createBuffer(
             cd_capacity,
             vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &self.chunk_data_buffer,
-            &self.chunk_data_buffer_memory,
+            .host_visible,
         );
 
-        self.texture_manager.updateFaceDescriptor(ctx, self.face_buffer, fb_capacity);
-        self.texture_manager.updateChunkDataDescriptor(ctx, self.chunk_data_buffer, cd_capacity);
-        self.texture_manager.updateModelDescriptor(ctx, self.model_buffer, model_size);
-        self.texture_manager.updateLightDescriptor(ctx, self.light_buffer, lb_capacity);
+        self.texture_manager.updateFaceDescriptor(ctx, self.face_alloc.buffer, fb_capacity);
+        self.texture_manager.updateChunkDataDescriptor(ctx, self.chunk_data_alloc.buffer, cd_capacity);
+        self.texture_manager.updateModelDescriptor(ctx, self.model_alloc.buffer, model_size);
+        self.texture_manager.updateLightDescriptor(ctx, self.light_alloc.buffer, lb_capacity);
 
         std.log.info("Persistent mesh buffers created ({}F / {}L, {:.1} MB)", .{
             INITIAL_FACE_CAPACITY,
@@ -856,7 +755,7 @@ pub const WorldRenderer = struct {
         @memcpy(dst[0..6], &models);
         vk.unmapMemory(ctx.device, staging_memory);
 
-        try vk_utils.copyBuffer(ctx, staging_buffer, self.model_buffer, model_size);
+        try vk_utils.copyBuffer(ctx, staging_buffer, self.model_alloc.buffer, model_size);
     }
 
     fn uploadStaticIndexBuffer(self: *WorldRenderer, ctx: *const VulkanContext, ib_capacity: vk.VkDeviceSize) !void {
@@ -888,7 +787,7 @@ pub const WorldRenderer = struct {
         }
 
         vk.unmapMemory(ctx.device, staging_memory);
-        try vk_utils.copyBuffer(ctx, staging_buffer, self.static_index_buffer, ib_capacity);
+        try vk_utils.copyBuffer(ctx, staging_buffer, self.static_index_alloc.buffer, ib_capacity);
     }
 };
 

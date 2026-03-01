@@ -2,6 +2,9 @@ const std = @import("std");
 const vk = @import("../../platform/volk.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const tracy = @import("../../platform/tracy.zig");
+const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
+const GpuAllocator = gpu_alloc_mod.GpuAllocator;
+const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
 pub fn findMemoryType(physical_device: vk.VkPhysicalDevice, type_filter: u32, properties: c_uint) !u32 {
     var mem_properties: vk.VkPhysicalDeviceMemoryProperties = undefined;
@@ -185,12 +188,12 @@ pub const TransferBatch = struct {
 
     cmd: vk.VkCommandBuffer,
     ctx: *const VulkanContext,
-    staging_buffers: [MAX_STAGING]vk.VkBuffer = [_]vk.VkBuffer{null} ** MAX_STAGING,
-    staging_memory: [MAX_STAGING]vk.VkDeviceMemory = [_]vk.VkDeviceMemory{null} ** MAX_STAGING,
+    gpu_alloc: *GpuAllocator,
+    staging_allocs: [MAX_STAGING]BufferAllocation = undefined,
     staging_count: u32 = 0,
     has_commands: bool = false,
 
-    pub fn begin(ctx: *const VulkanContext) !TransferBatch {
+    pub fn begin(ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !TransferBatch {
         const cb_alloc_info = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
@@ -210,7 +213,14 @@ pub const TransferBatch = struct {
             .pInheritanceInfo = null,
         });
 
-        return .{ .cmd = cmd_buffers[0], .ctx = ctx };
+        return .{ .cmd = cmd_buffers[0], .ctx = ctx, .gpu_alloc = gpu_alloc };
+    }
+
+    pub fn allocStaging(self: *TransferBatch, size: vk.VkDeviceSize) !BufferAllocation {
+        const alloc = try self.gpu_alloc.createBuffer(size, vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT, .staging);
+        self.staging_allocs[self.staging_count] = alloc;
+        self.staging_count += 1;
+        return alloc;
     }
 
     pub fn copyRegion(
@@ -230,19 +240,12 @@ pub const TransferBatch = struct {
         self.has_commands = true;
     }
 
-    pub fn addStaging(self: *TransferBatch, buffer: vk.VkBuffer, memory: vk.VkDeviceMemory) void {
-        self.staging_buffers[self.staging_count] = buffer;
-        self.staging_memory[self.staging_count] = memory;
-        self.staging_count += 1;
-    }
-
     pub fn submitAndWait(self: *TransferBatch) !void {
         defer {
             const cmds = [1]vk.VkCommandBuffer{self.cmd};
             vk.freeCommandBuffers(self.ctx.device, self.ctx.command_pool, 1, &cmds);
             for (0..self.staging_count) |i| {
-                vk.destroyBuffer(self.ctx.device, self.staging_buffers[i], null);
-                vk.freeMemory(self.ctx.device, self.staging_memory[i], null);
+                self.gpu_alloc.destroyBuffer(self.staging_allocs[i]);
             }
         }
 

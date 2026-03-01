@@ -10,6 +10,9 @@ const tracy = @import("../../platform/tracy.zig");
 const zlm = @import("zlm");
 const GameState = @import("../../GameState.zig");
 const Raycast = @import("../../Raycast.zig");
+const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
+const GpuAllocator = gpu_alloc_mod.GpuAllocator;
+const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
 const DEBUG_LINE_MAX_VERTICES = 16384;
 
@@ -24,15 +27,13 @@ pub const DebugRenderer = struct {
     compute_descriptor_set_layout: vk.VkDescriptorSetLayout,
     compute_descriptor_pool: vk.VkDescriptorPool,
     compute_descriptor_set: vk.VkDescriptorSet,
-    vertex_buffer: vk.VkBuffer,
-    vertex_buffer_memory: vk.VkDeviceMemory,
-    indirect_buffer: vk.VkBuffer,
-    indirect_buffer_memory: vk.VkDeviceMemory,
-    count_buffer: vk.VkBuffer,
-    count_buffer_memory: vk.VkDeviceMemory,
+    vertex_alloc: BufferAllocation,
+    indirect_alloc: BufferAllocation,
+    count_alloc: BufferAllocation,
+    gpu_alloc: *GpuAllocator,
     vertex_count: u32,
 
-    pub fn init(shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !DebugRenderer {
+    pub fn init(shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat, gpu_alloc: *GpuAllocator) !DebugRenderer {
         const tz = tracy.zone(@src(), "DebugRenderer.init");
         defer tz.end();
 
@@ -47,16 +48,14 @@ pub const DebugRenderer = struct {
             .compute_descriptor_set_layout = null,
             .compute_descriptor_pool = null,
             .compute_descriptor_set = null,
-            .vertex_buffer = null,
-            .vertex_buffer_memory = null,
-            .indirect_buffer = null,
-            .indirect_buffer_memory = null,
-            .count_buffer = null,
-            .count_buffer_memory = null,
+            .vertex_alloc = undefined,
+            .indirect_alloc = undefined,
+            .count_alloc = undefined,
+            .gpu_alloc = gpu_alloc,
             .vertex_count = 0,
         };
 
-        try self.createResources(ctx);
+        try self.createResources(ctx, gpu_alloc);
         try self.createPipeline(shader_compiler, ctx, swapchain_format);
         try self.createComputePipeline(shader_compiler, ctx);
 
@@ -72,12 +71,9 @@ pub const DebugRenderer = struct {
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
         vk.destroyDescriptorPool(device, self.descriptor_pool, null);
         vk.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
-        vk.destroyBuffer(device, self.vertex_buffer, null);
-        vk.freeMemory(device, self.vertex_buffer_memory, null);
-        vk.destroyBuffer(device, self.indirect_buffer, null);
-        vk.freeMemory(device, self.indirect_buffer_memory, null);
-        vk.destroyBuffer(device, self.count_buffer, null);
-        vk.freeMemory(device, self.count_buffer_memory, null);
+        self.gpu_alloc.destroyBuffer(self.vertex_alloc);
+        self.gpu_alloc.destroyBuffer(self.indirect_alloc);
+        self.gpu_alloc.destroyBuffer(self.count_alloc);
     }
 
     pub fn recordCompute(self: *const DebugRenderer, command_buffer: vk.VkCommandBuffer) void {
@@ -109,7 +105,7 @@ pub const DebugRenderer = struct {
             .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
             .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .buffer = self.indirect_buffer,
+            .buffer = self.indirect_alloc.buffer,
             .offset = 0,
             .size = @sizeOf(vk.VkDrawIndirectCommand),
         };
@@ -150,52 +146,40 @@ pub const DebugRenderer = struct {
         );
         vk.cmdDrawIndirectCount(
             command_buffer,
-            self.indirect_buffer,
+            self.indirect_alloc.buffer,
             0,
-            self.count_buffer,
+            self.count_alloc.buffer,
             0,
             1,
             @sizeOf(vk.VkDrawIndirectCommand),
         );
     }
 
-    fn createResources(self: *DebugRenderer, ctx: *const VulkanContext) !void {
+    fn createResources(self: *DebugRenderer, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {
         const tz = tracy.zone(@src(), "createDebugLineResources");
         defer tz.end();
 
         const vertex_buffer_size: vk.VkDeviceSize = DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex);
-        try vk_utils.createBuffer(
-            ctx,
+        self.vertex_alloc = try gpu_alloc.createBuffer(
             vertex_buffer_size,
             vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &self.vertex_buffer,
-            &self.vertex_buffer_memory,
+            .host_visible,
         );
 
-        try vk_utils.createBuffer(
-            ctx,
+        self.indirect_alloc = try gpu_alloc.createBuffer(
             @sizeOf(vk.VkDrawIndirectCommand),
             vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            &self.indirect_buffer,
-            &self.indirect_buffer_memory,
+            .device_local,
         );
 
-        try vk_utils.createBuffer(
-            ctx,
+        self.count_alloc = try gpu_alloc.createBuffer(
             @sizeOf(u32),
             vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &self.count_buffer,
-            &self.count_buffer_memory,
+            .host_visible,
         );
         {
-            var data: ?*anyopaque = null;
-            try vk.mapMemory(ctx.device, self.count_buffer_memory, 0, @sizeOf(u32), 0, &data);
-            const count_ptr: *u32 = @ptrCast(@alignCast(data));
+            const count_ptr: *u32 = @ptrCast(@alignCast(self.count_alloc.mapped_ptr.?));
             count_ptr.* = 1;
-            vk.unmapMemory(ctx.device, self.count_buffer_memory);
         }
 
         {
@@ -246,7 +230,7 @@ pub const DebugRenderer = struct {
             self.descriptor_set = sets[0];
 
             const buffer_info = vk.VkDescriptorBufferInfo{
-                .buffer = self.vertex_buffer,
+                .buffer = self.vertex_alloc.buffer,
                 .offset = 0,
                 .range = vertex_buffer_size,
             };
@@ -315,7 +299,7 @@ pub const DebugRenderer = struct {
             self.compute_descriptor_set = sets[0];
 
             const buffer_info = vk.VkDescriptorBufferInfo{
-                .buffer = self.indirect_buffer,
+                .buffer = self.indirect_alloc.buffer,
                 .offset = 0,
                 .range = @sizeOf(vk.VkDrawIndirectCommand),
             };
@@ -336,15 +320,14 @@ pub const DebugRenderer = struct {
             vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{write}, 0, null);
         }
 
-        self.generateChunkOutlines(ctx.device);
+        self.generateChunkOutlines();
 
         std.log.info("Debug line resources created ({} vertices)", .{self.vertex_count});
     }
 
     pub fn updateVertices(self: *DebugRenderer, device: vk.VkDevice, game_state: *const GameState) void {
-        var data: ?*anyopaque = null;
-        vk.mapMemory(device, self.vertex_buffer_memory, 0, DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex), 0, &data) catch return;
-        const vertices: [*]LineVertex = @ptrCast(@alignCast(data));
+        _ = device;
+        const vertices: [*]LineVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
 
         var count: u32 = 0;
 
@@ -399,7 +382,6 @@ pub const DebugRenderer = struct {
             count = addLine(vertices, count, bx0, by0, bz1, bx0, by1, bz1, outline_color);
         }
 
-        vk.unmapMemory(device, self.vertex_buffer_memory);
         self.vertex_count = count;
     }
 
@@ -409,13 +391,11 @@ pub const DebugRenderer = struct {
         return count + 2;
     }
 
-    fn generateChunkOutlines(self: *DebugRenderer, device: vk.VkDevice) void {
+    fn generateChunkOutlines(self: *DebugRenderer) void {
         const tz = tracy.zone(@src(), "generateChunkOutlines");
         defer tz.end();
 
-        var data: ?*anyopaque = null;
-        vk.mapMemory(device, self.vertex_buffer_memory, 0, DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex), 0, &data) catch return;
-        const vertices: [*]LineVertex = @ptrCast(@alignCast(data));
+        const vertices: [*]LineVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
 
         var count: u32 = 0;
 
@@ -423,7 +403,6 @@ pub const DebugRenderer = struct {
         count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 64.0, 0.0, .{ 0.0, 1.0, 0.0, 1.0 });
         count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 });
 
-        vk.unmapMemory(device, self.vertex_buffer_memory);
         self.vertex_count = count;
     }
 

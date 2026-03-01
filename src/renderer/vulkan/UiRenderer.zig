@@ -8,6 +8,9 @@ const types = @import("types.zig");
 const UiVertex = types.UiVertex;
 const tracy = @import("../../platform/tracy.zig");
 const app_config = @import("../../app_config.zig");
+const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
+const GpuAllocator = gpu_alloc_mod.GpuAllocator;
+const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
 const MAX_QUADS = 4096;
 const MAX_VERTICES = MAX_QUADS * 6;
@@ -34,8 +37,8 @@ pub const UiRenderer = struct {
     descriptor_set_layout: vk.VkDescriptorSetLayout,
     descriptor_pool: vk.VkDescriptorPool,
     descriptor_set: vk.VkDescriptorSet,
-    vertex_buffer: vk.VkBuffer,
-    vertex_buffer_memory: vk.VkDeviceMemory,
+    vertex_alloc: BufferAllocation,
+    gpu_alloc: *GpuAllocator,
     vertex_count: u32,
     inverted_vertex_count: u32 = 0,
     screen_width: f32,
@@ -70,6 +73,7 @@ pub const UiRenderer = struct {
         shader_compiler: *ShaderCompiler,
         ctx: *const VulkanContext,
         swapchain_format: vk.VkFormat,
+        gpu_alloc: *GpuAllocator,
     ) !UiRenderer {
         const tz = tracy.zone(@src(), "UiRenderer.init");
         defer tz.end();
@@ -81,8 +85,8 @@ pub const UiRenderer = struct {
             .descriptor_set_layout = null,
             .descriptor_pool = null,
             .descriptor_set = null,
-            .vertex_buffer = null,
-            .vertex_buffer_memory = null,
+            .vertex_alloc = undefined,
+            .gpu_alloc = gpu_alloc,
             .vertex_count = 0,
             .screen_width = 800.0,
             .screen_height = 600.0,
@@ -93,7 +97,7 @@ pub const UiRenderer = struct {
             .atlas_sampler = null,
         };
 
-        try self.createVertexBuffer(ctx);
+        try self.createVertexBuffer(gpu_alloc);
         try self.createFallbackAtlas(ctx);
         try self.createDescriptors(ctx);
         try self.createPipeline(shader_compiler, ctx, swapchain_format);
@@ -108,8 +112,7 @@ pub const UiRenderer = struct {
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
         vk.destroyDescriptorPool(device, self.descriptor_pool, null);
         vk.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
-        vk.destroyBuffer(device, self.vertex_buffer, null);
-        vk.freeMemory(device, self.vertex_buffer_memory, null);
+        self.gpu_alloc.destroyBuffer(self.vertex_alloc);
         vk.destroySampler(device, self.atlas_sampler, null);
         vk.destroyImageView(device, self.atlas_image_view, null);
         vk.destroyImage(device, self.atlas_image, null);
@@ -117,19 +120,16 @@ pub const UiRenderer = struct {
     }
 
     pub fn beginFrame(self: *UiRenderer, device: vk.VkDevice) void {
-        var data: ?*anyopaque = null;
-        vk.mapMemory(device, self.vertex_buffer_memory, 0, MAX_VERTICES * @sizeOf(UiVertex), 0, &data) catch return;
-        self.mapped_vertices = @ptrCast(@alignCast(data));
+        _ = device;
+        self.mapped_vertices = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr));
         self.vertex_count = 0;
         self.inverted_vertex_count = 0;
         self.draw_layer_count = 0;
     }
 
     pub fn endFrame(self: *UiRenderer, device: vk.VkDevice) void {
-        if (self.mapped_vertices != null) {
-            vk.unmapMemory(device, self.vertex_buffer_memory);
-            self.mapped_vertices = null;
-        }
+        _ = device;
+        self.mapped_vertices = null;
     }
 
     pub fn beginLayer(self: *UiRenderer) void {
@@ -610,15 +610,12 @@ pub const UiRenderer = struct {
     }
 
 
-    fn createVertexBuffer(self: *UiRenderer, ctx: *const VulkanContext) !void {
+    fn createVertexBuffer(self: *UiRenderer, gpu_alloc: *GpuAllocator) !void {
         const buffer_size: vk.VkDeviceSize = MAX_VERTICES * @sizeOf(UiVertex);
-        try vk_utils.createBuffer(
-            ctx,
+        self.vertex_alloc = try gpu_alloc.createBuffer(
             buffer_size,
             vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            &self.vertex_buffer,
-            &self.vertex_buffer_memory,
+            .host_visible,
         );
     }
 
@@ -881,7 +878,7 @@ pub const UiRenderer = struct {
         self.descriptor_set = sets[0];
 
         const buffer_info = vk.VkDescriptorBufferInfo{
-            .buffer = self.vertex_buffer,
+            .buffer = self.vertex_alloc.buffer,
             .offset = 0,
             .range = MAX_VERTICES * @sizeOf(UiVertex),
         };
