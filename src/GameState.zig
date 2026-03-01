@@ -177,7 +177,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         }
 
         if (!lod_any_loaded) {
-            WorldState.downsampleWorld(world, lod_worlds_arr[lod_level_usize], lod_level);
+            const src = if (lod_level_usize == 1) world else lod_worlds_arr[lod_level_usize - 1];
+            WorldState.downsampleWorld(src, lod_worlds_arr[lod_level_usize], lod_level - 1);
             WorldState.computeLightMap(lod_worlds_arr[lod_level_usize], lod_light_maps_arr[lod_level_usize]);
 
             if (storage != null) {
@@ -231,14 +232,32 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
 
 pub fn save(self: *GameState) void {
     const s = self.storage orelse return;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const save_start = std.Io.Clock.now(.awake, io);
+
+    var lod_write_ns: i64 = 0;
+    var lod_chunks_saved: usize = 0;
 
     for (1..MAX_LOD) |lod_level_usize| {
         const lod_level: u8 = @intCast(lod_level_usize);
         if (self.lod_stale[lod_level_usize]) {
-            WorldState.downsampleWorld(self.lod_worlds[0], self.lod_worlds[lod_level_usize], lod_level);
+            const ds_start = std.Io.Clock.now(.awake, io);
+            WorldState.downsampleWorld(self.lod_worlds[lod_level_usize - 1], self.lod_worlds[lod_level_usize], lod_level - 1);
+            const ds_ns: i64 = @intCast(ds_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+
+            const lm_start = std.Io.Clock.now(.awake, io);
             WorldState.computeLightMap(self.lod_worlds[lod_level_usize], self.lod_light_maps[lod_level_usize]);
+            const lm_ns: i64 = @intCast(lm_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+
             self.lod_stale[lod_level_usize] = false;
 
+            std.log.info("[save] LOD{d}: downsample={d:.1}ms, lightmap={d:.1}ms", .{
+                lod_level,
+                @as(f64, @floatFromInt(ds_ns)) / 1_000_000.0,
+                @as(f64, @floatFromInt(lm_ns)) / 1_000_000.0,
+            });
+
+            const write_start = std.Io.Clock.now(.awake, io);
             for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
                 for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
                     for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
@@ -248,15 +267,35 @@ pub fn save(self: *GameState) void {
                         s.saveChunk(cx, cy, cz, lod_level, &self.lod_worlds[lod_level_usize][cy_u][cz_u][cx_u]) catch |err| {
                             std.log.warn("Failed to save LOD{d} chunk ({d},{d},{d}): {}", .{ lod_level, cx, cy, cz, err });
                         };
+                        lod_chunks_saved += 1;
                     }
                 }
             }
+            lod_write_ns += @intCast(write_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
         }
     }
 
+    if (lod_chunks_saved > 0) {
+        std.log.info("[save] LOD: {d} chunks written in {d:.1}ms", .{
+            lod_chunks_saved,
+            @as(f64, @floatFromInt(lod_write_ns)) / 1_000_000.0,
+        });
+    }
+
+    const dirty_start = std.Io.Clock.now(.awake, io);
     s.saveAllDirty();
+    const dirty_ns: i64 = @intCast(dirty_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+
+    const flush_start = std.Io.Clock.now(.awake, io);
     s.flush();
-    std.log.info("World saved", .{});
+    const flush_ns: i64 = @intCast(flush_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+
+    const total_ns: i64 = @intCast(save_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+    std.log.info("[save] dirty={d:.1}ms, flush={d:.1}ms, total={d:.1}ms", .{
+        @as(f64, @floatFromInt(dirty_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(flush_ns)) / 1_000_000.0,
+        @as(f64, @floatFromInt(total_ns)) / 1_000_000.0,
+    });
 }
 
 pub fn deinit(self: *GameState) void {
@@ -311,10 +350,15 @@ pub fn toggleMode(self: *GameState) void {
 pub fn switchLod(self: *GameState, lod: u8) void {
     if (lod >= MAX_LOD or lod == self.current_lod) return;
 
-    if (lod > 0 and self.lod_stale[lod]) {
-        WorldState.downsampleWorld(self.lod_worlds[0], self.lod_worlds[lod], lod);
-        WorldState.computeLightMap(self.lod_worlds[lod], self.lod_light_maps[lod]);
-        self.lod_stale[lod] = false;
+    if (lod > 0) {
+        // Ensure all prior LOD levels are up to date (chained 2x downsample)
+        for (1..@as(usize, lod) + 1) |i| {
+            if (self.lod_stale[i]) {
+                WorldState.downsampleWorld(self.lod_worlds[i - 1], self.lod_worlds[i], @intCast(i - 1));
+                WorldState.computeLightMap(self.lod_worlds[i], self.lod_light_maps[i]);
+                self.lod_stale[i] = false;
+            }
+        }
     }
 
     self.world = self.lod_worlds[lod];

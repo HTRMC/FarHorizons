@@ -235,6 +235,8 @@ pub const RegionFile = struct {
         blocks: *const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType,
         algo: CompressionAlgo,
     ) !void {
+        const t0 = std.Io.Clock.now(.awake, self.io);
+
         var encoded = try chunk_codec.encode(self.mem_allocator, blocks);
         defer encoded.deinit();
 
@@ -245,6 +247,8 @@ pub const RegionFile = struct {
             const len = try compression.compress(algo, encoded.data, &compressed_buf);
             break :blk compressed_buf[0..len];
         };
+
+        const t1 = std.Io.Clock.now(.awake, self.io);
 
         const sectors_needed = storage_types.sectorsNeeded(compressed_data.len);
         if (sectors_needed == 0) return;
@@ -260,6 +264,8 @@ pub const RegionFile = struct {
             self.allocator_bitmap.free(new_offset, sectors_needed);
             return error.IoError;
         };
+
+        const t2 = std.Io.Clock.now(.awake, self.io);
 
         const old_entry = self.cot[chunk_index];
         if (old_entry.isPresent()) {
@@ -278,6 +284,14 @@ pub const RegionFile = struct {
         self.header.total_sectors = self.allocator_bitmap.total_sectors;
 
         try self.commitHeader();
+
+        const t3 = std.Io.Clock.now(.awake, self.io);
+        const encode_us = @divTrunc(@as(i64, @intCast(t0.durationTo(t1).nanoseconds)), 1000);
+        const write_us = @divTrunc(@as(i64, @intCast(t1.durationTo(t2).nanoseconds)), 1000);
+        const commit_us = @divTrunc(@as(i64, @intCast(t2.durationTo(t3).nanoseconds)), 1000);
+        log.debug("[writeChunk] idx={d} encode={d}us write={d}us commit={d}us size={d}B", .{
+            chunk_index, encode_us, write_us, commit_us, compressed_data.len,
+        });
     }
 
     pub fn writeChunkBatch(
@@ -288,6 +302,12 @@ pub const RegionFile = struct {
     ) !void {
         if (chunk_indices.len == 0) return;
         std.debug.assert(chunk_indices.len == block_arrays.len);
+
+        const batch_start = std.Io.Clock.now(.awake, self.io);
+        var encode_ns: i64 = 0;
+        var compress_ns: i64 = 0;
+        var write_ns: i64 = 0;
+        var total_bytes: usize = 0;
 
         self.rw_lock.lockUncancelable(self.io);
         defer self.rw_lock.unlock(self.io);
@@ -301,12 +321,15 @@ pub const RegionFile = struct {
             const chunk_index = chunk_indices[i];
             const blocks = block_arrays[i];
 
+            const enc_start = std.Io.Clock.now(.awake, self.io);
             var encoded = chunk_codec.encode(self.mem_allocator, blocks) catch |err| {
                 log.err("Batch encode failed for chunk {d}: {}", .{ chunk_index, err });
                 continue;
             };
             defer encoded.deinit();
+            encode_ns += @intCast(enc_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds);
 
+            const comp_start = std.Io.Clock.now(.awake, self.io);
             const compressed_data: []const u8 = if (algo == .none)
                 encoded.data
             else blk: {
@@ -316,6 +339,7 @@ pub const RegionFile = struct {
                 };
                 break :blk compressed_buf[0..len];
             };
+            compress_ns += @intCast(comp_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds);
 
             const sectors_needed = storage_types.sectorsNeeded(compressed_data.len);
             if (sectors_needed == 0) continue;
@@ -325,12 +349,15 @@ pub const RegionFile = struct {
                 continue;
             };
 
+            const wr_start = std.Io.Clock.now(.awake, self.io);
             const file_offset: u64 = @as(u64, new_offset) * SECTOR_SIZE;
             self.pwriteAll(compressed_data, file_offset) catch {
                 self.allocator_bitmap.free(new_offset, sectors_needed);
                 log.err("Batch: write failed for chunk {d}", .{chunk_index});
                 continue;
             };
+            write_ns += @intCast(wr_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds);
+            total_bytes += compressed_data.len;
 
             const old_entry = self.cot[chunk_index];
             if (old_entry.isPresent() and old_count < old_entries.len) {
@@ -354,7 +381,20 @@ pub const RegionFile = struct {
         self.header.generation += 1;
         self.header.total_sectors = self.allocator_bitmap.total_sectors;
 
+        const commit_start = std.Io.Clock.now(.awake, self.io);
         try self.commitHeader();
+        const commit_ns: i64 = @intCast(commit_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds);
+
+        const total_us = @divTrunc(@as(i64, @intCast(batch_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds)), 1000);
+        log.info("[writeChunkBatch] n={d} encode={d}us compress={d}us write={d}us commit={d}us total={d}us bytes={d}", .{
+            chunk_indices.len,
+            @divTrunc(encode_ns, 1000),
+            @divTrunc(compress_ns, 1000),
+            @divTrunc(write_ns, 1000),
+            @divTrunc(commit_ns, 1000),
+            total_us,
+            total_bytes,
+        });
     }
 
     pub fn chunkExists(self: *RegionFile, chunk_index: u9) bool {
@@ -435,7 +475,9 @@ pub const RegionFile = struct {
         self.pwriteAll(cot_data[0 .. CHUNKS_PER_REGION * @sizeOf(ChunkOffsetEntry)], cot_offset) catch
             return error.IoError;
 
+        const fsync1_start = std.Io.Clock.now(.awake, self.io);
         self.fsync() catch {};
+        const fsync1_us = @divTrunc(@as(i64, @intCast(fsync1_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds)), 1000);
 
         var meta_page: [SECTOR_SIZE]u8 = [_]u8{0} ** SECTOR_SIZE;
 
@@ -454,7 +496,11 @@ pub const RegionFile = struct {
         const meta_offset: u64 = if (inactive == 0) storage_types.OFFSET_META_A else storage_types.OFFSET_META_B;
         self.pwriteAll(&meta_page, meta_offset) catch return error.IoError;
 
+        const fsync2_start = std.Io.Clock.now(.awake, self.io);
         self.fsync() catch {};
+        const fsync2_us = @divTrunc(@as(i64, @intCast(fsync2_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds)), 1000);
+
+        log.debug("[commitHeader] fsync1={d}us fsync2={d}us", .{ fsync1_us, fsync2_us });
 
         self.active_slot = inactive;
     }

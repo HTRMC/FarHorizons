@@ -179,6 +179,7 @@ pub fn saveAllDirty(self: *Storage) void {
     for (0..result.batch_count) |bi| {
         const batch = &result.batches[bi];
         const coord = batch.region_coord;
+        const region_start = std.Io.Clock.now(.awake, io);
         const region = self.region_cache.getOrOpen(coord) catch {
             log.err("Failed to open region for shutdown save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
             for (batch.chunks[0..batch.count]) |chunk_ptr| {
@@ -202,6 +203,13 @@ pub fn saveAllDirty(self: *Storage) void {
         ) catch |err| {
             log.err("Shutdown batch save failed: {}", .{err});
         };
+
+        const region_ns: i64 = @intCast(region_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+        log.info("[saveAllDirty] region({d},{d},{d}) {d} chunks in {d:.1}ms", .{
+            coord.rx, coord.ry, coord.rz,
+            batch.count,
+            @as(f64, @floatFromInt(region_ns)) / 1_000_000.0,
+        });
 
         for (batch.chunks[0..batch.count]) |chunk_ptr| {
             self.allocator.destroy(chunk_ptr);

@@ -660,37 +660,48 @@ pub fn generateTerrainWorld(out: *World) void {
     }
 }
 
-pub fn downsampleWorld(src: *const World, dst: *World, lod_level: u8) void {
+/// 2x downsample: each output block is the majority vote of 2x2x2 source blocks.
+/// `src_lod_level` is the LOD level of `src` (0 for the base world).
+/// The output will be at LOD level `src_lod_level + 1`.
+pub fn downsampleWorld(src: *const World, dst: *World, src_lod_level: u8) void {
     @memset(std.mem.asBytes(dst), 0);
 
-    const scale: u32 = @as(u32, 1) << @intCast(lod_level);
-    const iscale: i32 = @intCast(scale);
+    const src_scale: u32 = @as(u32, 1) << @intCast(src_lod_level);
+    const src_chunks_x = @max(1, WORLD_CHUNKS_X / src_scale);
+    const src_chunks_y = @max(1, WORLD_CHUNKS_Y / src_scale);
+    const src_chunks_z = @max(1, WORLD_CHUNKS_Z / src_scale);
 
-    const lod_chunks_x = @max(1, WORLD_CHUNKS_X / scale);
-    const lod_chunks_y = @max(1, WORLD_CHUNKS_Y / scale);
-    const lod_chunks_z = @max(1, WORLD_CHUNKS_Z / scale);
+    const dst_chunks_x = @max(1, src_chunks_x / 2);
+    const dst_chunks_y = @max(1, src_chunks_y / 2);
+    const dst_chunks_z = @max(1, src_chunks_z / 2);
 
-    for (0..lod_chunks_y) |cy| {
-        for (0..lod_chunks_z) |cz| {
-            for (0..lod_chunks_x) |cx| {
+    // Half-size of the source world in blocks (for world-space offset)
+    const src_half_x: i32 = @intCast(src_chunks_x * CHUNK_SIZE / 2);
+    const src_half_y: i32 = @intCast(src_chunks_y * CHUNK_SIZE / 2);
+    const src_half_z: i32 = @intCast(src_chunks_z * CHUNK_SIZE / 2);
+
+    for (0..dst_chunks_y) |cy| {
+        for (0..dst_chunks_z) |cz| {
+            for (0..dst_chunks_x) |cx| {
                 var blocks: [BLOCKS_PER_CHUNK]BlockType = .{.air} ** BLOCKS_PER_CHUNK;
 
                 for (0..CHUNK_SIZE) |by| {
                     for (0..CHUNK_SIZE) |bz| {
                         for (0..CHUNK_SIZE) |bx| {
-                            const src_wx: i32 = (@as(i32, @intCast(cx)) * CHUNK_SIZE + @as(i32, @intCast(bx))) * iscale - @as(i32, WORLD_SIZE_X / 2);
-                            const src_wy: i32 = (@as(i32, @intCast(cy)) * CHUNK_SIZE + @as(i32, @intCast(by))) * iscale - @as(i32, WORLD_SIZE_Y / 2);
-                            const src_wz: i32 = (@as(i32, @intCast(cz)) * CHUNK_SIZE + @as(i32, @intCast(bz))) * iscale - @as(i32, WORLD_SIZE_Z / 2);
+                            // Map output block to source world coords (2x scale)
+                            const src_wx: i32 = (@as(i32, @intCast(cx)) * CHUNK_SIZE + @as(i32, @intCast(bx))) * 2 - src_half_x;
+                            const src_wy: i32 = (@as(i32, @intCast(cy)) * CHUNK_SIZE + @as(i32, @intCast(by))) * 2 - src_half_y;
+                            const src_wz: i32 = (@as(i32, @intCast(cz)) * CHUNK_SIZE + @as(i32, @intCast(bz))) * 2 - src_half_z;
 
                             var counts = [_]u32{0} ** 6;
                             var non_air_total: u32 = 0;
 
                             var dy: i32 = 0;
-                            while (dy < iscale) : (dy += 1) {
+                            while (dy < 2) : (dy += 1) {
                                 var dz: i32 = 0;
-                                while (dz < iscale) : (dz += 1) {
+                                while (dz < 2) : (dz += 1) {
                                     var dx: i32 = 0;
-                                    while (dx < iscale) : (dx += 1) {
+                                    while (dx < 2) : (dx += 1) {
                                         const b = getBlock(src, src_wx + dx, src_wy + dy, src_wz + dz);
                                         if (b != .air) {
                                             counts[@intFromEnum(b)] += 1;
