@@ -5,6 +5,9 @@ const WidgetId = Widget.WidgetId;
 const NULL_WIDGET = Widget.NULL_WIDGET;
 const WidgetTree = @import("WidgetTree.zig").WidgetTree;
 const ActionRegistry = @import("ActionRegistry.zig").ActionRegistry;
+const HudBinder = @import("HudBinder.zig").HudBinder;
+const UiRenderer = @import("../renderer/vulkan/UiRenderer.zig").UiRenderer;
+const GameState = @import("../GameState.zig");
 const app_config = @import("../app_config.zig");
 
 const log = std.log.scoped(.UI);
@@ -31,6 +34,10 @@ pub const MenuController = struct {
     title_screen_loaded: bool = false,
     singleplayer_screen_loaded: bool = false,
     pause_screen_loaded: bool = false,
+    hud_screen_loaded: bool = false,
+
+    // HUD data-binding
+    hud_binder: ?HudBinder = null,
 
     // Cached widget IDs (title screen)
     coming_soon_modal_id: WidgetId = NULL_WIDGET,
@@ -246,6 +253,10 @@ pub const MenuController = struct {
             self.ui_manager.removeTopScreen();
             self.pause_screen_loaded = false;
         }
+        // Remove HUD screen if loaded
+        if (self.hud_screen_loaded) {
+            self.unloadHud();
+        }
         // Remove singleplayer screen if loaded (it's at screens[0])
         if (self.singleplayer_screen_loaded) {
             self.ui_manager.removeTopScreen();
@@ -274,6 +285,52 @@ pub const MenuController = struct {
             self.ui_manager.removeTopScreen();
             self.title_screen_loaded = false;
         }
+    }
+
+    // ── HUD lifecycle ──
+
+    fn hudTree(self: *MenuController) ?*WidgetTree {
+        if (!self.hud_screen_loaded) return null;
+        if (self.ui_manager.screen_count == 0) return null;
+        if (!self.ui_manager.screens[0].active) return null;
+        return &self.ui_manager.screens[0].tree;
+    }
+
+    /// Load the HUD screen (passthrough) and resolve sprite atlas UVs.
+    pub fn loadHud(self: *MenuController, ui_renderer: *const UiRenderer) void {
+        if (self.hud_screen_loaded) return;
+        if (self.ui_manager.loadScreenFromFile("hud.xml", self.allocator)) {
+            self.hud_screen_loaded = true;
+            const tree = self.hudTree() orelse return;
+            var binder = HudBinder.init(tree);
+            binder.resolveSprites(tree, ui_renderer);
+            self.hud_binder = binder;
+        } else {
+            log.err("Failed to load hud.xml", .{});
+        }
+    }
+
+    /// Remove the HUD screen from the stack.
+    pub fn unloadHud(self: *MenuController) void {
+        if (!self.hud_screen_loaded) return;
+        // Pause screen sits above HUD — remove it first if present
+        if (self.pause_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.pause_screen_loaded = false;
+        }
+        // HUD is now the top screen
+        if (self.ui_manager.screen_count > 0) {
+            self.ui_manager.removeTopScreen();
+        }
+        self.hud_screen_loaded = false;
+        self.hud_binder = null;
+    }
+
+    /// Per-frame HUD update: bind game state to widget properties.
+    pub fn updateHud(self: *MenuController, gs: *const GameState) void {
+        const binder = self.hud_binder orelse return;
+        const tree = self.hudTree() orelse return;
+        binder.update(tree, gs);
     }
 
     pub fn getSelectedWorldName(self: *const MenuController) []const u8 {

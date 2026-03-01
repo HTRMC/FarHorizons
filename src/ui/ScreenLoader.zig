@@ -297,6 +297,14 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.image.tint = parseColor(attr.value);
                 } else if (eql(attr.name, "nine_slice_border")) {
                     data.image.nine_slice_border = parseFloat(attr.value);
+                } else if (eql(attr.name, "atlas_u")) {
+                    data.image.atlas_u = parseFloat(attr.value);
+                } else if (eql(attr.name, "atlas_v")) {
+                    data.image.atlas_v = parseFloat(attr.value);
+                } else if (eql(attr.name, "atlas_w")) {
+                    data.image.atlas_w = parseFloat(attr.value);
+                } else if (eql(attr.name, "atlas_h")) {
+                    data.image.atlas_h = parseFloat(attr.value);
                 }
             }
         },

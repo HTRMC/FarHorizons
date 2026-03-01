@@ -123,6 +123,12 @@ fn keyName(key: c_int) []const u8 {
         glfw.GLFW_KEY_1 => "1",
         glfw.GLFW_KEY_2 => "2",
         glfw.GLFW_KEY_3 => "3",
+        glfw.GLFW_KEY_4 => "4",
+        glfw.GLFW_KEY_5 => "5",
+        glfw.GLFW_KEY_6 => "6",
+        glfw.GLFW_KEY_7 => "7",
+        glfw.GLFW_KEY_8 => "8",
+        glfw.GLFW_KEY_9 => "9",
         glfw.GLFW_KEY_W => "W",
         glfw.GLFW_KEY_A => "A",
         glfw.GLFW_KEY_S => "S",
@@ -177,12 +183,13 @@ const InputState = struct {
     last_cursor_y: f64 = 0.0,
     first_mouse: bool = true,
     move_speed: f32 = 20.0,
-    scroll_speed_delta: f32 = 0.0,
     last_space_press_time: f64 = 0.0,
     mode_toggle_requested: bool = false,
     debug_toggle_requested: bool = false,
     overdraw_toggle_requested: bool = false,
     lod_switch_requested: ?u8 = null,
+    hotbar_scroll_delta: f32 = 0.0,
+    hotbar_slot_requested: ?u8 = null,
 };
 
 fn cursorPosCallback(window: ?*glfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
@@ -206,8 +213,10 @@ fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c
     }
 
     if (input_state.menu_ctrl.app_state != .playing) return;
-    input_log.debug("Scroll y={d:.1}", .{yoffset});
-    input_state.scroll_speed_delta += @floatCast(yoffset);
+    if (input_state.mouse_captured) {
+        input_log.debug("Scroll y={d:.1} (hotbar)", .{yoffset});
+        input_state.hotbar_scroll_delta += @floatCast(yoffset);
+    }
 }
 
 fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.c) void {
@@ -242,11 +251,27 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 input_state.overdraw_toggle_requested = true;
             }
 
-            if (key == glfw.GLFW_KEY_1 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 0;
-            if (key == glfw.GLFW_KEY_2 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 1;
-            if (key == glfw.GLFW_KEY_3 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 2;
-            if (key == glfw.GLFW_KEY_4 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 3;
-            if (key == glfw.GLFW_KEY_5 and action == glfw.GLFW_PRESS) input_state.lod_switch_requested = 4;
+            // Ctrl+1-5: LOD switch; plain 1-9: hotbar slot
+            if (action == glfw.GLFW_PRESS) {
+                const ctrl = (mods & glfw.GLFW_MOD_CONTROL) != 0;
+                if (ctrl) {
+                    if (key == glfw.GLFW_KEY_1) input_state.lod_switch_requested = 0;
+                    if (key == glfw.GLFW_KEY_2) input_state.lod_switch_requested = 1;
+                    if (key == glfw.GLFW_KEY_3) input_state.lod_switch_requested = 2;
+                    if (key == glfw.GLFW_KEY_4) input_state.lod_switch_requested = 3;
+                    if (key == glfw.GLFW_KEY_5) input_state.lod_switch_requested = 4;
+                } else {
+                    if (key == glfw.GLFW_KEY_1) input_state.hotbar_slot_requested = 0;
+                    if (key == glfw.GLFW_KEY_2) input_state.hotbar_slot_requested = 1;
+                    if (key == glfw.GLFW_KEY_3) input_state.hotbar_slot_requested = 2;
+                    if (key == glfw.GLFW_KEY_4) input_state.hotbar_slot_requested = 3;
+                    if (key == glfw.GLFW_KEY_5) input_state.hotbar_slot_requested = 4;
+                    if (key == glfw.GLFW_KEY_6) input_state.hotbar_slot_requested = 5;
+                    if (key == glfw.GLFW_KEY_7) input_state.hotbar_slot_requested = 6;
+                    if (key == glfw.GLFW_KEY_8) input_state.hotbar_slot_requested = 7;
+                    if (key == glfw.GLFW_KEY_9) input_state.hotbar_slot_requested = 8;
+                }
+            }
 
             if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
                 const now = glfw.getTime();
@@ -381,9 +406,6 @@ pub fn main() !void {
     std.log.info("Entering main loop...", .{});
 
     const mouse_sensitivity: f32 = 0.003;
-    const min_speed: f32 = 1.0;
-    const max_speed: f32 = 200.0;
-    const speed_scroll_factor: f32 = 1.2;
     var last_time = glfw.getTime();
     var tick_accumulator: f32 = 0.0;
 
@@ -413,6 +435,8 @@ pub fn main() !void {
                             renderer.setGameState(@ptrCast(gs));
                             input_state.game_state = gs;
                             menu_ctrl.hideTitleMenu();
+                            const vk_impl: *VulkanRenderer = @ptrCast(@alignCast(renderer.impl));
+                            menu_ctrl.loadHud(&vk_impl.render_state.ui_renderer);
                             menu_ctrl.app_state = .playing;
                             input_state.mouse_captured = true;
                             input_state.first_mouse = true;
@@ -455,15 +479,18 @@ pub fn main() !void {
         // Game update (only when playing)
         if (menu_ctrl.app_state == .playing) {
             if (game_state) |*gs| {
-                // Adjust move speed via scroll
-                if (input_state.scroll_speed_delta != 0.0) {
-                    if (input_state.scroll_speed_delta > 0.0) {
-                        input_state.move_speed *= speed_scroll_factor;
-                    } else {
-                        input_state.move_speed /= speed_scroll_factor;
-                    }
-                    input_state.move_speed = @max(min_speed, @min(max_speed, input_state.move_speed));
-                    input_state.scroll_speed_delta = 0.0;
+                // Hotbar slot selection via scroll wheel
+                if (input_state.hotbar_scroll_delta != 0.0) {
+                    const delta: i32 = if (input_state.hotbar_scroll_delta < 0.0) @as(i32, 1) else @as(i32, -1);
+                    const current: i32 = @intCast(gs.selected_slot);
+                    gs.selected_slot = @intCast(@mod(current + delta + GameState.HOTBAR_SIZE, GameState.HOTBAR_SIZE));
+                    input_state.hotbar_scroll_delta = 0.0;
+                }
+
+                // Hotbar slot selection via number keys
+                if (input_state.hotbar_slot_requested) |slot| {
+                    gs.selected_slot = slot;
+                    input_state.hotbar_slot_requested = null;
                 }
 
                 // Mouse look (per-frame, not tick-rate limited)
@@ -551,6 +578,9 @@ pub fn main() !void {
                 if (gs.storage) |s| {
                     s.tick();
                 }
+
+                // Update HUD widgets from game state
+                menu_ctrl.updateHud(gs);
             }
         }
 

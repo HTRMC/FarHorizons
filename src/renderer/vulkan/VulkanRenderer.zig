@@ -151,6 +151,11 @@ pub const VulkanRenderer = struct {
         self.render_state.text_renderer.updateScreenSize(virtual_w, virtual_h, ui_scale);
         self.render_state.ui_renderer.updateScreenSize(virtual_w, virtual_h, ui_scale);
 
+        // Load HUD sprite atlas
+        self.render_state.ui_renderer.loadHudAtlas(allocator, &self.ctx) catch |err| {
+            std.log.warn("Failed to load HUD atlas: {}, HUD sprites disabled", .{err});
+        };
+
         // Initialize mesh worker and camera if game_state is provided
         if (game_state) |gs| {
             gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
@@ -244,7 +249,7 @@ pub const VulkanRenderer = struct {
         self.render_state.text_renderer.beginFrame(self.ctx.device);
 
         if (self.game_state) |gs| {
-            // In-game HUD
+            // In-game debug text
             self.render_state.text_renderer.drawText(10.0, 10.0, "FarHorizons", .{ 1.0, 1.0, 1.0, 1.0 });
 
             var lod_buf: [16]u8 = undefined;
