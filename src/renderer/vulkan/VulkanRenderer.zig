@@ -243,11 +243,8 @@ pub const VulkanRenderer = struct {
         self.render_state.text_renderer.beginFrame(self.ctx.device);
 
         if (self.game_state) |gs| {
-            self.render_state.text_renderer.drawText(10.0, 10.0, "FarHorizons", .{ 1.0, 1.0, 1.0, 1.0 });
-
-            var lod_buf: [16]u8 = undefined;
-            const lod_text = std.fmt.bufPrint(&lod_buf, "LOD {d}", .{gs.current_lod}) catch "LOD ?";
-            self.render_state.text_renderer.drawText(10.0, 30.0, lod_text, .{ 1.0, 1.0, 0.0, 1.0 });
+            const DebugOverlay = @import("../../DebugOverlay.zig");
+            DebugOverlay.draw(&self.render_state.text_renderer, gs, self.render_state.world_renderer.draw_count);
         }
 
         if (self.ui_manager) |um| {

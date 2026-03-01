@@ -148,7 +148,11 @@ fn keyName(key: c_int) []const u8 {
         glfw.GLFW_KEY_BACKSPACE => "Backspace",
         glfw.GLFW_KEY_DELETE => "Delete",
         glfw.GLFW_KEY_P => "P",
+        glfw.GLFW_KEY_F3 => "F3",
         glfw.GLFW_KEY_F4 => "F4",
+        glfw.GLFW_KEY_F5 => "F5",
+        glfw.GLFW_KEY_F6 => "F6",
+        glfw.GLFW_KEY_F7 => "F7",
         glfw.GLFW_KEY_F11 => "F11",
         glfw.GLFW_KEY_UP => "Up",
         glfw.GLFW_KEY_DOWN => "Down",
@@ -194,6 +198,7 @@ const InputState = struct {
     mode_toggle_requested: bool = false,
     debug_toggle_requested: bool = false,
     overdraw_toggle_requested: bool = false,
+    debug_screen_toggle: ?u3 = null,
     lod_switch_requested: ?u8 = null,
     hotbar_scroll_delta: f32 = 0.0,
     hotbar_slot_requested: ?u8 = null,
@@ -263,8 +268,18 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 input_state.debug_toggle_requested = true;
             }
 
-            if (key == glfw.GLFW_KEY_F4 and action == glfw.GLFW_PRESS) {
-                input_state.overdraw_toggle_requested = true;
+            if (action == glfw.GLFW_PRESS) {
+                const shift = (mods & glfw.GLFW_MOD_SHIFT) != 0;
+
+                if (key == glfw.GLFW_KEY_F3) input_state.debug_screen_toggle = 0;
+                if (key == glfw.GLFW_KEY_F4 and shift) {
+                    input_state.overdraw_toggle_requested = true;
+                } else if (key == glfw.GLFW_KEY_F4 and !shift) {
+                    input_state.debug_screen_toggle = 1;
+                }
+                if (key == glfw.GLFW_KEY_F5) input_state.debug_screen_toggle = 2;
+                if (key == glfw.GLFW_KEY_F6) input_state.debug_screen_toggle = 3;
+                if (key == glfw.GLFW_KEY_F7) input_state.debug_screen_toggle = 4;
             }
 
             if (action == glfw.GLFW_PRESS) {
@@ -524,6 +539,13 @@ pub fn main() !void {
                     input_state.overdraw_toggle_requested = false;
                     gs.overdraw_mode = !gs.overdraw_mode;
                 }
+
+                if (input_state.debug_screen_toggle) |bit| {
+                    input_state.debug_screen_toggle = null;
+                    gs.debug_screens ^= @as(u8, 1) << bit;
+                }
+
+                gs.delta_time = delta_time;
 
                 if (input_state.lod_switch_requested) |lod| {
                     input_state.lod_switch_requested = null;
