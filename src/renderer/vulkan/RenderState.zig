@@ -15,7 +15,6 @@ pub const RenderState = struct {
     debug_renderer: DebugRenderer,
     text_renderer: TextRenderer,
     ui_renderer: UiRenderer,
-    // Command buffers and sync
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence,

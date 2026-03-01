@@ -24,41 +24,32 @@ pub const MenuController = struct {
     app_state: AppState = .title_menu,
     action: ?Action = null,
 
-    // World list data
     world_names: [MAX_WORLDS][MAX_NAME_LEN]u8 = undefined,
     world_name_lens: [MAX_WORLDS]u8 = .{0} ** MAX_WORLDS,
     world_count: u8 = 0,
     selection: u8 = 0,
 
-    // Screen tracking
     title_screen_loaded: bool = false,
     singleplayer_screen_loaded: bool = false,
     pause_screen_loaded: bool = false,
     hud_screen_loaded: bool = false,
 
-    // HUD data-binding
     hud_binder: ?HudBinder = null,
 
-    // Cached widget IDs (title screen)
     coming_soon_modal_id: WidgetId = NULL_WIDGET,
 
-    // Cached widget IDs (singleplayer screen)
     world_list_id: WidgetId = NULL_WIDGET,
     no_worlds_label_id: WidgetId = NULL_WIDGET,
     delete_confirm_id: WidgetId = NULL_WIDGET,
     delete_label_id: WidgetId = NULL_WIDGET,
     world_name_input_id: WidgetId = NULL_WIDGET,
 
-    /// Create a MenuController and load the title screen.
-    /// Caller MUST call `registerActions()` after storing the result at its
-    /// final address — the action callbacks capture a pointer to `self`.
     pub fn init(ui_manager: *UiManager, allocator: std.mem.Allocator) MenuController {
         var self = MenuController{
             .ui_manager = ui_manager,
             .allocator = allocator,
         };
 
-        // Load title screen
         if (ui_manager.loadScreenFromFile("title_menu.xml", allocator)) {
             self.title_screen_loaded = true;
             self.cacheTitleWidgetIds();
@@ -119,7 +110,6 @@ pub const MenuController = struct {
         self.world_count = 0;
         self.selection = 0;
 
-        // Read worlds from disk
         var name_slices: [MAX_WORLDS][]const u8 = undefined;
         const count = app_config.listWorlds(self.allocator, &name_slices) catch 0;
 
@@ -132,14 +122,12 @@ pub const MenuController = struct {
         }
         self.world_count = count;
 
-        // Update the list_view widget
         self.populateWorldListWidget();
     }
 
     fn populateWorldListWidget(self: *MenuController) void {
         const tree = self.singleplayerTree() orelse return;
 
-        // Update list_view item_count
         if (self.world_list_id != NULL_WIDGET) {
             if (tree.getData(self.world_list_id)) |data| {
                 data.list_view.item_count = self.world_count;
@@ -147,12 +135,10 @@ pub const MenuController = struct {
                 data.list_view.scroll_offset = 0;
             }
 
-            // Clear existing children and build rich items for each world
             tree.clearChildren(self.world_list_id);
             for (0..self.world_count) |i| {
                 const name = self.world_names[i][0..self.world_name_lens[i]];
 
-                // Row container: [image] [text column]
                 const row_id = tree.addWidget(.panel, self.world_list_id) orelse break;
                 if (tree.getWidget(row_id)) |w| {
                     w.width = .fill;
@@ -163,7 +149,6 @@ pub const MenuController = struct {
                     w.padding = .{ .top = 4, .right = 8, .bottom = 4, .left = 8 };
                 }
 
-                // Image placeholder
                 const img_id = tree.addWidget(.panel, row_id) orelse break;
                 if (tree.getWidget(img_id)) |w| {
                     w.width = .{ .px = 56 };
@@ -171,7 +156,6 @@ pub const MenuController = struct {
                     w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 1.0 };
                 }
 
-                // Text column: title, last played, version
                 const col_id = tree.addWidget(.panel, row_id) orelse break;
                 if (tree.getWidget(col_id)) |w| {
                     w.width = .fill;
@@ -180,7 +164,6 @@ pub const MenuController = struct {
                     w.gap = 2;
                 }
 
-                // Title
                 const title_id = tree.addWidget(.label, col_id) orelse break;
                 if (tree.getWidget(title_id)) |w| {
                     w.width = .fill;
@@ -191,7 +174,6 @@ pub const MenuController = struct {
                     data.label.color = Widget.Color.white;
                 }
 
-                // Last played
                 const date_id = tree.addWidget(.label, col_id) orelse break;
                 if (tree.getWidget(date_id)) |w| {
                     w.width = .fill;
@@ -202,7 +184,6 @@ pub const MenuController = struct {
                     data.label.color = .{ .r = 0.6, .g = 0.6, .b = 0.6, .a = 1.0 };
                 }
 
-                // Version
                 const ver_id = tree.addWidget(.label, col_id) orelse break;
                 if (tree.getWidget(ver_id)) |w| {
                     w.width = .fill;
@@ -215,14 +196,12 @@ pub const MenuController = struct {
             }
         }
 
-        // Toggle no-worlds label visibility
         if (self.no_worlds_label_id != NULL_WIDGET) {
             if (tree.getWidget(self.no_worlds_label_id)) |w| {
                 w.visible = (self.world_count == 0);
             }
         }
 
-        // Hide delete confirmation
         if (self.delete_confirm_id != NULL_WIDGET) {
             if (tree.getWidget(self.delete_confirm_id)) |w| {
                 w.visible = false;
@@ -248,22 +227,18 @@ pub const MenuController = struct {
     }
 
     pub fn showTitleMenu(self: *MenuController) void {
-        // Remove pause screen if still on stack
         if (self.pause_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.pause_screen_loaded = false;
         }
-        // Remove HUD screen if loaded
         if (self.hud_screen_loaded) {
             self.unloadHud();
         }
-        // Remove singleplayer screen if loaded (it's at screens[0])
         if (self.singleplayer_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.singleplayer_screen_loaded = false;
             self.resetSingleplayerWidgetIds();
         }
-        // If title screen was removed, reload it
         if (!self.title_screen_loaded or self.ui_manager.screen_count == 0) {
             if (self.ui_manager.loadScreenFromFile("title_menu.xml", self.allocator)) {
                 self.title_screen_loaded = true;
@@ -273,9 +248,7 @@ pub const MenuController = struct {
         self.app_state = .title_menu;
     }
 
-    /// Hide all menu screens (when entering gameplay).
     pub fn hideTitleMenu(self: *MenuController) void {
-        // Singleplayer and title are mutually exclusive at screens[0]
         if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
             self.singleplayer_screen_loaded = false;
@@ -287,7 +260,6 @@ pub const MenuController = struct {
         }
     }
 
-    // ── HUD lifecycle ──
 
     fn hudTree(self: *MenuController) ?*WidgetTree {
         if (!self.hud_screen_loaded) return null;
@@ -296,7 +268,6 @@ pub const MenuController = struct {
         return &self.ui_manager.screens[0].tree;
     }
 
-    /// Load the HUD screen (passthrough) and resolve sprite atlas UVs.
     pub fn loadHud(self: *MenuController, ui_renderer: *const UiRenderer) void {
         if (self.hud_screen_loaded) return;
         if (self.ui_manager.loadScreenFromFile("hud.xml", self.allocator)) {
@@ -310,15 +281,12 @@ pub const MenuController = struct {
         }
     }
 
-    /// Remove the HUD screen from the stack.
     pub fn unloadHud(self: *MenuController) void {
         if (!self.hud_screen_loaded) return;
-        // Pause screen sits above HUD — remove it first if present
         if (self.pause_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.pause_screen_loaded = false;
         }
-        // HUD is now the top screen
         if (self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
         }
@@ -326,7 +294,6 @@ pub const MenuController = struct {
         self.hud_binder = null;
     }
 
-    /// Per-frame HUD update: bind game state to widget properties.
     pub fn updateHud(self: *MenuController, gs: *const GameState) void {
         const binder = self.hud_binder orelse return;
         const tree = self.hudTree() orelse return;
@@ -358,7 +325,6 @@ pub const MenuController = struct {
         self.world_name_input_id = NULL_WIDGET;
     }
 
-    // ── Action callbacks ──
 
     fn actionPlayWorld(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
@@ -379,14 +345,12 @@ pub const MenuController = struct {
         const self = getSelf(ctx);
         if (self.world_count == 0) return;
 
-        // Show delete confirmation panel
         const tree = self.singleplayerTree() orelse return;
         if (self.delete_confirm_id != NULL_WIDGET) {
             if (tree.getWidget(self.delete_confirm_id)) |w| {
                 w.visible = true;
             }
         }
-        // Update label text
         if (self.delete_label_id != NULL_WIDGET) {
             if (tree.getData(self.delete_label_id)) |data| {
                 const world_name = self.getSelectedWorldName();
@@ -400,7 +364,6 @@ pub const MenuController = struct {
     fn actionConfirmDelete(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
         self.action = .delete_world;
-        // Hide confirm panel
         const tree = self.singleplayerTree() orelse return;
         if (self.delete_confirm_id != NULL_WIDGET) {
             if (tree.getWidget(self.delete_confirm_id)) |w| {
@@ -451,7 +414,6 @@ pub const MenuController = struct {
     fn actionShowSingleplayer(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
         if (self.singleplayer_screen_loaded) return;
-        // Remove title screen first so singleplayer becomes screens[0]
         if (self.title_screen_loaded and self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
             self.title_screen_loaded = false;
@@ -468,7 +430,6 @@ pub const MenuController = struct {
 
     fn actionBackToTitle(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
-        // Remove singleplayer screen, then reload title as screens[0]
         if (self.singleplayer_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.singleplayer_screen_loaded = false;

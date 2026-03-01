@@ -6,46 +6,35 @@ const WidgetTree = @import("WidgetTree.zig").WidgetTree;
 const WidgetData = @import("WidgetData.zig");
 const TextRenderer = @import("../renderer/vulkan/TextRenderer.zig").TextRenderer;
 
-/// Run the full two-pass layout on the tree.
-/// Pass 1 (measure): bottom-up, computes intrinsic sizes.
-/// Pass 2 (layout): top-down, assigns positions and final sizes.
 pub fn layoutTree(tree: *WidgetTree, screen_w: f32, screen_h: f32, text_renderer: *const TextRenderer) void {
     if (tree.root == NULL_WIDGET) return;
 
-    // Set root size to screen
     var root = &tree.widgets[tree.root];
     root.computed_rect.w = screen_w;
     root.computed_rect.h = screen_h;
     root.computed_rect.x = 0;
     root.computed_rect.y = 0;
 
-    // Pass 1: measure (post-order)
     measureWidget(tree, tree.root, text_renderer);
 
-    // Pass 2: layout (pre-order)
     layoutWidget(tree, tree.root, screen_w, screen_h, text_renderer);
 }
 
-// ── Pass 1: Measure (bottom-up) ──
 
 fn measureWidget(tree: *WidgetTree, id: WidgetId, text_renderer: *const TextRenderer) void {
     const w = &tree.widgets[id];
     if (!w.active or !w.visible) return;
 
-    // Measure children first (post-order)
     var iter = tree.children(id);
     while (iter.next()) |child_id| {
         measureWidget(tree, child_id, text_renderer);
     }
 
-    // Compute intrinsic size based on widget kind
     const data = &tree.data[id];
     switch (w.kind) {
         .label => {
             const label = &data.label;
             const scale: f32 = @floatFromInt(label.font_size);
-            // For wrapping labels: intrinsic width is full single-line text width,
-            // height is placeholder — real height computed in layout pass after width resolves
             w.intrinsic_width = text_renderer.measureText(label.getText()) * scale + w.padding.horizontal();
             w.intrinsic_height = 16.0 * scale + w.padding.vertical();
         },
@@ -79,7 +68,6 @@ fn measureWidget(tree: *WidgetTree, id: WidgetId, text_renderer: *const TextRend
         },
         .dropdown => {
             const dd = &data.dropdown;
-            // Width = max item text width + arrow space
             var max_item_w: f32 = 0;
             for (0..dd.item_count) |i| {
                 const item_text = dd.items[i][0..dd.item_lens[i]];
@@ -90,7 +78,6 @@ fn measureWidget(tree: *WidgetTree, id: WidgetId, text_renderer: *const TextRend
             w.intrinsic_height = 28 + w.padding.vertical();
         },
         .panel, .scroll_view, .list_view, .image => {
-            // Intrinsic size from children for containers
             if (w.layout_mode == .flex) {
                 var total_main: f32 = 0;
                 var max_cross: f32 = 0;
@@ -123,7 +110,6 @@ fn measureWidget(tree: *WidgetTree, id: WidgetId, text_renderer: *const TextRend
                     w.intrinsic_height = max_cross + w.padding.vertical();
                 }
             } else {
-                // Anchor mode: intrinsic is max extent of children
                 var max_w: f32 = 0;
                 var max_h: f32 = 0;
                 var child_iter = tree.children(id);
@@ -140,17 +126,14 @@ fn measureWidget(tree: *WidgetTree, id: WidgetId, text_renderer: *const TextRend
     }
 }
 
-// ── Pass 2: Layout (top-down) ──
 
 fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, text_renderer: *const TextRenderer) void {
     const w = &tree.widgets[id];
     if (!w.active or !w.visible) return;
 
-    // Resolve own final size
     w.computed_rect.w = resolveSizeSpec(w.width, parent_w, w.intrinsic_width);
     w.computed_rect.h = resolveSizeSpec(w.height, parent_h, w.intrinsic_height);
 
-    // Wrapping label: recompute height now that width is resolved
     if (w.kind == .label) {
         const data = &tree.data[id];
         const label = &data.label;
@@ -166,7 +149,6 @@ fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, t
         }
     }
 
-    // scroll_view: compute content size and offset children by scroll position
     if (w.kind == .scroll_view) {
         const sv = &tree.data[id].scroll_view;
         const content_x = w.computed_rect.x + w.padding.left;
@@ -176,7 +158,6 @@ fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, t
 
         layoutFlexChildrenOffset(tree, id, content_x, content_y - sv.scroll_y, content_w, content_h, text_renderer);
 
-        // Compute content_height from children extents
         var max_bottom: f32 = 0;
         var child_iter = tree.children(id);
         while (child_iter.next()) |cid| {
@@ -188,13 +169,11 @@ fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, t
         sv.content_height = max_bottom;
         sv.content_width = content_w;
 
-        // Clamp scroll
         const max_scroll = @max(sv.content_height - content_h, 0);
         sv.scroll_y = std.math.clamp(sv.scroll_y, 0, max_scroll);
         return;
     }
 
-    // list_view: position children at index * item_height
     if (w.kind == .list_view) {
         const lv = &tree.data[id].list_view;
         const content_x = w.computed_rect.x + w.padding.left;
@@ -219,14 +198,12 @@ fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, t
 
         lv.item_count = child_idx;
 
-        // Clamp scroll
         const total_content = @as(f32, @floatFromInt(child_idx)) * lv.item_height;
         const max_scroll = @max(total_content - content_h, 0);
         lv.scroll_offset = std.math.clamp(lv.scroll_offset, 0, max_scroll);
         return;
     }
 
-    // Content area
     const content_x = w.computed_rect.x + w.padding.left;
     const content_y = w.computed_rect.y + w.padding.top;
     const content_w = w.computed_rect.w - w.padding.horizontal();
@@ -249,7 +226,6 @@ fn layoutFlexChildrenOffset(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy:
     const main_size = if (is_column) ch else cw;
     const cross_size = if (is_column) cw else ch;
 
-    // First pass: sum fixed sizes and flex-grow weights
     var total_fixed: f32 = 0;
     var total_grow: f32 = 0;
     var visible_count: f32 = 0;
@@ -278,7 +254,6 @@ fn layoutFlexChildrenOffset(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy:
     var remaining = main_size - total_fixed - gaps;
     if (remaining < 0) remaining = 0;
 
-    // Second pass: position children
     var main_pos: f32 = switch (parent.justify) {
         .start => 0,
         .center => (main_size - total_fixed - gaps - (if (total_grow > 0) remaining else 0)) / 2.0,
@@ -301,7 +276,6 @@ fn layoutFlexChildrenOffset(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy:
             if (!first) main_pos += if (parent.justify == .space_between) space_between_gap else parent.gap;
             first = false;
 
-            // Main axis size
             var child_main: f32 = undefined;
             if (child.flex_grow > 0 and total_grow > 0) {
                 child_main = remaining * (child.flex_grow / total_grow);
@@ -312,7 +286,6 @@ fn layoutFlexChildrenOffset(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy:
                     resolveSizeSpec(child.width, cw, child.intrinsic_width);
             }
 
-            // Cross axis size and alignment
             const child_cross_natural = if (is_column)
                 resolveSizeSpec(child.width, cw, child.intrinsic_width)
             else
@@ -347,7 +320,6 @@ fn layoutFlexChildrenOffset(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy:
 
             main_pos += child_main + (if (is_column) child.margin.bottom else child.margin.right);
 
-            // Recurse
             layoutWidget(tree, cid, child.computed_rect.w, child.computed_rect.h, text_renderer);
         }
     }
@@ -379,15 +351,11 @@ fn layoutAnchorChildren(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy: f32
         child.computed_rect.w = child_w;
         child.computed_rect.h = child_h;
 
-        // Recurse
         layoutWidget(tree, cid, child_w, child_h, text_renderer);
     }
 }
 
-// ── Helpers ──
 
-/// Compute the height a child will actually occupy in a column layout,
-/// accounting for wrapping labels whose height depends on resolved width.
 fn resolveColumnChildHeight(
     tree: *WidgetTree,
     cid: WidgetId,
@@ -400,7 +368,6 @@ fn resolveColumnChildHeight(
     if (child.kind == .label and child.height == .auto) {
         const label = &tree.data[cid].label;
         if (label.wrap) {
-            // Compute the width this child will receive
             const natural_w = resolveSizeSpec(child.width, cw, child.intrinsic_width);
             const child_w = if (parent_cross_align == .stretch)
                 cw - child.margin.horizontal()

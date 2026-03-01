@@ -16,11 +16,9 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
 
     const clamped_dt = @min(dt, MAX_DT);
 
-    // Walking movement from input (input_move persists across ticks, set per-frame by main loop)
     const forward_input = state.input_move[0];
     const right_input = state.input_move[2];
 
-    // Project camera forward/right onto XZ plane
     const cam_forward = state.camera.getForward();
     const cam_right = state.camera.getRight();
     const fwd_xz = zlm.Vec3.init(cam_forward.x, 0.0, cam_forward.z);
@@ -28,7 +26,6 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
     const fwd_norm = zlm.Vec3.normalize(fwd_xz);
     const right_norm = zlm.Vec3.normalize(right_xz);
 
-    // Compute wish direction
     var wish = zlm.Vec3.add(
         zlm.Vec3.scale(fwd_norm, forward_input),
         zlm.Vec3.scale(right_norm, right_input),
@@ -38,22 +35,18 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         wish = zlm.Vec3.scale(wish, 1.0 / wish_len);
     }
 
-    // Target velocity
     const target_vx = wish.x * WALK_SPEED;
     const target_vz = wish.z * WALK_SPEED;
 
-    // Approach target velocity (full friction on ground, reduced in air)
     const control = if (state.entity_on_ground) FRICTION else FRICTION * AIR_CONTROL;
     const max_delta = control * clamped_dt;
     state.entity_vel[0] = approach(state.entity_vel[0], target_vx, max_delta);
     state.entity_vel[2] = approach(state.entity_vel[2], target_vz, max_delta);
 
-    // Apply gravity
     state.entity_vel[1] -= GRAVITY * clamped_dt;
 
     state.entity_on_ground = false;
 
-    // Sort axes by |velocity| descending
     const abs_vel = [3]f32{
         @abs(state.entity_vel[0]),
         @abs(state.entity_vel[1]),
@@ -61,18 +54,15 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
     };
 
     var axes = [3]usize{ 0, 1, 2 };
-    // Simple sort of 3 elements
     if (abs_vel[axes[0]] < abs_vel[axes[1]]) std.mem.swap(usize, &axes[0], &axes[1]);
     if (abs_vel[axes[1]] < abs_vel[axes[2]]) std.mem.swap(usize, &axes[1], &axes[2]);
     if (abs_vel[axes[0]] < abs_vel[axes[1]]) std.mem.swap(usize, &axes[0], &axes[1]);
 
-    // Resolve each axis sequentially
     for (axes) |axis| {
         if (state.entity_vel[axis] == 0.0) continue;
 
         state.entity_pos[axis] += state.entity_vel[axis] * clamped_dt;
 
-        // Compute AABB from pos (foot position, bottom-center)
         const min_x = state.entity_pos[0] - HALF_W;
         const min_y = state.entity_pos[1];
         const min_z = state.entity_pos[2] - HALF_W;
@@ -80,7 +70,6 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         const max_y = state.entity_pos[1] + HEIGHT;
         const max_z = state.entity_pos[2] + HALF_W;
 
-        // Voxel range the AABB overlaps
         const bx0 = floori(min_x);
         const by0 = floori(min_y);
         const bz0 = floori(min_z);
@@ -99,20 +88,17 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
                     const block = WorldState.getBlock(state.world, bx, by, bz);
                     if (!WorldState.block_properties.isSolid(block)) continue;
 
-                    // Block occupies [bx, bx+1) x [by, by+1) x [bz, bz+1) in world space
                     const block_min = @as(f32, @floatFromInt(blockCoord(axis, bx, by, bz)));
                     const block_max = block_min + 1.0;
                     const aabb_min = aabbMin(axis, min_x, min_y, min_z);
                     const aabb_max = aabbMax(axis, max_x, max_y, max_z);
 
                     if (state.entity_vel[axis] > 0.0) {
-                        // Moving positive: penetration = aabb_max - block_min
                         const pen = aabb_max - block_min;
                         if (pen > 0.0 and pen < 1.0) {
                             max_pen = @max(max_pen, pen);
                         }
                     } else {
-                        // Moving negative: penetration = block_max - aabb_min
                         const pen = block_max - aabb_min;
                         if (pen > 0.0 and pen < 1.0) {
                             max_pen = @max(max_pen, pen);
@@ -129,7 +115,6 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
                 state.entity_pos[axis] += max_pen;
             }
 
-            // Landing detection
             if (axis == 1 and state.entity_vel[1] < 0.0) {
                 state.entity_on_ground = true;
             }

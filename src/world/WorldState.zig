@@ -5,55 +5,48 @@ const LightEntry = types.LightEntry;
 const tracy = @import("../platform/tracy.zig");
 
 pub const CHUNK_SIZE = 32;
-pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; // 32768
-pub const MAX_FACES_PER_CHUNK = BLOCKS_PER_CHUNK * 6; // 196608
+pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+pub const MAX_FACES_PER_CHUNK = BLOCKS_PER_CHUNK * 6;
 
 pub const WORLD_CHUNKS_X = 4;
 pub const WORLD_CHUNKS_Y = 1;
 pub const WORLD_CHUNKS_Z = 4;
-pub const WORLD_SIZE_X = WORLD_CHUNKS_X * CHUNK_SIZE; // 128
-pub const WORLD_SIZE_Y = WORLD_CHUNKS_Y * CHUNK_SIZE; // 32
-pub const WORLD_SIZE_Z = WORLD_CHUNKS_Z * CHUNK_SIZE; // 128
-pub const TOTAL_WORLD_CHUNKS = WORLD_CHUNKS_X * WORLD_CHUNKS_Y * WORLD_CHUNKS_Z; // 16
+pub const WORLD_SIZE_X = WORLD_CHUNKS_X * CHUNK_SIZE;
+pub const WORLD_SIZE_Y = WORLD_CHUNKS_Y * CHUNK_SIZE;
+pub const WORLD_SIZE_Z = WORLD_CHUNKS_Z * CHUNK_SIZE;
+pub const TOTAL_WORLD_CHUNKS = WORLD_CHUNKS_X * WORLD_CHUNKS_Y * WORLD_CHUNKS_Z;
 
-// Per-face vertex template (unit cube with min corner at origin)
 pub const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }{
-    // Front face (z = 1)
     .{
         .{ .px = 0.0, .py = 0.0, .pz = 1.0, .u = 0.0, .v = 1.0 },
         .{ .px = 1.0, .py = 0.0, .pz = 1.0, .u = 1.0, .v = 1.0 },
         .{ .px = 1.0, .py = 1.0, .pz = 1.0, .u = 1.0, .v = 0.0 },
         .{ .px = 0.0, .py = 1.0, .pz = 1.0, .u = 0.0, .v = 0.0 },
     },
-    // Back face (z = 0)
     .{
         .{ .px = 1.0, .py = 0.0, .pz = 0.0, .u = 0.0, .v = 1.0 },
         .{ .px = 0.0, .py = 0.0, .pz = 0.0, .u = 1.0, .v = 1.0 },
         .{ .px = 0.0, .py = 1.0, .pz = 0.0, .u = 1.0, .v = 0.0 },
         .{ .px = 1.0, .py = 1.0, .pz = 0.0, .u = 0.0, .v = 0.0 },
     },
-    // Left face (x = 0)
     .{
         .{ .px = 0.0, .py = 0.0, .pz = 0.0, .u = 0.0, .v = 1.0 },
         .{ .px = 0.0, .py = 0.0, .pz = 1.0, .u = 1.0, .v = 1.0 },
         .{ .px = 0.0, .py = 1.0, .pz = 1.0, .u = 1.0, .v = 0.0 },
         .{ .px = 0.0, .py = 1.0, .pz = 0.0, .u = 0.0, .v = 0.0 },
     },
-    // Right face (x = 1)
     .{
         .{ .px = 1.0, .py = 0.0, .pz = 1.0, .u = 0.0, .v = 1.0 },
         .{ .px = 1.0, .py = 0.0, .pz = 0.0, .u = 1.0, .v = 1.0 },
         .{ .px = 1.0, .py = 1.0, .pz = 0.0, .u = 1.0, .v = 0.0 },
         .{ .px = 1.0, .py = 1.0, .pz = 1.0, .u = 0.0, .v = 0.0 },
     },
-    // Top face (y = 1)
     .{
         .{ .px = 0.0, .py = 1.0, .pz = 1.0, .u = 0.0, .v = 1.0 },
         .{ .px = 1.0, .py = 1.0, .pz = 1.0, .u = 1.0, .v = 1.0 },
         .{ .px = 1.0, .py = 1.0, .pz = 0.0, .u = 1.0, .v = 0.0 },
         .{ .px = 0.0, .py = 1.0, .pz = 0.0, .u = 0.0, .v = 0.0 },
     },
-    // Bottom face (y = 0)
     .{
         .{ .px = 0.0, .py = 0.0, .pz = 0.0, .u = 0.0, .v = 1.0 },
         .{ .px = 1.0, .py = 0.0, .pz = 0.0, .u = 1.0, .v = 1.0 },
@@ -62,18 +55,15 @@ pub const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f
     },
 };
 
-// Per-face index pattern (two triangles, 6 indices referencing 4 verts)
 pub const face_index_pattern = [6]u32{ 0, 1, 2, 2, 3, 0 };
 
-// Face neighbor offsets: for each face index, the (dx, dy, dz) to the adjacent block
-// Matches face_vertices order: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
 pub const face_neighbor_offsets = [6][3]i32{
-    .{ 0, 0, 1 }, // front  (+Z)
-    .{ 0, 0, -1 }, // back   (-Z)
-    .{ -1, 0, 0 }, // left   (-X)
-    .{ 1, 0, 0 }, // right  (+X)
-    .{ 0, 1, 0 }, // top    (+Y)
-    .{ 0, -1, 0 }, // bottom (-Y)
+    .{ 0, 0, 1 },
+    .{ 0, 0, -1 },
+    .{ -1, 0, 0 },
+    .{ 1, 0, 0 },
+    .{ 0, 1, 0 },
+    .{ 0, -1, 0 },
 };
 
 pub const BlockType = enum(u8) {
@@ -112,8 +102,8 @@ pub const block_properties = struct {
 };
 
 pub const LightMap = struct {
-    block: [WORLD_SIZE_Y][WORLD_SIZE_Z][WORLD_SIZE_X][3]u8, // block light RGB
-    sky: [WORLD_SIZE_Y][WORLD_SIZE_Z][WORLD_SIZE_X]u8, // sky light
+    block: [WORLD_SIZE_Y][WORLD_SIZE_Z][WORLD_SIZE_X][3]u8,
+    sky: [WORLD_SIZE_Y][WORLD_SIZE_Z][WORLD_SIZE_X]u8,
 
     pub fn getBlock(self: *const LightMap, wx: i32, wy: i32, wz: i32) [3]u8 {
         const vx = wx + @as(i32, WORLD_SIZE_X / 2);
@@ -130,7 +120,6 @@ pub const LightMap = struct {
         const vy = wy + @as(i32, WORLD_SIZE_Y / 2);
         const vz = wz + @as(i32, WORLD_SIZE_Z / 2);
         if (vx < 0 or vx >= WORLD_SIZE_X or vy < 0 or vy >= WORLD_SIZE_Y or vz < 0 or vz >= WORLD_SIZE_Z) {
-            // Out-of-world = full sky light (open sky above/beside world)
             return 255;
         }
         return self.sky[@intCast(vy)][@intCast(vz)][@intCast(vx)];
@@ -138,7 +127,7 @@ pub const LightMap = struct {
 };
 
 const LIGHT_ATTENUATION: u8 = 8;
-pub const LIGHT_MAX_RADIUS: i32 = 255 / LIGHT_ATTENUATION; // ~31 blocks
+pub const LIGHT_MAX_RADIUS: i32 = 255 / LIGHT_ATTENUATION;
 
 fn getBlockAt(world: *const World, vx: usize, vy: usize, vz: usize) BlockType {
     return world[vy / CHUNK_SIZE][vz / CHUNK_SIZE][vx / CHUNK_SIZE]
@@ -158,9 +147,6 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
         .{ 0, 0, 1 }, .{ 0, 0, -1 },
     };
 
-    // --- Sky light ---
-    // Column scan: flood sky light straight down from the top
-    // Buffer must be large enough for worst case (entire world air = WORLD_SIZE_X * Y * Z)
     var sky_queue_buf: [WORLD_SIZE_X * WORLD_SIZE_Y * WORLD_SIZE_Z]QueueEntry = undefined;
     var sky_head: usize = 0;
     var sky_tail: usize = 0;
@@ -185,7 +171,6 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
         }
     }
 
-    // BFS: propagate sky light sideways/down with attenuation
     while (sky_head < sky_tail) {
         const e = sky_queue_buf[sky_head];
         sky_head += 1;
@@ -221,12 +206,10 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
         }
     }
 
-    // --- Block light ---
     var queue_buf: [256 * 1024]RgbQueueEntry = undefined;
     var head: usize = 0;
     var tail: usize = 0;
 
-    // Seed queue with all emitting blocks
     for (0..WORLD_SIZE_Y) |vy| {
         for (0..WORLD_SIZE_Z) |vz| {
             for (0..WORLD_SIZE_X) |vx| {
@@ -247,7 +230,6 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
         }
     }
 
-    // BFS flood fill for block light
     while (head < tail) {
         const e = queue_buf[head];
         head += 1;
@@ -293,9 +275,6 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
     }
 }
 
-/// Incrementally update the light map around a changed block position.
-/// Uses destructive BFS to remove stale light, then re-propagates from nearby sources.
-/// Much faster than full recomputation for single block changes.
 pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i32, wz: i32) void {
     const bfs_offsets = [6][3]i32{
         .{ 1, 0, 0 }, .{ -1, 0, 0 },
@@ -308,7 +287,6 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
     const cvz = wz + @as(i32, WORLD_SIZE_Z / 2);
     if (cvx < 0 or cvx >= WORLD_SIZE_X or cvy < 0 or cvy >= WORLD_SIZE_Y or cvz < 0 or cvz >= WORLD_SIZE_Z) return;
 
-    // --- Destructive phase: clear light in radius and collect border sources ---
     const radius = LIGHT_MAX_RADIUS + 1;
 
     const min_vx: usize = @intCast(@max(0, cvx - radius));
@@ -318,9 +296,7 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
     const min_vz: usize = @intCast(@max(0, cvz - radius));
     const max_vz: usize = @intCast(@min(@as(i32, WORLD_SIZE_Z) - 1, cvz + radius));
 
-    // Clear block light and sky light in the affected region, then re-propagate
 
-    // Block light: clear region
     for (min_vy..max_vy + 1) |vy| {
         for (min_vz..max_vz + 1) |vz| {
             for (min_vx..max_vx + 1) |vx| {
@@ -329,7 +305,6 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
         }
     }
 
-    // Sky light: clear region
     for (min_vy..max_vy + 1) |vy| {
         for (min_vz..max_vz + 1) |vz| {
             for (min_vx..max_vx + 1) |vx| {
@@ -338,7 +313,6 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
         }
     }
 
-    // --- Re-seed sky light in region: column scan ---
     const QueueEntry = struct { vx: u8, vy: u8, vz: u8, level: u8 };
     const RgbQueueEntry = struct { vx: u8, vy: u8, vz: u8, r: u8, g: u8, b: u8 };
 
@@ -348,7 +322,6 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
 
     for (min_vz..max_vz + 1) |vz| {
         for (min_vx..max_vx + 1) |vx| {
-            // Scan column from top of world down
             var vy: usize = WORLD_SIZE_Y;
             while (vy > 0) {
                 vy -= 1;
@@ -369,8 +342,6 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
         }
     }
 
-    // Also seed from border: any neighbor outside the cleared region that still has sky light
-    // Check all voxels just outside the cleared region that could propagate in
     const border_ranges = [_][2]usize{
         .{ min_vx, max_vx },
         .{ min_vy, max_vy },
@@ -378,27 +349,23 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
     };
     _ = border_ranges;
 
-    // Seed sky from external neighbors at region borders
     for (min_vy..max_vy + 1) |vy| {
         for (min_vz..max_vz + 1) |vz| {
             for (min_vx..max_vx + 1) |vx| {
-                if (light_map.sky[vy][vz][vx] > 0) continue; // already set (column scan)
+                if (light_map.sky[vy][vz][vx] > 0) continue;
                 if (block_properties.isOpaque(getBlockAt(world, vx, vy, vz))) continue;
 
-                // Check if any neighbor outside the region has light to offer
                 for (bfs_offsets) |off| {
                     const nx_i: i32 = @as(i32, @intCast(vx)) + off[0];
                     const ny_i: i32 = @as(i32, @intCast(vy)) + off[1];
                     const nz_i: i32 = @as(i32, @intCast(vz)) + off[2];
 
-                    // Only consider neighbors outside the cleared region
                     if (nx_i >= @as(i32, @intCast(min_vx)) and nx_i <= @as(i32, @intCast(max_vx)) and
                         ny_i >= @as(i32, @intCast(min_vy)) and ny_i <= @as(i32, @intCast(max_vy)) and
                         nz_i >= @as(i32, @intCast(min_vz)) and nz_i <= @as(i32, @intCast(max_vz)))
                         continue;
 
                     if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) {
-                        // Out of world = full sky
                         const new_level: u8 = 255 -| LIGHT_ATTENUATION;
                         if (new_level > light_map.sky[vy][vz][vx]) {
                             light_map.sky[vy][vz][vx] = new_level;
@@ -430,7 +397,6 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
         }
     }
 
-    // BFS sky light within region
     while (sky_head < sky_tail) {
         const e = sky_queue_buf[sky_head];
         sky_head += 1;
@@ -461,12 +427,10 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
         }
     }
 
-    // --- Re-seed block light: find all emitters in region + border sources ---
     var queue_buf: [128 * 1024]RgbQueueEntry = undefined;
     var head: usize = 0;
     var tail: usize = 0;
 
-    // Seed emitters within region
     for (min_vy..max_vy + 1) |vy| {
         for (min_vz..max_vz + 1) |vz| {
             for (min_vx..max_vx + 1) |vx| {
@@ -482,7 +446,6 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
         }
     }
 
-    // Seed from border: neighbors outside region with block light
     for (min_vy..max_vy + 1) |vy| {
         for (min_vz..max_vz + 1) |vz| {
             for (min_vx..max_vx + 1) |vx| {
@@ -535,7 +498,6 @@ pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i3
         }
     }
 
-    // BFS block light within region (can overflow outside, that's fine)
     while (head < tail) {
         const e = queue_buf[head];
         head += 1;
@@ -615,7 +577,7 @@ pub const ChunkCoord = struct {
 
 pub const ChunkMeshResult = struct {
     faces: []FaceData,
-    face_counts: [6]u32, // per-normal count
+    face_counts: [6]u32,
     total_face_count: u32,
     lights: []LightEntry,
     light_count: u32,
@@ -641,7 +603,6 @@ pub fn setBlock(world: *World, wx: i32, wy: i32, wz: i32, block: BlockType) void
 }
 
 pub fn getBlock(world: *const World, wx: i32, wy: i32, wz: i32) BlockType {
-    // World-to-voxel: vx = wx + 64, vy = wy + 16, vz = wz + 64
     const vx = wx + @as(i32, WORLD_SIZE_X / 2);
     const vy = wy + @as(i32, WORLD_SIZE_Y / 2);
     const vz = wz + @as(i32, WORLD_SIZE_Z / 2);
@@ -667,8 +628,6 @@ pub fn getBlock(world: *const World, wx: i32, wy: i32, wz: i32) BlockType {
 pub fn generateTerrainWorld(out: *World) void {
     const half_y: i32 = WORLD_SIZE_Y / 2;
 
-    // Flat terrain: surface at world Y=0
-    //   Y=0: grass, Y=-1..-2: dirt, Y=-3..-7: stone
     for (0..WORLD_CHUNKS_Y) |cy| {
         for (0..WORLD_CHUNKS_Z) |cz| {
             for (0..WORLD_CHUNKS_X) |cx| {
@@ -701,19 +660,12 @@ pub fn generateTerrainWorld(out: *World) void {
     }
 }
 
-/// Downsample the LOD0 world into a lower-detail world for the given LOD level.
-/// lod_level 1 → scale=2, lod_level 2 → scale=4.
-/// Each LOD block represents a scale^3 region from LOD0, determined by majority vote.
-/// The destination world uses the same 4x1x4 array; LOD chunks fill the first
-/// lod_chunks_x * lod_chunks_y * lod_chunks_z slots, rest stays air.
 pub fn downsampleWorld(src: *const World, dst: *World, lod_level: u8) void {
-    // Zero out destination (all air)
     @memset(std.mem.asBytes(dst), 0);
 
     const scale: u32 = @as(u32, 1) << @intCast(lod_level);
     const iscale: i32 = @intCast(scale);
 
-    // LOD grid dimensions (minimum 1 chunk — high LODs fit in a single chunk)
     const lod_chunks_x = @max(1, WORLD_CHUNKS_X / scale);
     const lod_chunks_y = @max(1, WORLD_CHUNKS_Y / scale);
     const lod_chunks_z = @max(1, WORLD_CHUNKS_Z / scale);
@@ -726,13 +678,11 @@ pub fn downsampleWorld(src: *const World, dst: *World, lod_level: u8) void {
                 for (0..CHUNK_SIZE) |by| {
                     for (0..CHUNK_SIZE) |bz| {
                         for (0..CHUNK_SIZE) |bx| {
-                            // World-space origin of this LOD block's source region
                             const src_wx: i32 = (@as(i32, @intCast(cx)) * CHUNK_SIZE + @as(i32, @intCast(bx))) * iscale - @as(i32, WORLD_SIZE_X / 2);
                             const src_wy: i32 = (@as(i32, @intCast(cy)) * CHUNK_SIZE + @as(i32, @intCast(by))) * iscale - @as(i32, WORLD_SIZE_Y / 2);
                             const src_wz: i32 = (@as(i32, @intCast(cz)) * CHUNK_SIZE + @as(i32, @intCast(bz))) * iscale - @as(i32, WORLD_SIZE_Z / 2);
 
-                            // Majority vote among non-air blocks in the scale^3 region
-                            var counts = [_]u32{0} ** 6; // one per BlockType
+                            var counts = [_]u32{0} ** 6;
                             var non_air_total: u32 = 0;
 
                             var dy: i32 = 0;
@@ -752,7 +702,6 @@ pub fn downsampleWorld(src: *const World, dst: *World, lod_level: u8) void {
 
                             if (non_air_total == 0) continue;
 
-                            // Find block type with highest count
                             var best_type: BlockType = .air;
                             var best_count: u32 = 0;
                             for (1..counts.len) |i| {
@@ -773,9 +722,6 @@ pub fn downsampleWorld(src: *const World, dst: *World, lod_level: u8) void {
     }
 }
 
-// AO neighbor offset table: for each face direction (6) and corner (4),
-// stores 3 neighbor offsets (side1, side2, diagonal) as (dx, dy, dz)
-// relative to the block position. Offsets include the face normal direction.
 const ao_offsets = computeAoOffsets();
 
 fn computeAoOffsets() [6][4][3][3]i32 {
@@ -788,7 +734,6 @@ fn computeAoOffsets() [6][4][3][3]i32 {
             const vert = face_vertices[face][corner];
             const pos = [3]f32{ vert.px, vert.py, vert.pz };
 
-            // Find the two tangent axes (where normal component is 0)
             var tang: [2]usize = undefined;
             var ti: usize = 0;
             for (0..3) |axis| {
@@ -798,25 +743,21 @@ fn computeAoOffsets() [6][4][3][3]i32 {
                 }
             }
 
-            // Edge direction along each tangent axis: vertex at 0 → -1, at 1 → +1
             var edge1 = [3]i32{ 0, 0, 0 };
             var edge2 = [3]i32{ 0, 0, 0 };
             edge1[tang[0]] = if (pos[tang[0]] == 0.0) -1 else 1;
             edge2[tang[1]] = if (pos[tang[1]] == 0.0) -1 else 1;
 
-            // side1 = normal + edge1
             result[face][corner][0] = .{
                 normal[0] + edge1[0],
                 normal[1] + edge1[1],
                 normal[2] + edge1[2],
             };
-            // side2 = normal + edge2
             result[face][corner][1] = .{
                 normal[0] + edge2[0],
                 normal[1] + edge2[1],
                 normal[2] + edge2[2],
             };
-            // diagonal = normal + edge1 + edge2
             result[face][corner][2] = .{
                 normal[0] + edge1[0] + edge2[0],
                 normal[1] + edge1[1] + edge2[1],
@@ -828,8 +769,6 @@ fn computeAoOffsets() [6][4][3][3]i32 {
     return result;
 }
 
-/// Look up a block by chunk-local coordinates that may be outside [0, CHUNK_SIZE).
-/// Crosses into neighbor chunks as needed. Returns .air for out-of-world positions.
 fn getNeighborBlock(
     world: *const World,
     cx: usize,
@@ -857,8 +796,6 @@ fn getNeighborBlock(
     return world[@intCast(ncy)][@intCast(ncz)][@intCast(ncx)].blocks[chunkIndex(flx, fly, flz)];
 }
 
-/// Generate mesh data for a single chunk. Faces are grouped by normal direction.
-/// Light entries are 1:1 with faces (one LightEntry per face).
 pub fn generateChunkMesh(
     allocator: std.mem.Allocator,
     world: *const World,
@@ -872,12 +809,10 @@ pub fn generateChunkMesh(
     const cy: usize = coord.cy;
     const cz: usize = coord.cz;
 
-    // World-space origin of this chunk
     const chunk_origin_x: i32 = @as(i32, @intCast(cx)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_X / 2);
     const chunk_origin_y: i32 = @as(i32, @intCast(cy)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Y / 2);
     const chunk_origin_z: i32 = @as(i32, @intCast(cz)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Z / 2);
 
-    // Per-normal face + light lists
     var normal_faces: [6]std.ArrayList(FaceData) = undefined;
     var normal_lights: [6]std.ArrayList(LightEntry) = undefined;
     for (0..6) |i| {
@@ -899,7 +834,6 @@ pub fn generateChunkMesh(
                 const iby: i32 = @intCast(by);
                 const ibz: i32 = @intCast(bz);
 
-                // World-space position of this block
                 const wx = chunk_origin_x + ibx;
                 const wy = chunk_origin_y + iby;
                 const wz = chunk_origin_z + ibz;
@@ -923,13 +857,10 @@ pub fn generateChunkMesh(
                         .glowstone => 4,
                     };
 
-                    // Compute per-corner sky + block light, packed as 5-bit channels
-                    // Format: sky_r:5 | sky_g:5 | sky_b:5 | block_r:5 | block_g:5 | block_b:5
                     var corner_packed: [4]u32 = undefined;
                     var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
 
                     if (is_emitter) {
-                        // Emitters: pack full emitted color as block light, full sky
                         const br5: u32 = @as(u32, emits[0]) >> 3;
                         const bg5: u32 = @as(u32, emits[1]) >> 3;
                         const bb5: u32 = @as(u32, emits[2]) >> 3;
@@ -941,7 +872,6 @@ pub fn generateChunkMesh(
                             const offsets = ao_offsets[face][corner];
 
                             if (light_map_ptr) |lm| {
-                                // Smooth block light: average 4 neighbors
                                 var sum_r: u32 = 0;
                                 var sum_g: u32 = 0;
                                 var sum_b: u32 = 0;
@@ -962,10 +892,8 @@ pub fn generateChunkMesh(
                                 const avg_g: u32 = sum_g / 4;
                                 const avg_b: u32 = sum_b / 4;
 
-                                // Track block light brightness for AO reduction
                                 corner_block_brightness[corner] = @intCast(@max(avg_r, @max(avg_g, avg_b)));
 
-                                // Smooth sky light: average same 4 neighbors
                                 var sky_sum: u32 = 0;
                                 sky_sum += lm.getSky(wx + fno[0], wy + fno[1], wz + fno[2]);
                                 for (0..3) |s| {
@@ -973,7 +901,6 @@ pub fn generateChunkMesh(
                                 }
                                 const sky_avg: u32 = sky_sum / 4;
 
-                                // Pack as 5-bit: downsample from 8-bit by >> 3
                                 const sr5: u32 = sky_avg >> 3;
                                 const sg5: u32 = sky_avg >> 3;
                                 const sb5: u32 = sky_avg >> 3;
@@ -983,14 +910,11 @@ pub fn generateChunkMesh(
 
                                 corner_packed[corner] = sr5 | (sg5 << 5) | (sb5 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
                             } else {
-                                // No light map: full sky, no block light
                                 corner_packed[corner] = 31 | (31 << 5) | (31 << 10);
                             }
                         }
                     }
 
-                    // Compute per-corner AO, reduced by block light
-                    // AO is ambient occlusion — direct block light overrides it
                     var ao: [4]u2 = undefined;
                     if (is_emitter) {
                         ao = .{ 0, 0, 0, 0 };
@@ -1005,8 +929,6 @@ pub fn generateChunkMesh(
                                 block_properties.isOpaque(getNeighborBlock(world, cx, cy, cz, ibx + offsets[2][0], iby + offsets[2][1], ibz + offsets[2][2]));
                             const raw_ao: u3 = @as(u3, @intFromBool(s1)) + @intFromBool(s2) + @intFromBool(diag);
 
-                            // Reduce AO based on block light: bright light cancels occlusion
-                            // brightness 0..255 maps to reduction 0..3
                             const reduction: u3 = @intCast(@min(@as(u32, 3), @as(u32, corner_block_brightness[corner]) / 64));
                             ao[corner] = @intCast(raw_ao -| reduction);
                         }
@@ -1018,7 +940,7 @@ pub fn generateChunkMesh(
                         @intCast(bz),
                         tex_index,
                         @intCast(face),
-                        0, // light_index unused with 1:1 mapping
+                        0,
                         ao,
                     );
 
@@ -1029,7 +951,6 @@ pub fn generateChunkMesh(
         }
     }
 
-    // Compute per-normal face counts
     var face_counts: [6]u32 = undefined;
     var total_face_count: u32 = 0;
     for (0..6) |i| {
@@ -1037,7 +958,6 @@ pub fn generateChunkMesh(
         total_face_count += face_counts[i];
     }
 
-    // Concatenate all faces and lights sorted by normal into single slices
     const faces = try allocator.alloc(FaceData, total_face_count);
     errdefer allocator.free(faces);
     const lights = try allocator.alloc(LightEntry, total_face_count);
@@ -1059,7 +979,7 @@ pub fn generateChunkMesh(
         .face_counts = face_counts,
         .total_face_count = total_face_count,
         .lights = lights,
-        .light_count = total_face_count, // 1:1 mapping
+        .light_count = total_face_count,
     };
 }
 
@@ -1068,10 +988,6 @@ pub const AffectedChunks = struct {
     count: u8,
 };
 
-/// Return the chunk coord(s) affected by a world-space block change.
-/// Modifying a block on a chunk boundary can affect the neighbor chunk's mesh
-/// (face culling changes), so we return up to 4 coords (the chunk itself +
-/// up to 3 neighbors when the block is in a corner).
 pub fn affectedChunks(wx: i32, wy: i32, wz: i32) AffectedChunks {
     const vx = wx + @as(i32, WORLD_SIZE_X / 2);
     const vy = wy + @as(i32, WORLD_SIZE_Y / 2);
@@ -1094,18 +1010,13 @@ pub fn affectedChunks(wx: i32, wy: i32, wz: i32) AffectedChunks {
         .count = 0,
     };
 
-    // Always include the chunk containing the block
     result.coords[0] = .{ .cx = base_cx, .cy = base_cy, .cz = base_cz };
     result.count = 1;
 
-    // Check if block is on a chunk boundary and add neighbor chunks
     const lx = uvx % CHUNK_SIZE;
     const ly = uvy % CHUNK_SIZE;
     const lz = uvz % CHUNK_SIZE;
 
-    // AO extends 1 block beyond the face neighbor check, so a block change
-    // at lx==1 can affect AO of faces at lx==0 whose neighbors cross into
-    // the adjacent chunk.
     if (lx <= 1 and base_cx > 0) {
         result.coords[result.count] = .{ .cx = base_cx - 1, .cy = base_cy, .cz = base_cz };
         result.count += 1;
@@ -1136,7 +1047,6 @@ pub fn affectedChunks(wx: i32, wy: i32, wz: i32) AffectedChunks {
     return result;
 }
 
-// --- Tests ---
 
 const testing = std.testing;
 
@@ -1165,7 +1075,6 @@ fn makeEmptyWorld() World {
 
 test "single block in air produces 6 faces" {
     var world = makeEmptyWorld();
-    // Place a single stone block at local (5,5,5) in chunk (0,0,0)
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
 
     const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
@@ -1174,24 +1083,21 @@ test "single block in air produces 6 faces" {
 
     try testing.expectEqual(@as(u32, 6), result.total_face_count);
 
-    // Each normal direction should have exactly 1 face
     for (0..6) |i| {
         try testing.expectEqual(@as(u32, 1), result.face_counts[i]);
     }
 
-    // All faces should reference position (5,5,5)
     for (result.faces) |face| {
         const u = unpackFace(face);
         try testing.expectEqual(@as(u5, 5), u.x);
         try testing.expectEqual(@as(u5, 5), u.y);
         try testing.expectEqual(@as(u5, 5), u.z);
-        try testing.expectEqual(@as(u8, 3), u.tex_index); // stone = 3
+        try testing.expectEqual(@as(u8, 3), u.tex_index);
     }
 }
 
 test "two adjacent blocks share face - culled" {
     var world = makeEmptyWorld();
-    // Two stone blocks adjacent in X
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
     world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .stone;
 
@@ -1199,23 +1105,18 @@ test "two adjacent blocks share face - culled" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // 2 blocks * 6 faces - 2 shared faces = 10
     try testing.expectEqual(@as(u32, 10), result.total_face_count);
 
-    // The shared face: block(5)'s +X face (normal 3) and block(6)'s -X face (normal 2) should be culled
-    // So normal 2 (-X) should have 1 face (block 5's -X), normal 3 (+X) should have 1 face (block 6's +X)
-    try testing.expectEqual(@as(u32, 1), result.face_counts[2]); // -X: only block 5
-    try testing.expectEqual(@as(u32, 1), result.face_counts[3]); // +X: only block 6
-    // +Z, -Z, +Y, -Y each have 2 faces (one per block)
-    try testing.expectEqual(@as(u32, 2), result.face_counts[0]); // +Z
-    try testing.expectEqual(@as(u32, 2), result.face_counts[1]); // -Z
-    try testing.expectEqual(@as(u32, 2), result.face_counts[4]); // +Y
-    try testing.expectEqual(@as(u32, 2), result.face_counts[5]); // -Y
+    try testing.expectEqual(@as(u32, 1), result.face_counts[2]);
+    try testing.expectEqual(@as(u32, 1), result.face_counts[3]);
+    try testing.expectEqual(@as(u32, 2), result.face_counts[0]);
+    try testing.expectEqual(@as(u32, 2), result.face_counts[1]);
+    try testing.expectEqual(@as(u32, 2), result.face_counts[4]);
+    try testing.expectEqual(@as(u32, 2), result.face_counts[5]);
 }
 
 test "face_counts sum equals total_face_count" {
     var world = makeEmptyWorld();
-    // Place a small cluster
     for (3..7) |x| {
         for (3..6) |y| {
             world[0][0][0].blocks[chunkIndex(x, y, 4)] = .dirt;
@@ -1240,7 +1141,6 @@ test "normal indices in faces match their group" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // Faces are concatenated by normal group: first face_counts[0] faces have normal 0, etc.
     var offset: usize = 0;
     for (0..6) |normal_idx| {
         const count = result.face_counts[normal_idx];
@@ -1254,10 +1154,7 @@ test "normal indices in faces match their group" {
 
 test "cross-chunk boundary face culling" {
     var world = makeEmptyWorld();
-    // Place blocks on both sides of the chunk boundary in X
-    // Chunk (0,0,0) block at local x=31 (rightmost)
     world[0][0][0].blocks[chunkIndex(CHUNK_SIZE - 1, 5, 5)] = .stone;
-    // Chunk (1,0,0) block at local x=0 (leftmost)
     world[0][0][1].blocks[chunkIndex(0, 5, 5)] = .stone;
 
     const result0 = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
@@ -1268,13 +1165,10 @@ test "cross-chunk boundary face culling" {
     defer testing.allocator.free(result1.faces);
     defer testing.allocator.free(result1.lights);
 
-    // Each block should have 5 faces (shared +X/-X face culled)
     try testing.expectEqual(@as(u32, 5), result0.total_face_count);
     try testing.expectEqual(@as(u32, 5), result1.total_face_count);
 
-    // Chunk 0's +X face (normal 3) should be 0 (culled by adjacent block in chunk 1)
     try testing.expectEqual(@as(u32, 0), result0.face_counts[3]);
-    // Chunk 1's -X face (normal 2) should be 0 (culled by adjacent block in chunk 0)
     try testing.expectEqual(@as(u32, 0), result1.face_counts[2]);
 }
 
@@ -1290,7 +1184,6 @@ test "empty chunk produces no faces" {
 
 test "glass does not cull adjacent non-glass" {
     var world = makeEmptyWorld();
-    // Glass next to stone: stone face should be visible (glass is not opaque)
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
     world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .glass;
 
@@ -1298,8 +1191,6 @@ test "glass does not cull adjacent non-glass" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // Stone has 6 faces (glass doesn't cull it since glass is not opaque)
-    // Glass has 5 faces (stone IS opaque, so glass's -X face facing stone is culled)
     try testing.expectEqual(@as(u32, 11), result.total_face_count);
 }
 
@@ -1312,7 +1203,6 @@ test "glass-glass adjacency culls shared face" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // Glass-glass: cullsSelf is true, so shared faces culled → 10 faces
     try testing.expectEqual(@as(u32, 10), result.total_face_count);
 }
 
@@ -1326,19 +1216,16 @@ test "light count equals face count (1:1 mapping)" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // With 1:1 face-to-light mapping, light_count == total_face_count
     try testing.expectEqual(result.total_face_count, result.light_count);
     try testing.expectEqual(result.faces.len, result.lights.len);
 }
 
 test "ChunkCoord.position returns correct world-space origin" {
-    // Chunk (0,0,0) should map to (-WORLD_SIZE_X/2, -WORLD_SIZE_Y/2, -WORLD_SIZE_Z/2)
     const pos0 = (ChunkCoord{ .cx = 0, .cy = 0, .cz = 0 }).position();
     try testing.expectEqual(@as(i32, -64), pos0[0]);
     try testing.expectEqual(@as(i32, -16), pos0[1]);
     try testing.expectEqual(@as(i32, -64), pos0[2]);
 
-    // Chunk (2,0,2) should be at (0, -16, 0)
     const pos2 = (ChunkCoord{ .cx = 2, .cy = 0, .cz = 2 }).position();
     try testing.expectEqual(@as(i32, 0), pos2[0]);
     try testing.expectEqual(@as(i32, -16), pos2[1]);
@@ -1347,18 +1234,15 @@ test "ChunkCoord.position returns correct world-space origin" {
 
 test "world boundary blocks have all outer faces" {
     var world = makeEmptyWorld();
-    // Place block at corner (0,0,0) of chunk (0,0,0) — world boundary on 3 sides
     world[0][0][0].blocks[chunkIndex(0, 0, 0)] = .stone;
 
     const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // All 6 faces should be present (all neighbors are air - either in-chunk or world boundary)
     try testing.expectEqual(@as(u32, 6), result.total_face_count);
 }
 
-// --- AO Tests ---
 
 fn unpackAo(fd: FaceData) [4]u2 {
     return .{
@@ -1369,8 +1253,6 @@ fn unpackAo(fd: FaceData) [4]u2 {
     };
 }
 
-/// Find the face with the given normal index from a mesh result.
-/// Assumes faces are grouped by normal.
 fn findFaceByNormal(result: ChunkMeshResult, normal: u3) ?FaceData {
     var offset: usize = 0;
     for (0..6) |i| {
@@ -1392,7 +1274,6 @@ test "AO: single block in air has no occlusion" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // All faces of an isolated block should have AO level 0 on every corner
     for (result.faces) |face| {
         try testing.expectEqual([4]u2{ 0, 0, 0, 0 }, unpackAo(face));
     }
@@ -1400,7 +1281,6 @@ test "AO: single block in air has no occlusion" {
 
 test "AO: block on flat surface has correct top face AO" {
     var world = makeEmptyWorld();
-    // Create a 3x1x3 flat surface of stone at y=5, centered at (5,5,5)
     for (4..7) |x| {
         for (4..7) |z| {
             world[0][0][0].blocks[chunkIndex(x, 5, z)] = .stone;
@@ -1411,7 +1291,6 @@ test "AO: block on flat surface has correct top face AO" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // Find the top face (+Y, normal 4) of the center block at (5,5,5)
     var offset: usize = 0;
     for (0..4) |i| {
         offset += result.face_counts[i];
@@ -1425,10 +1304,6 @@ test "AO: block on flat surface has correct top face AO" {
         }
     }
 
-    // The center block's top face: all 4 corners are surrounded by
-    // adjacent blocks on the same plane, so each corner has 3 opaque
-    // neighbors (side1, side2, and diagonal — all on the flat surface)
-    // → AO level 3 for all corners
     const ao = unpackAo(center_top.?);
     for (ao) |level| {
         try testing.expectEqual(@as(u2, 3), level);
@@ -1437,21 +1312,15 @@ test "AO: block on flat surface has correct top face AO" {
 
 test "AO: block in corner has maximum occlusion on enclosed corner" {
     var world = makeEmptyWorld();
-    // Create an L-shaped corner: blocks along +X, +Y, and +Z from (5,5,5)
     world[0][0][0].blocks[chunkIndex(5, 5, 5)] = .stone;
-    world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .stone; // +X
-    world[0][0][0].blocks[chunkIndex(5, 6, 5)] = .stone; // +Y
-    world[0][0][0].blocks[chunkIndex(5, 5, 6)] = .stone; // +Z
+    world[0][0][0].blocks[chunkIndex(6, 5, 5)] = .stone;
+    world[0][0][0].blocks[chunkIndex(5, 6, 5)] = .stone;
+    world[0][0][0].blocks[chunkIndex(5, 5, 6)] = .stone;
 
     const result = try generateChunkMesh(testing.allocator, &world, .{ .cx = 0, .cy = 0, .cz = 0 }, null);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
-    // The +Z face (normal 0) of the +Y block at (5,6,5):
-    // Corner at (1,0,1) has side neighbors towards +X and -Y from the air space.
-    // +X direction: block at (6,6,6) — air → not opaque
-    // -Y direction: block at (5,5,6) — STONE → opaque (this is the +Z block)
-    // So at least one corner should have AO > 0
     var found_nonzero = false;
     for (result.faces) |face| {
         const ao = unpackAo(face);
@@ -1467,18 +1336,14 @@ test "AO: block in corner has maximum occlusion on enclosed corner" {
 }
 
 test "AO: comptime offset table sanity" {
-    // Verify AO offsets are within expected range and include the normal direction
     for (0..6) |face| {
         const normal = face_neighbor_offsets[face];
         for (0..4) |corner| {
-            for (0..3) |sample| { // side1, side2, diagonal
+            for (0..3) |sample| {
                 const off = ao_offsets[face][corner][sample];
                 for (0..3) |axis| {
-                    // Each component should be in [-1, 1]
                     try testing.expect(off[axis] >= -1 and off[axis] <= 1);
                 }
-                // The offset along the normal axis should match the normal
-                // (all AO samples are in the air space in front of the face)
                 for (0..3) |axis| {
                     if (normal[axis] != 0) {
                         try testing.expectEqual(normal[axis], off[axis]);

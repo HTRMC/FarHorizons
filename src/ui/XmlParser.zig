@@ -36,15 +36,13 @@ pub const XmlParser = struct {
     }
 
     pub fn next(self: *XmlParser) ?XmlEvent {
-        // Skip to next '<'
         while (self.pos < self.source.len and self.source[self.pos] != '<') {
             self.pos += 1;
         }
         if (self.pos >= self.source.len) return null;
-        self.pos += 1; // skip '<'
+        self.pos += 1;
         if (self.pos >= self.source.len) return null;
 
-        // Comment <!-- ... -->
         if (self.pos + 2 < self.source.len and
             self.source[self.pos] == '!' and
             self.source[self.pos + 1] == '-' and
@@ -65,7 +63,6 @@ pub const XmlParser = struct {
             return null;
         }
 
-        // PI <?...?>
         if (self.source[self.pos] == '?') {
             while (self.pos + 1 < self.source.len) {
                 if (self.source[self.pos] == '?' and self.source[self.pos + 1] == '>') {
@@ -78,23 +75,20 @@ pub const XmlParser = struct {
             return null;
         }
 
-        // Close tag </...>
         if (self.source[self.pos] == '/') {
             self.pos += 1;
             self.skipWhitespace();
             const tag = self.readName();
             self.skipTo('>');
-            if (self.pos < self.source.len) self.pos += 1; // skip '>'
+            if (self.pos < self.source.len) self.pos += 1;
             return .{ .kind = .close_tag, .tag = tag };
         }
 
-        // Open or self-closing tag
         self.skipWhitespace();
         const tag = self.readName();
 
         var event = XmlEvent{ .kind = .open_tag, .tag = tag };
 
-        // Parse attributes
         while (self.pos < self.source.len) {
             self.skipWhitespace();
             if (self.pos >= self.source.len) break;
@@ -114,13 +108,13 @@ pub const XmlParser = struct {
 
             const attr_name = self.readName();
             if (attr_name.len == 0) {
-                self.pos += 1; // skip unknown char
+                self.pos += 1;
                 continue;
             }
 
             self.skipWhitespace();
             if (self.pos < self.source.len and self.source[self.pos] == '=') {
-                self.pos += 1; // skip '='
+                self.pos += 1;
                 self.skipWhitespace();
                 const attr_value = self.readQuotedValue();
                 if (event.attr_count < MAX_ATTRS) {
@@ -160,13 +154,13 @@ pub const XmlParser = struct {
         if (self.pos >= self.source.len) return "";
         const quote = self.source[self.pos];
         if (quote != '"' and quote != '\'') return "";
-        self.pos += 1; // skip open quote
+        self.pos += 1;
         const start = self.pos;
         while (self.pos < self.source.len and self.source[self.pos] != quote) {
             self.pos += 1;
         }
         const value = self.source[start..self.pos];
-        if (self.pos < self.source.len) self.pos += 1; // skip close quote
+        if (self.pos < self.source.len) self.pos += 1;
         return value;
     }
 
@@ -178,7 +172,6 @@ pub const XmlParser = struct {
     }
 };
 
-// ── Tests ──
 
 test "self-closing tags" {
     var parser = XmlParser.init("<br/><img src=\"test\"/>");

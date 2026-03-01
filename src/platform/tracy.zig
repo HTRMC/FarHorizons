@@ -47,8 +47,6 @@ pub inline fn connected() bool {
     return false;
 }
 
-/// Spin-waits until Tracy profiler connects. Call at start of main()
-/// so early startup zones are captured.
 pub fn waitForConnection() void {
     if (!enabled) return;
     std.log.info("Waiting for Tracy profiler to connect...", .{});

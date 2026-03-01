@@ -1,7 +1,6 @@
 const std = @import("std");
 pub const c = @import("c.zig").c;
 
-// Re-export types
 pub const VkInstance = c.VkInstance;
 pub const VkPhysicalDevice = c.VkPhysicalDevice;
 pub const VkDevice = c.VkDevice;
@@ -68,7 +67,6 @@ pub const VkBufferCopy = c.VkBufferCopy;
 pub const VkVertexInputBindingDescription = c.VkVertexInputBindingDescription;
 pub const VkVertexInputAttributeDescription = c.VkVertexInputAttributeDescription;
 
-// Texture and sampler types
 pub const VkSampler = c.VkSampler;
 pub const VkSamplerCreateInfo = c.VkSamplerCreateInfo;
 pub const VkDescriptorImageInfo = c.VkDescriptorImageInfo;
@@ -79,17 +77,14 @@ pub const VkImageSubresourceLayers = c.VkImageSubresourceLayers;
 pub const VkExtent3D = c.VkExtent3D;
 pub const VkOffset3D = c.VkOffset3D;
 
-// Dynamic rendering types (Vulkan 1.3)
 pub const VkRenderingInfo = c.VkRenderingInfo;
 pub const VkRenderingAttachmentInfo = c.VkRenderingAttachmentInfo;
 pub const VkPipelineRenderingCreateInfo = c.VkPipelineRenderingCreateInfo;
 pub const VkPhysicalDeviceVulkan13Features = c.VkPhysicalDeviceVulkan13Features;
 
-// Bindless descriptor types
 pub const VkDescriptorSetLayoutBindingFlagsCreateInfo = c.VkDescriptorSetLayoutBindingFlagsCreateInfo;
 pub const VkDescriptorSetVariableDescriptorCountAllocateInfo = c.VkDescriptorSetVariableDescriptorCountAllocateInfo;
 
-// Re-export constants
 pub const VK_SUCCESS = c.VK_SUCCESS;
 pub const VK_TRUE = c.VK_TRUE;
 pub const VK_FALSE = c.VK_FALSE;
@@ -156,7 +151,6 @@ pub const VK_FENCE_CREATE_SIGNALED_BIT = c.VK_FENCE_CREATE_SIGNALED_BIT;
 pub const VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
 pub const VK_SUBPASS_CONTENTS_INLINE = c.VK_SUBPASS_CONTENTS_INLINE;
 
-// Buffer and memory constants
 pub const VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 pub const VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT = c.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
@@ -176,25 +170,20 @@ pub const VK_FORMAT_R32G32_SFLOAT = c.VK_FORMAT_R32G32_SFLOAT;
 pub const VK_FORMAT_R8G8B8A8_SRGB = c.VK_FORMAT_R8G8B8A8_SRGB;
 pub const VK_FORMAT_R8G8B8A8_UNORM = c.VK_FORMAT_R8G8B8A8_UNORM;
 
-// Image layout constants for textures
 pub const VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 pub const VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 pub const VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL = c.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
 
-// Image usage
 pub const VK_IMAGE_USAGE_TRANSFER_DST_BIT = c.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-// Descriptor type
 pub const VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 
-// Sampler constants
 pub const VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
 pub const VK_FILTER_NEAREST = c.VK_FILTER_NEAREST;
 pub const VK_SAMPLER_MIPMAP_MODE_NEAREST = c.VK_SAMPLER_MIPMAP_MODE_NEAREST;
 pub const VK_SAMPLER_ADDRESS_MODE_REPEAT = c.VK_SAMPLER_ADDRESS_MODE_REPEAT;
 pub const VK_BORDER_COLOR_INT_OPAQUE_BLACK = c.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
 
-// Barrier constants
 pub const VK_PIPELINE_STAGE_TRANSFER_BIT = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
 pub const VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT = c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 pub const VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT = c.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
@@ -207,13 +196,11 @@ pub const VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER = c.VK_STRUCTURE_TYPE_IMAGE_MEM
 pub const VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER = c.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
 pub const VK_QUEUE_FAMILY_IGNORED = c.VK_QUEUE_FAMILY_IGNORED;
 
-// Dynamic rendering constants (Vulkan 1.3)
 pub const VK_STRUCTURE_TYPE_RENDERING_INFO = c.VK_STRUCTURE_TYPE_RENDERING_INFO;
 pub const VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
 pub const VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
 
-// Bindless descriptor flags
 pub const VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT = c.VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
 pub const VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT = c.VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 pub const VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT = c.VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
@@ -222,7 +209,6 @@ pub const VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT = c.VK_DESCRIPTOR_BINDING_
 pub const VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO;
 
-// Shader and pipeline types
 pub const VkShaderModule = c.VkShaderModule;
 pub const VkPipeline = c.VkPipeline;
 pub const VkPipelineLayout = c.VkPipelineLayout;
@@ -254,7 +240,6 @@ pub const VkDescriptorBufferInfo = c.VkDescriptorBufferInfo;
 pub const VkViewport = c.VkViewport;
 pub const VkShaderStageFlagBits = c.VkShaderStageFlagBits;
 
-// Shader and pipeline constants
 pub const VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -297,14 +282,12 @@ pub const VK_COLOR_COMPONENT_G_BIT = c.VK_COLOR_COMPONENT_G_BIT;
 pub const VK_COLOR_COMPONENT_B_BIT = c.VK_COLOR_COMPONENT_B_BIT;
 pub const VK_COLOR_COMPONENT_A_BIT = c.VK_COLOR_COMPONENT_A_BIT;
 
-// Debug utils types
 pub const VkDebugUtilsMessengerEXT = c.VkDebugUtilsMessengerEXT;
 pub const VkDebugUtilsMessengerCreateInfoEXT = c.VkDebugUtilsMessengerCreateInfoEXT;
 pub const VkDebugUtilsMessageSeverityFlagBitsEXT = c.VkDebugUtilsMessageSeverityFlagBitsEXT;
 pub const VkDebugUtilsMessageTypeFlagsEXT = c.VkDebugUtilsMessageTypeFlagsEXT;
 pub const VkDebugUtilsMessengerCallbackDataEXT = c.VkDebugUtilsMessengerCallbackDataEXT;
 
-// Debug utils constants
 pub const VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
 pub const VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT;
 pub const VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
@@ -314,10 +297,8 @@ pub const VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE
 pub const VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
 pub const VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 
-// Error types
 pub const VulkanError = error{
     FunctionNotLoaded,
-    // Core errors
     OutOfHostMemory,
     OutOfDeviceMemory,
     InitializationFailed,
@@ -334,37 +315,30 @@ pub const VulkanError = error{
     InvalidExternalHandle,
     Fragmentation,
     InvalidOpaqueCaptureAddress,
-    // Surface/Swapchain errors (KHR)
     SurfaceLostKHR,
     NativeWindowInUseKHR,
     OutOfDateKHR,
     IncompatibleDisplayKHR,
     FullScreenExclusiveModeLostEXT,
-    // Validation and shader errors
     ValidationFailedEXT,
     InvalidShaderNV,
     IncompatibleShaderBinaryEXT,
-    // Pipeline and rendering errors
     PipelineCompileRequiredEXT,
     InvalidDrmFormatModifierPlaneLayoutEXT,
     NotPermittedEXT,
-    // Compression errors
     CompressionExhaustedEXT,
-    // Video errors
     ImageUsageNotSupportedKHR,
     VideoPictureLayoutNotSupportedKHR,
     VideoProfileOperationNotSupportedKHR,
     VideoProfileFormatNotSupportedKHR,
     VideoProfileCodecNotSupportedKHR,
     VideoStdVersionNotSupportedKHR,
-    // Unknown fallback
     Unknown,
 };
 
 fn vkResultToError(result: VkResult) VulkanError!void {
     return switch (result) {
         c.VK_SUCCESS, c.VK_SUBOPTIMAL_KHR => {},
-        // Core errors
         c.VK_ERROR_OUT_OF_HOST_MEMORY => error.OutOfHostMemory,
         c.VK_ERROR_OUT_OF_DEVICE_MEMORY => error.OutOfDeviceMemory,
         c.VK_ERROR_INITIALIZATION_FAILED => error.InitializationFailed,
@@ -381,7 +355,6 @@ fn vkResultToError(result: VkResult) VulkanError!void {
         c.VK_ERROR_INVALID_EXTERNAL_HANDLE => error.InvalidExternalHandle,
         c.VK_ERROR_FRAGMENTATION => error.Fragmentation,
         c.VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS => error.InvalidOpaqueCaptureAddress,
-        // Surface/Swapchain errors
         c.VK_ERROR_SURFACE_LOST_KHR => error.SurfaceLostKHR,
         c.VK_ERROR_NATIVE_WINDOW_IN_USE_KHR => error.NativeWindowInUseKHR,
         c.VK_ERROR_OUT_OF_DATE_KHR => error.OutOfDateKHR,
@@ -400,7 +373,6 @@ fn vkResultToError(result: VkResult) VulkanError!void {
     };
 }
 
-// Safe Volk initialization
 pub fn initialize() VulkanError!void {
     const result = c.volkInitialize();
     try vkResultToError(result);
@@ -414,7 +386,6 @@ pub fn loadDevice(device: VkDevice) void {
     c.volkLoadDevice(device);
 }
 
-// Safe Vulkan function wrappers
 pub fn createInstance(
     create_info: *const VkInstanceCreateInfo,
     allocator: ?*const VkAllocationCallbacks,
@@ -591,7 +562,6 @@ pub fn destroyImageView(
     }
 }
 
-// Debug utils functions
 pub fn createDebugUtilsMessengerEXT(
     instance: VkInstance,
     create_info: *const VkDebugUtilsMessengerCreateInfoEXT,

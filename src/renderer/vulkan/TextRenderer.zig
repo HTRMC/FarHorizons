@@ -106,7 +106,6 @@ pub const TextRenderer = struct {
         self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
     }
 
-    /// Push a clip rect that intersects with the current one.
     pub fn pushClipRect(self: *TextRenderer, x: f32, y: f32, w: f32, h: f32) void {
         if (self.clip_depth < 8) {
             self.clip_stack[self.clip_depth] = self.clip_rect;
@@ -121,7 +120,6 @@ pub const TextRenderer = struct {
         self.clip_rect = new;
     }
 
-    /// Restore the previous clip rect from the stack.
     pub fn popClipRect(self: *TextRenderer) void {
         if (self.clip_depth > 0) {
             self.clip_depth -= 1;
@@ -166,20 +164,18 @@ pub const TextRenderer = struct {
             const px_right = cursor_x + quad_w;
             const py_bottom = y + rs;
 
-            // Triangle 1: top-left, top-right, bottom-left
             const s = self.clip_scale;
             const cr = [4]f32{ self.clip_rect[0] * s, self.clip_rect[1] * s, self.clip_rect[2] * s, self.clip_rect[3] * s };
             verts[self.vertex_count + 0] = .{ .px = px_left, .py = py_top, .u = uv_left, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
             verts[self.vertex_count + 1] = .{ .px = px_right, .py = py_top, .u = uv_right, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
             verts[self.vertex_count + 2] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
 
-            // Triangle 2: top-right, bottom-right, bottom-left
             verts[self.vertex_count + 3] = .{ .px = px_right, .py = py_top, .u = uv_right, .v = uv_top, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
             verts[self.vertex_count + 4] = .{ .px = px_right, .py = py_bottom, .u = uv_right, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
             verts[self.vertex_count + 5] = .{ .px = px_left, .py = py_bottom, .u = uv_left, .v = uv_bottom, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
 
             self.vertex_count += 6;
-            cursor_x += quad_w + gs; // 1px gap at native scale
+            cursor_x += quad_w + gs;
         }
     }
 
@@ -228,12 +224,10 @@ pub const TextRenderer = struct {
             if (gw == 0) continue;
             width += @as(f32, @floatFromInt(gw)) * GLYPH_SCALE + GLYPH_SCALE;
         }
-        // Remove trailing gap if we drew anything
         if (width > 0) width -= GLYPH_SCALE;
         return width;
     }
 
-    /// Measure text with word wrapping at max_width. Returns (width, height).
     pub fn measureTextWrapped(self: *const TextRenderer, text: []const u8, max_width: f32) struct { width: f32, height: f32 } {
         if (text.len == 0 or max_width <= 0) return .{ .width = 0, .height = 0 };
 
@@ -249,13 +243,11 @@ pub const TextRenderer = struct {
             const is_space = if (!at_end) text[i] == ' ' else true;
 
             if (is_space or at_end) {
-                // Measure the word
                 const word = text[word_start..i];
                 const word_w = self.measureText(word);
                 const space_w: f32 = if (line_w > 0) 4 * GLYPH_SCALE else 0;
 
                 if (line_w > 0 and line_w + space_w + word_w > max_width) {
-                    // Word doesn't fit — wrap
                     max_line_w = @max(max_line_w, line_w);
                     line_count += 1;
                     line_w = word_w;
@@ -263,7 +255,6 @@ pub const TextRenderer = struct {
                     line_w += space_w + word_w;
                 }
 
-                // Handle the case of a single word exceeding max_width
                 if (word_w > max_width and line_w == word_w) {
                     max_line_w = @max(max_line_w, line_w);
                 }
@@ -279,7 +270,6 @@ pub const TextRenderer = struct {
         return .{ .width = @min(max_line_w, max_width), .height = line_count * line_height };
     }
 
-    /// Draw text with word wrapping. Returns total height drawn.
     pub fn drawTextWrapped(self: *TextRenderer, x: f32, y: f32, text: []const u8, max_width: f32, color: [4]f32) f32 {
         if (text.len == 0 or max_width <= 0) return 0;
 
@@ -302,7 +292,6 @@ pub const TextRenderer = struct {
                 const space_w: f32 = if (line_w > 0) 4 * GLYPH_SCALE else 0;
 
                 if (line_w > 0 and line_w + space_w + word_w > max_width) {
-                    // Draw current line
                     self.drawText(x, line_y, text[line_start..if (has_space) last_space else i], color);
                     line_y += line_height;
                     line_start = if (has_space) last_space + 1 else word_start;
@@ -320,7 +309,6 @@ pub const TextRenderer = struct {
             i += 1;
         }
 
-        // Draw remaining line
         if (line_start < text.len) {
             self.drawText(x, line_y, text[line_start..], color);
             line_y += line_height;
@@ -336,7 +324,6 @@ pub const TextRenderer = struct {
     }
 
     fn orthoMatrix(w: f32, h: f32) [16]f32 {
-        // Maps (0,0) top-left -> (-1,-1), (w,h) bottom-right -> (1,1)
         return .{
             2.0 / w, 0.0,      0.0, 0.0,
             0.0,     2.0 / h,  0.0, 0.0,
@@ -385,7 +372,6 @@ pub const TextRenderer = struct {
         const img_h: u32 = @intCast(th);
         const image_size: vk.VkDeviceSize = @as(vk.VkDeviceSize, img_w) * img_h * 4;
 
-        // Compute per-glyph widths by scanning for rightmost opaque column
         const pixel_data: [*]const u8 = @ptrCast(pixels);
         for (0..256) |ch| {
             const glyph_col = ch % ATLAS_COLS;
@@ -411,7 +397,6 @@ pub const TextRenderer = struct {
             self.glyph_widths[ch] = if (found) max_col else 0;
         }
 
-        // Staging buffer
         var staging_buffer: vk.VkBuffer = undefined;
         var staging_memory: vk.VkDeviceMemory = undefined;
         try vk_utils.createBuffer(
@@ -432,7 +417,6 @@ pub const TextRenderer = struct {
             vk.unmapMemory(ctx.device, staging_memory);
         }
 
-        // Create device-local image
         const image_info = vk.VkImageCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = null,
@@ -472,7 +456,6 @@ pub const TextRenderer = struct {
         self.font_image_memory = try vk.allocateMemory(ctx.device, &alloc_info, null);
         try vk.bindImageMemory(ctx.device, self.font_image, self.font_image_memory, 0);
 
-        // Upload via command buffer
         const cmd_alloc_info = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
@@ -493,7 +476,6 @@ pub const TextRenderer = struct {
         };
         try vk.beginCommandBuffer(cmd, &cmd_begin_info);
 
-        // Barrier: UNDEFINED -> TRANSFER_DST
         const to_transfer = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -531,7 +513,6 @@ pub const TextRenderer = struct {
 
         vk.cmdCopyBufferToImage(cmd, staging_buffer, self.font_image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &[_]vk.VkBufferImageCopy{region});
 
-        // Barrier: TRANSFER_DST -> SHADER_READ_ONLY
         const to_shader = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -574,7 +555,6 @@ pub const TextRenderer = struct {
         vk.destroyBuffer(ctx.device, staging_buffer, null);
         vk.freeMemory(ctx.device, staging_memory, null);
 
-        // Image view
         const view_info = vk.VkImageViewCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = null,
@@ -599,7 +579,6 @@ pub const TextRenderer = struct {
 
         self.font_image_view = try vk.createImageView(ctx.device, &view_info, null);
 
-        // Sampler (nearest-neighbor for crisp pixels)
         const sampler_info = vk.VkSamplerCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .pNext = null,
@@ -682,14 +661,12 @@ pub const TextRenderer = struct {
         try vk.allocateDescriptorSets(ctx.device, &ds_alloc_info, &sets);
         self.descriptor_set = sets[0];
 
-        // Write binding 0: vertex SSBO
         const buffer_info = vk.VkDescriptorBufferInfo{
             .buffer = self.vertex_buffer,
             .offset = 0,
             .range = MAX_VERTICES * @sizeOf(TextVertex),
         };
 
-        // Write binding 1: font sampler
         const image_info = vk.VkDescriptorImageInfo{
             .sampler = self.font_sampler,
             .imageView = self.font_image_view,
@@ -831,7 +808,6 @@ pub const TextRenderer = struct {
             .alphaToOneEnable = vk.VK_FALSE,
         };
 
-        // Depth test DISABLED — text always on top
         const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .pNext = null,
@@ -872,7 +848,7 @@ pub const TextRenderer = struct {
         const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
-            .size = 64, // mat4
+            .size = 64,
         };
 
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{

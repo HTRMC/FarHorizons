@@ -2,12 +2,10 @@ const std = @import("std");
 const c = @import("c.zig").c;
 const vk = @import("volk.zig");
 
-// Re-export types
 pub const Window = c.GLFWwindow;
 pub const Monitor = c.GLFWmonitor;
 pub const VidMode = c.GLFWvidmode;
 
-// Re-export constants
 pub const GLFW_CLIENT_API = c.GLFW_CLIENT_API;
 pub const GLFW_NO_API = c.GLFW_NO_API;
 pub const GLFW_RESIZABLE = c.GLFW_RESIZABLE;
@@ -18,7 +16,6 @@ pub const GLFW_MAXIMIZED = c.GLFW_MAXIMIZED;
 pub const GLFW_TRUE = c.GLFW_TRUE;
 pub const GLFW_FALSE = c.GLFW_FALSE;
 
-// Input constants
 pub const GLFW_KEY_W = c.GLFW_KEY_W;
 pub const GLFW_KEY_A = c.GLFW_KEY_A;
 pub const GLFW_KEY_S = c.GLFW_KEY_S;
@@ -51,7 +48,6 @@ pub const GLFW_PRESS = c.GLFW_PRESS;
 pub const GLFW_RELEASE = c.GLFW_RELEASE;
 pub const GLFW_REPEAT = c.GLFW_REPEAT;
 
-// Mouse / cursor constants
 pub const GLFW_MOUSE_BUTTON_LEFT = c.GLFW_MOUSE_BUTTON_LEFT;
 pub const GLFW_MOUSE_BUTTON_RIGHT = c.GLFW_MOUSE_BUTTON_RIGHT;
 pub const GLFW_CURSOR = c.GLFW_CURSOR;
@@ -59,21 +55,18 @@ pub const GLFW_CURSOR_DISABLED = c.GLFW_CURSOR_DISABLED;
 pub const GLFW_CURSOR_NORMAL = c.GLFW_CURSOR_NORMAL;
 pub const GLFW_MOUSE_BUTTON_MIDDLE = c.GLFW_MOUSE_BUTTON_MIDDLE;
 
-// Keyboard extras
 pub const GLFW_KEY_TAB = c.GLFW_KEY_TAB;
 pub const GLFW_KEY_HOME = c.GLFW_KEY_HOME;
 pub const GLFW_KEY_END = c.GLFW_KEY_END;
 pub const GLFW_MOD_SHIFT = c.GLFW_MOD_SHIFT;
 pub const GLFW_MOD_CONTROL = c.GLFW_MOD_CONTROL;
 
-// Error type
 pub const GlfwError = error{
     InitFailed,
     WindowCreationFailed,
     SurfaceCreationFailed,
 };
 
-// Safe GLFW function wrappers
 pub fn init() GlfwError!void {
     if (c.glfwInit() == GLFW_FALSE) {
         return error.InitFailed;
@@ -208,7 +201,6 @@ pub fn getTime() f64 {
 }
 
 pub fn getRequiredInstanceExtensions(count: *u32) ?[*]const [*:0]const u8 {
-    // Returns null if GLFW is not initialized
     const extensions = c.glfwGetRequiredInstanceExtensions(count);
     if (extensions == null) return null;
     return @ptrCast(extensions);

@@ -34,7 +34,6 @@ pub fn raycast(world: *const WorldState.World, origin: zlm.Vec3, dir: zlm.Vec3) 
     var block_y: i32 = @intFromFloat(@floor(origin.y));
     var block_z: i32 = @intFromFloat(@floor(origin.z));
 
-    // Check if starting block is solid (inside-block case)
     if (WorldState.block_properties.isSolid(WorldState.getBlock(world, block_x, block_y, block_z))) {
         return .{
             .block_pos = .{ block_x, block_y, block_z },

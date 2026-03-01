@@ -102,7 +102,6 @@ pub const DebugRenderer = struct {
         );
         vk.cmdDispatch(command_buffer, 1, 1, 1);
 
-        // Barrier: compute write -> indirect read
         const indirect_barrier = vk.VkBufferMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
             .pNext = null,
@@ -164,7 +163,6 @@ pub const DebugRenderer = struct {
         const tz = tracy.zone(@src(), "createDebugLineResources");
         defer tz.end();
 
-        // Vertex SSBO (host-visible for CPU writes)
         const vertex_buffer_size: vk.VkDeviceSize = DEBUG_LINE_MAX_VERTICES * @sizeOf(LineVertex);
         try vk_utils.createBuffer(
             ctx,
@@ -175,7 +173,6 @@ pub const DebugRenderer = struct {
             &self.vertex_buffer_memory,
         );
 
-        // Indirect draw buffer (device-local, written by compute)
         try vk_utils.createBuffer(
             ctx,
             @sizeOf(vk.VkDrawIndirectCommand),
@@ -185,7 +182,6 @@ pub const DebugRenderer = struct {
             &self.indirect_buffer_memory,
         );
 
-        // Count buffer (host-visible, always 1)
         try vk_utils.createBuffer(
             ctx,
             @sizeOf(u32),
@@ -202,7 +198,6 @@ pub const DebugRenderer = struct {
             vk.unmapMemory(ctx.device, self.count_buffer_memory);
         }
 
-        // Graphics descriptor set (binding 0 = vertex SSBO)
         {
             const binding = vk.VkDescriptorSetLayoutBinding{
                 .binding = 0,
@@ -272,7 +267,6 @@ pub const DebugRenderer = struct {
             vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{write}, 0, null);
         }
 
-        // Compute descriptor set (binding 0 = indirect draw command SSBO)
         {
             const binding = vk.VkDescriptorSetLayoutBinding{
                 .binding = 0,
@@ -342,7 +336,6 @@ pub const DebugRenderer = struct {
             vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{write}, 0, null);
         }
 
-        // Fill vertex buffer with chunk outlines
         self.generateChunkOutlines(ctx.device);
 
         std.log.info("Debug line resources created ({} vertices)", .{self.vertex_count});
@@ -355,13 +348,11 @@ pub const DebugRenderer = struct {
 
         var count: u32 = 0;
 
-        // World axis lines (64 units each, from origin)
         const yellow = [4]f32{ 1.0, 1.0, 0.0, 1.0 };
-        count = addLine(vertices, count, 0.0, 0.0, 0.0, 64.0, 0.0, 0.0, .{ 1.0, 0.0, 0.0, 1.0 }); // X red
-        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 64.0, 0.0, .{ 0.0, 1.0, 0.0, 1.0 }); // Y green
-        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 }); // Z blue
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 64.0, 0.0, 0.0, .{ 1.0, 0.0, 0.0, 1.0 });
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 64.0, 0.0, .{ 0.0, 1.0, 0.0, 1.0 });
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 });
 
-        // AABB wireframe (12 edges)
         const entity_pos = game_state.render_entity_pos;
         const half_w: f32 = 0.4;
         const height: f32 = 1.8;
@@ -372,23 +363,19 @@ pub const DebugRenderer = struct {
         const y1 = entity_pos[1] + height;
         const z1 = entity_pos[2] + half_w;
 
-        // Bottom face (4 edges)
         count = addLine(vertices, count, x0, y0, z0, x1, y0, z0, yellow);
         count = addLine(vertices, count, x1, y0, z0, x1, y0, z1, yellow);
         count = addLine(vertices, count, x1, y0, z1, x0, y0, z1, yellow);
         count = addLine(vertices, count, x0, y0, z1, x0, y0, z0, yellow);
-        // Top face (4 edges)
         count = addLine(vertices, count, x0, y1, z0, x1, y1, z0, yellow);
         count = addLine(vertices, count, x1, y1, z0, x1, y1, z1, yellow);
         count = addLine(vertices, count, x1, y1, z1, x0, y1, z1, yellow);
         count = addLine(vertices, count, x0, y1, z1, x0, y1, z0, yellow);
-        // Vertical edges (4 edges)
         count = addLine(vertices, count, x0, y0, z0, x0, y1, z0, yellow);
         count = addLine(vertices, count, x1, y0, z0, x1, y1, z0, yellow);
         count = addLine(vertices, count, x1, y0, z1, x1, y1, z1, yellow);
         count = addLine(vertices, count, x0, y0, z1, x0, y1, z1, yellow);
 
-        // Block outline (12 edges of targeted block)
         if (game_state.hit_result) |hit| {
             const bx0: f32 = @floatFromInt(hit.block_pos[0]);
             const by0: f32 = @floatFromInt(hit.block_pos[1]);
@@ -398,17 +385,14 @@ pub const DebugRenderer = struct {
             const bz1: f32 = bz0 + 1.0;
             const outline_color = [4]f32{ 0.1, 0.1, 0.1, 1.0 };
 
-            // Bottom face (4 edges)
             count = addLine(vertices, count, bx0, by0, bz0, bx1, by0, bz0, outline_color);
             count = addLine(vertices, count, bx1, by0, bz0, bx1, by0, bz1, outline_color);
             count = addLine(vertices, count, bx1, by0, bz1, bx0, by0, bz1, outline_color);
             count = addLine(vertices, count, bx0, by0, bz1, bx0, by0, bz0, outline_color);
-            // Top face (4 edges)
             count = addLine(vertices, count, bx0, by1, bz0, bx1, by1, bz0, outline_color);
             count = addLine(vertices, count, bx1, by1, bz0, bx1, by1, bz1, outline_color);
             count = addLine(vertices, count, bx1, by1, bz1, bx0, by1, bz1, outline_color);
             count = addLine(vertices, count, bx0, by1, bz1, bx0, by1, bz0, outline_color);
-            // Vertical edges (4 edges)
             count = addLine(vertices, count, bx0, by0, bz0, bx0, by1, bz0, outline_color);
             count = addLine(vertices, count, bx1, by0, bz0, bx1, by1, bz0, outline_color);
             count = addLine(vertices, count, bx1, by0, bz1, bx1, by1, bz1, outline_color);
@@ -435,10 +419,9 @@ pub const DebugRenderer = struct {
 
         var count: u32 = 0;
 
-        // World axis lines (64 units each, from origin)
-        count = addLine(vertices, count, 0.0, 0.0, 0.0, 64.0, 0.0, 0.0, .{ 1.0, 0.0, 0.0, 1.0 }); // X red
-        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 64.0, 0.0, .{ 0.0, 1.0, 0.0, 1.0 }); // Y green
-        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 }); // Z blue
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 64.0, 0.0, 0.0, .{ 1.0, 0.0, 0.0, 1.0 });
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 64.0, 0.0, .{ 0.0, 1.0, 0.0, 1.0 });
+        count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 });
 
         vk.unmapMemory(device, self.vertex_buffer_memory);
         self.vertex_count = count;
@@ -594,7 +577,7 @@ pub const DebugRenderer = struct {
         const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
-            .size = 64, // sizeof(mat4)
+            .size = 64,
         };
 
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{

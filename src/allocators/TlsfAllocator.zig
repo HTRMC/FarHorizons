@@ -1,17 +1,9 @@
 const std = @import("std");
 
-/// Two-Level Segregated Fit allocator for managing sub-regions within a fixed-size
-/// buffer (e.g. a GPU heap). Operates on abstract offset/size ranges — no Vulkan
-/// or graphics dependencies.
-///
-/// First level: floor(log2(size))   → index into `fl_bitmap`
-/// Second level: subdivides each first-level range into `SL_COUNT` linear buckets
-///
-/// All sizes/offsets are in *elements* (vertices, indices, bytes — caller decides).
 pub const TlsfAllocator = struct {
-    pub const FL_MAX = 24; // supports up to 2^24 = 16M elements per allocation
+    pub const FL_MAX = 24;
     pub const SL_BITS = 4;
-    pub const SL_COUNT = 1 << SL_BITS; // 16 second-level buckets
+    pub const SL_COUNT = 1 << SL_BITS;
 
     pub const Allocation = struct {
         offset: u32,
@@ -25,23 +17,22 @@ pub const TlsfAllocator = struct {
         offset: u32,
         size: u32,
         free: bool,
-        prev_phys: Handle, // previous block in physical (address) order
-        next_phys: Handle, // next block in physical (address) order
-        prev_free: Handle, // previous block in same free-list bucket
-        next_free: Handle, // next block in same free-list bucket
+        prev_phys: Handle,
+        next_phys: Handle,
+        prev_free: Handle,
+        next_free: Handle,
     };
 
     blocks: [max_blocks]Block,
     block_count: u16,
-    free_block_stack: [max_blocks]Handle, // stack of recycled block indices
+    free_block_stack: [max_blocks]Handle,
     free_stack_top: u16,
 
-    // Segregated free lists: fl_bitmap and sl_bitmap track which buckets are non-empty
-    fl_bitmap: u32, // bit i set => first-level class i has at least one free block
-    sl_bitmap: [FL_MAX]u16, // bit j set => second-level bucket j of class i is non-empty
-    free_lists: [FL_MAX][SL_COUNT]Handle, // head of free list for each (fl, sl) bucket
+    fl_bitmap: u32,
+    sl_bitmap: [FL_MAX]u16,
+    free_lists: [FL_MAX][SL_COUNT]Handle,
 
-    capacity: u32, // total size of the managed region
+    capacity: u32,
 
     const max_blocks = 4096;
 
@@ -57,7 +48,6 @@ pub const TlsfAllocator = struct {
             .capacity = capacity,
         };
 
-        // Create one free block spanning the entire region
         const handle = self.newBlock();
         self.blocks[handle] = .{
             .offset = 0,
@@ -73,8 +63,6 @@ pub const TlsfAllocator = struct {
         return self;
     }
 
-    /// Allocate a region of at least `size` elements. Returns null if no suitable
-    /// free block exists.
     pub fn alloc(self: *TlsfAllocator, size: u32) ?Allocation {
         if (size == 0) return null;
 
@@ -87,7 +75,6 @@ pub const TlsfAllocator = struct {
         const block = &self.blocks[handle];
         const remainder = block.size - size;
 
-        // Split if remainder is large enough to be useful (>= 1 element)
         if (remainder > 0) {
             const split_handle = self.newBlock();
             self.blocks[split_handle] = .{
@@ -113,15 +100,11 @@ pub const TlsfAllocator = struct {
         return .{ .offset = block.offset, .size = block.size };
     }
 
-    /// Free a previously allocated region. The offset must exactly match a prior
-    /// allocation's offset.
     pub fn free(self: *TlsfAllocator, offset: u32) void {
-        // Find the block by offset
         const handle = self.findBlockByOffset(offset) orelse return;
         var block = &self.blocks[handle];
         block.free = true;
 
-        // Merge with next physical neighbor if free
         var current_handle = handle;
         if (block.next_phys != null_handle) {
             const next = block.next_phys;
@@ -136,7 +119,6 @@ pub const TlsfAllocator = struct {
             }
         }
 
-        // Merge with previous physical neighbor if free
         if (block.prev_phys != null_handle) {
             const prev = block.prev_phys;
             if (self.blocks[prev].free) {
@@ -155,7 +137,6 @@ pub const TlsfAllocator = struct {
         self.insertFreeBlock(current_handle);
     }
 
-    /// Returns total free space available (sum of all free blocks).
     pub fn totalFree(self: *const TlsfAllocator) u32 {
         var total: u32 = 0;
         var i: u16 = 0;
@@ -167,7 +148,6 @@ pub const TlsfAllocator = struct {
         return total;
     }
 
-    /// Returns the largest single free block size.
     pub fn largestFree(self: *const TlsfAllocator) u32 {
         var largest: u32 = 0;
         var i: u16 = 0;
@@ -179,7 +159,6 @@ pub const TlsfAllocator = struct {
         return largest;
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────
 
     const FLSLPair = struct { fl: u5, sl: u4 };
 
@@ -201,15 +180,13 @@ pub const TlsfAllocator = struct {
         return @truncate((size >> shift) ^ (@as(u32, 1) << SL_BITS));
     }
 
-    /// Like mapping(), but rounds up size so the found bucket is guaranteed to
-    /// contain blocks >= the requested size.
     fn searchMapping(size: u32) FLSLPair {
         var rounded = size;
         if (size > 0) {
             const fl = flIndex(size);
             if (fl >= SL_BITS) {
                 const round = (@as(u32, 1) << (fl - SL_BITS)) - 1;
-                rounded = size +| round; // saturating add
+                rounded = size +| round;
             }
         }
         return mapping(rounded);
@@ -220,20 +197,18 @@ pub const TlsfAllocator = struct {
         var fl = m.fl;
         const sl = m.sl;
 
-        // Search in the rounded-up (fl, sl) bucket and above within same fl
         var sl_map = self.sl_bitmap[fl] & (~@as(u16, 0) << sl);
         if (sl_map != 0) {
             const found_sl: u4 = @intCast(@ctz(sl_map));
             return .{ .fl = fl, .sl = found_sl };
         }
 
-        // Search higher first-level classes
         const fl_map = self.fl_bitmap & (~@as(u32, 0) << (@as(u5, fl) +| 1));
-        if (fl_map == 0) return null; // no large enough free block
+        if (fl_map == 0) return null;
 
         fl = @intCast(@ctz(fl_map));
         sl_map = self.sl_bitmap[fl];
-        if (sl_map == 0) return null; // shouldn't happen if fl_bitmap is consistent
+        if (sl_map == 0) return null;
         const found_sl: u4 = @intCast(@ctz(sl_map));
         return .{ .fl = fl, .sl = found_sl };
     }
@@ -274,7 +249,6 @@ pub const TlsfAllocator = struct {
         block.prev_free = null_handle;
         block.next_free = null_handle;
 
-        // Update bitmaps if this bucket is now empty
         if (self.free_lists[fl][sl] == null_handle) {
             self.sl_bitmap[fl] &= ~(@as(u16, 1) << sl);
             if (self.sl_bitmap[fl] == 0) {
@@ -325,7 +299,6 @@ pub const TlsfAllocator = struct {
     }
 };
 
-// ── Tests ────────────────────────────────────────────────────────────
 
 test "basic alloc and free" {
     var a = TlsfAllocator.init(1024);
@@ -340,7 +313,6 @@ test "basic alloc and free" {
 
     a.free(r1.offset);
 
-    // Should reuse the freed region
     const r3 = a.alloc(50).?;
     try std.testing.expectEqual(0, r3.offset);
     try std.testing.expectEqual(50, r3.size);
@@ -355,10 +327,9 @@ test "merge coalesces adjacent free blocks" {
     _ = r2;
 
     a.free(r1.offset);
-    a.free(r3.offset); // r3 is not adjacent to r1
+    a.free(r3.offset);
 
-    // Free r2 — should merge r1+r2+r3 into one 300-element block
-    a.free(100); // r2's offset
+    a.free(100);
 
     const big = a.alloc(300).?;
     try std.testing.expectEqual(0, big.offset);
@@ -388,7 +359,6 @@ test "full alloc-free cycle restores capacity" {
     a.free(r1.offset);
     a.free(r2.offset);
 
-    // After freeing everything, should have full capacity again
     const big = a.alloc(1024).?;
     try std.testing.expectEqual(0, big.offset);
     try std.testing.expectEqual(1024, big.size);
@@ -403,15 +373,12 @@ test "many small allocations" {
         offsets[i] = r.offset;
     }
 
-    // Should be full
     try std.testing.expect(a.alloc(1) == null);
 
-    // Free all
     for (0..100) |i| {
         a.free(offsets[i]);
     }
 
-    // Should have full capacity
     try std.testing.expectEqual(1000, a.totalFree());
 }
 
@@ -428,8 +395,6 @@ test "totalFree and largestFree" {
     _ = a.alloc(100).?;
 
     a.free(r2.offset);
-    // Now we have a 200-element hole at offset 100 and a free tail
-    // 200 (freed r2 hole) + 624 (tail) = 824
     try std.testing.expectEqual(824, a.totalFree());
 }
 
@@ -442,7 +407,6 @@ test "split creates properly linked blocks" {
     try std.testing.expectEqual(0, r1.offset);
     try std.testing.expectEqual(300, r2.offset);
 
-    // Remainder block should exist at offset 600 with size 400
     try std.testing.expectEqual(400, a.totalFree());
 
     const r3 = a.alloc(400).?;
@@ -458,38 +422,29 @@ test "free in reverse order merges correctly" {
     const r3 = a.alloc(256).?;
     const r4 = a.alloc(256).?;
 
-    // Free in reverse: r4, r3, r2, r1
     a.free(r4.offset);
     a.free(r3.offset);
     a.free(r2.offset);
     a.free(r1.offset);
 
-    // Should coalesce back to one big block
     try std.testing.expectEqual(1024, a.largestFree());
     const big = a.alloc(1024).?;
     try std.testing.expectEqual(0, big.offset);
 }
 
 test "searchMapping rounds up to guarantee block >= requested size" {
-    // Regression: without rounding up, a block smaller than `size` could be
-    // returned from a bucket whose range straddles the request, causing an
-    // integer overflow in the split path (block.size - size).
     var a = TlsfAllocator.init(600_000);
 
-    // Create fragmentation: allocate many varied-size chunks then free some
     var allocs: [50]TlsfAllocator.Allocation = undefined;
     for (0..50) |i| {
-        const sz: u32 = @intCast(1000 + i * 137); // varying sizes
+        const sz: u32 = @intCast(1000 + i * 137);
         allocs[i] = a.alloc(sz).?;
     }
 
-    // Free every other allocation to create non-contiguous free blocks
     for (0..50) |i| {
         if (i % 2 == 0) a.free(allocs[i].offset);
     }
 
-    // Now allocate sizes that are likely to hit inter-bucket boundaries.
-    // The key property: every returned allocation must have size >= requested.
     for (0..25) |i| {
         const req: u32 = @intCast(500 + i * 200);
         if (a.alloc(req)) |result| {

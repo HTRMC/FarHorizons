@@ -1,12 +1,10 @@
 const std = @import("std");
 
-// ── Identifiers ──
 
 pub const WidgetId = u16;
 pub const NULL_WIDGET: WidgetId = std.math.maxInt(WidgetId);
 pub const MAX_WIDGETS = 1024;
 
-// ── Enums ──
 
 pub const WidgetKind = enum(u8) {
     panel,
@@ -60,7 +58,6 @@ pub const SizeSpec = union(enum) {
     fill,
 };
 
-// ── Geometry ──
 
 pub const Rect = struct {
     x: f32 = 0,
@@ -130,26 +127,21 @@ pub const Color = struct {
     }
 };
 
-// ── Widget ──
 
 pub const Widget = struct {
-    // Tree links
     parent: WidgetId = NULL_WIDGET,
     first_child: WidgetId = NULL_WIDGET,
     next_sibling: WidgetId = NULL_WIDGET,
 
-    // Identity
     kind: WidgetKind = .panel,
     id_hash: u32 = 0,
     active: bool = false,
 
-    // Size
     width: SizeSpec = .auto,
     height: SizeSpec = .auto,
     min_width: f32 = 0,
     min_height: f32 = 0,
 
-    // Layout properties (how this widget arranges its children)
     layout_mode: LayoutMode = .flex,
     flex_direction: FlexDirection = .column,
     cross_align: Alignment = .start,
@@ -157,33 +149,27 @@ pub const Widget = struct {
     gap: f32 = 0,
     flex_grow: f32 = 0,
 
-    // Anchor properties (used when parent layout_mode == .anchor)
     anchor_x: AnchorPoint = .start,
     anchor_y: AnchorPoint = .start,
     offset_x: f32 = 0,
     offset_y: f32 = 0,
 
-    // Spacing
     padding: Edges = .{},
     margin: Edges = .{},
 
-    // Visual
     background: Color = Color.transparent,
     border_color: Color = Color.transparent,
     border_width: f32 = 0,
 
-    // State
     visible: bool = true,
     focusable: bool = false,
     hovered: bool = false,
     pressed: bool = false,
     focused: bool = false,
 
-    // Tooltip
     tooltip: [64]u8 = .{0} ** 64,
     tooltip_len: u8 = 0,
 
-    // Computed (set by layout)
     computed_rect: Rect = .{},
     intrinsic_width: f32 = 0,
     intrinsic_height: f32 = 0,

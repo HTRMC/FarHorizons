@@ -14,7 +14,6 @@ const log = std.log.scoped(.UI);
 const HOTBAR_SIZE = GameState.HOTBAR_SIZE;
 
 pub const HudBinder = struct {
-    // Cached widget IDs
     crosshair_id: WidgetId = NULL_WIDGET,
     hotbar_bg_id: WidgetId = NULL_WIDGET,
     selection_id: WidgetId = NULL_WIDGET,
@@ -38,7 +37,6 @@ pub const HudBinder = struct {
         return self;
     }
 
-    /// Map sprite src strings ("hud:crosshair", etc.) to UiRenderer atlas UVs.
     pub fn resolveSprites(self: *const HudBinder, tree: *WidgetTree, ui_renderer: *const UiRenderer) void {
         if (!ui_renderer.hud_atlas_loaded) return;
 
@@ -48,19 +46,14 @@ pub const HudBinder = struct {
         setImageAtlas(tree, self.offhand_id, ui_renderer.offhand_rect);
     }
 
-    /// Per-frame update: read GameState and update widget properties.
     pub fn update(self: *const HudBinder, tree: *WidgetTree, gs: *const GameState) void {
-        // Move selection highlight to selected slot
         if (self.selection_id != NULL_WIDGET) {
             if (tree.getWidget(self.selection_id)) |w| {
-                // Each slot is 20px * 2 (scale) = 40px pitch
                 const slot_pitch: f32 = 40.0;
-                // MC selection is -1px left of hotbar at 1x = -2px at 2x
                 w.offset_x = @as(f32, @floatFromInt(gs.selected_slot)) * slot_pitch - 2.0;
             }
         }
 
-        // Update slot background colors
         for (0..HOTBAR_SIZE) |i| {
             if (self.slot_ids[i] != NULL_WIDGET) {
                 if (tree.getWidget(self.slot_ids[i])) |w| {
@@ -75,7 +68,6 @@ pub const HudBinder = struct {
             }
         }
 
-        // Update block name label
         if (self.block_name_id != NULL_WIDGET) {
             const selected_block = gs.hotbar[gs.selected_slot];
             if (tree.getWidget(self.block_name_id)) |w| {

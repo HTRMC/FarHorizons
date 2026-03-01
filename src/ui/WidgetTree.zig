@@ -39,7 +39,6 @@ pub const WidgetTree = struct {
             .dropdown => .{ .dropdown = .{} },
         };
 
-        // Set default focusability
         switch (kind) {
             .button, .text_input, .checkbox, .slider, .dropdown => self.widgets[id].focusable = true,
             else => {},
@@ -48,7 +47,6 @@ pub const WidgetTree = struct {
         if (parent == NULL_WIDGET) {
             self.root = id;
         } else {
-            // Append to parent's child list
             const p = &self.widgets[parent];
             if (p.first_child == NULL_WIDGET) {
                 p.first_child = id;
@@ -107,8 +105,6 @@ pub const WidgetTree = struct {
         self.root = NULL_WIDGET;
     }
 
-    /// Deactivate all children (and grandchildren recursively) of a widget.
-    /// Detaches them from the parent's child list but does NOT reclaim IDs.
     pub fn clearChildren(self: *WidgetTree, parent_id: WidgetId) void {
         const parent = self.getWidget(parent_id) orelse return;
         var child_id = parent.first_child;
@@ -121,7 +117,6 @@ pub const WidgetTree = struct {
     }
 
     fn deactivateRecursive(self: *WidgetTree, id: WidgetId) void {
-        // Deactivate children first
         var child_id = self.widgets[id].first_child;
         while (child_id != NULL_WIDGET) {
             const next = self.widgets[child_id].next_sibling;
@@ -131,7 +126,6 @@ pub const WidgetTree = struct {
         self.widgets[id].active = false;
     }
 
-    // ── Child iteration ──
 
     pub const ChildIterator = struct {
         tree: *const WidgetTree,
@@ -153,7 +147,6 @@ pub const WidgetTree = struct {
         };
     }
 
-    // Count direct children
     pub fn childCount(self: *const WidgetTree, parent_id: WidgetId) u16 {
         var iter = self.children(parent_id);
         var n: u16 = 0;
@@ -167,7 +160,6 @@ pub fn hashId(id_str: []const u8) u32 {
     return @truncate(std.hash.XxHash3.hash(0, id_str));
 }
 
-// ── Tests ──
 
 test "add widgets and iterate children" {
     var tree = WidgetTree{};
@@ -208,7 +200,6 @@ test "clearChildren deactivates children recursively" {
 
     tree.clearChildren(root);
 
-    // Parent still active, children deactivated
     try std.testing.expect(tree.widgets[root].active);
     try std.testing.expect(!tree.widgets[child1].active);
     try std.testing.expect(!tree.widgets[grandchild].active);

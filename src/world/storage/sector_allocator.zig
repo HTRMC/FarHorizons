@@ -7,9 +7,6 @@ const BITMAP_BYTES = storage_types.BITMAP_BYTES;
 const ChunkOffsetEntry = storage_types.ChunkOffsetEntry;
 const CHUNKS_PER_REGION = storage_types.CHUNKS_PER_REGION;
 
-/// Bitmap-based sector allocator for region files.
-/// Manages allocation of contiguous sector runs using a first-fit strategy.
-/// The bitmap is rebuilt from the COT on file open (the COT is the source of truth).
 pub const SectorAllocator = struct {
     bitmap: [BITMAP_BYTES]u8,
     total_sectors: u32,
@@ -19,23 +16,18 @@ pub const SectorAllocator = struct {
             .bitmap = [_]u8{0} ** BITMAP_BYTES,
             .total_sectors = HEADER_SECTORS,
         };
-        // Mark header sectors as used
         self.markRange(0, HEADER_SECTORS);
         return self;
     }
 
-    /// Rebuild the bitmap from a Chunk Offset Table.
-    /// This is the crash recovery path — the COT is the single source of truth.
     pub fn rebuildFromCot(cot: *const [CHUNKS_PER_REGION]ChunkOffsetEntry) SectorAllocator {
         var self = SectorAllocator{
             .bitmap = [_]u8{0} ** BITMAP_BYTES,
             .total_sectors = HEADER_SECTORS,
         };
 
-        // Reserve header sectors
         self.markRange(0, HEADER_SECTORS);
 
-        // Mark sectors referenced by each COT entry
         for (cot) |entry| {
             if (entry.isPresent()) {
                 const offset = entry.sector_offset;
@@ -51,8 +43,6 @@ pub const SectorAllocator = struct {
         return self;
     }
 
-    /// Allocate a contiguous run of `count` sectors.
-    /// Returns the starting sector offset, or null if no space.
     pub fn allocate(self: *SectorAllocator, count: u8) ?u24 {
         if (count == 0) return null;
 
@@ -60,7 +50,6 @@ pub const SectorAllocator = struct {
         var start: u32 = HEADER_SECTORS;
 
         while (start + needed <= MAX_SECTORS) {
-            // Check if the run starting at `start` is entirely free
             if (self.isRangeFree(start, needed)) {
                 self.markRange(start, needed);
                 const end = start + needed;
@@ -70,20 +59,16 @@ pub const SectorAllocator = struct {
                 return @intCast(start);
             }
 
-            // Skip to the next potential starting position
-            // Find the first used sector in the range and skip past it
             start = self.nextFreeAfter(start);
         }
 
         return null;
     }
 
-    /// Free a previously allocated run of sectors.
     pub fn free(self: *SectorAllocator, offset: u24, count: u8) void {
         self.clearRange(@as(u32, offset), @as(u32, count));
     }
 
-    /// Check if a range of sectors is entirely free.
     fn isRangeFree(self: *const SectorAllocator, start: u32, count: u32) bool {
         for (start..start + count) |sector| {
             if (self.isUsed(@intCast(sector))) return false;
@@ -91,7 +76,6 @@ pub const SectorAllocator = struct {
         return true;
     }
 
-    /// Find the next free sector at or after `start`.
     fn nextFreeAfter(self: *const SectorAllocator, start: u32) u32 {
         var pos = start;
         while (pos < MAX_SECTORS) : (pos += 1) {
@@ -133,45 +117,36 @@ pub const SectorAllocator = struct {
         self.bitmap[byte_idx] &= ~(@as(u8, 1) << bit_idx);
     }
 
-    /// Get the bitmap bytes (for writing to disk).
     pub fn getBitmap(self: *const SectorAllocator) *const [BITMAP_BYTES]u8 {
         return &self.bitmap;
     }
 
-    /// Load bitmap from disk bytes (performance hint only, rebuilt from COT on open).
     pub fn loadBitmap(self: *SectorAllocator, data: *const [BITMAP_BYTES]u8) void {
         @memcpy(&self.bitmap, data);
     }
 };
 
-// ── Tests ──────────────────────────────────────────────────────────
 
 test "init reserves header sectors" {
     const alloc = SectorAllocator.init();
-    // Sectors 0-3 should be used (4 header sectors for shadow paging)
     try std.testing.expect(alloc.isUsed(0));
     try std.testing.expect(alloc.isUsed(1));
     try std.testing.expect(alloc.isUsed(2));
     try std.testing.expect(alloc.isUsed(3));
-    // Sector 4 should be free
     try std.testing.expect(!alloc.isUsed(4));
 }
 
 test "allocate and free" {
     var alloc = SectorAllocator.init();
 
-    // Allocate 3 sectors — should start at sector 4 (after 4 header sectors)
     const offset1 = alloc.allocate(3) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u24, 4), offset1);
 
-    // Next allocation should start at sector 7
     const offset2 = alloc.allocate(2) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u24, 7), offset2);
 
-    // Free first allocation
     alloc.free(offset1, 3);
 
-    // Should be able to reuse sectors 4-6
     const offset3 = alloc.allocate(3) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(u24, 4), offset3);
 }
@@ -180,33 +155,28 @@ test "rebuildFromCot" {
     var cot: [CHUNKS_PER_REGION]ChunkOffsetEntry = undefined;
     @memset(&cot, ChunkOffsetEntry.empty);
 
-    // Set a few entries (offsets must be >= HEADER_SECTORS=4)
-    cot[0] = @bitCast(@as(u64, 0) | (@as(u64, 4) << 0) | // sector_offset = 4
-        (@as(u64, 3) << 24) | // sector_count = 3
-        (@as(u64, 1000) << 32) | // compressed_size
-        (@as(u64, 1) << 56)); // compression = deflate
-    cot[1] = @bitCast(@as(u64, 0) | (@as(u64, 7) << 0) | // sector_offset = 7
-        (@as(u64, 1) << 24) | // sector_count = 1
-        (@as(u64, 500) << 32) | // compressed_size
+    cot[0] = @bitCast(@as(u64, 0) | (@as(u64, 4) << 0) |
+        (@as(u64, 3) << 24) |
+        (@as(u64, 1000) << 32) |
+        (@as(u64, 1) << 56));
+    cot[1] = @bitCast(@as(u64, 0) | (@as(u64, 7) << 0) |
+        (@as(u64, 1) << 24) |
+        (@as(u64, 500) << 32) |
         (@as(u64, 1) << 56));
 
     const alloc = SectorAllocator.rebuildFromCot(&cot);
 
-    // Header sectors 0-3 used
     try std.testing.expect(alloc.isUsed(0));
     try std.testing.expect(alloc.isUsed(1));
     try std.testing.expect(alloc.isUsed(2));
     try std.testing.expect(alloc.isUsed(3));
 
-    // Sectors 4-6 used by entry 0
     try std.testing.expect(alloc.isUsed(4));
     try std.testing.expect(alloc.isUsed(5));
     try std.testing.expect(alloc.isUsed(6));
 
-    // Sector 7 used by entry 1
     try std.testing.expect(alloc.isUsed(7));
 
-    // Sector 8 should be free
     try std.testing.expect(!alloc.isUsed(8));
 
     try std.testing.expectEqual(@as(u32, 8), alloc.total_sectors);

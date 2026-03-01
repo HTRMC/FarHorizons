@@ -4,13 +4,11 @@ const build_options = @import("build_options");
 
 const CompressionAlgo = storage_types.CompressionAlgo;
 
-// ── ZSTD C bindings (optional, enabled via -Dzstd=true) ────────────
 
 pub const zstd_enabled = build_options.zstd_enabled;
 
 const zstd = if (zstd_enabled) @cImport(@cInclude("zstd.h")) else struct {};
 
-// ── Compression ────────────────────────────────────────────────────
 
 pub const CompressionError = error{
     CompressionFailed,
@@ -20,8 +18,6 @@ pub const CompressionError = error{
     OutOfMemory,
 };
 
-/// Compress `input` using the specified algorithm into `output`.
-/// Returns the number of compressed bytes written to `output`.
 pub fn compress(
     algo: CompressionAlgo,
     input: []const u8,
@@ -34,9 +30,6 @@ pub fn compress(
     };
 }
 
-/// Decompress `input` using the specified algorithm into `output`.
-/// `expected_size` is the known decompressed size.
-/// Returns the number of decompressed bytes.
 pub fn decompress(
     algo: CompressionAlgo,
     input: []const u8,
@@ -50,11 +43,10 @@ pub fn decompress(
     };
 }
 
-/// Returns a conservative upper bound on compressed size for a given input size.
 pub fn compressBound(algo: CompressionAlgo, input_size: usize) usize {
     return switch (algo) {
         .none => input_size,
-        .deflate => input_size + input_size / 7 + 64, // deflate overhead estimate
+        .deflate => input_size + input_size / 7 + 64,
         .zstd => if (zstd_enabled)
             zstd.ZSTD_compressBound(input_size)
         else
@@ -62,7 +54,6 @@ pub fn compressBound(algo: CompressionAlgo, input_size: usize) usize {
     };
 }
 
-// ── None (passthrough) ─────────────────────────────────────────────
 
 fn compressNone(input: []const u8, output: []u8) CompressionError!usize {
     if (output.len < input.len) return error.OutputTooSmall;
@@ -77,7 +68,6 @@ fn decompressNone(input: []const u8, output: []u8, expected_size: usize) Compres
     return input.len;
 }
 
-// ── Deflate (using Zig stdlib) ─────────────────────────────────────
 
 fn compressDeflate(input: []const u8, output: []u8) CompressionError!usize {
     const Writer = std.Io.Writer;
@@ -107,7 +97,6 @@ fn decompressDeflate(input: []const u8, output: []u8) CompressionError!usize {
     return total;
 }
 
-// ── ZSTD (via C libzstd) ──────────────────────────────────────────
 
 fn compressZstd(input: []const u8, output: []u8) CompressionError!usize {
     if (!zstd_enabled) return error.UnsupportedAlgorithm;
@@ -117,7 +106,7 @@ fn compressZstd(input: []const u8, output: []u8) CompressionError!usize {
         output.len,
         input.ptr,
         input.len,
-        1, // compression level 1 (fast)
+        1,
     );
 
     if (zstd.ZSTD_isError(result) != 0) {
@@ -145,7 +134,6 @@ fn decompressZstd(input: []const u8, output: []u8, expected_size: usize) Compres
     return result;
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
 
 test "none compression round-trip" {
     const input = "Hello, world! This is test data for compression.";
@@ -160,7 +148,6 @@ test "none compression round-trip" {
 }
 
 test "deflate compression round-trip" {
-    // Create compressible data (repeating pattern)
     var input: [4096]u8 = undefined;
     for (&input, 0..) |*b, i| {
         b.* = @intCast(i % 16);
@@ -169,7 +156,6 @@ test "deflate compression round-trip" {
     var compressed: [8192]u8 = undefined;
     const comp_len = try compress(.deflate, &input, &compressed);
 
-    // Deflate should compress the repeating pattern well
     try std.testing.expect(comp_len < input.len);
 
     var decompressed: [4096]u8 = undefined;

@@ -26,7 +26,6 @@ const log = std.log.scoped(.UI);
 
 const MAX_DEPTH = 32;
 
-/// Load a screen from an XML file in the assets/farhorizons/ui/ directory.
 pub fn loadScreen(tree: *WidgetTree, passthrough: *bool, filename: []const u8, allocator: std.mem.Allocator) bool {
     const base_path = app_config.getAppDataPath(allocator) catch return false;
     defer allocator.free(base_path);
@@ -48,7 +47,6 @@ pub fn loadScreen(tree: *WidgetTree, passthrough: *bool, filename: []const u8, a
     return loadScreenFromSource(tree, passthrough, data);
 }
 
-/// Load a screen from XML source bytes (no file I/O, testable).
 pub fn loadScreenFromSource(tree: *WidgetTree, passthrough: *bool, xml: []const u8) bool {
     var parser = XmlParser.XmlParser.init(xml);
     var parent_stack: [MAX_DEPTH]WidgetId = .{NULL_WIDGET} ** MAX_DEPTH;
@@ -101,7 +99,6 @@ pub fn loadScreenFromSource(tree: *WidgetTree, passthrough: *bool, xml: []const 
     return tree.root != NULL_WIDGET;
 }
 
-// ── Tag mapping ──
 
 fn tagToKind(tag: []const u8) ?WidgetKind {
     const map = .{
@@ -124,7 +121,6 @@ fn tagToKind(tag: []const u8) ?WidgetKind {
     return null;
 }
 
-// ── Attribute application ──
 
 fn applyWidgetAttrs(tree: *WidgetTree, id: WidgetId, event: *const XmlEvent) void {
     const w = tree.getWidget(id) orelse return;
@@ -356,7 +352,6 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
         .dropdown => {
             for (event.attrs[0..event.attr_count]) |attr| {
                 if (eql(attr.name, "items")) {
-                    // Parse comma-separated items
                     var start: usize = 0;
                     for (attr.value, 0..) |ch, j| {
                         if (ch == ',') {
@@ -386,7 +381,6 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
     }
 }
 
-// ── Parse helpers ──
 
 fn eql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
@@ -485,7 +479,6 @@ fn parseAnchorPoint(s: []const u8) AnchorPoint {
     return .start;
 }
 
-// ── Tests ──
 
 test "minimal screen" {
     var tree = WidgetTree{};
@@ -510,17 +503,14 @@ test "nested widgets" {
     const result = loadScreenFromSource(&tree, &passthrough, xml);
     try std.testing.expect(result);
 
-    // Root panel
     const root = tree.getWidgetConst(0).?;
     try std.testing.expectEqual(SizeSpec.fill, root.width);
     try std.testing.expectEqual(LayoutMode.anchor, root.layout_mode);
 
-    // Label
     const lbl_data = tree.getDataConst(1).?;
     try std.testing.expectEqualSlices(u8, "Hello", lbl_data.label.getText());
     try std.testing.expectEqual(@as(u8, 2), lbl_data.label.font_size);
 
-    // Button
     const btn_data = tree.getDataConst(2).?;
     try std.testing.expectEqualSlices(u8, "Click", btn_data.button.getText());
     try std.testing.expectEqualSlices(u8, "test_action", btn_data.button.getAction());
@@ -537,28 +527,23 @@ test "screen passthrough" {
 }
 
 test "parse helpers" {
-    // Size
     try std.testing.expectEqual(SizeSpec.auto, parseSize("auto"));
     try std.testing.expectEqual(SizeSpec.fill, parseSize("fill"));
     try std.testing.expectEqual(SizeSpec{ .px = 320 }, parseSize("320"));
     try std.testing.expectEqual(SizeSpec{ .percent = 50 }, parseSize("50%"));
 
-    // Color
     const c = parseColor("#FF8800FF");
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), c.r, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 0.533), c.g, 0.01);
 
-    // Edges uniform
     const e1 = parseEdges("16");
     try std.testing.expectApproxEqAbs(@as(f32, 16), e1.top, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 16), e1.left, 0.01);
 
-    // Edges t,r,b,l
     const e2 = parseEdges("8,16,8,16");
     try std.testing.expectApproxEqAbs(@as(f32, 8), e2.top, 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 16), e2.right, 0.01);
 
-    // Bool
     try std.testing.expect(parseBool("true"));
     try std.testing.expect(!parseBool("false"));
 }

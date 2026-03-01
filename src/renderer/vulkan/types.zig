@@ -1,11 +1,9 @@
 pub const FaceData = extern struct {
-    word0: u32, // x:5 | y:5 | z:5 | texIndex:8 | normalIndex:3 | lightIndex:6
-    word1: u32, // ao0:2 | ao1:2 | ao2:2 | ao3:2 | flip:1
+    word0: u32,
+    word1: u32,
 };
 
 pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_index: u6, ao: [4]u2) FaceData {
-    // Flip the quad diagonal when opposite-corner AO sums are unequal,
-    // to avoid anisotropic interpolation artifacts.
     const flip: u32 = @intFromBool(@as(u3, ao[0]) + ao[2] > @as(u3, ao[1]) + ao[3]);
     return .{
         .word0 = @as(u32, x) |
@@ -23,21 +21,21 @@ pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_
 }
 
 pub const QuadModel = extern struct {
-    corners: [12]f32, // 4 corners x 3 components (px,py,pz)
-    uvs: [8]f32, // 4 corners x 2 components (u,v)
-    normal: [3]f32, // face normal
+    corners: [12]f32,
+    uvs: [8]f32,
+    normal: [3]f32,
 };
 
 pub const LightEntry = extern struct {
-    corners: [4]u32, // packed 5-bit: sky_r:5|sky_g:5|sky_b:5|block_r:5|block_g:5|block_b:5
+    corners: [4]u32,
 };
 
 pub const ChunkData = extern struct {
-    position: [3]i32, // world-space chunk origin in blocks
-    light_start: u32, // offset into global light buffer
-    face_start: u32, // offset into global face buffer
-    face_counts: [6]u32, // per-normal face count (+Z,-Z,-X,+X,+Y,-Y)
-    voxel_size: u32, // 1=LOD0, 2=LOD1, 4=LOD2
+    position: [3]i32,
+    light_start: u32,
+    face_start: u32,
+    face_counts: [6]u32,
+    voxel_size: u32,
 };
 
 pub const DrawCommand = extern struct {
@@ -88,7 +86,6 @@ pub const UiVertex = extern struct {
     clip_max_y: f32 = 1e9,
 };
 
-// --- Tests ---
 
 fn unpackFaceData(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, normal_index: u3, light_index: u6 } {
     return .{
@@ -149,7 +146,6 @@ test "packFaceData roundtrip - typical values" {
 }
 
 test "packFaceData - no field overlap" {
-    // Set only x, verify others are 0
     const fd_x = packFaceData(31, 0, 0, 0, 0, 0, no_ao);
     const u_x = unpackFaceData(fd_x);
     try std.testing.expectEqual(@as(u5, 31), u_x.x);
@@ -158,7 +154,6 @@ test "packFaceData - no field overlap" {
     try std.testing.expectEqual(@as(u3, 0), u_x.normal_index);
     try std.testing.expectEqual(@as(u6, 0), u_x.light_index);
 
-    // Set only tex_index
     const fd_t = packFaceData(0, 0, 0, 255, 0, 0, no_ao);
     const u_t = unpackFaceData(fd_t);
     try std.testing.expectEqual(@as(u5, 0), u_t.x);
@@ -168,7 +163,6 @@ test "packFaceData - no field overlap" {
     try std.testing.expectEqual(@as(u3, 0), u_t.normal_index);
     try std.testing.expectEqual(@as(u6, 0), u_t.light_index);
 
-    // Set only light_index
     const fd_l = packFaceData(0, 0, 0, 0, 0, 63, no_ao);
     const u_l = unpackFaceData(fd_l);
     try std.testing.expectEqual(@as(u5, 0), u_l.x);
@@ -176,7 +170,6 @@ test "packFaceData - no field overlap" {
     try std.testing.expectEqual(@as(u3, 0), u_l.normal_index);
     try std.testing.expectEqual(@as(u6, 63), u_l.light_index);
 
-    // Set only AO, verify word0 fields are 0
     const fd_ao = packFaceData(0, 0, 0, 0, 0, 0, .{ 1, 2, 3, 0 });
     const u_ao = unpackFaceData(fd_ao);
     try std.testing.expectEqual(@as(u5, 0), u_ao.x);
@@ -185,46 +178,32 @@ test "packFaceData - no field overlap" {
 }
 
 test "packFaceData - shader unpacking matches" {
-    // Verify the GLSL unpacking logic matches our Zig unpacking
     const fd = packFaceData(15, 8, 22, 130, 5, 40, .{ 2, 1, 3, 0 });
     const w = fd.word0;
-    // GLSL: uint x = face.word0 & 0x1F;
     try std.testing.expectEqual(@as(u32, 15), w & 0x1F);
-    // GLSL: uint y = (face.word0 >> 5) & 0x1F;
     try std.testing.expectEqual(@as(u32, 8), (w >> 5) & 0x1F);
-    // GLSL: uint z = (face.word0 >> 10) & 0x1F;
     try std.testing.expectEqual(@as(u32, 22), (w >> 10) & 0x1F);
-    // GLSL: uint texIdx = (face.word0 >> 15) & 0xFF;
     try std.testing.expectEqual(@as(u32, 130), (w >> 15) & 0xFF);
-    // GLSL: uint normIdx = (face.word0 >> 23) & 0x7;
     try std.testing.expectEqual(@as(u32, 5), (w >> 23) & 0x7);
-    // GLSL: uint lightIdx = (face.word0 >> 26) & 0x3F;
     try std.testing.expectEqual(@as(u32, 40), (w >> 26) & 0x3F);
-    // GLSL: uint aoLevel = (face.word1 >> (cornerID * 2)) & 0x3;
     const w1 = fd.word1;
     try std.testing.expectEqual(@as(u32, 2), w1 & 0x3);
     try std.testing.expectEqual(@as(u32, 1), (w1 >> 2) & 0x3);
     try std.testing.expectEqual(@as(u32, 3), (w1 >> 4) & 0x3);
     try std.testing.expectEqual(@as(u32, 0), (w1 >> 6) & 0x3);
-    // GLSL: uint flipBit = (face.word1 >> 8) & 0x1;
-    // ao[0]+ao[2]=2+3=5 > ao[1]+ao[3]=1+0=1 → flip=1
     try std.testing.expectEqual(@as(u32, 1), (w1 >> 8) & 0x1);
 }
 
 test "packFaceData - flip bit set only when needed" {
-    // Symmetric AO → no flip (0+0 == 0+0)
     const fd_sym = packFaceData(0, 0, 0, 0, 0, 0, .{ 0, 0, 0, 0 });
     try std.testing.expectEqual(@as(u32, 0), (fd_sym.word1 >> 8) & 0x1);
 
-    // ao[0]+ao[2] > ao[1]+ao[3] → flip
     const fd_flip = packFaceData(0, 0, 0, 0, 0, 0, .{ 3, 0, 3, 0 });
     try std.testing.expectEqual(@as(u32, 1), (fd_flip.word1 >> 8) & 0x1);
 
-    // ao[0]+ao[2] < ao[1]+ao[3] → no flip
     const fd_nf = packFaceData(0, 0, 0, 0, 0, 0, .{ 0, 3, 0, 3 });
     try std.testing.expectEqual(@as(u32, 0), (fd_nf.word1 >> 8) & 0x1);
 
-    // ao[0]+ao[2] == ao[1]+ao[3] → no flip
     const fd_eq = packFaceData(0, 0, 0, 0, 0, 0, .{ 1, 2, 2, 1 });
     try std.testing.expectEqual(@as(u32, 0), (fd_eq.word1 >> 8) & 0x1);
 }

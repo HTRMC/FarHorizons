@@ -47,7 +47,6 @@ pub fn init(allocator: std.mem.Allocator) !Self {
 
     const io = Io.Threaded.global_single_threaded.io();
 
-    // Ensure cache directory exists
     Dir.createDirAbsolute(io, cache_dir_path, .default_file) catch {};
 
     return .{
@@ -72,7 +71,6 @@ pub fn compile(self: *Self, filename: []const u8, kind: ShaderKind) ![]const u8 
     defer tz.end();
     tz.text(filename);
 
-    // Read shader source from disk
     const shader_path = try std.fmt.allocPrint(self.allocator, "{s}" ++ sep ++ "{s}", .{ self.shader_base_path, filename });
     defer self.allocator.free(shader_path);
 
@@ -82,22 +80,18 @@ pub fn compile(self: *Self, filename: []const u8, kind: ShaderKind) ![]const u8 
     };
     defer self.allocator.free(source);
 
-    // Hash the source
     const hash = std.hash.XxHash3.hash(0, source);
     var hash_hex: [16]u8 = undefined;
     _ = std.fmt.bufPrint(&hash_hex, "{x:0>16}", .{hash}) catch unreachable;
 
-    // Build cache filename path
     const cache_file_path = try std.fmt.allocPrint(self.allocator, "{s}" ++ sep ++ "{s}.{s}.spv", .{ self.cache_dir_path, filename, hash_hex });
     defer self.allocator.free(cache_file_path);
 
-    // Try cache hit
     if (Dir.readFileAlloc(.cwd(), self.io, cache_file_path, self.allocator, .unlimited)) |cached| {
         std.log.info("Shader cache hit: {s}", .{filename});
         return cached;
     } else |_| {}
 
-    // Cache miss — compile
     std.log.info("Shader cache miss, compiling: {s}", .{filename});
 
     const filename_z = try self.allocator.dupeZ(u8, filename);
@@ -130,7 +124,6 @@ pub fn compile(self: *Self, filename: []const u8, kind: ShaderKind) ![]const u8 
     const spirv = try self.allocator.alloc(u8, length);
     @memcpy(spirv, bytes[0..length]);
 
-    // Write to cache
     Dir.writeFile(.cwd(), self.io, .{ .sub_path = cache_file_path, .data = spirv }) catch {};
 
     return spirv;

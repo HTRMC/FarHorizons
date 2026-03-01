@@ -74,13 +74,11 @@ pub const VulkanRenderer = struct {
 
         try vk.initialize();
 
-        // Build pipeline cache path
         const app_data_path = try app_config.getAppDataPath(allocator);
         defer allocator.free(app_data_path);
         const pipeline_cache_path = try std.fmt.allocPrint(allocator, "{s}" ++ sep ++ ".pipeline_cache", .{app_data_path});
         errdefer allocator.free(pipeline_cache_path);
 
-        // Read pipeline cache file (synchronous, small file)
         const io = Io.Threaded.global_single_threaded.io();
         const cache_data = Dir.readFileAlloc(.cwd(), io, pipeline_cache_path, allocator, .unlimited) catch null;
         defer if (cache_data) |d| allocator.free(d);
@@ -110,7 +108,6 @@ pub const VulkanRenderer = struct {
         var graphics_queue: vk.VkQueue = undefined;
         vk.getDeviceQueue(device, device_info.queue_family_index, 0, &graphics_queue);
 
-        // Create pipeline cache
         const pipeline_cache = try createPipelineCache(device, cache_data);
 
         const ctx = VulkanContext{
@@ -142,7 +139,6 @@ pub const VulkanRenderer = struct {
         try self.createCommandPool();
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
         self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format);
-        // Compute UI scale for resolution-independent layout (reference: 720p)
         const actual_w = self.surface_state.swapchain_extent.width;
         const actual_h = self.surface_state.swapchain_extent.height;
         const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
@@ -151,12 +147,10 @@ pub const VulkanRenderer = struct {
         self.render_state.text_renderer.updateScreenSize(virtual_w, virtual_h, ui_scale);
         self.render_state.ui_renderer.updateScreenSize(virtual_w, virtual_h, ui_scale);
 
-        // Load HUD sprite atlas
         self.render_state.ui_renderer.loadHudAtlas(allocator, &self.ctx) catch |err| {
             std.log.warn("Failed to load HUD atlas: {}, HUD sprites disabled", .{err});
         };
 
-        // Initialize mesh worker and camera if game_state is provided
         if (game_state) |gs| {
             gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
             self.mesh_worker = MeshWorker.init(allocator, gs.world);
@@ -198,7 +192,6 @@ pub const VulkanRenderer = struct {
     }
 
     pub fn setGameState(self: *VulkanRenderer, gs: ?*GameState) void {
-        // Tear down existing mesh worker
         if (self.mesh_worker) |*mw| {
             mw.deinit();
             self.mesh_worker = null;
@@ -206,7 +199,6 @@ pub const VulkanRenderer = struct {
 
         self.game_state = gs;
 
-        // Set up new mesh worker if we have a game state
         if (gs) |game_state| {
             game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
             self.mesh_worker = MeshWorker.init(self.allocator, game_state.world);
@@ -219,8 +211,6 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "beginFrame");
         defer tz.end();
 
-        // Wait for ALL in-flight fences so shared buffers (debug vertices, draw commands)
-        // are not read by the GPU while we update them on the CPU.
         try vk.waitForFences(self.ctx.device, MAX_FRAMES_IN_FLIGHT, &self.render_state.in_flight_fences, vk.VK_TRUE, std.math.maxInt(u64));
 
         if (self.game_state) |gs| {
@@ -242,14 +232,11 @@ pub const VulkanRenderer = struct {
             }
         }
 
-        // UI rendering (backgrounds/panels before text)
         self.render_state.ui_renderer.beginFrame(self.ctx.device);
 
-        // Text rendering
         self.render_state.text_renderer.beginFrame(self.ctx.device);
 
         if (self.game_state) |gs| {
-            // In-game debug text
             self.render_state.text_renderer.drawText(10.0, 10.0, "FarHorizons", .{ 1.0, 1.0, 1.0, 1.0 });
 
             var lod_buf: [16]u8 = undefined;
@@ -257,7 +244,6 @@ pub const VulkanRenderer = struct {
             self.render_state.text_renderer.drawText(10.0, 30.0, lod_text, .{ 1.0, 1.0, 0.0, 1.0 });
         }
 
-        // Draw UI widget screens
         if (self.ui_manager) |um| {
             um.layout(&self.render_state.text_renderer);
             um.draw(&self.render_state.ui_renderer, &self.render_state.text_renderer);
@@ -304,7 +290,6 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "render");
         defer tz.end();
 
-        // Handle minimized window (0x0 framebuffer)
         const fb_size = self.window.getFramebufferSize();
         if (fb_size.width == 0 or fb_size.height == 0) {
             glfw.waitEvents();
@@ -388,32 +373,25 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "recreateSwapchain");
         defer tz.end();
 
-        // Wait for all in-flight frames to complete
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[i]};
             try vk.waitForFences(self.ctx.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
         }
 
-        // Destroy depth buffer
         vk.destroyImageView(self.ctx.device, self.surface_state.depth_image_view, null);
         vk.destroyImage(self.ctx.device, self.surface_state.depth_image, null);
         vk.freeMemory(self.ctx.device, self.surface_state.depth_image_memory, null);
 
-        // Cleanup old swapchain (image views + swapchain handle)
         self.surface_state.cleanupSwapchain(self.ctx.device);
 
-        // Recreate swapchain, image views (semaphores are reused/grown inside)
         try self.surface_state.createSwapchain(self.allocator, &self.ctx, self.surface, self.window);
 
-        // Recreate depth buffer at new size
         try self.surface_state.createDepthBuffer(&self.ctx);
 
-        // Update camera aspect ratio if game is active
         if (self.game_state) |gs| {
             gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
         }
 
-        // Compute UI scale for resolution-independent layout (reference: 720p)
         const actual_w = self.surface_state.swapchain_extent.width;
         const actual_h = self.surface_state.swapchain_extent.height;
         const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
@@ -446,10 +424,8 @@ pub const VulkanRenderer = struct {
         const has_game = self.game_state != null;
         const overdraw = if (self.game_state) |gs| gs.overdraw_mode else false;
 
-        // Debug line compute dispatch (before render pass) — skip in overdraw mode or no game
         if (has_game and !overdraw) self.render_state.debug_renderer.recordCompute(command_buffer);
 
-        // Barrier: depth image UNDEFINED -> DEPTH_ATTACHMENT_OPTIMAL
         const depth_barrier = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -482,7 +458,6 @@ pub const VulkanRenderer = struct {
             &[_]vk.VkImageMemoryBarrier{depth_barrier},
         );
 
-        // Barrier: swapchain image UNDEFINED -> COLOR_ATTACHMENT_OPTIMAL
         const color_barrier = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -515,7 +490,6 @@ pub const VulkanRenderer = struct {
             &[_]vk.VkImageMemoryBarrier{color_barrier},
         );
 
-        // Choose clear color: dark for menus, sky blue for gameplay
         const clear_color: [4]f32 = if (!has_game)
             .{ 0.05, 0.05, 0.1, 1.0 }
         else if (overdraw)
@@ -523,7 +497,6 @@ pub const VulkanRenderer = struct {
         else
             .{ 0.224, 0.643, 0.918, 1.0 };
 
-        // Dynamic rendering
         const color_attachment = vk.VkRenderingAttachmentInfo{
             .sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
             .pNext = null,
@@ -568,7 +541,6 @@ pub const VulkanRenderer = struct {
 
         vk.cmdBeginRendering(command_buffer, &rendering_info);
 
-        // Set viewport and scissor
         const viewport = vk.VkViewport{
             .x = 0.0,
             .y = 0.0,
@@ -585,16 +557,12 @@ pub const VulkanRenderer = struct {
         };
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
 
-        // Draw world and debug lines only if game is active
         if (self.game_state) |gs| {
             const mvp = gs.camera.getViewProjectionMatrix();
 
-            // Draw world chunks
             self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw);
 
-            // Draw debug lines with view-space shrink (skip in overdraw mode)
             if (!overdraw) {
-                // Compute P * VIEW_SCALE * V so lines are pulled toward camera in view-space.
                 const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
                 const view_scale = zlm.Mat4{
                     .m = .{
@@ -611,15 +579,12 @@ pub const VulkanRenderer = struct {
             }
         }
 
-        // Draw UI backgrounds/panels (before text)
         self.render_state.ui_renderer.recordDraw(command_buffer);
 
-        // Draw text overlay (always on top, no depth test)
         self.render_state.text_renderer.recordDraw(command_buffer);
 
         vk.cmdEndRendering(command_buffer);
 
-        // Barrier: swapchain image COLOR_ATTACHMENT_OPTIMAL -> PRESENT_SRC_KHR
         const present_barrier = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -676,7 +641,6 @@ pub const VulkanRenderer = struct {
     }
 
     fn savePipelineCache(self: *VulkanRenderer) void {
-        // Query cache data size
         var data_size: usize = 0;
         vk.getPipelineCacheData(self.ctx.device, self.ctx.pipeline_cache, &data_size, null) catch {
             std.log.warn("Pipeline cache: failed to query size", .{});
@@ -685,7 +649,6 @@ pub const VulkanRenderer = struct {
 
         if (data_size == 0) return;
 
-        // Allocate and retrieve cache data
         const data = self.allocator.alloc(u8, data_size) catch {
             std.log.warn("Pipeline cache: failed to allocate {} bytes", .{data_size});
             return;
@@ -697,7 +660,6 @@ pub const VulkanRenderer = struct {
             return;
         };
 
-        // Write to disk
         const io = Io.Threaded.global_single_threaded.io();
         Dir.writeFile(.cwd(), io, .{ .sub_path = self.pipeline_cache_path, .data = data[0..data_size] }) catch {
             std.log.warn("Pipeline cache: failed to write to disk", .{});
@@ -743,7 +705,6 @@ pub const VulkanRenderer = struct {
 
         const window_extensions = Window.getRequiredExtensions();
 
-        // Collect all required extensions
         var extensions: std.ArrayList([*:0]const u8) = .empty;
         defer extensions.deinit(allocator);
 
@@ -764,14 +725,12 @@ pub const VulkanRenderer = struct {
             .ppEnabledExtensionNames = extensions.items.ptr,
         };
 
-        // Try to create instance with validation layers
         if (enable_validation_layers) {
             if (vk.createInstance(&create_info, null)) |instance| {
                 return .{ .instance = instance, .validation_enabled = true };
             } else |err| {
                 if (err == error.LayerNotPresent) {
                     std.log.warn("Validation layers requested but not available, continuing without them", .{});
-                    // Retry without validation layers
                     const create_info_no_validation = vk.VkInstanceCreateInfo{
                         .sType = vk.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
                         .pNext = null,
@@ -892,7 +851,6 @@ pub const VulkanRenderer = struct {
         vulkan13_features.dynamicRendering = vk.VK_TRUE;
         vulkan13_features.synchronization2 = vk.VK_TRUE;
 
-        // Chain: DeviceCreateInfo -> Vulkan13Features -> Vulkan12Features -> Vulkan11Features
         vulkan12_features.pNext = &vulkan11_features;
         vulkan13_features.pNext = &vulkan12_features;
 

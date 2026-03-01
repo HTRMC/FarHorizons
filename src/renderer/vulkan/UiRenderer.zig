@@ -46,24 +46,20 @@ pub const UiRenderer = struct {
     clip_depth: u8 = 0,
     clip_scale: f32 = 1.0,
 
-    // Per-screen draw layers for proper z-ordering
     draw_layers: [MAX_DRAW_LAYERS]DrawLayer = [_]DrawLayer{.{}} ** MAX_DRAW_LAYERS,
     draw_layer_count: u8 = 0,
     layer_normal_start: u32 = 0,
     layer_inverted_start: u32 = 0,
 
-    // Atlas texture (1x1 white fallback if no real atlas)
     atlas_image: vk.VkImage,
     atlas_image_memory: vk.VkDeviceMemory,
     atlas_image_view: vk.VkImageView,
     atlas_sampler: vk.VkSampler,
 
-    // HUD sprite rects (valid after loadHudAtlas)
     crosshair_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     hotbar_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     selection_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     offhand_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
-    // Original pixel dimensions of each sprite (for sizing at scale)
     crosshair_size: [2]f32 = .{ 0, 0 },
     hotbar_size: [2]f32 = .{ 0, 0 },
     selection_size: [2]f32 = .{ 0, 0 },
@@ -136,13 +132,11 @@ pub const UiRenderer = struct {
         }
     }
 
-    /// Begin a new draw layer. Call before rendering each screen.
     pub fn beginLayer(self: *UiRenderer) void {
         self.layer_normal_start = self.vertex_count;
         self.layer_inverted_start = self.inverted_vertex_count;
     }
 
-    /// End the current draw layer. Call after rendering each screen.
     pub fn endLayer(self: *UiRenderer) void {
         if (self.draw_layer_count >= MAX_DRAW_LAYERS) return;
         const normal_count = self.vertex_count - self.layer_normal_start;
@@ -162,8 +156,6 @@ pub const UiRenderer = struct {
 
         const ortho = orthoMatrix(self.screen_width, self.screen_height);
 
-        // Draw per-layer: for each screen layer, draw inverted then normal,
-        // so that later screens' widgets render on top of earlier screens.
         for (self.draw_layers[0..self.draw_layer_count]) |layer| {
             if (layer.inverted_count > 0) {
                 vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.inverted_pipeline);
@@ -185,8 +177,6 @@ pub const UiRenderer = struct {
                     64,
                     &ortho,
                 );
-                // Inverted vertices are stored at the end of the buffer, growing downward.
-                // layer.inverted_start is the count of inverted verts before this layer started.
                 const first = MAX_VERTICES - layer.inverted_start - layer.inverted_count;
                 vk.cmdDraw(command_buffer, layer.inverted_count, 1, first, 0);
             }
@@ -222,7 +212,6 @@ pub const UiRenderer = struct {
         self.clip_scale = scale;
     }
 
-    // ── Clip rect ──
 
     pub fn setClipRect(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32) void {
         self.clip_rect = .{ x, y, x + w, y + h };
@@ -232,13 +221,11 @@ pub const UiRenderer = struct {
         self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
     }
 
-    /// Push a clip rect that intersects with the current one.
     pub fn pushClipRect(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32) void {
         if (self.clip_depth < 8) {
             self.clip_stack[self.clip_depth] = self.clip_rect;
             self.clip_depth += 1;
         }
-        // Intersect with current clip rect
         const new = [4]f32{
             @max(self.clip_rect[0], x),
             @max(self.clip_rect[1], y),
@@ -248,7 +235,6 @@ pub const UiRenderer = struct {
         self.clip_rect = new;
     }
 
-    /// Restore the previous clip rect from the stack.
     pub fn popClipRect(self: *UiRenderer) void {
         if (self.clip_depth > 0) {
             self.clip_depth -= 1;
@@ -258,9 +244,7 @@ pub const UiRenderer = struct {
         }
     }
 
-    // ── Drawing primitives ──
 
-    /// Draw a solid-color rectangle.
     pub fn drawRect(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
         if (w <= 0 or h <= 0 or color[3] < 0.01) return;
         const verts = self.mapped_vertices orelse return;
@@ -271,7 +255,6 @@ pub const UiRenderer = struct {
         const x1 = x + w;
         const y1 = y + h;
 
-        // Negative UV.x signals solid color in fragment shader
         const s = self.clip_scale;
         const cr = [4]f32{ self.clip_rect[0] * s, self.clip_rect[1] * s, self.clip_rect[2] * s, self.clip_rect[3] * s };
         verts[self.vertex_count + 0] = .{ .px = x0, .py = y0, .u = -1, .v = -1, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
@@ -284,7 +267,6 @@ pub const UiRenderer = struct {
         self.vertex_count += 6;
     }
 
-    /// Draw a textured rectangle with UV coordinates and tint color.
     pub fn drawTexturedRect(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, uv_left: f32, uv_top: f32, uv_right: f32, uv_bottom: f32, tint: [4]f32) void {
         if (w <= 0 or h <= 0 or tint[3] < 0.01) return;
         const verts = self.mapped_vertices orelse return;
@@ -307,58 +289,46 @@ pub const UiRenderer = struct {
         self.vertex_count += 6;
     }
 
-    /// Draw a 9-slice textured rectangle. border = inset in pixels for corners/edges.
     pub fn drawNineSlice(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, border: f32, uv_l: f32, uv_t: f32, uv_r: f32, uv_b: f32, atlas_w: f32, atlas_h: f32, tint: [4]f32) void {
         if (w <= 0 or h <= 0 or border <= 0) {
             self.drawTexturedRect(x, y, w, h, uv_l, uv_t, uv_r, uv_b, tint);
             return;
         }
 
-        const bu = border / atlas_w; // border in UV space
+        const bu = border / atlas_w;
         const bv = border / atlas_h;
-        const b = border; // border in pixel space
+        const b = border;
 
-        // Clamp border to half the size
         const bx = @min(b, w / 2);
         const by = @min(b, h / 2);
         const bux = @min(bu, (uv_r - uv_l) / 2);
         const bvy = @min(bv, (uv_b - uv_t) / 2);
 
-        // Top-left, top-center, top-right
         self.drawTexturedRect(x, y, bx, by, uv_l, uv_t, uv_l + bux, uv_t + bvy, tint);
         self.drawTexturedRect(x + bx, y, w - bx * 2, by, uv_l + bux, uv_t, uv_r - bux, uv_t + bvy, tint);
         self.drawTexturedRect(x + w - bx, y, bx, by, uv_r - bux, uv_t, uv_r, uv_t + bvy, tint);
 
-        // Middle-left, center, middle-right
         self.drawTexturedRect(x, y + by, bx, h - by * 2, uv_l, uv_t + bvy, uv_l + bux, uv_b - bvy, tint);
         self.drawTexturedRect(x + bx, y + by, w - bx * 2, h - by * 2, uv_l + bux, uv_t + bvy, uv_r - bux, uv_b - bvy, tint);
         self.drawTexturedRect(x + w - bx, y + by, bx, h - by * 2, uv_r - bux, uv_t + bvy, uv_r, uv_b - bvy, tint);
 
-        // Bottom-left, bottom-center, bottom-right
         self.drawTexturedRect(x, y + h - by, bx, by, uv_l, uv_b - bvy, uv_l + bux, uv_b, tint);
         self.drawTexturedRect(x + bx, y + h - by, w - bx * 2, by, uv_l + bux, uv_b - bvy, uv_r - bux, uv_b, tint);
         self.drawTexturedRect(x + w - bx, y + h - by, bx, by, uv_r - bux, uv_b - bvy, uv_r, uv_b, tint);
     }
 
-    /// Draw a rectangle outline (border).
     pub fn drawRectOutline(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, thickness: f32, color: [4]f32) void {
         if (thickness <= 0 or color[3] < 0.01) return;
-        // Top edge
         self.drawRect(x, y, w, thickness, color);
-        // Bottom edge
         self.drawRect(x, y + h - thickness, w, thickness, color);
-        // Left edge
         self.drawRect(x, y + thickness, thickness, h - thickness * 2, color);
-        // Right edge
         self.drawRect(x + w - thickness, y + thickness, thickness, h - thickness * 2, color);
     }
 
-    /// Draw a sprite from the HUD atlas at the given position and scale.
     pub fn drawSprite(self: *UiRenderer, sprite: SpriteRect, x: f32, y: f32, w: f32, h: f32, tint: [4]f32) void {
         self.drawTexturedRect(x, y, w, h, sprite.u0, sprite.v0, sprite.u1, sprite.v1, tint);
     }
 
-    /// Draw a textured rectangle into the inverted-blend region (end of vertex buffer).
     pub fn drawTexturedRectInverted(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, uv_left: f32, uv_top: f32, uv_right: f32, uv_bottom: f32, tint: [4]f32) void {
         if (w <= 0 or h <= 0) return;
         const verts = self.mapped_vertices orelse return;
@@ -383,12 +353,10 @@ pub const UiRenderer = struct {
         self.inverted_vertex_count += 6;
     }
 
-    /// Draw a sprite with inverted blending.
     pub fn drawSpriteInverted(self: *UiRenderer, sprite: SpriteRect, x: f32, y: f32, w: f32, h: f32, tint: [4]f32) void {
         self.drawTexturedRectInverted(x, y, w, h, sprite.u0, sprite.v0, sprite.u1, sprite.v1, tint);
     }
 
-    /// Load HUD sprite textures into a vertical atlas, replacing the 1x1 fallback.
     pub fn loadHudAtlas(self: *UiRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
         const base_path = try app_config.getAppDataPath(allocator);
         defer allocator.free(base_path);
@@ -433,7 +401,6 @@ pub const UiRenderer = struct {
         const ah: u32 = @intCast(atlas_height);
         const atlas_bytes: usize = @intCast(@as(u64, aw) * @as(u64, ah) * 4);
 
-        // Create staging buffer
         var staging_buffer: vk.VkBuffer = undefined;
         var staging_memory: vk.VkDeviceMemory = undefined;
         try vk_utils.createBuffer(
@@ -449,10 +416,8 @@ pub const UiRenderer = struct {
             var data: ?*anyopaque = null;
             try vk.mapMemory(ctx.device, staging_memory, 0, atlas_bytes, 0, &data);
             const dst: [*]u8 = @ptrCast(data.?);
-            // Clear to transparent black
             @memset(dst[0..atlas_bytes], 0);
 
-            // Copy each sprite into the atlas at the correct vertical offset
             var y_offset: u32 = 0;
             for (0..sprite_count) |i| {
                 const sw: u32 = @intCast(widths[i]);
@@ -468,12 +433,10 @@ pub const UiRenderer = struct {
             vk.unmapMemory(ctx.device, staging_memory);
         }
 
-        // Destroy old fallback atlas
         vk.destroyImageView(ctx.device, self.atlas_image_view, null);
         vk.destroyImage(ctx.device, self.atlas_image, null);
         vk.freeMemory(ctx.device, self.atlas_image_memory, null);
 
-        // Create new atlas image
         const image_info = vk.VkImageCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = null,
@@ -511,7 +474,6 @@ pub const UiRenderer = struct {
         }, null);
         try vk.bindImageMemory(ctx.device, self.atlas_image, self.atlas_image_memory, 0);
 
-        // Upload via command buffer
         const cmd_alloc_info = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
@@ -531,7 +493,6 @@ pub const UiRenderer = struct {
             .pInheritanceInfo = null,
         });
 
-        // Transition to transfer dst
         const to_transfer = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -556,7 +517,6 @@ pub const UiRenderer = struct {
         };
         vk.cmdCopyBufferToImage(cmd, staging_buffer, self.atlas_image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &[_]vk.VkBufferImageCopy{region});
 
-        // Transition to shader read
         const to_shader = vk.VkImageMemoryBarrier{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             .pNext = null,
@@ -591,7 +551,6 @@ pub const UiRenderer = struct {
         vk.destroyBuffer(ctx.device, staging_buffer, null);
         vk.freeMemory(ctx.device, staging_memory, null);
 
-        // Create new image view
         self.atlas_image_view = try vk.createImageView(ctx.device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = null,
@@ -608,7 +567,6 @@ pub const UiRenderer = struct {
             .subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
         }, null);
 
-        // Update descriptor set with new image view (reuse existing sampler)
         const desc_image_info = vk.VkDescriptorImageInfo{
             .sampler = self.atlas_sampler,
             .imageView = self.atlas_image_view,
@@ -628,27 +586,22 @@ pub const UiRenderer = struct {
         };
         vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{write}, 0, null);
 
-        // Compute UV rects for each sprite
         const faw: f32 = @floatFromInt(atlas_width);
         const fah: f32 = @floatFromInt(atlas_height);
         var y_off: f32 = 0;
 
-        // crosshair
         self.crosshair_size = .{ @floatFromInt(widths[0]), @floatFromInt(heights[0]) };
         self.crosshair_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[0])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[0]))) / fah };
         y_off += @floatFromInt(heights[0]);
 
-        // hotbar
         self.hotbar_size = .{ @floatFromInt(widths[1]), @floatFromInt(heights[1]) };
         self.hotbar_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[1])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[1]))) / fah };
         y_off += @floatFromInt(heights[1]);
 
-        // selection
         self.selection_size = .{ @floatFromInt(widths[2]), @floatFromInt(heights[2]) };
         self.selection_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[2])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[2]))) / fah };
         y_off += @floatFromInt(heights[2]);
 
-        // offhand
         self.offhand_size = .{ @floatFromInt(widths[3]), @floatFromInt(heights[3]) };
         self.offhand_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[3])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[3]))) / fah };
 
@@ -656,7 +609,6 @@ pub const UiRenderer = struct {
         std.log.info("HUD atlas loaded: {}x{} ({} sprites)", .{ aw, ah, sprite_count });
     }
 
-    // ── Vulkan setup ──
 
     fn createVertexBuffer(self: *UiRenderer, ctx: *const VulkanContext) !void {
         const buffer_size: vk.VkDeviceSize = MAX_VERTICES * @sizeOf(UiVertex);
@@ -670,9 +622,7 @@ pub const UiRenderer = struct {
         );
     }
 
-    /// Create a 1x1 white pixel as fallback atlas (avoids null descriptor).
     fn createFallbackAtlas(self: *UiRenderer, ctx: *const VulkanContext) !void {
-        // Create 1x1 RGBA image
         const image_info = vk.VkImageCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .pNext = null,
@@ -712,7 +662,6 @@ pub const UiRenderer = struct {
         self.atlas_image_memory = try vk.allocateMemory(ctx.device, &alloc_info, null);
         try vk.bindImageMemory(ctx.device, self.atlas_image, self.atlas_image_memory, 0);
 
-        // Upload 1x1 white pixel via staging buffer
         var staging_buffer: vk.VkBuffer = undefined;
         var staging_memory: vk.VkDeviceMemory = undefined;
         try vk_utils.createBuffer(
@@ -735,7 +684,6 @@ pub const UiRenderer = struct {
             vk.unmapMemory(ctx.device, staging_memory);
         }
 
-        // Upload via command buffer
         const cmd_alloc_info2 = vk.VkCommandBufferAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .pNext = null,
@@ -830,7 +778,6 @@ pub const UiRenderer = struct {
         vk.destroyBuffer(ctx.device, staging_buffer, null);
         vk.freeMemory(ctx.device, staging_memory, null);
 
-        // Image view
         self.atlas_image_view = try vk.createImageView(ctx.device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = null,
@@ -853,7 +800,6 @@ pub const UiRenderer = struct {
             },
         }, null);
 
-        // Sampler (nearest-neighbor)
         self.atlas_sampler = try vk.createSampler(ctx.device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
             .pNext = null,
@@ -879,7 +825,6 @@ pub const UiRenderer = struct {
     }
 
     fn createDescriptors(self: *UiRenderer, ctx: *const VulkanContext) !void {
-        // Binding 0: vertex SSBO, Binding 1: atlas sampler
         const bindings = [_]vk.VkDescriptorSetLayoutBinding{
             .{
                 .binding = 0,
@@ -935,14 +880,12 @@ pub const UiRenderer = struct {
         try vk.allocateDescriptorSets(ctx.device, &ds_alloc_info, &sets);
         self.descriptor_set = sets[0];
 
-        // Write binding 0: vertex SSBO
         const buffer_info = vk.VkDescriptorBufferInfo{
             .buffer = self.vertex_buffer,
             .offset = 0,
             .range = MAX_VERTICES * @sizeOf(UiVertex),
         };
 
-        // Write binding 1: atlas sampler
         const image_info = vk.VkDescriptorImageInfo{
             .sampler = self.atlas_sampler,
             .imageView = self.atlas_image_view,
@@ -1084,7 +1027,6 @@ pub const UiRenderer = struct {
             .alphaToOneEnable = vk.VK_FALSE,
         };
 
-        // Depth test DISABLED — UI always on top of world
         const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
             .pNext = null,
@@ -1125,7 +1067,7 @@ pub const UiRenderer = struct {
         const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
-            .size = 64, // mat4
+            .size = 64,
         };
 
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
@@ -1160,7 +1102,6 @@ pub const UiRenderer = struct {
             .pDynamicStates = &dynamic_states,
         };
 
-        // Inverted blend: ONE_MINUS_DST_COLOR for Minecraft-style crosshair
         const inverted_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
             .blendEnable = vk.VK_TRUE,
             .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
@@ -1184,7 +1125,6 @@ pub const UiRenderer = struct {
         };
 
         const pipeline_infos = [2]vk.VkGraphicsPipelineCreateInfo{
-            // [0] Normal alpha-blend pipeline
             .{
                 .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
                 .pNext = &rendering_create_info,
@@ -1206,7 +1146,6 @@ pub const UiRenderer = struct {
                 .basePipelineHandle = null,
                 .basePipelineIndex = -1,
             },
-            // [1] Inverted-blend pipeline
             .{
                 .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
                 .pNext = &rendering_create_info,
@@ -1239,7 +1178,6 @@ pub const UiRenderer = struct {
     }
 
     fn orthoMatrix(w: f32, h: f32) [16]f32 {
-        // Maps (0,0) top-left -> (-1,-1), (w,h) bottom-right -> (1,1)
         return .{
             2.0 / w, 0.0,     0.0, 0.0,
             0.0,     2.0 / h, 0.0, 0.0,

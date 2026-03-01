@@ -36,15 +36,11 @@ default_compression: CompressionAlgo,
 dirty_set: DirtySet,
 dirty_mutex: Io.Mutex,
 
-// ── Lifecycle ──────────────────────────────────────────────────────
 
-/// Initialize the storage system for a specific world.
-/// Creates the world directory structure if it doesn't exist.
 pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     const io = Io.Threaded.global_single_threaded.io();
     const sep = std.fs.path.sep_str;
 
-    // Build world directory path
     const base_path = try app_config.getAppDataPath(allocator);
     defer allocator.free(base_path);
 
@@ -62,13 +58,11 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     );
     errdefer allocator.free(region_dir);
 
-    // Ensure directory structure exists (create each level since createDirAbsolute doesn't make parents)
     const worlds_dir = try std.fmt.allocPrint(allocator, "{s}{s}worlds", .{ base_path, sep });
     defer allocator.free(worlds_dir);
     ensureDirExists(io, worlds_dir);
     ensureDirExists(io, world_dir);
     ensureDirExists(io, region_dir);
-    // LOD directories (lod0, lod1, lod2) are created on demand by region cache
 
     const self = try allocator.create(Storage);
     errdefer allocator.destroy(self);
@@ -88,18 +82,16 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
         self.default_compression,
     );
 
-    // Start I/O worker threads
     self.io_pipeline.start();
 
     log.info("Storage initialized: {s}", .{world_dir});
     return self;
 }
 
-/// Shut down the storage system, flushing all pending writes.
 pub fn deinit(self: *Storage) void {
     self.saveAllDirty();
-    self.io_pipeline.stop(); // Drain pending saves, join workers
-    self.flush(); // Sync region files to disk
+    self.io_pipeline.stop();
+    self.flush();
     self.dirty_set.deinit();
     self.region_cache.deinit();
     const allocator = self.allocator;
@@ -109,14 +101,11 @@ pub fn deinit(self: *Storage) void {
     allocator.destroy(self);
 }
 
-/// Flush all pending writes to disk.
 pub fn flush(self: *Storage) void {
     self.region_cache.flushAll();
 }
 
-// ── Dirty Chunk Tracking ──────────────────────────────────────────
 
-/// Mark a chunk as dirty. Snapshots chunk data. Thread-safe.
 pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *const Chunk) void {
     const io = Io.Threaded.global_single_threaded.io();
     const key = ChunkKey.init(cx, cy, cz, lod);
@@ -125,7 +114,6 @@ pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *con
     self.dirty_set.markDirty(key, chunk);
 }
 
-/// Run one tick of the adaptive save scheduler. Call once per frame.
 pub fn tick(self: *Storage) void {
     const io = Io.Threaded.global_single_threaded.io();
 
@@ -136,7 +124,6 @@ pub fn tick(self: *Storage) void {
         return;
     }
 
-    // Check if loads should take priority
     const load_depth = self.io_pipeline.getLoadQueueDepth();
     if (load_depth > 32) {
         self.dirty_mutex.unlock(io);
@@ -152,11 +139,9 @@ pub fn tick(self: *Storage) void {
 
     const result = drain_result orelse return;
 
-    // Submit batches to I/O pipeline (outside dirty_mutex)
     for (0..result.batch_count) |bi| {
         const batch = &result.batches[bi];
         const batch_data = self.allocator.create(BatchSaveData) catch {
-            // Free leaked chunk pointers on alloc failure
             for (batch.chunks[0..batch.count]) |chunk_ptr| {
                 self.allocator.destroy(chunk_ptr);
             }
@@ -174,7 +159,6 @@ pub fn tick(self: *Storage) void {
     }
 }
 
-/// Force-save all remaining dirty chunks. For shutdown.
 pub fn saveAllDirty(self: *Storage) void {
     const io = Io.Threaded.global_single_threaded.io();
 
@@ -187,19 +171,16 @@ pub fn saveAllDirty(self: *Storage) void {
 
     log.info("Saving {d} dirty chunks...", .{dirty_count});
 
-    // Drain everything
     const drain_result = self.dirty_set.drainBatch(dirty_count);
     self.dirty_mutex.unlock(io);
 
     const result = drain_result orelse return;
 
-    // Write all batches synchronously (shutdown path)
     for (0..result.batch_count) |bi| {
         const batch = &result.batches[bi];
         const coord = batch.region_coord;
         const region = self.region_cache.getOrOpen(coord) catch {
             log.err("Failed to open region for shutdown save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
-            // Free chunk pointers we own
             for (batch.chunks[0..batch.count]) |chunk_ptr| {
                 self.allocator.destroy(chunk_ptr);
             }
@@ -207,7 +188,6 @@ pub fn saveAllDirty(self: *Storage) void {
         };
         defer self.region_cache.releaseRegion(region);
 
-        // Build slice arrays for writeChunkBatch
         var indices: [dirty_set_mod.MAX_BATCH_SIZE]u9 = undefined;
         var block_ptrs: [dirty_set_mod.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType = undefined;
         for (0..batch.count) |i| {
@@ -223,7 +203,6 @@ pub fn saveAllDirty(self: *Storage) void {
             log.err("Shutdown batch save failed: {}", .{err});
         };
 
-        // Free chunk snapshots
         for (batch.chunks[0..batch.count]) |chunk_ptr| {
             self.allocator.destroy(chunk_ptr);
         }
@@ -232,20 +211,14 @@ pub fn saveAllDirty(self: *Storage) void {
     log.info("All dirty chunks saved", .{});
 }
 
-// ── Synchronous API ────────────────────────────────────────────────
 
-/// Synchronously load a chunk from disk.
-/// Checks cache first, then reads from region file.
-/// Returns null if chunk doesn't exist on disk.
 pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chunk {
     const key = ChunkKey.init(cx, cy, cz, lod);
 
-    // Check chunk cache
     if (self.chunk_cache.get(key)) |cached| {
         return cached;
     }
 
-    // Load from region file
     const coord = key.regionCoord();
     const region = self.region_cache.getOrOpen(coord) catch |err| {
         log.err("loadChunk({d},{d},{d}): open failed: {}", .{ cx, cy, cz, err });
@@ -261,14 +234,11 @@ pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chu
     };
     if (!found) return null;
 
-    // Cache the loaded chunk
     self.chunk_cache.put(key, &chunk);
 
-    // Return cached pointer (stable until eviction)
     return self.chunk_cache.get(key);
 }
 
-/// Synchronously save a chunk to disk.
 pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *const Chunk) !void {
     const key = ChunkKey.init(cx, cy, cz, lod);
     const coord = key.regionCoord();
@@ -279,11 +249,9 @@ pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *con
     const chunk_index = key.localIndex();
     try region.writeChunk(chunk_index, &chunk.blocks, self.default_compression);
 
-    // Update cache
     self.chunk_cache.put(key, chunk);
 }
 
-/// Check if a chunk exists on disk (without loading it).
 pub fn chunkExists(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) bool {
     const key = ChunkKey.init(cx, cy, cz, lod);
     const coord = key.regionCoord();
@@ -294,9 +262,7 @@ pub fn chunkExists(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) bool {
     return region.chunkExists(key.localIndex());
 }
 
-// ── Async API ──────────────────────────────────────────────────────
 
-/// Request an asynchronous chunk load. Returns a handle for polling.
 pub fn requestLoadAsync(
     self: *Storage,
     cx: i32,
@@ -307,31 +273,23 @@ pub fn requestLoadAsync(
 ) AsyncHandle {
     const key = ChunkKey.init(cx, cy, cz, lod);
 
-    // Already cached?
     if (self.chunk_cache.get(key) != null) {
-        // Return a handle that will immediately resolve
         return AsyncHandle.invalid;
     }
 
     return self.io_pipeline.requestLoad(key, priority);
 }
 
-/// Poll a previously requested async load.
-/// Returns the chunk pointer if completed and successful, null if still pending.
 pub fn pollLoad(self: *Storage, handle: AsyncHandle) ?*const Chunk {
     if (!handle.isValid()) return null;
 
     const completed = self.io_pipeline.pollLoad(handle) orelse return null;
     if (!completed) return null;
 
-    // The chunk should now be in the cache (the worker put it there)
-    // We can't return it without the key, so callers should use getCached
     return null;
 }
 
-// ── Batch API ──────────────────────────────────────────────────────
 
-/// Load a region of chunks (inclusive range) synchronously.
 pub fn loadRegion(
     self: *Storage,
     min: [3]i32,
@@ -350,21 +308,17 @@ pub fn loadRegion(
     }
 }
 
-// ── Cache API ──────────────────────────────────────────────────────
 
-/// Get a chunk from the cache only (no disk I/O).
 pub fn getCached(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chunk {
     const key = ChunkKey.init(cx, cy, cz, lod);
     return self.chunk_cache.get(key);
 }
 
-/// Invalidate a cached chunk.
 pub fn invalidateCache(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) void {
     const key = ChunkKey.init(cx, cy, cz, lod);
     self.chunk_cache.invalidate(key);
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
 
 fn ensureDirExists(io: Io, path: []const u8) void {
     Dir.createDirAbsolute(io, path, .default_file) catch {};

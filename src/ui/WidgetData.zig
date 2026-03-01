@@ -20,14 +20,13 @@ pub const WidgetData = union(Widget.WidgetKind) {
 };
 
 pub const PanelData = struct {
-    // Panel is purely structural — visual properties live on Widget
 };
 
 pub const LabelData = struct {
     text: [MAX_TEXT_LEN]u8 = .{0} ** MAX_TEXT_LEN,
     text_len: u8 = 0,
     color: Color = Color.white,
-    font_size: u8 = 1, // multiplier (1 = default 16px, 2 = 32px)
+    font_size: u8 = 1,
     wrap: bool = false,
     shadow: bool = false,
     shadow_color: Color = Color.fromHex(0x000000AA),
@@ -127,7 +126,6 @@ pub const TextInputData = struct {
         if (self.hasSelection()) self.deleteSelection();
         if (self.buffer_len >= self.max_len) return;
         if (self.cursor_pos < self.buffer_len) {
-            // Shift right
             var i: u8 = self.buffer_len;
             while (i > self.cursor_pos) : (i -= 1) {
                 self.buffer[i] = self.buffer[i - 1];
@@ -160,16 +158,14 @@ pub const TextInputData = struct {
 pub const BlendMode = enum(u8) { normal, inverted };
 
 pub const ImageData = struct {
-    // Source path stored as string (namespace:path)
     src: [MAX_TEXT_LEN]u8 = .{0} ** MAX_TEXT_LEN,
     src_len: u8 = 0,
-    // Atlas region (set during loading)
     atlas_u: f32 = 0,
     atlas_v: f32 = 0,
     atlas_w: f32 = 0,
     atlas_h: f32 = 0,
     tint: Color = Color.white,
-    nine_slice_border: f32 = 0, // 0 = stretch, >0 = 9-slice inset
+    nine_slice_border: f32 = 0,
     blend_mode: BlendMode = .normal,
 };
 
@@ -194,7 +190,7 @@ pub const ListViewData = struct {
 };
 
 pub const ProgressBarData = struct {
-    value: f32 = 0, // 0.0 to 1.0
+    value: f32 = 0,
     fill_color: Color = Color.fromHex(0xCC3333FF),
     track_color: Color = Color.fromHex(0x333333FF),
 };
@@ -208,7 +204,7 @@ pub const CheckboxData = struct {
 };
 
 pub const SliderData = struct {
-    value: f32 = 0, // 0.0 to 1.0
+    value: f32 = 0,
     min_value: f32 = 0,
     max_value: f32 = 1.0,
     track_color: Color = Color.fromHex(0x444444FF),
@@ -237,7 +233,7 @@ pub const DropdownData = struct {
     hover_color: Color = Color.fromHex(0x444466FF),
     on_change_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
     on_change_action_len: u8 = 0,
-    hovered_item: u8 = 0xFF, // 0xFF = none
+    hovered_item: u8 = 0xFF,
 
     pub fn getSelectedText(self: *const DropdownData) []const u8 {
         if (self.selected >= self.item_count) return "";

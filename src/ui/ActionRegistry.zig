@@ -22,7 +22,6 @@ pub const ActionRegistry = struct {
         const hash = hashId(name);
         if (hash == 0) return;
 
-        // Check for existing entry with same hash (update it)
         for (&self.entries) |*e| {
             if (e.active and e.hash == hash) {
                 e.func = func;
@@ -31,7 +30,6 @@ pub const ActionRegistry = struct {
             }
         }
 
-        // Find empty slot
         for (&self.entries) |*e| {
             if (!e.active) {
                 e.* = .{
@@ -84,7 +82,6 @@ pub const ActionRegistry = struct {
     }
 };
 
-// ── Tests ──
 
 test "register and dispatch action" {
     var registry = ActionRegistry{};

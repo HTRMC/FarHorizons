@@ -17,10 +17,10 @@ fn now() i64 {
 }
 
 pub const UrgencyTier = enum(u3) {
-    critical = 0, // chunk being unloaded — save NOW
-    urgent = 1, // dirty for > 30 seconds
-    normal = 2, // dirty for > 5 seconds AND idle > 2 sec
-    deferred = 3, // dirty < 5 seconds OR still being edited
+    critical = 0,
+    urgent = 1,
+    normal = 2,
+    deferred = 3,
 };
 
 pub const DirtyEntry = struct {
@@ -28,7 +28,7 @@ pub const DirtyEntry = struct {
     region_coord: RegionCoord,
     first_dirty_time: i64,
     last_dirty_time: i64,
-    chunk_data: *Chunk, // heap-allocated snapshot
+    chunk_data: *Chunk,
 
     pub fn computeUrgency(self: *const DirtyEntry, current_time: i64) UrgencyTier {
         const dirty_duration = current_time - self.first_dirty_time;
@@ -75,7 +75,6 @@ pub const DirtySet = struct {
     }
 
     pub fn deinit(self: *DirtySet) void {
-        // Free all heap-allocated chunk snapshots
         var it = self.map.valueIterator();
         while (it.next()) |entry| {
             self.allocator.destroy(entry.chunk_data);
@@ -88,13 +87,11 @@ pub const DirtySet = struct {
         const current_time = now();
 
         if (self.map.getPtr(k)) |existing| {
-            // Update existing: overwrite snapshot + update last_dirty_time
             existing.last_dirty_time = current_time;
             existing.chunk_data.* = chunk.*;
             return;
         }
 
-        // New entry: allocate heap chunk and copy
         const heap_chunk = self.allocator.create(Chunk) catch {
             log.err("Failed to allocate chunk snapshot for dirty set", .{});
             return;
@@ -139,23 +136,18 @@ pub const DirtySet = struct {
         return counts;
     }
 
-    /// Drain up to `budget` entries from the dirty set, grouped by region.
-    /// Entries are selected by urgency priority. Chunk data ownership transfers
-    /// to the caller (removed from map but NOT freed).
     pub fn drainBatch(self: *DirtySet, budget: u32) ?DrainResult {
         const effective_budget = @min(budget, MAX_BATCH_SIZE);
         if (self.map.count() == 0) return null;
 
         const current_time = now();
 
-        // Collect candidates sorted by urgency (stack arrays, budget capped at 20)
         var candidates: [MAX_BATCH_SIZE]struct { key_u64: u64, urgency: u3, region_hash: u64 } = undefined;
         var candidate_count: u32 = 0;
 
         var it = self.map.iterator();
         while (it.next()) |kv| {
             const urgency = kv.value_ptr.computeUrgency(current_time);
-            // Skip deferred unless we have nothing better
             if (urgency == .deferred and candidate_count >= effective_budget) continue;
 
             if (candidate_count < effective_budget) {
@@ -166,7 +158,6 @@ pub const DirtySet = struct {
                 };
                 candidate_count += 1;
             } else {
-                // Replace worst candidate if this one is better
                 var worst_idx: u32 = 0;
                 for (1..candidate_count) |i| {
                     if (candidates[i].urgency > candidates[worst_idx].urgency) {
@@ -185,7 +176,6 @@ pub const DirtySet = struct {
 
         if (candidate_count == 0) return null;
 
-        // Sort by urgency then region hash for grouping
         std.mem.sort(
             @TypeOf(candidates[0]),
             candidates[0..candidate_count],
@@ -198,7 +188,6 @@ pub const DirtySet = struct {
             }.lessThan,
         );
 
-        // Build result grouped by region
         var result = DrainResult{
             .batches = undefined,
             .batch_count = 0,
@@ -209,7 +198,6 @@ pub const DirtySet = struct {
             const key_u64 = candidates[i].key_u64;
             const entry = self.map.get(key_u64) orelse continue;
 
-            // Find or create region batch
             var batch_idx: ?u32 = null;
             for (0..result.batch_count) |bi| {
                 if (result.batches[bi].region_coord.eql(entry.region_coord)) {
@@ -241,7 +229,6 @@ pub const DirtySet = struct {
             result.batches[bi].count += 1;
             result.total_drained += 1;
 
-            // Remove from map WITHOUT freeing chunk_data (ownership transferred)
             _ = self.map.remove(key_u64);
         }
 

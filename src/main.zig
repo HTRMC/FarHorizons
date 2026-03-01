@@ -12,7 +12,6 @@ const app_config = @import("app_config.zig");
 
 var file_logger_instance: ?*Logger.FileLogger = null;
 
-// C time bindings for local time in log output
 const c_time = struct {
     const Tm = extern struct {
         tm_sec: c_int,
@@ -50,7 +49,6 @@ fn logFn(
     var t = c_time.time(null);
     const tm = c_time.localtime(&t);
 
-    // Format plain text into stack buffer for file logger
     var file_buf: [4096]u8 = undefined;
     var pos: usize = 0;
 
@@ -80,12 +78,10 @@ fn logFn(
     };
     pos += msg.len;
 
-    // Push to file logger if active
     if (file_logger_instance) |logger| {
         logger.push(file_buf[0..pos]);
     }
 
-    // Write to stderr with colors
     const level_color: std.Io.Terminal.Color = switch (level) {
         .err => .red,
         .warn => .yellow,
@@ -202,7 +198,6 @@ fn cursorPosCallback(window: ?*glfw.Window, xpos: f64, ypos: f64) callconv(.c) v
 fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c) void {
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
 
-    // Try UI first when mouse is not captured
     if (!input_state.mouse_captured) {
         if (input_state.ui_manager.handleScroll(
             input_state.ui_manager.last_mouse_x,
@@ -241,7 +236,6 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },
         .playing => {
-            // ESC opens pause menu
             if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.showPauseMenu();
                 input_state.mouse_captured = false;
@@ -262,7 +256,6 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 input_state.overdraw_toggle_requested = true;
             }
 
-            // Ctrl+1-5: LOD switch; plain 1-9: hotbar slot
             if (action == glfw.GLFW_PRESS) {
                 const ctrl = (mods & glfw.GLFW_MOD_CONTROL) != 0;
                 if (ctrl) {
@@ -306,7 +299,6 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     _ = mods;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
 
-    // Try UI system first when mouse is not captured
     if (!input_state.mouse_captured) {
         var mx: f64 = 0;
         var my: f64 = 0;
@@ -354,7 +346,6 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize file logger early so all subsequent logs are captured
     const file_logger = Logger.FileLogger.init(allocator) catch null;
     if (file_logger) |fl| {
         file_logger_instance = fl;
@@ -373,24 +364,19 @@ pub fn main() !void {
     });
     defer window.deinit();
 
-    // Initialize renderer with no game state (title screen)
     var renderer = try Renderer.init(allocator, &window, &VulkanRenderer.vtable, null);
     defer renderer.deinit();
 
     const framebuffer_resized = renderer.getFramebufferResizedPtr();
 
-    // Initialize UI system (heap-allocated due to large widget arrays)
     const ui_manager = try allocator.create(UiManager);
     defer allocator.destroy(ui_manager);
     ui_manager.* = .{};
     renderer.setUiManager(@ptrCast(ui_manager));
 
-    // Initialize menu controller (loads title_menu.xml)
     var menu_ctrl = MenuController.init(ui_manager, allocator);
-    // Register actions after init so callbacks capture the final address of menu_ctrl
     menu_ctrl.registerActions();
 
-    // Game state (created on demand when a world is loaded)
     var game_state: ?GameState = null;
     defer {
         if (game_state) |*gs| {
@@ -427,7 +413,6 @@ pub fn main() !void {
         const delta_time: f32 = @floatCast(current_time - last_time);
         last_time = current_time;
 
-        // Process menu actions
         if (menu_ctrl.action) |action| {
             menu_ctrl.action = null;
             switch (action) {
@@ -466,7 +451,6 @@ pub fn main() !void {
                     }
                 },
                 .resume_game => {
-                    // hidePauseMenu already sets app_state = .playing
                     input_state.mouse_captured = true;
                     input_state.first_mouse = true;
                     glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
@@ -487,10 +471,8 @@ pub fn main() !void {
             }
         }
 
-        // Game update (only when playing)
         if (menu_ctrl.app_state == .playing) {
             if (game_state) |*gs| {
-                // Hotbar slot selection via scroll wheel
                 if (input_state.hotbar_scroll_delta != 0.0) {
                     const delta: i32 = if (input_state.hotbar_scroll_delta < 0.0) @as(i32, 1) else @as(i32, -1);
                     const current: i32 = @intCast(gs.selected_slot);
@@ -498,13 +480,11 @@ pub fn main() !void {
                     input_state.hotbar_scroll_delta = 0.0;
                 }
 
-                // Hotbar slot selection via number keys
                 if (input_state.hotbar_slot_requested) |slot| {
                     gs.selected_slot = slot;
                     input_state.hotbar_slot_requested = null;
                 }
 
-                // Mouse look (per-frame, not tick-rate limited)
                 if (input_state.mouse_captured) {
                     var cursor_x: f64 = 0.0;
                     var cursor_y: f64 = 0.0;
@@ -524,25 +504,21 @@ pub fn main() !void {
                     }
                 }
 
-                // Consume debug camera toggle
                 if (input_state.debug_toggle_requested) {
                     input_state.debug_toggle_requested = false;
                     gs.toggleDebugCamera();
                 }
 
-                // Consume overdraw toggle
                 if (input_state.overdraw_toggle_requested) {
                     input_state.overdraw_toggle_requested = false;
                     gs.overdraw_mode = !gs.overdraw_mode;
                 }
 
-                // Consume LOD switch
                 if (input_state.lod_switch_requested) |lod| {
                     input_state.lod_switch_requested = null;
                     gs.switchLod(lod);
                 }
 
-                // Buffer movement input (read once per frame, consumed by ticks)
                 var forward_input: f32 = 0.0;
                 var right_input: f32 = 0.0;
                 var up_input: f32 = 0.0;
@@ -555,11 +531,9 @@ pub fn main() !void {
                 if (glfw.getKey(window.handle, glfw.GLFW_KEY_LEFT_SHIFT) == glfw.GLFW_PRESS) up_input -= 1.0;
 
                 if (gs.debug_camera_active) {
-                    // Debug camera: free-fly movement applied directly per-frame
                     const speed = input_state.move_speed * delta_time;
                     gs.camera.move(forward_input * speed, right_input * speed, up_input * speed);
                 } else {
-                    // Consume mode toggle
                     if (input_state.mode_toggle_requested) {
                         input_state.mode_toggle_requested = false;
                         gs.toggleMode();
@@ -571,7 +545,6 @@ pub fn main() !void {
                         gs.jump_requested = true;
                     }
 
-                    // Fixed timestep accumulator
                     tick_accumulator += delta_time;
                     if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
 
@@ -580,25 +553,20 @@ pub fn main() !void {
                         tick_accumulator -= GameState.TICK_INTERVAL;
                     }
 
-                    // Interpolate for smooth rendering
                     const alpha = tick_accumulator / GameState.TICK_INTERVAL;
                     gs.interpolateForRender(alpha);
                 }
 
-                // Run save scheduler (every frame, time-based urgency handles rate)
                 if (gs.storage) |s| {
                     s.tick();
                 }
 
-                // Update HUD widgets from game state
                 menu_ctrl.updateHud(gs);
             }
         }
 
-        // Tick UI cursor blink
         ui_manager.tickCursorBlink();
 
-        // Render (always — works in all states)
         try renderer.beginFrame();
         try renderer.render();
         try renderer.endFrame();

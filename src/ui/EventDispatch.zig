@@ -11,8 +11,6 @@ const log = std.log.scoped(.UI);
 
 const HIT_TEST_STACK_DEPTH = 32;
 
-/// Find the deepest widget under the given screen coordinates.
-/// Uses iterative depth-first traversal with a fixed stack.
 pub fn hitTest(tree: *const WidgetTree, x: f32, y: f32) WidgetId {
     if (tree.root == NULL_WIDGET) return NULL_WIDGET;
 
@@ -32,7 +30,6 @@ pub fn hitTest(tree: *const WidgetTree, x: f32, y: f32) WidgetId {
         if (w.computed_rect.contains(x, y)) {
             deepest = id;
 
-            // Push children in reverse order so first child is processed first
             var children_buf: [HIT_TEST_STACK_DEPTH]WidgetId = undefined;
             var child_count: u8 = 0;
             var iter = tree.children(id);
@@ -42,7 +39,6 @@ pub fn hitTest(tree: *const WidgetTree, x: f32, y: f32) WidgetId {
                     child_count += 1;
                 }
             }
-            // Push in reverse so first child ends up on top of stack
             var i: u8 = child_count;
             while (i > 0) {
                 i -= 1;
@@ -57,14 +53,11 @@ pub fn hitTest(tree: *const WidgetTree, x: f32, y: f32) WidgetId {
     return deepest;
 }
 
-/// Clear all hover states, then set hover on target and its ancestors.
 pub fn updateHoverState(tree: *WidgetTree, target: WidgetId) void {
-    // Clear all hover
     for (0..tree.count) |i| {
         tree.widgets[i].hovered = false;
     }
 
-    // Set hover on target and ancestors
     var id = target;
     while (id != NULL_WIDGET) {
         const w = tree.getWidget(id) orelse break;
@@ -73,7 +66,6 @@ pub fn updateHoverState(tree: *WidgetTree, target: WidgetId) void {
     }
 }
 
-/// Handle mouse press: set pressed/focus on target, return whether consumed.
 pub fn dispatchMousePress(tree: *WidgetTree, target: WidgetId, registry: *const ActionRegistry) bool {
     _ = registry;
 
@@ -81,31 +73,25 @@ pub fn dispatchMousePress(tree: *WidgetTree, target: WidgetId, registry: *const 
 
     const w = tree.getWidget(target) orelse return false;
 
-    // Set pressed state
     w.pressed = true;
 
-    // Move focus to this widget if focusable
     if (w.focusable) {
         setFocusTo(tree, target);
     }
 
-    // Consume if the widget is interactive
     return switch (w.kind) {
         .button, .text_input, .checkbox, .slider, .dropdown => true,
         else => false,
     };
 }
 
-/// Handle mouse release: clear pressed, fire action if released on same widget.
 pub fn dispatchMouseRelease(tree: *WidgetTree, target: WidgetId, pressed_widget: WidgetId, registry: *const ActionRegistry) bool {
-    // Clear all pressed states
     for (0..tree.count) |i| {
         tree.widgets[i].pressed = false;
     }
 
     if (pressed_widget == NULL_WIDGET) return false;
 
-    // If released on the same widget that was pressed, it's a click
     if (target == pressed_widget) {
         fireWidgetAction(tree, target, registry);
         return true;
@@ -114,7 +100,6 @@ pub fn dispatchMouseRelease(tree: *WidgetTree, target: WidgetId, pressed_widget:
     return false;
 }
 
-/// Fire the appropriate action for a widget based on its kind.
 pub fn fireWidgetAction(tree: *WidgetTree, id: WidgetId, registry: *const ActionRegistry) void {
     const w = tree.getWidget(id) orelse return;
     const data = tree.getData(id) orelse return;
@@ -142,7 +127,6 @@ pub fn fireWidgetAction(tree: *WidgetTree, id: WidgetId, registry: *const Action
     }
 }
 
-/// Route character input to the focused text_input widget.
 pub fn dispatchChar(tree: *WidgetTree, codepoint: u32) bool {
     const focused_id = findFocused(tree);
     if (focused_id == NULL_WIDGET) return false;
@@ -150,10 +134,8 @@ pub fn dispatchChar(tree: *WidgetTree, codepoint: u32) bool {
     const w = tree.getWidgetConst(focused_id) orelse return false;
     if (w.kind != .text_input) return false;
 
-    // Accept printable ASCII
     if (codepoint >= 0x20 and codepoint <= 0x7E) {
         const data = tree.getData(focused_id) orelse return false;
-        // insertChar already handles deleteSelection if selection active
         data.text_input.insertChar(@intCast(codepoint));
         data.text_input.cursor_blink_counter = 0;
         return true;
@@ -162,7 +144,6 @@ pub fn dispatchChar(tree: *WidgetTree, codepoint: u32) bool {
     return false;
 }
 
-/// Route key input to the focused widget. Returns true if consumed.
 pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, registry: *const ActionRegistry) bool {
     if (action != glfw.GLFW_PRESS and action != glfw.GLFW_REPEAT) return false;
 
@@ -178,7 +159,6 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
             const data = tree.getData(focused_id) orelse return false;
             const ti = &data.text_input;
 
-            // Ctrl+A: select all
             if (ctrl and key == glfw.GLFW_KEY_A) {
                 ti.selectAll();
                 ti.cursor_blink_counter = 0;
@@ -186,7 +166,6 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
             }
 
             if (key == glfw.GLFW_KEY_BACKSPACE) {
-                // deleteBack already handles selection
                 ti.deleteBack();
                 ti.cursor_blink_counter = 0;
                 return true;
@@ -194,7 +173,6 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
                 if (ti.hasSelection()) {
                     ti.deleteSelection();
                 } else if (ti.cursor_pos < ti.buffer_len) {
-                    // Delete forward: move cursor right then deleteBack
                     ti.cursor_pos += 1;
                     ti.selection_start = ti.cursor_pos;
                     ti.deleteBack();
@@ -203,12 +181,10 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
                 return true;
             } else if (key == glfw.GLFW_KEY_LEFT) {
                 if (shift) {
-                    // Extend selection left
                     if (ti.cursor_pos > 0) {
                         ti.cursor_pos -= 1;
                     }
                 } else if (ti.hasSelection()) {
-                    // Collapse to start of selection
                     const sel = ti.selectionRange();
                     ti.cursor_pos = sel.start;
                     ti.selection_start = sel.start;
@@ -220,12 +196,10 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
                 return true;
             } else if (key == glfw.GLFW_KEY_RIGHT) {
                 if (shift) {
-                    // Extend selection right
                     if (ti.cursor_pos < ti.buffer_len) {
                         ti.cursor_pos += 1;
                     }
                 } else if (ti.hasSelection()) {
-                    // Collapse to end of selection
                     const sel = ti.selectionRange();
                     ti.cursor_pos = sel.end;
                     ti.selection_start = sel.end;
@@ -287,7 +261,6 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
             const dd = &data.dropdown;
             if (key == glfw.GLFW_KEY_ENTER or key == glfw.GLFW_KEY_SPACE) {
                 if (dd.open) {
-                    // Select current item and close
                     dd.open = false;
                     const action_name = dd.on_change_action[0..dd.on_change_action_len];
                     if (action_name.len > 0) {
@@ -326,9 +299,7 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
     }
 }
 
-// ── Focus helpers ──
 
-/// Find the currently focused widget in the tree.
 pub fn findFocused(tree: *const WidgetTree) WidgetId {
     for (0..tree.count) |i| {
         const id: WidgetId = @intCast(i);
@@ -339,7 +310,6 @@ pub fn findFocused(tree: *const WidgetTree) WidgetId {
     return NULL_WIDGET;
 }
 
-/// Set focus to the given widget, clearing focus from all others.
 pub fn setFocusTo(tree: *WidgetTree, target: WidgetId) void {
     for (0..tree.count) |i| {
         tree.widgets[i].focused = false;
@@ -353,14 +323,12 @@ pub fn setFocusTo(tree: *WidgetTree, target: WidgetId) void {
     }
 }
 
-/// Clear focus from all widgets.
 pub fn clearFocus(tree: *WidgetTree) void {
     for (0..tree.count) |i| {
         tree.widgets[i].focused = false;
     }
 }
 
-// ── Tests ──
 
 test "hitTest returns deepest widget" {
     var tree = WidgetTree{};

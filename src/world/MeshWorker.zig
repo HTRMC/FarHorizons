@@ -12,13 +12,11 @@ pub const MeshWorker = struct {
     world: *const WorldState.World,
     light_map: ?*const WorldState.LightMap,
 
-    // Result storage (written by worker thread, consumed by poll)
     results: [WorldState.TOTAL_WORLD_CHUNKS]?ChunkResult,
     result_coords: [WorldState.TOTAL_WORLD_CHUNKS]WorldState.ChunkCoord,
     result_count: u32,
     is_initial: bool,
 
-    // Input: which chunks to mesh (copied from dirty set before thread spawn)
     pending_coords: [WorldState.TOTAL_WORLD_CHUNKS]WorldState.ChunkCoord,
     pending_count: u8,
     pending_initial: bool,
@@ -58,7 +56,6 @@ pub const MeshWorker = struct {
         };
     }
 
-    /// Start meshing all chunks (initial world load).
     pub fn startAll(self: *MeshWorker) void {
         if (self.thread) |t| {
             t.join();
@@ -74,7 +71,6 @@ pub const MeshWorker = struct {
         };
     }
 
-    /// Start meshing specific dirty chunks.
     pub fn startDirty(self: *MeshWorker, coords: []const WorldState.ChunkCoord) void {
         if (self.thread) |t| {
             t.join();
@@ -105,7 +101,6 @@ pub const MeshWorker = struct {
         return result;
     }
 
-    /// Free mesh data for a specific result (caller invokes after uploading to GPU).
     pub fn freeResult(self: *MeshWorker, idx: usize) void {
         if (self.results[idx]) |r| {
             self.allocator.free(r.faces);
@@ -136,7 +131,6 @@ pub const MeshWorker = struct {
         self.is_initial = self.pending_initial;
 
         if (self.pending_initial) {
-            // Mesh all chunks
             for (0..WorldState.WORLD_CHUNKS_Y) |cy| {
                 for (0..WorldState.WORLD_CHUNKS_Z) |cz| {
                     for (0..WorldState.WORLD_CHUNKS_X) |cx| {
@@ -150,7 +144,6 @@ pub const MeshWorker = struct {
                 }
             }
         } else {
-            // Mesh only dirty chunks
             for (self.pending_coords[0..self.pending_count]) |coord| {
                 self.meshChunk(coord);
             }

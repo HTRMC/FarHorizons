@@ -5,7 +5,6 @@ const storage_types = @import("types.zig");
 
 const BLOCKS_PER_CHUNK = storage_types.BLOCKS_PER_CHUNK;
 
-// ── Encoding Tag ───────────────────────────────────────────────────
 
 pub const Encoding = enum(u8) {
     raw = 0,
@@ -14,16 +13,10 @@ pub const Encoding = enum(u8) {
     single_block = 3,
 };
 
-// ── Binary format header ───────────────────────────────────────────
-// Offset 0: format_version (u8) = 1
-// Offset 1: encoding (u8)
-// Offset 2: reserved (u16) = 0
-// Offset 4: data (varies)
 
 const CODEC_HEADER_SIZE = 4;
 const CODEC_FORMAT_VERSION: u8 = 1;
 
-// ── Encode ─────────────────────────────────────────────────────────
 
 pub const EncodeResult = struct {
     data: []u8,
@@ -34,10 +27,7 @@ pub const EncodeResult = struct {
     }
 };
 
-/// Encode a chunk's block data into a compact binary format.
-/// Caller owns the returned allocation.
 pub fn encode(allocator: std.mem.Allocator, blocks: *const [BLOCKS_PER_CHUNK]BlockType) !EncodeResult {
-    // Count distinct block types
     var seen = [_]bool{false} ** 256;
     var distinct: u16 = 0;
     for (blocks) |b| {
@@ -61,7 +51,7 @@ fn encodeSingleBlock(allocator: std.mem.Allocator, block: BlockType) !EncodeResu
     const data = try allocator.alloc(u8, CODEC_HEADER_SIZE + 1);
     data[0] = CODEC_FORMAT_VERSION;
     data[1] = @intFromEnum(Encoding.single_block);
-    data[2] = 0; // reserved
+    data[2] = 0;
     data[3] = 0;
     data[4] = @intFromEnum(block);
     return .{ .data = data, .allocator = allocator };
@@ -75,7 +65,6 @@ fn encodePalette8(
 ) !EncodeResult {
     const palette_size: u8 = @intCast(distinct);
 
-    // Build palette: block_type → palette_index
     var palette: [256]BlockType = undefined;
     var reverse_map: [256]u8 = undefined;
     var idx: u8 = 0;
@@ -87,23 +76,19 @@ fn encodePalette8(
         }
     }
 
-    // Header(4) + palette_size(1) + palette(N) + indices(32768)
     const total = CODEC_HEADER_SIZE + 1 + @as(usize, palette_size) + BLOCKS_PER_CHUNK;
     const data = try allocator.alloc(u8, total);
 
-    // Header
     data[0] = CODEC_FORMAT_VERSION;
     data[1] = @intFromEnum(Encoding.palette8);
     data[2] = 0;
     data[3] = 0;
 
-    // Palette
     data[4] = palette_size;
     for (0..palette_size) |i| {
         data[5 + i] = @intFromEnum(palette[i]);
     }
 
-    // Indices
     const indices_start = 5 + @as(usize, palette_size);
     for (blocks, 0..) |b, i| {
         data[indices_start + i] = reverse_map[@intFromEnum(b)];
@@ -130,7 +115,6 @@ fn encodeRaw(
     return .{ .data = data, .allocator = allocator };
 }
 
-// ── Decode ─────────────────────────────────────────────────────────
 
 pub const DecodeError = error{
     InvalidFormat,
@@ -139,7 +123,6 @@ pub const DecodeError = error{
     DataTruncated,
 };
 
-/// Decode binary data back into a chunk's block array.
 pub fn decode(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]BlockType) DecodeError!void {
     if (data.len < CODEC_HEADER_SIZE) return error.DataTruncated;
     if (data[0] != CODEC_FORMAT_VERSION) return error.InvalidFormat;
@@ -155,7 +138,7 @@ pub fn decode(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]BlockType) Decode
         .single_block => decodeSingleBlock(data, out_blocks),
         .palette8 => try decodePalette8(data, out_blocks),
         .raw => try decodeRaw(data, out_blocks),
-        .palette16 => return error.UnknownEncoding, // not yet implemented
+        .palette16 => return error.UnknownEncoding,
     }
 }
 
@@ -180,13 +163,11 @@ fn decodePalette8(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]BlockType) De
     const indices_end = palette_end + BLOCKS_PER_CHUNK;
     if (data.len < indices_end) return error.DataTruncated;
 
-    // Build palette lookup
     var palette: [256]BlockType = undefined;
     for (0..palette_size) |i| {
         palette[i] = @enumFromInt(data[5 + i]);
     }
 
-    // Decode indices
     for (0..BLOCKS_PER_CHUNK) |i| {
         const idx = data[palette_end + i];
         if (idx >= palette_size) return error.InvalidPalette;
@@ -200,7 +181,6 @@ fn decodeRaw(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]BlockType) DecodeE
     @memcpy(block_bytes[0..BLOCKS_PER_CHUNK], data[CODEC_HEADER_SIZE..][0..BLOCKS_PER_CHUNK]);
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
 
 test "single_block encode/decode round-trip" {
     const allocator = std.testing.allocator;
@@ -211,7 +191,6 @@ test "single_block encode/decode round-trip" {
     var result = try encode(allocator, &blocks);
     defer result.deinit();
 
-    // Should be single_block encoding (very small)
     try std.testing.expectEqual(@as(usize, 5), result.data.len);
     try std.testing.expectEqual(@intFromEnum(Encoding.single_block), result.data[1]);
 
@@ -227,7 +206,6 @@ test "palette8 encode/decode round-trip" {
     const allocator = std.testing.allocator;
 
     var blocks: [BLOCKS_PER_CHUNK]BlockType = undefined;
-    // Mix of stone and dirt
     for (&blocks, 0..) |*b, i| {
         b.* = if (i % 2 == 0) .stone else .dirt;
     }

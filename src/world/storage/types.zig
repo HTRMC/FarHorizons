@@ -1,21 +1,18 @@
 const std = @import("std");
 const WorldState = @import("../WorldState.zig");
 
-// ── Constants ──────────────────────────────────────────────────────
 
 pub const SECTOR_SIZE = 4096;
-pub const REGION_DIM = 8; // 8x8x8 chunks per region
-pub const CHUNKS_PER_REGION = REGION_DIM * REGION_DIM * REGION_DIM; // 512
-pub const HEADER_SECTORS = 4; // Sectors 0-3: dual meta+COT slots (shadow paging)
+pub const REGION_DIM = 8;
+pub const CHUNKS_PER_REGION = REGION_DIM * REGION_DIM * REGION_DIM;
+pub const HEADER_SECTORS = 4;
 pub const MAGIC = [4]u8{ 'F', 'H', 'R', 0x01 };
 pub const FORMAT_VERSION: u16 = 2;
 pub const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
 
-// Bitmap: 4060 bytes = 32480 bits → max sectors in a region file
 pub const BITMAP_BYTES = 4060;
-pub const MAX_SECTORS = BITMAP_BYTES * 8; // 32480
+pub const MAX_SECTORS = BITMAP_BYTES * 8;
 
-// ── Compression Algorithm ──────────────────────────────────────────
 
 pub const CompressionAlgo = enum(u4) {
     none = 0,
@@ -23,7 +20,6 @@ pub const CompressionAlgo = enum(u4) {
     zstd = 2,
 };
 
-// ── Chunk Offset Table Entry (8 bytes, packed) ─────────────────────
 
 pub const ChunkOffsetEntry = packed struct(u64) {
     sector_offset: u24,
@@ -51,7 +47,6 @@ pub const ChunkOffsetEntry = packed struct(u64) {
     }
 };
 
-// ── File Header (first 32 bytes of sector 0) ──────────────────────
 
 pub const FileHeader = extern struct {
     magic: [4]u8 align(1) = MAGIC,
@@ -75,25 +70,16 @@ pub const FileHeader = extern struct {
     }
 };
 
-// ── Shadow-paged dual-slot layout ─────────────────────────────────
-// Each slot = 1 meta sector (4096B) + 1 COT sector (4096B).
-// Meta page: FileHeader(32B) + Bitmap(4060B) + CRC32(4B) = 4096B exactly.
-// COT sector: 512 × ChunkOffsetEntry(8B) = 4096B exactly.
-// A single 4KB meta-page write is the atomic commit point.
 
-// Slot A (sectors 0-1)
-pub const OFFSET_META_A = 0x0000; // sector 0
-pub const OFFSET_COT_A = 0x1000; // sector 1
-// Slot B (sectors 2-3)
-pub const OFFSET_META_B = 0x2000; // sector 2
-pub const OFFSET_COT_B = 0x3000; // sector 3
+pub const OFFSET_META_A = 0x0000;
+pub const OFFSET_COT_A = 0x1000;
+pub const OFFSET_META_B = 0x2000;
+pub const OFFSET_COT_B = 0x3000;
 
-// Offsets within a 4096-byte meta page
-pub const META_OFFSET_HEADER = 0x00; // FileHeader, 32 bytes
-pub const META_OFFSET_BITMAP = 0x20; // Bitmap, 4060 bytes
-pub const META_OFFSET_CRC = 0xFFC; // CRC32, 4 bytes (covers 0x000..0xFFB)
+pub const META_OFFSET_HEADER = 0x00;
+pub const META_OFFSET_BITMAP = 0x20;
+pub const META_OFFSET_CRC = 0xFFC;
 
-// ── Region Coordinate ──────────────────────────────────────────────
 
 pub const RegionCoord = struct {
     rx: i32,
@@ -124,7 +110,6 @@ pub const RegionCoord = struct {
     }
 };
 
-// ── Chunk Key ──────────────────────────────────────────────────────
 
 pub const ChunkKey = packed struct(u64) {
     cx: i16,
@@ -150,7 +135,6 @@ pub const ChunkKey = packed struct(u64) {
         return @bitCast(self);
     }
 
-    /// Index of this chunk within its region (0..511)
     pub fn localIndex(self: ChunkKey) u9 {
         const lx: u3 = @intCast(@as(u16, @bitCast(self.cx)) & (REGION_DIM - 1));
         const ly: u3 = @intCast(@as(u16, @bitCast(self.cy)) & (REGION_DIM - 1));
@@ -163,7 +147,6 @@ pub const ChunkKey = packed struct(u64) {
     }
 };
 
-// ── I/O Priority ───────────────────────────────────────────────────
 
 pub const Priority = enum(u3) {
     critical = 0,
@@ -173,7 +156,6 @@ pub const Priority = enum(u3) {
     save = 4,
 };
 
-// ── Async Handle ───────────────────────────────────────────────────
 
 pub const AsyncHandle = struct {
     id: u32,
@@ -185,21 +167,17 @@ pub const AsyncHandle = struct {
     }
 };
 
-// ── Utility ────────────────────────────────────────────────────────
 
-/// Compute how many sectors are needed for `byte_count` bytes.
 pub fn sectorsNeeded(byte_count: usize) u8 {
     if (byte_count == 0) return 0;
     const sectors = (byte_count + SECTOR_SIZE - 1) / SECTOR_SIZE;
     return @intCast(@min(sectors, 255));
 }
 
-/// CRC32 over a byte slice (for header integrity check).
 pub fn crc32(data: []const u8) u32 {
     return std.hash.Crc32.hash(data);
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
 
 test "ChunkOffsetEntry is 8 bytes" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(ChunkOffsetEntry));
@@ -220,24 +198,21 @@ test "ChunkKey round-trip" {
 }
 
 test "ChunkKey localIndex" {
-    // Chunk at (0,0,0) within region → index 0
     const k0 = ChunkKey.init(0, 0, 0, 0);
     try std.testing.expectEqual(@as(u9, 0), k0.localIndex());
 
-    // Chunk at (1,0,0) → index 1
     const k1 = ChunkKey.init(1, 0, 0, 0);
     try std.testing.expectEqual(@as(u9, 1), k1.localIndex());
 
-    // Chunk at (0,0,1) → index 8 (REGION_DIM)
     const k8 = ChunkKey.init(0, 0, 1, 0);
     try std.testing.expectEqual(@as(u9, REGION_DIM), k8.localIndex());
 }
 
 test "RegionCoord fromChunk" {
     const rc = RegionCoord.fromChunk(9, 0, -1, 0);
-    try std.testing.expectEqual(@as(i32, 1), rc.rx); // 9 / 8 = 1
+    try std.testing.expectEqual(@as(i32, 1), rc.rx);
     try std.testing.expectEqual(@as(i32, 0), rc.ry);
-    try std.testing.expectEqual(@as(i32, -1), rc.rz); // -1 / 8 = -1 (floor division)
+    try std.testing.expectEqual(@as(i32, -1), rc.rz);
 }
 
 test "sectorsNeeded" {

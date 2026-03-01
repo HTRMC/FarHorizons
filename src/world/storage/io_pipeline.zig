@@ -21,26 +21,20 @@ const log = std.log.scoped(.io_pipeline);
 const MAX_QUEUE_SIZE = 1024;
 const MAX_WORKERS = 4;
 
-/// Async I/O pipeline with a thread pool and priority queue.
-/// Handles background chunk loading and saving.
 pub const IoPipeline = struct {
-    // Queue
     queue: [MAX_QUEUE_SIZE]Request,
     queue_len: u32,
     queue_mutex: Io.Mutex,
     queue_cond: Io.Condition,
 
-    // Results
     results: [MAX_QUEUE_SIZE]RequestResult,
     results_len: u32,
     results_mutex: Io.Mutex,
 
-    // Workers
     workers: [MAX_WORKERS]?std.Thread,
     worker_count: u32,
     shutdown: std.atomic.Value(bool),
 
-    // References to shared state
     region_cache: *RegionCache,
     chunk_cache: *ChunkCache,
     default_compression: CompressionAlgo,
@@ -53,9 +47,7 @@ pub const IoPipeline = struct {
         key: ChunkKey,
         priority: Priority,
         handle_id: u32,
-        // For save requests
         chunk_data: ?*const Chunk,
-        // For batch save requests
         batch: ?*BatchSaveData,
 
         const Kind = enum { load, save, batch_save };
@@ -71,18 +63,16 @@ pub const IoPipeline = struct {
         region_coord: RegionCoord,
         count: u32,
         indices: [MAX_BATCH_SIZE]u9,
-        chunks: [MAX_BATCH_SIZE]*Chunk, // pointers to DirtyEntry's heap chunks
-        keys: [MAX_BATCH_SIZE]ChunkKey, // for cleanup after save
+        chunks: [MAX_BATCH_SIZE]*Chunk,
+        keys: [MAX_BATCH_SIZE]ChunkKey,
         allocator: std.mem.Allocator,
 
         pub const MAX_BATCH_SIZE = dirty_set_mod.MAX_BATCH_SIZE;
 
         pub fn deinit(self: *BatchSaveData) void {
-            // Free the heap-allocated chunk snapshots
             for (self.chunks[0..self.count]) |chunk_ptr| {
                 self.allocator.destroy(chunk_ptr);
             }
-            // Free self
             self.allocator.destroy(self);
         }
     };
@@ -123,7 +113,6 @@ pub const IoPipeline = struct {
     pub fn stop(self: *IoPipeline) void {
         self.shutdown.store(true, .release);
 
-        // Wake all workers
         self.queue_cond.broadcast(self.io);
 
         for (&self.workers) |*w| {
@@ -134,7 +123,6 @@ pub const IoPipeline = struct {
         }
     }
 
-    /// Enqueue an async load request. Returns a handle for polling.
     pub fn requestLoad(self: *IoPipeline, key: ChunkKey, priority: Priority) AsyncHandle {
         self.queue_mutex.lockUncancelable(self.io);
         defer self.queue_mutex.unlock(self.io);
@@ -147,10 +135,8 @@ pub const IoPipeline = struct {
         const handle_id = self.next_handle_id;
         self.next_handle_id +%= 1;
 
-        // Insert in priority order
         const insert_idx = self.findInsertIndex(priority);
         if (insert_idx < self.queue_len) {
-            // Shift elements down
             var i = self.queue_len;
             while (i > insert_idx) : (i -= 1) {
                 self.queue[i] = self.queue[i - 1];
@@ -171,8 +157,6 @@ pub const IoPipeline = struct {
         return .{ .id = handle_id };
     }
 
-    /// Submit a batch save request. The BatchSaveData is heap-allocated and
-    /// ownership transfers to the pipeline (freed after execution).
     pub fn submitBatchSave(self: *IoPipeline, batch: *BatchSaveData) void {
         self.queue_mutex.lockUncancelable(self.io);
         defer self.queue_mutex.unlock(self.io);
@@ -186,10 +170,9 @@ pub const IoPipeline = struct {
         const handle_id = self.next_handle_id;
         self.next_handle_id +%= 1;
 
-        // Batch saves go at the end (lowest priority)
         self.queue[self.queue_len] = .{
             .kind = .batch_save,
-            .key = ChunkKey.init(0, 0, 0, 0), // unused for batch
+            .key = ChunkKey.init(0, 0, 0, 0),
             .priority = .save,
             .handle_id = handle_id,
             .chunk_data = null,
@@ -200,7 +183,6 @@ pub const IoPipeline = struct {
         self.queue_cond.signal(self.io);
     }
 
-    /// Count pending load requests (for I/O budget decisions).
     pub fn getLoadQueueDepth(self: *IoPipeline) u32 {
         self.queue_mutex.lockUncancelable(self.io);
         defer self.queue_mutex.unlock(self.io);
@@ -212,7 +194,6 @@ pub const IoPipeline = struct {
         return load_count;
     }
 
-    /// Poll for a completed load request.
     pub fn pollLoad(self: *IoPipeline, handle: AsyncHandle) ?bool {
         self.results_mutex.lockUncancelable(self.io);
         defer self.results_mutex.unlock(self.io);
@@ -220,7 +201,6 @@ pub const IoPipeline = struct {
         for (0..self.results_len) |i| {
             if (self.results[i].handle_id == handle.id) {
                 const success = self.results[i].success;
-                // Remove from results
                 self.results_len -= 1;
                 if (i < self.results_len) {
                     self.results[i] = self.results[self.results_len];
@@ -228,11 +208,10 @@ pub const IoPipeline = struct {
                 return success;
             }
         }
-        return null; // Not yet completed
+        return null;
     }
 
     fn findInsertIndex(self: *const IoPipeline, priority: Priority) u32 {
-        // Find position to maintain priority ordering (lower enum = higher priority)
         const pval = @intFromEnum(priority);
         for (0..self.queue_len) |i| {
             if (@intFromEnum(self.queue[i].priority) > pval) {
@@ -242,8 +221,6 @@ pub const IoPipeline = struct {
         return self.queue_len;
     }
 
-    /// Worker thread function.
-    /// Keeps processing until shutdown is set AND the queue is empty.
     fn workerFn(self: *IoPipeline) void {
         while (true) {
             const request = self.dequeue() orelse return;
@@ -265,11 +242,9 @@ pub const IoPipeline = struct {
             self.queue_cond.waitUncancelable(self.io, &self.queue_mutex);
         }
 
-        // Take the highest priority request (first element)
         const request = self.queue[0];
         self.queue_len -= 1;
         if (self.queue_len > 0) {
-            // Shift remaining items up
             for (0..self.queue_len) |i| {
                 self.queue[i] = self.queue[i + 1];
             }
@@ -328,7 +303,6 @@ pub const IoPipeline = struct {
         };
         defer self.region_cache.releaseRegion(region);
 
-        // Build slice arrays for writeChunkBatch
         var indices: [BatchSaveData.MAX_BATCH_SIZE]u9 = undefined;
         var block_ptrs: [BatchSaveData.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType = undefined;
         for (0..batch.count) |i| {

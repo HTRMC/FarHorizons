@@ -16,11 +16,10 @@ const WorldState = @import("../../world/WorldState.zig");
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 
-// Initial GPU heap capacities
-const INITIAL_FACE_CAPACITY: u32 = 400_000; // ~3.2 MB at 8 bytes/face
-const INITIAL_LIGHT_CAPACITY: u32 = 400_000; // ~6.4 MB at 16 bytes/entry (1:1 with faces)
-const MAX_FACES_PER_DRAW: u32 = 16_384; // max faces per draw (16384*4=65536 verts, u16 index limit)
-const MAX_INDIRECT_COMMANDS: u32 = WorldState.TOTAL_WORLD_CHUNKS * 6; // 96
+const INITIAL_FACE_CAPACITY: u32 = 400_000;
+const INITIAL_LIGHT_CAPACITY: u32 = 400_000;
+const MAX_FACES_PER_DRAW: u32 = 16_384;
+const MAX_INDIRECT_COMMANDS: u32 = WorldState.TOTAL_WORLD_CHUNKS * 6;
 
 pub const WorldRenderer = struct {
     texture_manager: TextureManager,
@@ -28,13 +27,11 @@ pub const WorldRenderer = struct {
     graphics_pipeline: vk.VkPipeline,
     overdraw_pipeline: vk.VkPipeline,
 
-    // Indirect draw buffers (host-visible)
     indirect_buffer: vk.VkBuffer,
     indirect_buffer_memory: vk.VkDeviceMemory,
     indirect_count_buffer: vk.VkBuffer,
     indirect_count_buffer_memory: vk.VkDeviceMemory,
 
-    // GPU heaps (device-local)
     face_buffer: vk.VkBuffer,
     face_buffer_memory: vk.VkDeviceMemory,
     light_buffer: vk.VkBuffer,
@@ -44,20 +41,16 @@ pub const WorldRenderer = struct {
     static_index_buffer: vk.VkBuffer,
     static_index_buffer_memory: vk.VkDeviceMemory,
 
-    // Chunk data SSBO (host-visible)
     chunk_data_buffer: vk.VkBuffer,
     chunk_data_buffer_memory: vk.VkDeviceMemory,
 
-    // TLSF sub-allocators for face and light heaps
     face_tlsf: TlsfAllocator,
     light_tlsf: TlsfAllocator,
 
-    // Per-chunk state
     chunk_face_alloc: [WorldState.TOTAL_WORLD_CHUNKS]?TlsfAllocator.Allocation,
     chunk_light_alloc: [WorldState.TOTAL_WORLD_CHUNKS]?TlsfAllocator.Allocation,
     chunk_data: [WorldState.TOTAL_WORLD_CHUNKS]ChunkData,
 
-    // Draw count
     draw_count: u32,
 
     pub fn init(
@@ -142,7 +135,6 @@ pub const WorldRenderer = struct {
         self.texture_manager.deinit(device);
     }
 
-    /// Upload mesh data for a single chunk into the GPU heaps at its TLSF-assigned region.
     pub fn uploadChunkData(
         self: *WorldRenderer,
         ctx: *const VulkanContext,
@@ -159,7 +151,6 @@ pub const WorldRenderer = struct {
 
         const slot = coord.flatIndex();
 
-        // Free old allocations if this chunk was previously meshed
         if (self.chunk_face_alloc[slot]) |fa| {
             self.face_tlsf.free(fa.offset);
             self.chunk_face_alloc[slot] = null;
@@ -169,7 +160,6 @@ pub const WorldRenderer = struct {
             self.chunk_light_alloc[slot] = null;
         }
 
-        // Empty chunk
         if (total_face_count == 0) {
             self.chunk_data[slot] = .{
                 .position = coord.positionScaled(voxel_size),
@@ -182,7 +172,6 @@ pub const WorldRenderer = struct {
             return;
         }
 
-        // Allocate TLSF regions
         const fa = self.face_tlsf.alloc(total_face_count) orelse {
             std.log.err("TLSF face heap full (requested {}, largest free {})", .{
                 total_face_count, self.face_tlsf.largestFree(),
@@ -205,7 +194,6 @@ pub const WorldRenderer = struct {
         self.chunk_face_alloc[slot] = fa;
         if (light_count > 0) self.chunk_light_alloc[slot] = la;
 
-        // Stage face data
         {
             const fb_size: vk.VkDeviceSize = @intCast(@as(u64, total_face_count) * @sizeOf(FaceData));
             var staging_buffer: vk.VkBuffer = undefined;
@@ -233,7 +221,6 @@ pub const WorldRenderer = struct {
             try vk_utils.copyBufferRegion(ctx, staging_buffer, 0, self.face_buffer, dst_offset, fb_size);
         }
 
-        // Stage light data
         if (light_count > 0) {
             const lb_size: vk.VkDeviceSize = @intCast(@as(u64, light_count) * @sizeOf(LightEntry));
             var staging_buffer: vk.VkBuffer = undefined;
@@ -261,7 +248,6 @@ pub const WorldRenderer = struct {
             try vk_utils.copyBufferRegion(ctx, staging_buffer, 0, self.light_buffer, dst_offset, lb_size);
         }
 
-        // Update CPU-side chunk data and write to GPU
         self.chunk_data[slot] = .{
             .position = coord.positionScaled(voxel_size),
             .light_start = la.offset,
@@ -281,9 +267,6 @@ pub const WorldRenderer = struct {
         vk.unmapMemory(ctx.device, self.chunk_data_buffer_memory);
     }
 
-    /// Build indirect draw commands with CPU-side normal culling.
-    /// Uses signed distance from camera to chunk AABB to determine which
-    /// normal groups are potentially visible (Cubyz-style approach).
     pub fn buildIndirectCommands(self: *WorldRenderer, ctx: *const VulkanContext, camera_pos: zlm.Vec3) void {
         const tz = tracy.zone(@src(), "buildIndirectCommands");
         defer tz.end();
@@ -298,17 +281,12 @@ pub const WorldRenderer = struct {
         for (0..WorldState.TOTAL_WORLD_CHUNKS) |chunk_idx| {
             const cd = self.chunk_data[chunk_idx];
 
-            // Check if chunk has any faces
             var total: u32 = 0;
             for (cd.face_counts) |fc| total += fc;
             if (total == 0) continue;
 
-            // Per-chunk scaled size for AABB culling
             const cs: i32 = @as(i32, WorldState.CHUNK_SIZE) * @as(i32, @intCast(@max(1, cd.voxel_size)));
 
-            // Signed distance from camera to chunk AABB.
-            // When inside the chunk, all components clamp to 0 (all normals visible).
-            // When outside, only the side the camera is on passes the check.
             const pd = aabbSignedDist(camera_pos.x, camera_pos.y, camera_pos.z, cd.position, cs);
 
             var normal_offset: u32 = 0;
@@ -337,7 +315,6 @@ pub const WorldRenderer = struct {
 
         vk.unmapMemory(ctx.device, self.indirect_buffer_memory);
 
-        // Write command count
         var count_data: ?*anyopaque = null;
         vk.mapMemory(ctx.device, self.indirect_count_buffer_memory, 0, @sizeOf(u32), 0, &count_data) catch return;
         const count_ptr: *u32 = @ptrCast(@alignCast(count_data));
@@ -552,7 +529,7 @@ pub const WorldRenderer = struct {
         const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
-            .size = 68, // sizeof(mat4) + sizeof(float) for contrast
+            .size = 68,
         };
 
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
@@ -614,7 +591,6 @@ pub const WorldRenderer = struct {
         try vk.createGraphicsPipelines(device, ctx.pipeline_cache, 1, pipeline_infos, null, &pipelines);
         self.graphics_pipeline = pipelines[0];
 
-        // Create overdraw pipeline: no depth test, additive blending, flat fragment shader
         const overdraw_frag_spirv = try shader_compiler.compile("overdraw.frag", .fragment);
         defer shader_compiler.allocator.free(overdraw_frag_spirv);
 
@@ -723,7 +699,6 @@ pub const WorldRenderer = struct {
             &self.indirect_buffer_memory,
         );
 
-        // Zero-initialize
         var data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, self.indirect_buffer_memory, 0, buffer_size, 0, &data);
         const dst: [*]u8 = @ptrCast(data.?);
@@ -763,7 +738,6 @@ pub const WorldRenderer = struct {
         self.indirect_count_buffer_memory = try vk.allocateMemory(ctx.device, &count_alloc_info, null);
         try vk.bindBufferMemory(ctx.device, self.indirect_count_buffer, self.indirect_count_buffer_memory, 0);
 
-        // Initialize count to 0
         var count_data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, self.indirect_count_buffer_memory, 0, count_buffer_size, 0, &count_data);
         const count_ptr: *u32 = @ptrCast(@alignCast(count_data));
@@ -777,7 +751,6 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "createPersistentBuffers");
         defer tz.end();
 
-        // Face buffer (device-local)
         const fb_capacity: vk.VkDeviceSize = @as(u64, INITIAL_FACE_CAPACITY) * @sizeOf(FaceData);
         try vk_utils.createBuffer(
             ctx,
@@ -788,7 +761,6 @@ pub const WorldRenderer = struct {
             &self.face_buffer_memory,
         );
 
-        // Light buffer (device-local)
         const lb_capacity: vk.VkDeviceSize = @as(u64, INITIAL_LIGHT_CAPACITY) * @sizeOf(LightEntry);
         try vk_utils.createBuffer(
             ctx,
@@ -799,7 +771,6 @@ pub const WorldRenderer = struct {
             &self.light_buffer_memory,
         );
 
-        // Model buffer (device-local, static) - 6 QuadModels built from face_vertices
         const model_size: vk.VkDeviceSize = 6 * @sizeOf(QuadModel);
         try vk_utils.createBuffer(
             ctx,
@@ -811,7 +782,6 @@ pub const WorldRenderer = struct {
         );
         try self.uploadModelBuffer(ctx, model_size);
 
-        // Static index buffer (device-local) - pattern {0,1,2,2,3,0} repeated, u16
         const index_count: u64 = @as(u64, MAX_FACES_PER_DRAW) * 6;
         const ib_capacity: vk.VkDeviceSize = index_count * @sizeOf(u16);
         try vk_utils.createBuffer(
@@ -824,7 +794,6 @@ pub const WorldRenderer = struct {
         );
         try self.uploadStaticIndexBuffer(ctx, ib_capacity);
 
-        // Chunk data buffer (host-visible)
         const cd_capacity: vk.VkDeviceSize = WorldState.TOTAL_WORLD_CHUNKS * @sizeOf(ChunkData);
         try vk_utils.createBuffer(
             ctx,
@@ -835,7 +804,6 @@ pub const WorldRenderer = struct {
             &self.chunk_data_buffer_memory,
         );
 
-        // Update descriptors
         self.texture_manager.updateFaceDescriptor(ctx, self.face_buffer, fb_capacity);
         self.texture_manager.updateChunkDataDescriptor(ctx, self.chunk_data_buffer, cd_capacity);
         self.texture_manager.updateModelDescriptor(ctx, self.model_buffer, model_size);
@@ -849,7 +817,6 @@ pub const WorldRenderer = struct {
     }
 
     fn uploadModelBuffer(self: *WorldRenderer, ctx: *const VulkanContext, model_size: vk.VkDeviceSize) !void {
-        // Build 6 QuadModels from face_vertices and face_neighbor_offsets
         var models: [6]QuadModel = undefined;
         for (0..6) |face| {
             var corners: [12]f32 = undefined;
@@ -931,11 +898,6 @@ pub const WorldRenderer = struct {
     }
 };
 
-/// Compute signed distance from a point to a chunk AABB.
-/// Returns [3]i32 where each component is:
-///   negative → point is before the chunk min on that axis
-///   0        → point is inside the chunk on that axis
-///   positive → point is past the chunk max on that axis
 pub fn aabbSignedDist(cam_x: f32, cam_y: f32, cam_z: f32, chunk_pos: [3]i32, cs: i32) [3]i32 {
     var pd = [3]i32{
         @as(i32, @intFromFloat(@floor(cam_x))) - chunk_pos[0],
@@ -948,21 +910,18 @@ pub fn aabbSignedDist(cam_x: f32, cam_y: f32, cam_z: f32, chunk_pos: [3]i32, cs:
     return pd;
 }
 
-/// Check if a normal group is visible given the signed AABB distance.
-/// Normal order: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
 pub fn isNormalVisible(normal_idx: usize, pd: [3]i32) bool {
     return switch (normal_idx) {
-        0 => pd[2] >= 0, // +Z: camera at or past chunk min Z
-        1 => pd[2] <= 0, // -Z: camera at or before chunk max Z
-        2 => pd[0] <= 0, // -X: camera at or before chunk max X
-        3 => pd[0] >= 0, // +X: camera at or past chunk min X
-        4 => pd[1] >= 0, // +Y: camera at or past chunk min Y
-        5 => pd[1] <= 0, // -Y: camera at or before chunk max Y
+        0 => pd[2] >= 0,
+        1 => pd[2] <= 0,
+        2 => pd[0] <= 0,
+        3 => pd[0] >= 0,
+        4 => pd[1] >= 0,
+        5 => pd[1] <= 0,
         else => true,
     };
 }
 
-// --- Tests ---
 
 const testing = std.testing;
 
@@ -979,21 +938,18 @@ test "aabbSignedDist: camera inside chunk → all zero" {
 }
 
 test "aabbSignedDist: camera outside chunk" {
-    // Camera at (40, -20, -5), chunk from (0,-16,0) to (32,16,32)
     const pd = aabbSignedDist(40, -20, -5, .{ 0, -16, 0 }, 32);
-    try testing.expectEqual(@as(i32, 8), pd[0]); // 40 - 0 = 40, clamped: 40 - 32 = 8
-    try testing.expectEqual(@as(i32, -4), pd[1]); // -20 - (-16) = -4, negative → no clamp
-    try testing.expectEqual(@as(i32, -5), pd[2]); // -5 - 0 = -5, negative → no clamp
+    try testing.expectEqual(@as(i32, 8), pd[0]);
+    try testing.expectEqual(@as(i32, -4), pd[1]);
+    try testing.expectEqual(@as(i32, -5), pd[2]);
 }
 
 test "aabbSignedDist: camera at chunk boundary edges" {
-    // At min corner
     const pd_min = aabbSignedDist(0, -16, 0, .{ 0, -16, 0 }, 32);
     try testing.expectEqual(@as(i32, 0), pd_min[0]);
     try testing.expectEqual(@as(i32, 0), pd_min[1]);
     try testing.expectEqual(@as(i32, 0), pd_min[2]);
 
-    // At max corner (floor(32) = 32, 32 - 0 = 32, clamped: 32 - 32 = 0)
     const pd_max = aabbSignedDist(32, 16, 32, .{ 0, -16, 0 }, 32);
     try testing.expectEqual(@as(i32, 0), pd_max[0]);
     try testing.expectEqual(@as(i32, 0), pd_max[1]);
@@ -1009,11 +965,9 @@ test "camera inside chunk draws all normals" {
 
 test "camera at chunk boundary (edge) draws all normals" {
     const pos = [3]i32{ 0, -16, 0 };
-    // Min corner
     for (0..6) |n| {
         try testing.expect(shouldDraw(pos, 0, -16, 0, n));
     }
-    // Max corner
     for (0..6) |n| {
         try testing.expect(shouldDraw(pos, 32, 16, 32, n));
     }
@@ -1021,93 +975,77 @@ test "camera at chunk boundary (edge) draws all normals" {
 
 test "camera in front of chunk (+Z side)" {
     const pos = [3]i32{ 0, -16, 0 };
-    // Camera at z=40, inside X and Y range
-    try testing.expect(shouldDraw(pos, 16, 0, 40, 0)); // +Z: draw
-    try testing.expect(!shouldDraw(pos, 16, 0, 40, 1)); // -Z: cull
-    // Camera inside X/Y range → those normals all visible
-    try testing.expect(shouldDraw(pos, 16, 0, 40, 2)); // -X: draw
-    try testing.expect(shouldDraw(pos, 16, 0, 40, 3)); // +X: draw
-    try testing.expect(shouldDraw(pos, 16, 0, 40, 4)); // +Y: draw
-    try testing.expect(shouldDraw(pos, 16, 0, 40, 5)); // -Y: draw
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 0));
+    try testing.expect(!shouldDraw(pos, 16, 0, 40, 1));
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 2));
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 3));
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 4));
+    try testing.expect(shouldDraw(pos, 16, 0, 40, 5));
 }
 
 test "camera behind chunk (-Z side)" {
     const pos = [3]i32{ 0, -16, 0 };
-    try testing.expect(!shouldDraw(pos, 16, 0, -10, 0)); // +Z: cull
-    try testing.expect(shouldDraw(pos, 16, 0, -10, 1)); // -Z: draw
+    try testing.expect(!shouldDraw(pos, 16, 0, -10, 0));
+    try testing.expect(shouldDraw(pos, 16, 0, -10, 1));
 }
 
 test "camera above chunk draws top, culls bottom" {
     const pos = [3]i32{ 0, -16, 0 };
-    try testing.expect(shouldDraw(pos, 16, 30, 16, 4)); // +Y: draw
-    try testing.expect(!shouldDraw(pos, 16, 30, 16, 5)); // -Y: cull
+    try testing.expect(shouldDraw(pos, 16, 30, 16, 4));
+    try testing.expect(!shouldDraw(pos, 16, 30, 16, 5));
 }
 
 test "camera below chunk draws bottom, culls top" {
     const pos = [3]i32{ 0, -16, 0 };
-    try testing.expect(!shouldDraw(pos, 16, -30, 16, 4)); // +Y: cull
-    try testing.expect(shouldDraw(pos, 16, -30, 16, 5)); // -Y: draw
+    try testing.expect(!shouldDraw(pos, 16, -30, 16, 4));
+    try testing.expect(shouldDraw(pos, 16, -30, 16, 5));
 }
 
 test "camera just outside chunk boundary sees near faces" {
     const pos = [3]i32{ 0, -16, 0 };
-    // Camera at x=-1 (just outside left)
-    try testing.expect(shouldDraw(pos, -1, 0, 16, 2)); // -X: draw
-    try testing.expect(!shouldDraw(pos, -1, 0, 16, 3)); // +X: cull
-    // Camera at x=33 (just outside right)
-    try testing.expect(shouldDraw(pos, 33, 0, 16, 3)); // +X: draw
-    try testing.expect(!shouldDraw(pos, 33, 0, 16, 2)); // -X: cull
+    try testing.expect(shouldDraw(pos, -1, 0, 16, 2));
+    try testing.expect(!shouldDraw(pos, -1, 0, 16, 3));
+    try testing.expect(shouldDraw(pos, 33, 0, 16, 3));
+    try testing.expect(!shouldDraw(pos, 33, 0, 16, 2));
 }
 
 test "diagonal camera position" {
     const pos = [3]i32{ 0, -16, 0 };
-    // Camera at upper-right-front corner
-    try testing.expect(shouldDraw(pos, 40, 25, 40, 0)); // +Z: draw
-    try testing.expect(shouldDraw(pos, 40, 25, 40, 3)); // +X: draw
-    try testing.expect(shouldDraw(pos, 40, 25, 40, 4)); // +Y: draw
-    try testing.expect(!shouldDraw(pos, 40, 25, 40, 1)); // -Z: cull
-    try testing.expect(!shouldDraw(pos, 40, 25, 40, 2)); // -X: cull
-    try testing.expect(!shouldDraw(pos, 40, 25, 40, 5)); // -Y: cull
+    try testing.expect(shouldDraw(pos, 40, 25, 40, 0));
+    try testing.expect(shouldDraw(pos, 40, 25, 40, 3));
+    try testing.expect(shouldDraw(pos, 40, 25, 40, 4));
+    try testing.expect(!shouldDraw(pos, 40, 25, 40, 1));
+    try testing.expect(!shouldDraw(pos, 40, 25, 40, 2));
+    try testing.expect(!shouldDraw(pos, 40, 25, 40, 5));
 }
 
 test "camera directly above center - side faces all visible" {
-    // This was the bug with the dot-product approach:
-    // camera above center had dot=0 for side normals → incorrectly culled
     const pos = [3]i32{ 0, -16, 0 };
-    // Camera at (16, 25, 16) - directly above center, inside X/Z range
-    try testing.expect(shouldDraw(pos, 16, 25, 16, 0)); // +Z
-    try testing.expect(shouldDraw(pos, 16, 25, 16, 1)); // -Z
-    try testing.expect(shouldDraw(pos, 16, 25, 16, 2)); // -X
-    try testing.expect(shouldDraw(pos, 16, 25, 16, 3)); // +X
-    try testing.expect(shouldDraw(pos, 16, 25, 16, 4)); // +Y: draw
-    try testing.expect(!shouldDraw(pos, 16, 25, 16, 5)); // -Y: cull
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 0));
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 1));
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 2));
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 3));
+    try testing.expect(shouldDraw(pos, 16, 25, 16, 4));
+    try testing.expect(!shouldDraw(pos, 16, 25, 16, 5));
 }
 
 test "camera at chunk Z edge sees both Z normals" {
-    // Camera at z=0, chunk from z=0 to z=32
-    // The old dot-product approach culled +Z here (center-based), but
-    // the camera IS at the chunk edge and can see blocks just inside.
     const pos = [3]i32{ 0, -16, 0 };
-    try testing.expect(shouldDraw(pos, 16, 0, 0, 0)); // +Z: draw (camera at min Z edge)
-    try testing.expect(shouldDraw(pos, 16, 0, 0, 1)); // -Z: draw (camera at min Z edge)
+    try testing.expect(shouldDraw(pos, 16, 0, 0, 0));
+    try testing.expect(shouldDraw(pos, 16, 0, 0, 1));
 }
 
 test "typical gameplay - standing on flat terrain" {
-    // Camera at (0, 2, 0). Chunk (cx=2, cz=2) → pos (0, -16, 0)
-    // Camera inside this chunk → all normals
     const pos_center = [3]i32{ 0, -16, 0 };
     for (0..6) |n| {
         try testing.expect(shouldDraw(pos_center, 0, 2, 0, n));
     }
 
-    // Chunk to the right: pos (32, -16, 0). Camera x=0 < 32.
     const pos_right = [3]i32{ 32, -16, 0 };
-    try testing.expect(!shouldDraw(pos_right, 0, 2, 0, 3)); // +X: cull
-    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 2)); // -X: draw
-    // Camera y=2 is inside Y range → both Y normals visible
-    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 4)); // +Y: draw
-    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 5)); // -Y: draw
-    // Camera z=0 is at chunk min Z → both Z normals visible
-    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 0)); // +Z: draw
-    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 1)); // -Z: draw
+    try testing.expect(!shouldDraw(pos_right, 0, 2, 0, 3));
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 2));
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 4));
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 5));
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 0));
+    try testing.expect(shouldDraw(pos_right, 0, 2, 0, 1));
 }

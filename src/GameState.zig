@@ -53,25 +53,21 @@ debug_camera_active: bool,
 overdraw_mode: bool,
 saved_camera: Camera,
 
-// LOD state
 current_lod: u8,
 lod_worlds: [MAX_LOD]*WorldState.World,
 lod_light_maps: [MAX_LOD]*WorldState.LightMap,
 lod_stale: [MAX_LOD]bool,
 
-// Hotbar
 selected_slot: u8 = 0,
 hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .glass, .glowstone, .air, .air, .air, .air },
 offhand: WorldState.BlockType = .air,
 
-// World persistence
 storage: ?*Storage,
 
-// Previous-tick snapshots for interpolation
 prev_entity_pos: [3]f32,
 prev_camera_pos: zlm.Vec3,
-tick_camera_pos: zlm.Vec3, // authoritative camera pos (saved before interpolation overwrites it)
-render_entity_pos: [3]f32, // interpolated entity pos for rendering (debug AABB etc.)
+tick_camera_pos: zlm.Vec3,
+render_entity_pos: [3]f32,
 
 pub const DirtyChunkSet = struct {
     chunks: [WorldState.TOTAL_WORLD_CHUNKS]WorldState.ChunkCoord,
@@ -98,18 +94,15 @@ pub const DirtyChunkSet = struct {
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8) !GameState {
     const world = try allocator.create(WorldState.World);
-    // Initialize all blocks to air so unloaded chunks don't have garbage data
     @memset(std.mem.asBytes(world), 0);
     const light_map = try allocator.create(WorldState.LightMap);
     const cam = Camera.init(width, height);
 
-    // Initialize storage (optional — game works without persistence)
     var storage = Storage.init(allocator, world_name) catch |err| blk: {
         std.log.warn("Storage init failed: {}, world will not be saved", .{err});
         break :blk null;
     };
 
-    // Try to load world from disk, generate missing chunks procedurally
     var any_loaded = false;
     if (storage != null) {
         for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
@@ -129,10 +122,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     }
 
     if (!any_loaded) {
-        // No saved data — generate fresh world
         WorldState.generateTerrainWorld(world);
 
-        // Persist generated world immediately
         if (storage != null) {
             for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
                 for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
@@ -152,7 +143,6 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
 
     WorldState.computeLightMap(world, light_map);
 
-    // Allocate LOD1-4 worlds and light maps
     var lod_worlds_arr: [MAX_LOD]*WorldState.World = undefined;
     var lod_light_maps_arr: [MAX_LOD]*WorldState.LightMap = undefined;
     lod_worlds_arr[0] = world;
@@ -164,7 +154,6 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         lod_light_maps_arr[i] = try allocator.create(WorldState.LightMap);
     }
 
-    // Try to load LOD data from disk, fall back to downsampling
     for (1..MAX_LOD) |lod_level_usize| {
         const lod_level: u8 = @intCast(lod_level_usize);
         var lod_any_loaded = false;
@@ -187,7 +176,6 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         }
 
         if (!lod_any_loaded) {
-            // No saved LOD — downsample from LOD0 and persist
             WorldState.downsampleWorld(world, lod_worlds_arr[lod_level_usize], lod_level);
             WorldState.computeLightMap(lod_worlds_arr[lod_level_usize], lod_light_maps_arr[lod_level_usize]);
 
@@ -207,7 +195,6 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
                 storage.?.flush();
             }
         } else {
-            // Loaded from disk — compute light map
             WorldState.computeLightMap(lod_worlds_arr[lod_level_usize], lod_light_maps_arr[lod_level_usize]);
         }
     }
@@ -240,11 +227,9 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     };
 }
 
-/// Save all dirty chunks to disk. Persists stale LODs before flushing.
 pub fn save(self: *GameState) void {
     const s = self.storage orelse return;
 
-    // Persist stale LOD worlds
     for (1..MAX_LOD) |lod_level_usize| {
         const lod_level: u8 = @intCast(lod_level_usize);
         if (self.lod_stale[lod_level_usize]) {
@@ -267,7 +252,6 @@ pub fn save(self: *GameState) void {
         }
     }
 
-    // Save LOD0 dirty chunks
     s.saveAllDirty();
     s.flush();
     std.log.info("World saved", .{});
@@ -275,7 +259,6 @@ pub fn save(self: *GameState) void {
 
 pub fn deinit(self: *GameState) void {
     if (self.storage) |s| s.deinit();
-    // Free LOD1-4 (LOD0 is the main world/light_map, freed last)
     for (1..MAX_LOD) |i| {
         self.allocator.destroy(self.lod_worlds[i]);
         self.allocator.destroy(self.lod_light_maps[i]);
@@ -323,7 +306,6 @@ pub fn toggleMode(self: *GameState) void {
 pub fn switchLod(self: *GameState, lod: u8) void {
     if (lod >= MAX_LOD or lod == self.current_lod) return;
 
-    // Re-downsample if LOD data is stale (block edits since last downsample)
     if (lod > 0 and self.lod_stale[lod]) {
         WorldState.downsampleWorld(self.lod_worlds[0], self.lod_worlds[lod], lod);
         WorldState.computeLightMap(self.lod_worlds[lod], self.lod_light_maps[lod]);
@@ -337,9 +319,7 @@ pub fn switchLod(self: *GameState, lod: u8) void {
     std.log.info("Switched to LOD {d}", .{lod});
 }
 
-/// Run one fixed-timestep physics tick. Called with TICK_INTERVAL.
 pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
-    // Snapshot previous positions before physics moves them
     self.prev_entity_pos = self.entity_pos;
     self.prev_camera_pos = self.camera.position;
 
@@ -355,9 +335,8 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
             }
         },
         .walking => {
-            // Consume buffered jump
             if (self.jump_requested and self.entity_on_ground) {
-                self.entity_vel[1] = 7.5; // JUMP_VELOCITY
+                self.entity_vel[1] = 7.5;
                 self.jump_requested = false;
             }
 
@@ -374,8 +353,6 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 
-/// Lerp camera position between previous and current tick state for smooth rendering.
-/// Call this after all ticks are drained, before rendering.
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
     self.tick_camera_pos = self.camera.position;
     self.render_entity_pos = lerpArray3(self.prev_entity_pos, self.entity_pos, alpha);
@@ -393,8 +370,6 @@ pub fn interpolateForRender(self: *GameState, alpha: f32) void {
     }
 }
 
-/// Restore camera to authoritative (non-interpolated) tick state.
-/// Call after rendering so that the next tick starts from the real position.
 pub fn restoreAfterRender(self: *GameState) void {
     switch (self.mode) {
         .flying => {
@@ -439,16 +414,13 @@ fn updateLight(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     WorldState.updateLightMap(self.world, self.light_map, wx, wy, wz);
 }
 
-/// Dirty all chunks whose meshes could be affected by a light change at (wx, wy, wz).
-/// The light propagation radius determines how far light can reach.
 fn dirtyLightRadius(self: *GameState, wx: i32, wy: i32, wz: i32) void {
-    const radius = WorldState.LIGHT_MAX_RADIUS + 2; // +2 for AO sampling across boundaries
+    const radius = WorldState.LIGHT_MAX_RADIUS + 2;
     const cs: i32 = WorldState.CHUNK_SIZE;
     const half_x: i32 = WorldState.WORLD_SIZE_X / 2;
     const half_y: i32 = WorldState.WORLD_SIZE_Y / 2;
     const half_z: i32 = WorldState.WORLD_SIZE_Z / 2;
 
-    // Convert world-space light radius to chunk range
     const min_cx = @max(0, @divFloor(wx - radius + half_x, cs));
     const max_cx = @min(@as(i32, WorldState.WORLD_CHUNKS_X) - 1, @divFloor(wx + radius + half_x, cs));
     const min_cy = @max(0, @divFloor(wy - radius + half_y, cs));
@@ -499,11 +471,9 @@ pub fn placeBlock(self: *GameState) void {
     for (1..MAX_LOD) |i| self.lod_stale[i] = true;
 }
 
-/// Queue an async save for the chunk containing world position (wx, wy, wz).
 fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     if (self.storage == null) return;
 
-    // Convert world position to voxel-space, then to local chunk index
     const half_x: i32 = WorldState.WORLD_SIZE_X / 2;
     const half_y: i32 = WorldState.WORLD_SIZE_Y / 2;
     const half_z: i32 = WorldState.WORLD_SIZE_Z / 2;
@@ -519,7 +489,6 @@ fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     const local_cy: usize = @intCast(@divFloor(vy, cs));
     const local_cz: usize = @intCast(@divFloor(vz, cs));
 
-    // Storage uses signed chunk coordinates (centered at world origin)
     const storage_cx = @as(i32, @intCast(local_cx)) - WorldState.WORLD_CHUNKS_X / 2;
     const storage_cy = @as(i32, @intCast(local_cy)) - WorldState.WORLD_CHUNKS_Y / 2;
     const storage_cz = @as(i32, @intCast(local_cz)) - WorldState.WORLD_CHUNKS_Z / 2;

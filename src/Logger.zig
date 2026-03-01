@@ -22,28 +22,24 @@ const c_time = struct {
     extern "c" fn localtime(timer: *const i64) ?*const Tm;
 };
 
-const BUFFER_SIZE = 256 * 1024; // 256KB per buffer
+const BUFFER_SIZE = 256 * 1024;
 const RETENTION_DAYS = 7;
 const SECONDS_PER_DAY = 86400;
 
 pub const FileLogger = struct {
-    // Double buffer system
     buffers: *[2][BUFFER_SIZE]u8,
     lens: [2]usize,
     active: u1,
     dropped_count: usize,
 
-    // Synchronization
     mutex: Io.Mutex,
     cond: Io.Condition,
     shutdown: bool,
 
-    // Writer thread
     thread: ?std.Thread,
     io: Io,
     log_file: File,
 
-    // Ownership
     logs_dir_path: []const u8,
     allocator: std.mem.Allocator,
 
@@ -56,14 +52,11 @@ pub const FileLogger = struct {
         const logs_dir_path = try std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "logs", .{base_path});
         errdefer allocator.free(logs_dir_path);
 
-        // Ensure logs directory exists
         Dir.createDirAbsolute(io, logs_dir_path, .default_file) catch {};
 
-        // Rotate old latest.log and cleanup old logs
         rotateLatestLog(allocator, io, logs_dir_path);
         cleanupOldLogs(allocator, io, logs_dir_path);
 
-        // Open new latest.log
         const latest_path = try std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "latest.log", .{logs_dir_path});
         defer allocator.free(latest_path);
 
@@ -73,7 +66,6 @@ pub const FileLogger = struct {
         };
         errdefer log_file.close(io);
 
-        // Heap-allocate because the buffers are large
         const self = try allocator.create(FileLogger);
         errdefer allocator.destroy(self);
 
@@ -104,7 +96,6 @@ pub const FileLogger = struct {
     }
 
     pub fn deinit(self: *FileLogger) void {
-        // Signal shutdown
         {
             self.mutex.lockUncancelable(self.io);
             self.shutdown = true;
@@ -112,7 +103,6 @@ pub const FileLogger = struct {
             self.mutex.unlock(self.io);
         }
 
-        // Wait for writer thread
         if (self.thread) |t| {
             t.join();
         }
@@ -157,7 +147,6 @@ pub const FileLogger = struct {
                 self.mutex.lockUncancelable(self.io);
                 defer self.mutex.unlock(self.io);
 
-                // Wait while active buffer is empty and not shutting down
                 while (self.lens[self.active] == 0 and !self.shutdown) {
                     self.cond.waitUncancelable(self.io, &self.mutex);
                 }
@@ -165,7 +154,6 @@ pub const FileLogger = struct {
                 if (self.shutdown and self.lens[self.active] == 0) {
                     should_exit = true;
                 } else {
-                    // Swap: take active buffer for draining
                     drain_idx = self.active;
                     drain_len = self.lens[drain_idx];
                     self.lens[drain_idx] = 0;
@@ -174,7 +162,6 @@ pub const FileLogger = struct {
             }
 
             if (drain_len > 0) {
-                // Write outside of mutex - file I/O happens here
                 file_writer.interface.writeAll(self.buffers[drain_idx][0..drain_len]) catch {};
                 file_writer.interface.flush() catch {};
             }
@@ -182,7 +169,6 @@ pub const FileLogger = struct {
             if (should_exit) break;
         }
 
-        // Final flush
         file_writer.interface.flush() catch {};
     }
 
@@ -190,18 +176,15 @@ pub const FileLogger = struct {
         const latest_path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "latest.log", .{logs_dir_path}) catch return;
         defer allocator.free(latest_path);
 
-        // Check if latest.log exists
         const file = Dir.openFileAbsolute(io, latest_path, .{}) catch return;
         file.close(io);
 
-        // Get current date for naming
         var t = c_time.time(null);
         const tm = c_time.localtime(&t) orelse return;
         const year = @as(u32, @intCast(tm.tm_year + 1900));
         const month = @as(u32, @intCast(tm.tm_mon + 1));
         const day = @as(u32, @intCast(tm.tm_mday));
 
-        // Find next available sequence number
         var seq: u32 = 1;
         while (seq < 1000) : (seq += 1) {
             var name_buf: [64]u8 = undefined;
@@ -214,10 +197,8 @@ pub const FileLogger = struct {
             }) catch return;
             defer allocator.free(dated_path);
 
-            // Check if this name is taken
             const check = Dir.openFileAbsolute(io, dated_path, .{}) catch |err| switch (err) {
                 error.FileNotFound => {
-                    // Available - rename latest.log to this
                     Dir.renameAbsolute(latest_path, dated_path, io) catch {
                         std.log.warn("Failed to rotate log file", .{});
                     };
@@ -245,7 +226,6 @@ pub const FileLogger = struct {
         while (iter.next(io) catch null) |entry| {
             if (entry.kind != .file) continue;
 
-            // Match pattern: YYYY-MM-DD-N.log
             const year, const month, const day = parseDateFromLogName(entry.name) orelse continue;
             const file_day = dateToDays(year, month, day);
 
@@ -260,7 +240,6 @@ pub const FileLogger = struct {
     }
 
     fn parseDateFromLogName(name: []const u8) ?struct { i32, i32, i32 } {
-        // Expected: YYYY-MM-DD-N.log (min length: 4+1+2+1+2+1+1+4 = 16)
         if (name.len < 16) return null;
         if (!std.mem.endsWith(u8, name, ".log")) return null;
         if (name[4] != '-' or name[7] != '-' or name[10] != '-') return null;
@@ -274,7 +253,6 @@ pub const FileLogger = struct {
     }
 
     fn dateToDays(year: i32, month: i32, day: i32) i32 {
-        // Convert date to a comparable day number (modified Julian day approximation)
         var y = year;
         var m = month;
         if (m <= 2) {
