@@ -153,6 +153,11 @@ pub const SurfaceState = struct {
         };
 
         const old_semaphore_count = self.render_finished_semaphores.items.len;
+        if (swapchain_image_count < old_semaphore_count) {
+            for (self.render_finished_semaphores.items[swapchain_image_count..]) |sem| {
+                vk.destroySemaphore(ctx.device, sem, null);
+            }
+        }
         try self.render_finished_semaphores.resize(allocator, swapchain_image_count);
         for (old_semaphore_count..swapchain_image_count) |i| {
             self.render_finished_semaphores.items[i] = try vk.createSemaphore(ctx.device, &semaphore_info, null);
@@ -204,6 +209,7 @@ pub const SurfaceState = struct {
         };
 
         self.depth_image = try vk.createImage(ctx.device, &image_info, null);
+        errdefer vk.destroyImage(ctx.device, self.depth_image, null);
 
         var mem_requirements: vk.VkMemoryRequirements = undefined;
         vk.getImageMemoryRequirements(ctx.device, self.depth_image, &mem_requirements);
@@ -222,6 +228,7 @@ pub const SurfaceState = struct {
         };
 
         self.depth_image_memory = try vk.allocateMemory(ctx.device, &alloc_info, null);
+        errdefer vk.freeMemory(ctx.device, self.depth_image_memory, null);
         try vk.bindImageMemory(ctx.device, self.depth_image, self.depth_image_memory, 0);
 
         const view_info = vk.VkImageViewCreateInfo{

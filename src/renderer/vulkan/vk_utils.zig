@@ -43,6 +43,7 @@ pub fn createBuffer(
     };
 
     buffer.* = try vk.createBuffer(ctx.device, &buffer_info, null);
+    errdefer vk.destroyBuffer(ctx.device, buffer.*, null);
 
     var mem_requirements: vk.VkMemoryRequirements = undefined;
     vk.getBufferMemoryRequirements(ctx.device, buffer.*, &mem_requirements);
@@ -61,6 +62,7 @@ pub fn createBuffer(
     };
 
     buffer_memory.* = try vk.allocateMemory(ctx.device, &alloc_info, null);
+    errdefer vk.freeMemory(ctx.device, buffer_memory.*, null);
     try vk.bindBufferMemory(ctx.device, buffer.*, buffer_memory.*, 0);
 }
 

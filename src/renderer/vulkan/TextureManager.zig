@@ -110,6 +110,8 @@ pub const TextureManager = struct {
             &staging_buffer,
             &staging_buffer_memory,
         );
+        defer vk.destroyBuffer(ctx.device, staging_buffer, null);
+        defer vk.freeMemory(ctx.device, staging_buffer_memory, null);
 
         var data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, staging_buffer_memory, 0, total_size, 0, &data);
@@ -303,8 +305,6 @@ pub const TextureManager = struct {
         try vk.queueWaitIdle(ctx.graphics_queue);
         vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd_buffers);
 
-        vk.destroyBuffer(ctx.device, staging_buffer, null);
-        vk.freeMemory(ctx.device, staging_buffer_memory, null);
 
         const view_info = vk.VkImageViewCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
