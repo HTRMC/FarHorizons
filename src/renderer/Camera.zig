@@ -64,13 +64,12 @@ pub fn getViewProjectionMatrix(self: Camera) zlm.Mat4 {
 }
 
 pub fn move(self: *Camera, forward_amount: f32, right_amount: f32, up_amount: f32) void {
-    const forward = self.getForward();
-    const right = self.getRight();
-    const world_up = zlm.Vec3.init(0.0, 1.0, 0.0);
+    const sin_yaw = @sin(self.yaw);
+    const cos_yaw = @cos(self.yaw);
 
-    self.position = zlm.Vec3.add(self.position, zlm.Vec3.scale(forward, forward_amount));
-    self.position = zlm.Vec3.add(self.position, zlm.Vec3.scale(right, right_amount));
-    self.position = zlm.Vec3.add(self.position, zlm.Vec3.scale(world_up, up_amount));
+    self.position.x += -sin_yaw * forward_amount + cos_yaw * right_amount;
+    self.position.y += up_amount;
+    self.position.z += -cos_yaw * forward_amount - sin_yaw * right_amount;
 }
 
 pub fn look(self: *Camera, delta_yaw: f32, delta_pitch: f32) void {
