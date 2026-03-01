@@ -663,15 +663,10 @@ pub fn generateTerrainWorld(out: *World) void {
 /// Recompute a single output block from its 2x2x2 source neighborhood.
 /// `dst_bx/by/bz` are block coords within the destination world's voxel space.
 /// Returns the majority-vote block type from the 2x2x2 source region.
-pub fn downsampleBlock(src: *const World, src_lod_level: u8, dst_bx: i32, dst_by: i32, dst_bz: i32) BlockType {
-    const src_scale: u32 = @as(u32, 1) << @intCast(src_lod_level);
-    const src_chunks_x: i32 = @intCast(@max(1, WORLD_CHUNKS_X / src_scale));
-    const src_chunks_y: i32 = @intCast(@max(1, WORLD_CHUNKS_Y / src_scale));
-    const src_chunks_z: i32 = @intCast(@max(1, WORLD_CHUNKS_Z / src_scale));
-
-    const src_half_x = @divExact(src_chunks_x * CHUNK_SIZE, 2);
-    const src_half_y = @divExact(src_chunks_y * CHUNK_SIZE, 2);
-    const src_half_z = @divExact(src_chunks_z * CHUNK_SIZE, 2);
+pub fn downsampleBlock(src: *const World, dst_bx: i32, dst_by: i32, dst_bz: i32) BlockType {
+    const src_half_x: i32 = WORLD_SIZE_X / 2;
+    const src_half_y: i32 = WORLD_SIZE_Y / 2;
+    const src_half_z: i32 = WORLD_SIZE_Z / 2;
 
     // Map destination block to source world coords (2x scale)
     const src_wx = dst_bx * 2 - src_half_x;
@@ -725,10 +720,10 @@ pub fn downsampleWorld(src: *const World, dst: *World, src_lod_level: u8) void {
     const dst_chunks_y = @max(1, src_chunks_y / 2);
     const dst_chunks_z = @max(1, src_chunks_z / 2);
 
-    // Half-size of the source world in blocks (for world-space offset)
-    const src_half_x: i32 = @intCast(src_chunks_x * CHUNK_SIZE / 2);
-    const src_half_y: i32 = @intCast(src_chunks_y * CHUNK_SIZE / 2);
-    const src_half_z: i32 = @intCast(src_chunks_z * CHUNK_SIZE / 2);
+    // Always use global half — getBlock/setBlock offset by WORLD_SIZE/2
+    const src_half_x: i32 = WORLD_SIZE_X / 2;
+    const src_half_y: i32 = WORLD_SIZE_Y / 2;
+    const src_half_z: i32 = WORLD_SIZE_Z / 2;
 
     for (0..dst_chunks_y) |cy| {
         for (0..dst_chunks_z) |cz| {

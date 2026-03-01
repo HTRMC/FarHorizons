@@ -64,6 +64,9 @@ offhand: WorldState.BlockType = .air,
 
 storage: ?*Storage,
 
+debug_screens: u8 = 0,
+delta_time: f32 = 0,
+
 prev_entity_pos: [3]f32,
 prev_camera_pos: zlm.Vec3,
 tick_camera_pos: zlm.Vec3,
@@ -508,8 +511,6 @@ fn propagateLodBlock(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     if (vx >= WorldState.WORLD_SIZE_X or vy >= WorldState.WORLD_SIZE_Y or vz >= WorldState.WORLD_SIZE_Z) return;
 
     for (1..MAX_LOD) |lod_usize| {
-        const src_lod: u8 = @intCast(lod_usize - 1);
-
         // Destination block in voxel-space = source voxel / 2
         const dst_vx = @divFloor(vx, 2);
         const dst_vy = @divFloor(vy, 2);
@@ -518,7 +519,6 @@ fn propagateLodBlock(self: *GameState, wx: i32, wy: i32, wz: i32) void {
         // Downsample the single affected block
         const new_block = WorldState.downsampleBlock(
             self.lod_worlds[lod_usize - 1],
-            src_lod,
             dst_vx,
             dst_vy,
             dst_vz,
