@@ -47,6 +47,7 @@ entity_on_ground: bool,
 mode: MovementMode,
 input_move: [3]f32,
 jump_requested: bool,
+jump_cooldown: u8,
 hit_result: ?Raycast.BlockHitResult,
 dirty_chunks: DirtyChunkSet,
 debug_camera_active: bool,
@@ -210,6 +211,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .mode = .flying,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .jump_requested = false,
+        .jump_cooldown = 0,
         .hit_result = null,
         .dirty_chunks = DirtyChunkSet.empty(),
         .current_lod = 0,
@@ -289,6 +291,9 @@ pub fn toggleMode(self: *GameState) void {
             };
             self.prev_entity_pos = self.entity_pos;
             self.entity_vel = .{ 0.0, 0.0, 0.0 };
+            self.entity_on_ground = false;
+            self.jump_requested = false;
+            self.jump_cooldown = 5;
             self.mode = .walking;
         },
         .walking => {
@@ -335,8 +340,11 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
             }
         },
         .walking => {
-            if (self.jump_requested and self.entity_on_ground) {
-                self.entity_vel[1] = 7.5;
+            if (self.jump_cooldown > 0) {
+                self.jump_cooldown -= 1;
+                self.jump_requested = false;
+            } else if (self.jump_requested and self.entity_on_ground) {
+                self.entity_vel[1] = 8.7;
                 self.jump_requested = false;
             }
 
