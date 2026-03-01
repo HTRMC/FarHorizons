@@ -60,8 +60,8 @@ pub const GpuMemoryPool = struct {
         return self.tlsf.allocAligned(size, alignment);
     }
 
-    pub fn free(self: *GpuMemoryPool, offset: u32) void {
-        self.tlsf.free(offset);
+    pub fn free(self: *GpuMemoryPool, handle: TlsfAllocator.Handle) void {
+        self.tlsf.free(handle);
     }
 
     pub fn getMappedSlice(self: *const GpuMemoryPool, offset: u32, _: u32) ?[*]u8 {

@@ -137,11 +137,11 @@ pub const WorldRenderer = struct {
         const slot = coord.flatIndex();
 
         if (self.chunk_face_alloc[slot]) |fa| {
-            self.face_tlsf.free(fa.offset);
+            self.face_tlsf.free(fa.handle);
             self.chunk_face_alloc[slot] = null;
         }
         if (self.chunk_light_alloc[slot]) |la| {
-            self.light_tlsf.free(la.offset);
+            self.light_tlsf.free(la.handle);
             self.chunk_light_alloc[slot] = null;
         }
 
@@ -163,7 +163,7 @@ pub const WorldRenderer = struct {
             });
             return error.OutOfMemory;
         };
-        errdefer self.face_tlsf.free(fa.offset);
+        errdefer self.face_tlsf.free(fa.handle);
 
         const la = if (light_count > 0)
             self.light_tlsf.alloc(light_count) orelse {
@@ -173,7 +173,7 @@ pub const WorldRenderer = struct {
                 return error.OutOfMemory;
             }
         else
-            TlsfAllocator.Allocation{ .offset = 0, .size = 0 };
+            TlsfAllocator.Allocation{ .offset = 0, .size = 0, .handle = TlsfAllocator.null_handle };
 
         self.chunk_face_alloc[slot] = fa;
         if (light_count > 0) self.chunk_light_alloc[slot] = la;

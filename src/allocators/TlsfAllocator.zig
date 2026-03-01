@@ -8,6 +8,7 @@ pub const TlsfAllocator = struct {
     pub const Allocation = struct {
         offset: u32,
         size: u32,
+        handle: Handle,
     };
 
     pub const Handle = u16;
@@ -17,6 +18,7 @@ pub const TlsfAllocator = struct {
         offset: u32,
         size: u32,
         free: bool,
+        recycled: bool,
         prev_phys: Handle,
         next_phys: Handle,
         prev_free: Handle,
@@ -53,6 +55,7 @@ pub const TlsfAllocator = struct {
             .offset = 0,
             .size = capacity,
             .free = true,
+            .recycled = false,
             .prev_phys = null_handle,
             .next_phys = null_handle,
             .prev_free = null_handle,
@@ -81,6 +84,7 @@ pub const TlsfAllocator = struct {
                     .offset = block.offset + size,
                     .size = remainder,
                     .free = true,
+                    .recycled = false,
                     .prev_phys = handle,
                     .next_phys = block.next_phys,
                     .prev_free = null_handle,
@@ -98,7 +102,7 @@ pub const TlsfAllocator = struct {
         }
 
         block.free = false;
-        return .{ .offset = block.offset, .size = block.size };
+        return .{ .offset = block.offset, .size = block.size, .handle = handle };
     }
 
     pub fn allocAligned(self: *TlsfAllocator, size: u32, alignment: u32) ?Allocation {
@@ -126,6 +130,7 @@ pub const TlsfAllocator = struct {
                     .offset = block.offset,
                     .size = front_waste,
                     .free = true,
+                    .recycled = false,
                     .prev_phys = block.prev_phys,
                     .next_phys = handle,
                     .prev_free = null_handle,
@@ -149,6 +154,7 @@ pub const TlsfAllocator = struct {
                     .offset = block.offset + size,
                     .size = remainder,
                     .free = true,
+                    .recycled = false,
                     .prev_phys = handle,
                     .next_phys = block.next_phys,
                     .prev_free = null_handle,
@@ -164,15 +170,16 @@ pub const TlsfAllocator = struct {
         }
 
         block.free = false;
-        return .{ .offset = block.offset, .size = block.size };
+        return .{ .offset = block.offset, .size = block.size, .handle = handle };
     }
 
     pub fn alignUp(offset: u32, alignment: u32) u32 {
         return (offset + alignment - 1) & ~(alignment - 1);
     }
 
-    pub fn free(self: *TlsfAllocator, offset: u32) void {
-        const handle = self.findBlockByOffset(offset) orelse return;
+    pub fn free(self: *TlsfAllocator, handle: Handle) void {
+        if (handle >= self.block_count) return;
+        if (self.blocks[handle].recycled or self.blocks[handle].free) return;
         var block = &self.blocks[handle];
         block.free = true;
 
@@ -212,7 +219,7 @@ pub const TlsfAllocator = struct {
         var total: u32 = 0;
         var i: u16 = 0;
         while (i < self.block_count) : (i += 1) {
-            if (!self.isRecycled(i) and self.blocks[i].free) {
+            if (!self.blocks[i].recycled and self.blocks[i].free) {
                 total += self.blocks[i].size;
             }
         }
@@ -223,7 +230,7 @@ pub const TlsfAllocator = struct {
         var largest: u32 = 0;
         var i: u16 = 0;
         while (i < self.block_count) : (i += 1) {
-            if (!self.isRecycled(i) and self.blocks[i].free and self.blocks[i].size > largest) {
+            if (!self.blocks[i].recycled and self.blocks[i].free and self.blocks[i].size > largest) {
                 largest = self.blocks[i].size;
             }
         }
@@ -328,16 +335,6 @@ pub const TlsfAllocator = struct {
         }
     }
 
-    fn findBlockByOffset(self: *const TlsfAllocator, offset: u32) ?Handle {
-        var i: u16 = 0;
-        while (i < self.block_count) : (i += 1) {
-            if (!self.isRecycled(i) and self.blocks[i].offset == offset and !self.blocks[i].free) {
-                return i;
-            }
-        }
-        return null;
-    }
-
     fn newBlock(self: *TlsfAllocator) ?Handle {
         if (self.free_stack_top > 0) {
             self.free_stack_top -= 1;
@@ -354,6 +351,7 @@ pub const TlsfAllocator = struct {
             .offset = std.math.maxInt(u32),
             .size = 0,
             .free = false,
+            .recycled = true,
             .prev_phys = null_handle,
             .next_phys = null_handle,
             .prev_free = null_handle,
@@ -361,13 +359,6 @@ pub const TlsfAllocator = struct {
         };
         self.free_block_stack[self.free_stack_top] = handle;
         self.free_stack_top += 1;
-    }
-
-    fn isRecycled(self: *const TlsfAllocator, handle: Handle) bool {
-        for (self.free_block_stack[0..self.free_stack_top]) |h| {
-            if (h == handle) return true;
-        }
-        return false;
     }
 };
 
@@ -383,7 +374,7 @@ test "basic alloc and free" {
     try std.testing.expectEqual(100, r2.offset);
     try std.testing.expectEqual(200, r2.size);
 
-    a.free(r1.offset);
+    a.free(r1.handle);
 
     const r3 = a.alloc(50).?;
     try std.testing.expectEqual(0, r3.offset);
@@ -396,12 +387,11 @@ test "merge coalesces adjacent free blocks" {
     const r1 = a.alloc(100).?;
     const r2 = a.alloc(100).?;
     const r3 = a.alloc(100).?;
-    _ = r2;
 
-    a.free(r1.offset);
-    a.free(r3.offset);
+    a.free(r1.handle);
+    a.free(r3.handle);
 
-    a.free(100);
+    a.free(r2.handle);
 
     const big = a.alloc(300).?;
     try std.testing.expectEqual(0, big.offset);
@@ -428,8 +418,8 @@ test "full alloc-free cycle restores capacity" {
 
     try std.testing.expect(a.alloc(1) == null);
 
-    a.free(r1.offset);
-    a.free(r2.offset);
+    a.free(r1.handle);
+    a.free(r2.handle);
 
     const big = a.alloc(1024).?;
     try std.testing.expectEqual(0, big.offset);
@@ -438,17 +428,17 @@ test "full alloc-free cycle restores capacity" {
 
 test "many small allocations" {
     var a = TlsfAllocator.init(1000);
-    var offsets: [100]u32 = undefined;
+    var handles: [100]TlsfAllocator.Handle = undefined;
 
     for (0..100) |i| {
         const r = a.alloc(10).?;
-        offsets[i] = r.offset;
+        handles[i] = r.handle;
     }
 
     try std.testing.expect(a.alloc(1) == null);
 
     for (0..100) |i| {
-        a.free(offsets[i]);
+        a.free(handles[i]);
     }
 
     try std.testing.expectEqual(1000, a.totalFree());
@@ -466,7 +456,7 @@ test "totalFree and largestFree" {
     const r2 = a.alloc(200).?;
     _ = a.alloc(100).?;
 
-    a.free(r2.offset);
+    a.free(r2.handle);
     try std.testing.expectEqual(824, a.totalFree());
 }
 
@@ -494,10 +484,10 @@ test "free in reverse order merges correctly" {
     const r3 = a.alloc(256).?;
     const r4 = a.alloc(256).?;
 
-    a.free(r4.offset);
-    a.free(r3.offset);
-    a.free(r2.offset);
-    a.free(r1.offset);
+    a.free(r4.handle);
+    a.free(r3.handle);
+    a.free(r2.handle);
+    a.free(r1.handle);
 
     try std.testing.expectEqual(1024, a.largestFree());
     const big = a.alloc(1024).?;
@@ -514,7 +504,7 @@ test "searchMapping rounds up to guarantee block >= requested size" {
     }
 
     for (0..50) |i| {
-        if (i % 2 == 0) a.free(allocs[i].offset);
+        if (i % 2 == 0) a.free(allocs[i].handle);
     }
 
     for (0..25) |i| {
@@ -536,8 +526,8 @@ test "allocAligned basic alignment" {
     try std.testing.expectEqual(0, r2.offset % 256);
     try std.testing.expectEqual(200, r2.size);
 
-    a.free(r1.offset);
-    a.free(r2.offset);
+    a.free(r1.handle);
+    a.free(r2.handle);
     try std.testing.expectEqual(4096, a.totalFree());
 }
 

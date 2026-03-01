@@ -17,7 +17,7 @@ pub const BufferAllocation = struct {
     offset: vk.VkDeviceSize,
     size: vk.VkDeviceSize,
     pool_kind: PoolKind,
-    tlsf_offset: u32,
+    tlsf_handle: TlsfAllocator.Handle,
     mapped_ptr: ?[*]u8,
 };
 
@@ -133,7 +133,7 @@ pub const GpuAllocator = struct {
             });
             return error.OutOfMemory;
         };
-        errdefer pool.free(tlsf_alloc.offset);
+        errdefer pool.free(tlsf_alloc.handle);
 
         const offset: vk.VkDeviceSize = @intCast(tlsf_alloc.offset);
         try vk.bindBufferMemory(self.device, buffer, pool.memory, offset);
@@ -146,14 +146,14 @@ pub const GpuAllocator = struct {
             .offset = offset,
             .size = size,
             .pool_kind = pool_kind,
-            .tlsf_offset = tlsf_alloc.offset,
+            .tlsf_handle = tlsf_alloc.handle,
             .mapped_ptr = mapped_ptr,
         };
     }
 
     pub fn destroyBuffer(self: *GpuAllocator, alloc: BufferAllocation) void {
         vk.destroyBuffer(self.device, alloc.buffer, null);
-        self.getPool(alloc.pool_kind).free(alloc.tlsf_offset);
+        self.getPool(alloc.pool_kind).free(alloc.tlsf_handle);
     }
 
     fn getPool(self: *GpuAllocator, kind: PoolKind) *GpuMemoryPool {
