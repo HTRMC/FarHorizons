@@ -1,5 +1,4 @@
 const std = @import("std");
-const zlm = @import("zlm");
 const GameState = @import("GameState.zig");
 const WorldState = @import("world/WorldState.zig");
 
@@ -18,24 +17,20 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
     const forward_input = state.input_move[0];
     const right_input = state.input_move[2];
 
-    const cam_forward = state.camera.getForward();
-    const cam_right = state.camera.getRight();
-    const fwd_xz = zlm.Vec3.init(cam_forward.x, 0.0, cam_forward.z);
-    const right_xz = zlm.Vec3.init(cam_right.x, 0.0, cam_right.z);
-    const fwd_norm = zlm.Vec3.normalize(fwd_xz);
-    const right_norm = zlm.Vec3.normalize(right_xz);
+    const sin_yaw = @sin(state.camera.yaw);
+    const cos_yaw = @cos(state.camera.yaw);
 
-    var wish = zlm.Vec3.add(
-        zlm.Vec3.scale(fwd_norm, forward_input),
-        zlm.Vec3.scale(right_norm, right_input),
-    );
-    const wish_len = zlm.Vec3.length(wish);
-    if (wish_len > 1.0) {
-        wish = zlm.Vec3.scale(wish, 1.0 / wish_len);
+    var wish_x = -forward_input * sin_yaw + right_input * cos_yaw;
+    var wish_z = -forward_input * cos_yaw - right_input * sin_yaw;
+    const wish_len_sq = wish_x * wish_x + wish_z * wish_z;
+    if (wish_len_sq > 1.0) {
+        const inv_len = 1.0 / @sqrt(wish_len_sq);
+        wish_x *= inv_len;
+        wish_z *= inv_len;
     }
 
-    const target_vx = wish.x * WALK_SPEED;
-    const target_vz = wish.z * WALK_SPEED;
+    const target_vx = wish_x * WALK_SPEED;
+    const target_vz = wish_z * WALK_SPEED;
 
     const control = if (state.entity_on_ground) FRICTION else FRICTION * AIR_CONTROL;
     const max_delta = control * dt;
