@@ -113,7 +113,9 @@ pub const IoPipeline = struct {
     pub fn stop(self: *IoPipeline) void {
         self.shutdown.store(true, .release);
 
+        self.queue_mutex.lockUncancelable(self.io);
         self.queue_cond.broadcast(self.io);
+        self.queue_mutex.unlock(self.io);
 
         for (&self.workers) |*w| {
             if (w.*) |thread| {
