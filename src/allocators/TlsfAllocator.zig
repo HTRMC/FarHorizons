@@ -48,7 +48,7 @@ pub const TlsfAllocator = struct {
             .capacity = capacity,
         };
 
-        const handle = self.newBlock();
+        const handle = self.newBlock().?;
         self.blocks[handle] = .{
             .offset = 0,
             .size = capacity,
@@ -76,24 +76,25 @@ pub const TlsfAllocator = struct {
         const remainder = block.size - size;
 
         if (remainder > 0) {
-            const split_handle = self.newBlock();
-            self.blocks[split_handle] = .{
-                .offset = block.offset + size,
-                .size = remainder,
-                .free = true,
-                .prev_phys = handle,
-                .next_phys = block.next_phys,
-                .prev_free = null_handle,
-                .next_free = null_handle,
-            };
+            if (self.newBlock()) |split_handle| {
+                self.blocks[split_handle] = .{
+                    .offset = block.offset + size,
+                    .size = remainder,
+                    .free = true,
+                    .prev_phys = handle,
+                    .next_phys = block.next_phys,
+                    .prev_free = null_handle,
+                    .next_free = null_handle,
+                };
 
-            if (block.next_phys != null_handle) {
-                self.blocks[block.next_phys].prev_phys = split_handle;
+                if (block.next_phys != null_handle) {
+                    self.blocks[block.next_phys].prev_phys = split_handle;
+                }
+                block.next_phys = split_handle;
+                block.size = size;
+
+                self.insertFreeBlock(split_handle);
             }
-            block.next_phys = split_handle;
-            block.size = size;
-
-            self.insertFreeBlock(split_handle);
         }
 
         block.free = false;
@@ -267,11 +268,12 @@ pub const TlsfAllocator = struct {
         return null;
     }
 
-    fn newBlock(self: *TlsfAllocator) Handle {
+    fn newBlock(self: *TlsfAllocator) ?Handle {
         if (self.free_stack_top > 0) {
             self.free_stack_top -= 1;
             return self.free_block_stack[self.free_stack_top];
         }
+        if (self.block_count >= max_blocks) return null;
         const handle = self.block_count;
         self.block_count += 1;
         return handle;
