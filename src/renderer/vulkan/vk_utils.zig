@@ -179,3 +179,90 @@ pub fn copyBufferRegion(
     try vk.queueSubmit(ctx.graphics_queue, 1, &submit_infos, null);
     try vk.queueWaitIdle(ctx.graphics_queue);
 }
+
+pub const TransferBatch = struct {
+    const MAX_STAGING = 32;
+
+    cmd: vk.VkCommandBuffer,
+    ctx: *const VulkanContext,
+    staging_buffers: [MAX_STAGING]vk.VkBuffer = [_]vk.VkBuffer{null} ** MAX_STAGING,
+    staging_memory: [MAX_STAGING]vk.VkDeviceMemory = [_]vk.VkDeviceMemory{null} ** MAX_STAGING,
+    staging_count: u32 = 0,
+    has_commands: bool = false,
+
+    pub fn begin(ctx: *const VulkanContext) !TransferBatch {
+        const cb_alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = ctx.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var cmd_buffers: [1]vk.VkCommandBuffer = undefined;
+        try vk.allocateCommandBuffers(ctx.device, &cb_alloc_info, &cmd_buffers);
+        errdefer vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd_buffers);
+
+        try vk.beginCommandBuffer(cmd_buffers[0], &.{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        });
+
+        return .{ .cmd = cmd_buffers[0], .ctx = ctx };
+    }
+
+    pub fn copyRegion(
+        self: *TransferBatch,
+        src: vk.VkBuffer,
+        src_offset: vk.VkDeviceSize,
+        dst: vk.VkBuffer,
+        dst_offset: vk.VkDeviceSize,
+        size: vk.VkDeviceSize,
+    ) void {
+        const regions = [_]vk.VkBufferCopy{.{
+            .srcOffset = src_offset,
+            .dstOffset = dst_offset,
+            .size = size,
+        }};
+        vk.cmdCopyBuffer(self.cmd, src, dst, 1, &regions);
+        self.has_commands = true;
+    }
+
+    pub fn addStaging(self: *TransferBatch, buffer: vk.VkBuffer, memory: vk.VkDeviceMemory) void {
+        self.staging_buffers[self.staging_count] = buffer;
+        self.staging_memory[self.staging_count] = memory;
+        self.staging_count += 1;
+    }
+
+    pub fn submitAndWait(self: *TransferBatch) !void {
+        defer {
+            const cmds = [1]vk.VkCommandBuffer{self.cmd};
+            vk.freeCommandBuffers(self.ctx.device, self.ctx.command_pool, 1, &cmds);
+            for (0..self.staging_count) |i| {
+                vk.destroyBuffer(self.ctx.device, self.staging_buffers[i], null);
+                vk.freeMemory(self.ctx.device, self.staging_memory[i], null);
+            }
+        }
+
+        if (!self.has_commands) return;
+
+        try vk.endCommandBuffer(self.cmd);
+
+        const submit_infos = [_]vk.VkSubmitInfo{.{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &self.cmd,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        }};
+
+        try vk.queueSubmit(self.ctx.graphics_queue, 1, &submit_infos, null);
+        try vk.queueWaitIdle(self.ctx.graphics_queue);
+    }
+};

@@ -138,6 +138,7 @@ pub const WorldRenderer = struct {
     pub fn uploadChunkData(
         self: *WorldRenderer,
         ctx: *const VulkanContext,
+        batch: *vk_utils.TransferBatch,
         coord: WorldState.ChunkCoord,
         faces: []const FaceData,
         face_counts: [6]u32,
@@ -205,10 +206,7 @@ pub const WorldRenderer = struct {
                 &staging_buffer,
                 &staging_memory,
             );
-            defer {
-                vk.destroyBuffer(ctx.device, staging_buffer, null);
-                vk.freeMemory(ctx.device, staging_memory, null);
-            }
+            batch.addStaging(staging_buffer, staging_memory);
 
             var data: ?*anyopaque = null;
             try vk.mapMemory(ctx.device, staging_memory, 0, fb_size, 0, &data);
@@ -217,7 +215,7 @@ pub const WorldRenderer = struct {
             vk.unmapMemory(ctx.device, staging_memory);
 
             const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, fa.offset) * @sizeOf(FaceData));
-            try vk_utils.copyBufferRegion(ctx, staging_buffer, 0, self.face_buffer, dst_offset, fb_size);
+            batch.copyRegion(staging_buffer, 0, self.face_buffer, dst_offset, fb_size);
         }
 
         if (light_count > 0) {
@@ -232,10 +230,7 @@ pub const WorldRenderer = struct {
                 &staging_buffer,
                 &staging_memory,
             );
-            defer {
-                vk.destroyBuffer(ctx.device, staging_buffer, null);
-                vk.freeMemory(ctx.device, staging_memory, null);
-            }
+            batch.addStaging(staging_buffer, staging_memory);
 
             var data: ?*anyopaque = null;
             try vk.mapMemory(ctx.device, staging_memory, 0, lb_size, 0, &data);
@@ -244,7 +239,7 @@ pub const WorldRenderer = struct {
             vk.unmapMemory(ctx.device, staging_memory);
 
             const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, la.offset) * @sizeOf(LightEntry));
-            try vk_utils.copyBufferRegion(ctx, staging_buffer, 0, self.light_buffer, dst_offset, lb_size);
+            batch.copyRegion(staging_buffer, 0, self.light_buffer, dst_offset, lb_size);
         }
 
         self.chunk_data[slot] = .{

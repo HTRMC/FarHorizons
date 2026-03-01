@@ -8,6 +8,7 @@ const SurfaceState = @import("SurfaceState.zig").SurfaceState;
 const render_state_mod = @import("RenderState.zig");
 const RenderState = render_state_mod.RenderState;
 const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
+const vk_utils = @import("vk_utils.zig");
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
@@ -254,12 +255,18 @@ pub const VulkanRenderer = struct {
         const mw = &(self.mesh_worker orelse return);
         const poll_result = mw.poll() orelse return;
 
+        var batch = vk_utils.TransferBatch.begin(&self.ctx) catch |err| {
+            std.log.err("Failed to begin transfer batch: {}", .{err});
+            return;
+        };
+
         const voxel_size: u32 = @as(u32, 1) << @intCast(gs.current_lod);
 
         for (0..poll_result.count) |i| {
             if (poll_result.results[i]) |chunk_result| {
                 self.render_state.world_renderer.uploadChunkData(
                     &self.ctx,
+                    &batch,
                     chunk_result.coord,
                     chunk_result.faces,
                     chunk_result.face_counts,
@@ -275,6 +282,10 @@ pub const VulkanRenderer = struct {
                 mw.freeResult(i);
             }
         }
+
+        batch.submitAndWait() catch |err| {
+            std.log.err("Failed to submit transfer batch: {}", .{err});
+        };
     }
 
     pub fn endFrame(self: *VulkanRenderer) !void {
