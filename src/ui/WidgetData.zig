@@ -86,6 +86,8 @@ pub const TextInputData = struct {
     cursor_blink_counter: u16 = 0,
     max_len: u8 = MAX_TEXT_LEN,
     scroll_offset: f32 = 0,
+    on_change_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
+    on_change_action_len: u8 = 0,
 
     pub fn getText(self: *const TextInputData) []const u8 {
         return self.buffer[0..self.buffer_len];

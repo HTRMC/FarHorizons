@@ -127,7 +127,7 @@ pub fn fireWidgetAction(tree: *WidgetTree, id: WidgetId, registry: *const Action
     }
 }
 
-pub fn dispatchChar(tree: *WidgetTree, codepoint: u32) bool {
+pub fn dispatchChar(tree: *WidgetTree, codepoint: u32, registry: *const ActionRegistry) bool {
     const focused_id = findFocused(tree);
     if (focused_id == NULL_WIDGET) return false;
 
@@ -138,10 +138,18 @@ pub fn dispatchChar(tree: *WidgetTree, codepoint: u32) bool {
         const data = tree.getData(focused_id) orelse return false;
         data.text_input.insertChar(@intCast(codepoint));
         data.text_input.cursor_blink_counter = 0;
+        fireTextInputChange(&data.text_input, registry);
         return true;
     }
 
     return false;
+}
+
+fn fireTextInputChange(ti: *WidgetData.TextInputData, registry: *const ActionRegistry) void {
+    const action_name = ti.on_change_action[0..ti.on_change_action_len];
+    if (action_name.len > 0) {
+        _ = registry.dispatch(action_name);
+    }
 }
 
 pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, registry: *const ActionRegistry) bool {
@@ -168,6 +176,7 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
             if (key == glfw.GLFW_KEY_BACKSPACE) {
                 ti.deleteBack();
                 ti.cursor_blink_counter = 0;
+                fireTextInputChange(ti, registry);
                 return true;
             } else if (key == glfw.GLFW_KEY_DELETE) {
                 if (ti.hasSelection()) {
@@ -178,6 +187,7 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
                     ti.deleteBack();
                 }
                 ti.cursor_blink_counter = 0;
+                fireTextInputChange(ti, registry);
                 return true;
             } else if (key == glfw.GLFW_KEY_LEFT) {
                 if (shift) {

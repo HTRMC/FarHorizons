@@ -31,6 +31,7 @@ pub const MenuController = struct {
 
     title_screen_loaded: bool = false,
     singleplayer_screen_loaded: bool = false,
+    create_world_screen_loaded: bool = false,
     pause_screen_loaded: bool = false,
     hud_screen_loaded: bool = false,
 
@@ -42,7 +43,8 @@ pub const MenuController = struct {
     no_worlds_label_id: WidgetId = NULL_WIDGET,
     delete_confirm_id: WidgetId = NULL_WIDGET,
     delete_label_id: WidgetId = NULL_WIDGET,
-    world_name_input_id: WidgetId = NULL_WIDGET,
+    world_search_input_id: WidgetId = NULL_WIDGET,
+    create_world_input_id: WidgetId = NULL_WIDGET,
 
     pub fn init(ui_manager: *UiManager, allocator: std.mem.Allocator) MenuController {
         var self = MenuController{
@@ -71,7 +73,12 @@ pub const MenuController = struct {
         self.no_worlds_label_id = tree.findById("no_worlds_label") orelse NULL_WIDGET;
         self.delete_confirm_id = tree.findById("delete_confirm") orelse NULL_WIDGET;
         self.delete_label_id = tree.findById("delete_label") orelse NULL_WIDGET;
-        self.world_name_input_id = tree.findById("world_name_input") orelse NULL_WIDGET;
+        self.world_search_input_id = tree.findById("world_search_input") orelse NULL_WIDGET;
+    }
+
+    fn cacheCreateWorldWidgetIds(self: *MenuController) void {
+        const tree = self.createWorldTree() orelse return;
+        self.create_world_input_id = tree.findById("create_world_input") orelse NULL_WIDGET;
     }
 
     fn titleTree(self: *MenuController) ?*WidgetTree {
@@ -88,11 +95,20 @@ pub const MenuController = struct {
         return &self.ui_manager.screens[0].tree;
     }
 
+    fn createWorldTree(self: *MenuController) ?*WidgetTree {
+        if (!self.create_world_screen_loaded) return null;
+        if (self.ui_manager.screen_count == 0) return null;
+        if (!self.ui_manager.screens[0].active) return null;
+        return &self.ui_manager.screens[0].tree;
+    }
+
     pub fn registerActions(self: *MenuController) void {
         const reg = &self.ui_manager.registry;
         const ctx: *anyopaque = @ptrCast(self);
         reg.register("play_world", actionPlayWorld, ctx);
-        reg.register("create_world", actionCreateWorld, ctx);
+        reg.register("show_create_world", actionShowCreateWorld, ctx);
+        reg.register("confirm_create_world", actionConfirmCreateWorld, ctx);
+        reg.register("cancel_create_world", actionCancelCreateWorld, ctx);
         reg.register("delete_world", actionDeleteWorld, ctx);
         reg.register("confirm_delete", actionConfirmDelete, ctx);
         reg.register("cancel_delete", actionCancelDelete, ctx);
@@ -101,6 +117,7 @@ pub const MenuController = struct {
         reg.register("quit_game", actionQuitGame, ctx);
         reg.register("world_select", actionWorldSelect, ctx);
         reg.register("show_singleplayer", actionShowSingleplayer, ctx);
+        reg.register("search_worlds", actionSearchWorlds, ctx);
         reg.register("back_to_title", actionBackToTitle, ctx);
         reg.register("show_coming_soon", actionShowComingSoon, ctx);
         reg.register("dismiss_modal", actionDismissModal, ctx);
@@ -125,19 +142,42 @@ pub const MenuController = struct {
         self.populateWorldListWidget();
     }
 
+    fn getSearchFilter(self: *MenuController) []const u8 {
+        if (self.world_search_input_id == NULL_WIDGET) return "";
+        const tree = self.singleplayerTree() orelse return "";
+        const data = tree.getDataConst(self.world_search_input_id) orelse return "";
+        return data.text_input.getText();
+    }
+
+    fn matchesSearch(name: []const u8, filter: []const u8) bool {
+        if (filter.len == 0) return true;
+        if (filter.len > name.len) return false;
+        // Case-insensitive substring match
+        for (0..name.len - filter.len + 1) |start| {
+            var match = true;
+            for (0..filter.len) |j| {
+                if (std.ascii.toLower(name[start + j]) != std.ascii.toLower(filter[j])) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) return true;
+        }
+        return false;
+    }
+
     fn populateWorldListWidget(self: *MenuController) void {
         const tree = self.singleplayerTree() orelse return;
+        const filter = self.getSearchFilter();
+
+        var visible_count: u8 = 0;
 
         if (self.world_list_id != NULL_WIDGET) {
-            if (tree.getData(self.world_list_id)) |data| {
-                data.list_view.item_count = self.world_count;
-                data.list_view.selected_index = self.selection;
-                data.list_view.scroll_offset = 0;
-            }
-
             tree.clearChildren(self.world_list_id);
             for (0..self.world_count) |i| {
                 const name = self.world_names[i][0..self.world_name_lens[i]];
+                if (!matchesSearch(name, filter)) continue;
+                visible_count += 1;
 
                 const row_id = tree.addWidget(.panel, self.world_list_id) orelse break;
                 if (tree.getWidget(row_id)) |w| {
@@ -194,11 +234,17 @@ pub const MenuController = struct {
                     data.label.color = .{ .r = 0.6, .g = 0.6, .b = 0.6, .a = 1.0 };
                 }
             }
+
+            if (tree.getData(self.world_list_id)) |data| {
+                data.list_view.item_count = visible_count;
+                data.list_view.selected_index = 0;
+                data.list_view.scroll_offset = 0;
+            }
         }
 
         if (self.no_worlds_label_id != NULL_WIDGET) {
             if (tree.getWidget(self.no_worlds_label_id)) |w| {
-                w.visible = (self.world_count == 0);
+                w.visible = (visible_count == 0);
             }
         }
 
@@ -234,6 +280,11 @@ pub const MenuController = struct {
         if (self.hud_screen_loaded) {
             self.unloadHud();
         }
+        if (self.create_world_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.create_world_screen_loaded = false;
+            self.create_world_input_id = NULL_WIDGET;
+        }
         if (self.singleplayer_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.singleplayer_screen_loaded = false;
@@ -249,6 +300,11 @@ pub const MenuController = struct {
     }
 
     pub fn hideTitleMenu(self: *MenuController) void {
+        if (self.create_world_screen_loaded and self.ui_manager.screen_count > 0) {
+            self.ui_manager.removeTopScreen();
+            self.create_world_screen_loaded = false;
+            self.create_world_input_id = NULL_WIDGET;
+        }
         if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
             self.singleplayer_screen_loaded = false;
@@ -308,12 +364,12 @@ pub const MenuController = struct {
     }
 
     pub fn getInputName(self: *const MenuController) []const u8 {
-        const tree: *const WidgetTree = if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0)
+        const tree: *const WidgetTree = if (self.create_world_screen_loaded and self.ui_manager.screen_count > 0)
             &self.ui_manager.screens[0].tree
         else
             return "";
-        if (self.world_name_input_id == NULL_WIDGET) return "";
-        const data = tree.getDataConst(self.world_name_input_id) orelse return "";
+        if (self.create_world_input_id == NULL_WIDGET) return "";
+        const data = tree.getDataConst(self.create_world_input_id) orelse return "";
         return data.text_input.getText();
     }
 
@@ -322,7 +378,7 @@ pub const MenuController = struct {
         self.no_worlds_label_id = NULL_WIDGET;
         self.delete_confirm_id = NULL_WIDGET;
         self.delete_label_id = NULL_WIDGET;
-        self.world_name_input_id = NULL_WIDGET;
+        self.world_search_input_id = NULL_WIDGET;
     }
 
 
@@ -333,11 +389,44 @@ pub const MenuController = struct {
         }
     }
 
-    fn actionCreateWorld(ctx: ?*anyopaque) void {
+    fn actionShowCreateWorld(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        if (self.create_world_screen_loaded) return;
+        if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0) {
+            self.ui_manager.removeTopScreen();
+            self.singleplayer_screen_loaded = false;
+            self.resetSingleplayerWidgetIds();
+        }
+        if (self.ui_manager.loadScreenFromFile("create_world_menu.xml", self.allocator)) {
+            self.create_world_screen_loaded = true;
+            self.cacheCreateWorldWidgetIds();
+        } else {
+            log.err("Failed to load create_world_menu.xml", .{});
+        }
+    }
+
+    fn actionConfirmCreateWorld(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
         const name = self.getInputName();
         if (name.len > 0) {
             self.action = .create_world;
+        }
+    }
+
+    fn actionCancelCreateWorld(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        if (self.create_world_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.create_world_screen_loaded = false;
+            self.create_world_input_id = NULL_WIDGET;
+        }
+        if (self.ui_manager.loadScreenFromFile("singleplayer_menu.xml", self.allocator)) {
+            self.singleplayer_screen_loaded = true;
+            self.cacheSingleplayerWidgetIds();
+            self.refreshWorldList();
+            self.app_state = .singleplayer_menu;
+        } else {
+            log.err("Failed to load singleplayer_menu.xml", .{});
         }
     }
 
@@ -409,6 +498,11 @@ pub const MenuController = struct {
                 }
             }
         }
+    }
+
+    fn actionSearchWorlds(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.populateWorldListWidget();
     }
 
     fn actionShowSingleplayer(ctx: ?*anyopaque) void {

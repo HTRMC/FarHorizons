@@ -224,7 +224,7 @@ pub const UiManager = struct {
 
     pub fn handleChar(self: *UiManager, codepoint: u32) bool {
         const tree = self.topTree() orelse return false;
-        return EventDispatch.dispatchChar(tree, codepoint);
+        return EventDispatch.dispatchChar(tree, codepoint, &self.registry);
     }
 
     pub fn handleScroll(self: *UiManager, mouse_x: f32, mouse_y: f32, _: f32, y_delta: f32) bool {

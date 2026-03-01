@@ -7,8 +7,8 @@
            padding_top="32" padding_bottom="32">
 
       <!-- Search bar -->
-      <text_input id="world_name_input" placeholder="Search worlds..."
-                  width="fill" height="32" max_len="32"/>
+      <text_input id="world_search_input" placeholder="Search worlds..."
+                  width="fill" height="32" max_len="32" on_change="search_worlds"/>
 
       <!-- World list (children added at runtime) -->
       <list_view id="world_list" width="fill" height="fill" flex_grow="1"
@@ -25,7 +25,7 @@
         <button text="Play World" width="fill" height="40" flex_grow="1"
                 background="#335588FF" shadow="true" on_click="play_world"/>
         <button text="Create World" width="fill" height="40" flex_grow="1"
-                background="#338833FF" shadow="true" on_click="create_world"/>
+                background="#338833FF" shadow="true" on_click="show_create_world"/>
       </panel>
 
       <!-- Row 2: Edit | Delete | Backup | Back -->

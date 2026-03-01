@@ -233,6 +233,10 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.text_input.placeholder_color = parseColor(attr.value);
                 } else if (eql(attr.name, "max_len")) {
                     data.text_input.max_len = parseInt(attr.value);
+                } else if (eql(attr.name, "on_change")) {
+                    const len: u8 = @intCast(@min(attr.value.len, WidgetData.MAX_ACTION_LEN));
+                    @memcpy(data.text_input.on_change_action[0..len], attr.value[0..len]);
+                    data.text_input.on_change_action_len = len;
                 }
             }
         },

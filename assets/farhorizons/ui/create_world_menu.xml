@@ -1,0 +1,18 @@
+<screen>
+  <panel width="fill" height="fill" layout="anchor">
+    <panel anchor_x="center" anchor_y="center" direction="column"
+           cross_align="stretch" gap="16" width="400" height="auto"
+           padding="24" background="#1A1A2ECC" border_width="1" border_color="#444466FF">
+      <label text="Create New World" color="#FFFFFFFF" font_size="2"/>
+      <label text="World Name" color="#AAAAAAFF"/>
+      <text_input id="create_world_input" placeholder="My World"
+                  width="fill" height="32" max_len="32"/>
+      <panel direction="row" gap="8" width="fill">
+        <button text="Create" width="fill" height="40" flex_grow="1"
+                background="#338833FF" shadow="true" on_click="confirm_create_world"/>
+        <button text="Cancel" width="fill" height="40" flex_grow="1"
+                background="#555555FF" shadow="true" on_click="cancel_create_world"/>
+      </panel>
+    </panel>
+  </panel>
+</screen>
