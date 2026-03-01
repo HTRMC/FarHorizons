@@ -42,9 +42,6 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
     state.entity_vel[0] = approach(state.entity_vel[0], target_vx, max_delta);
     state.entity_vel[2] = approach(state.entity_vel[2], target_vz, max_delta);
 
-    state.entity_vel[1] -= GRAVITY * dt;
-    state.entity_vel[1] *= Y_DRAG;
-
     state.entity_on_ground = false;
 
     const movement = [3]f32{
@@ -78,6 +75,9 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
             state.entity_vel[axis] = 0.0;
         }
     }
+
+    state.entity_vel[1] -= GRAVITY * dt;
+    state.entity_vel[1] *= Y_DRAG;
 }
 
 fn collideAxis(world: *WorldState.World, pos: [3]f32, movement: f32, axis: usize) struct { distance: f32, hit: bool } {

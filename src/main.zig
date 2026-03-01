@@ -180,6 +180,7 @@ const InputState = struct {
     first_mouse: bool = true,
     move_speed: f32 = 20.0,
     last_space_press_time: f64 = 0.0,
+    space_was_held: bool = false,
     mode_toggle_requested: bool = false,
     debug_toggle_requested: bool = false,
     overdraw_toggle_requested: bool = false,
@@ -541,9 +542,11 @@ pub fn main() !void {
 
                     gs.input_move = .{ forward_input, up_input, right_input };
 
-                    if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) {
+                    const space_held = glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS;
+                    if (space_held and !input_state.space_was_held) {
                         gs.jump_requested = true;
                     }
+                    input_state.space_was_held = space_held;
 
                     tick_accumulator += delta_time;
                     if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
