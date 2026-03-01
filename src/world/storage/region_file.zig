@@ -183,6 +183,9 @@ pub const RegionFile = struct {
 
 
     pub fn readChunkRaw(self: *RegionFile, chunk_index: u9) !?[]u8 {
+        self.rw_lock.lockSharedUncancelable(self.io);
+        defer self.rw_lock.unlockShared(self.io);
+
         const entry = self.cot[chunk_index];
         if (!entry.isPresent()) return null;
 
@@ -204,19 +207,18 @@ pub const RegionFile = struct {
         chunk_index: u9,
         out_blocks: *[WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType,
     ) !bool {
-        const raw = try self.readChunkRaw(chunk_index) orelse return false;
-        defer self.mem_allocator.free(raw);
+        const raw_result = try self.readChunkRawWithAlgo(chunk_index) orelse return false;
+        defer self.mem_allocator.free(raw_result.data);
 
-        const entry = self.cot[chunk_index];
-        const algo = entry.compressionAlgo();
+        const algo = raw_result.algo;
 
         var decompressed_buf: [64 * 1024]u8 = undefined;
         if (algo == .none) {
-            try chunk_codec.decode(raw, out_blocks);
+            try chunk_codec.decode(raw_result.data, out_blocks);
         } else {
             const decompressed_len = try compression.decompress(
                 algo,
-                raw,
+                raw_result.data,
                 &decompressed_buf,
                 decompressed_buf.len,
             );
@@ -355,10 +357,31 @@ pub const RegionFile = struct {
         try self.commitHeader();
     }
 
-    pub fn chunkExists(self: *const RegionFile, chunk_index: u9) bool {
+    pub fn chunkExists(self: *RegionFile, chunk_index: u9) bool {
+        self.rw_lock.lockSharedUncancelable(self.io);
+        defer self.rw_lock.unlockShared(self.io);
         return self.cot[chunk_index].isPresent();
     }
 
+    fn readChunkRawWithAlgo(self: *RegionFile, chunk_index: u9) !?struct { data: []u8, algo: CompressionAlgo } {
+        self.rw_lock.lockSharedUncancelable(self.io);
+        defer self.rw_lock.unlockShared(self.io);
+
+        const entry = self.cot[chunk_index];
+        if (!entry.isPresent()) return null;
+
+        const offset: u64 = @as(u64, entry.sector_offset) * SECTOR_SIZE;
+        const size: usize = entry.compressed_size;
+
+        const buf = try self.mem_allocator.alloc(u8, size);
+        errdefer self.mem_allocator.free(buf);
+
+        self.preadAll(buf, offset) catch {
+            return error.IoError;
+        };
+
+        return .{ .data = buf, .algo = entry.compressionAlgo() };
+    }
 
     fn readHeader(self: *RegionFile) !void {
         var buf: [HEADER_SECTORS * SECTOR_SIZE]u8 = undefined;
