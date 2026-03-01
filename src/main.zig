@@ -25,7 +25,16 @@ const c_time = struct {
         tm_isdst: c_int,
     };
     extern "c" fn time(timer: ?*i64) i64;
-    extern "c" fn localtime(timer: *const i64) ?*const Tm;
+    extern "c" fn localtime_r(timer: *const i64, result: *Tm) ?*Tm;
+    extern "c" fn _localtime64_s(result: *Tm, timer: *const i64) c_int;
+
+    fn localtime(timer: *const i64, result: *Tm) ?*const Tm {
+        if (@import("builtin").os.tag == .windows) {
+            return if (_localtime64_s(result, timer) == 0) result else null;
+        } else {
+            return localtime_r(timer, result);
+        }
+    }
 };
 
 pub const std_options: std.Options = .{
@@ -47,7 +56,8 @@ fn logFn(
     const scope_name = comptime if (scope == .default) "Main" else @tagName(scope);
 
     var t = c_time.time(null);
-    const tm = c_time.localtime(&t);
+    var local_buf: c_time.Tm = undefined;
+    const tm = c_time.localtime(&t, &local_buf);
 
     var file_buf: [4096]u8 = undefined;
     var pos: usize = 0;
