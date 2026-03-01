@@ -34,7 +34,7 @@
 
     <!-- Block name label: centered, above hotbar -->
     <label id="block_name" text="" color="#FFFFFFE6"
-           anchor_x="center" anchor_y="end" offset_y="-44" visible="false"
+           anchor_x="center" anchor_y="end" offset_y="-54" visible="false"
            shadow="true" shadow_color="#000000AA"/>
 
   </panel>
