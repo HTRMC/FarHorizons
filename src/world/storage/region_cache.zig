@@ -11,7 +11,7 @@ const MAX_OPEN_REGIONS = 64;
 
 /// LRU cache of open RegionFile handles.
 /// Thread-safe — protected by a mutex.
-/// Entries are ref-counted; eviction only occurs when ref_count == 0.
+/// Entries are ref-counted; eviction only occurs when ref_count <= 1 (cache-only).
 pub const RegionCache = struct {
     mutex: Io.Mutex,
     io: Io,
@@ -88,14 +88,19 @@ pub const RegionCache = struct {
         errdefer region.close();
 
         // Find a slot (evict if necessary)
-        const slot_idx = self.findSlot();
+        const slot_idx = self.findSlot() orelse {
+            log.err("Region cache full — all {d} entries are in use by workers", .{MAX_OPEN_REGIONS});
+            return error.OutOfSpace;
+        };
 
-        // Evict if occupied
+        // Evict if occupied (ref_count guaranteed <= 1 by findSlot)
         if (self.entries[slot_idx]) |old| {
             log.debug("Evicting region ({d},{d},{d}) lod{d}", .{
                 old.coord.rx, old.coord.ry, old.coord.rz, old.coord.lod,
             });
-            old.region.close();
+            if (old.region.unref()) {
+                old.region.close();
+            }
             self.count -= 1;
         }
 
@@ -121,7 +126,8 @@ pub const RegionCache = struct {
     }
 
     /// Find a free slot or evict using CLOCK algorithm.
-    fn findSlot(self: *RegionCache) usize {
+    /// Returns null if all entries are actively referenced by workers.
+    fn findSlot(self: *RegionCache) ?usize {
         // First pass: look for an empty slot
         for (self.entries, 0..) |entry, i| {
             if (entry == null) return i;
@@ -144,10 +150,7 @@ pub const RegionCache = struct {
             self.clock_hand = (self.clock_hand + 1) % MAX_OPEN_REGIONS;
         }
 
-        // Fallback: evict clock_hand regardless
-        const idx = self.clock_hand;
-        self.clock_hand = (self.clock_hand + 1) % MAX_OPEN_REGIONS;
-        return idx;
+        return null;
     }
 
     /// Flush all dirty regions (write headers to disk).
