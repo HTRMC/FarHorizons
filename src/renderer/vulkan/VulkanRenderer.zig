@@ -179,8 +179,8 @@ pub const VulkanRenderer = struct {
         vk.destroyPipelineCache(self.ctx.device, self.ctx.pipeline_cache, null);
         self.allocator.free(self.pipeline_cache_path);
 
-        vk.destroySurfaceKHR(self.instance, self.surface, null);
         vk.destroyDevice(self.ctx.device, null);
+        vk.destroySurfaceKHR(self.instance, self.surface, null);
 
         if (self.debug_messenger) |messenger| {
             vk.destroyDebugUtilsMessengerEXT(self.instance, messenger, null);
