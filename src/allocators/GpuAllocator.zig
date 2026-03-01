@@ -151,6 +151,59 @@ pub const GpuAllocator = struct {
         };
     }
 
+    pub fn createBufferConcurrent(
+        self: *GpuAllocator,
+        size: vk.VkDeviceSize,
+        usage: c_uint,
+        pool_kind: PoolKind,
+        queue_family_indices: []const u32,
+    ) !BufferAllocation {
+        const pool = self.getPool(pool_kind);
+
+        const buffer_info = vk.VkBufferCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .size = size,
+            .usage = usage,
+            .sharingMode = vk.VK_SHARING_MODE_CONCURRENT,
+            .queueFamilyIndexCount = @intCast(queue_family_indices.len),
+            .pQueueFamilyIndices = queue_family_indices.ptr,
+        };
+
+        const buffer = try vk.createBuffer(self.device, &buffer_info, null);
+        errdefer vk.destroyBuffer(self.device, buffer, null);
+
+        var mem_req: vk.VkMemoryRequirements = undefined;
+        vk.getBufferMemoryRequirements(self.device, buffer, &mem_req);
+
+        const alignment: u32 = @intCast(mem_req.alignment);
+        const alloc_size: u32 = @intCast(mem_req.size);
+
+        const tlsf_alloc = pool.alloc(alloc_size, alignment) orelse {
+            std.log.err("GpuAllocator: pool {s} full (requested {}, alignment {}, largest free {})", .{
+                @tagName(pool_kind), alloc_size, alignment, pool.largestFree(),
+            });
+            return error.OutOfMemory;
+        };
+        errdefer pool.free(tlsf_alloc.handle);
+
+        const offset: vk.VkDeviceSize = @intCast(tlsf_alloc.offset);
+        try vk.bindBufferMemory(self.device, buffer, pool.memory, offset);
+
+        const mapped_ptr = pool.getMappedSlice(tlsf_alloc.offset, alloc_size);
+
+        return .{
+            .buffer = buffer,
+            .memory = pool.memory,
+            .offset = offset,
+            .size = size,
+            .pool_kind = pool_kind,
+            .tlsf_handle = tlsf_alloc.handle,
+            .mapped_ptr = mapped_ptr,
+        };
+    }
+
     pub fn destroyBuffer(self: *GpuAllocator, alloc: BufferAllocation) void {
         vk.destroyBuffer(self.device, alloc.buffer, null);
         self.getPool(alloc.pool_kind).free(alloc.tlsf_handle);

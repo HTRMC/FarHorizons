@@ -7,4 +7,7 @@ pub const VulkanContext = struct {
     queue_family_index: u32,
     command_pool: vk.VkCommandPool,
     pipeline_cache: vk.VkPipelineCache,
+    transfer_queue: vk.VkQueue,
+    transfer_queue_family: u32,
+    separate_transfer_family: bool,
 };

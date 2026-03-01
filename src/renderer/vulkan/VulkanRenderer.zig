@@ -9,6 +9,7 @@ const render_state_mod = @import("RenderState.zig");
 const RenderState = render_state_mod.RenderState;
 const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 const vk_utils = @import("vk_utils.zig");
+const TransferPipeline = @import("TransferPipeline.zig").TransferPipeline;
 const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const GameState = @import("../../GameState.zig");
@@ -63,6 +64,7 @@ pub const VulkanRenderer = struct {
     surface_state: SurfaceState,
     render_state: RenderState,
     pipeline_cache_path: []const u8,
+    transfer_pipeline: TransferPipeline,
     mesh_worker: ?MeshWorker,
     game_state: ?*GameState,
     ui_manager: ?*UiManager,
@@ -103,13 +105,16 @@ pub const VulkanRenderer = struct {
         errdefer vk.destroySurfaceKHR(instance, surface, null);
 
         const device_info = try selectPhysicalDevice(allocator, instance, surface);
-        const device = try createDevice(device_info.physical_device, device_info.queue_family_index);
+        const device = try createDevice(device_info);
         errdefer vk.destroyDevice(device, null);
 
         vk.loadDevice(device);
 
         var graphics_queue: vk.VkQueue = undefined;
         vk.getDeviceQueue(device, device_info.queue_family_index, 0, &graphics_queue);
+
+        var transfer_queue: vk.VkQueue = undefined;
+        vk.getDeviceQueue(device, device_info.transfer_queue_family, device_info.transfer_queue_index, &transfer_queue);
 
         const pipeline_cache = try createPipelineCache(device, cache_data);
 
@@ -120,6 +125,9 @@ pub const VulkanRenderer = struct {
             .queue_family_index = device_info.queue_family_index,
             .command_pool = undefined,
             .pipeline_cache = pipeline_cache,
+            .transfer_queue = transfer_queue,
+            .transfer_queue_family = device_info.transfer_queue_family,
+            .separate_transfer_family = device_info.separate_transfer_family,
         };
 
         self.* = .{
@@ -134,6 +142,7 @@ pub const VulkanRenderer = struct {
             .pipeline_cache_path = pipeline_cache_path,
             .surface_state = undefined,
             .render_state = undefined,
+            .transfer_pipeline = undefined,
             .mesh_worker = null,
             .game_state = game_state,
             .ui_manager = null,
@@ -142,6 +151,7 @@ pub const VulkanRenderer = struct {
 
         try self.createCommandPool();
         self.gpu_allocator = try GpuAllocator.init(allocator, &self.ctx);
+        self.transfer_pipeline = try TransferPipeline.init(&self.ctx);
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
         self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format, self.gpu_allocator);
         const actual_w = self.surface_state.swapchain_extent.width;
@@ -174,6 +184,8 @@ pub const VulkanRenderer = struct {
         vk.deviceWaitIdle(self.ctx.device) catch |err| {
             std.log.err("vkDeviceWaitIdle failed: {}", .{err});
         };
+
+        self.transfer_pipeline.deinit();
 
         if (self.mesh_worker) |*mw| mw.deinit();
         self.render_state.deinit(self.ctx.device);
@@ -217,11 +229,24 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "beginFrame");
         defer tz.end();
 
-        try vk.waitForFences(self.ctx.device, MAX_FRAMES_IN_FLIGHT, &self.render_state.in_flight_fences, vk.VK_TRUE, std.math.maxInt(u64));
+        const cf = self.render_state.current_frame;
+
+        // Wait only for this frame's fence (not all fences)
+        const fence = [_]vk.VkFence{self.render_state.in_flight_fences[cf]};
+        try vk.waitForFences(self.ctx.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
+
+        // Async transfer pipeline: wait for this slot's previous transfer, recycle ring
+        try self.transfer_pipeline.beginTransfer(cf);
+
+        // Commit deferred data from completed transfers (makes it visible to buildIndirectCommands)
+        self.transfer_pipeline.commitTransfers(cf, &self.render_state.world_renderer);
 
         if (self.game_state) |gs| {
             if (!gs.debug_camera_active) {
-                self.pollMeshWorker(gs);
+                self.pollMeshWorkerAsync(gs);
+                self.transfer_pipeline.submitTransfer(cf) catch |err| {
+                    std.log.err("Failed to submit transfer: {}", .{err});
+                };
                 self.render_state.world_renderer.buildIndirectCommands(&self.ctx, gs.camera.position);
                 self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
 
@@ -235,7 +260,16 @@ pub const VulkanRenderer = struct {
                         }
                     }
                 }
+            } else {
+                // No transfers in debug camera mode, just submit empty
+                self.transfer_pipeline.submitTransfer(cf) catch |err| {
+                    std.log.err("Failed to submit transfer: {}", .{err});
+                };
             }
+        } else {
+            self.transfer_pipeline.submitTransfer(cf) catch |err| {
+                std.log.err("Failed to submit transfer: {}", .{err});
+            };
         }
 
         self.render_state.ui_renderer.beginFrame(self.ctx.device);
@@ -253,21 +287,18 @@ pub const VulkanRenderer = struct {
         }
     }
 
-    fn pollMeshWorker(self: *VulkanRenderer, gs: *GameState) void {
+    fn pollMeshWorkerAsync(self: *VulkanRenderer, gs: *GameState) void {
         const mw = &(self.mesh_worker orelse return);
         const poll_result = mw.poll() orelse return;
 
-        var batch = vk_utils.TransferBatch.begin(&self.ctx, self.gpu_allocator) catch |err| {
-            std.log.err("Failed to begin transfer batch: {}", .{err});
-            return;
-        };
-
+        const cf = self.render_state.current_frame;
         const voxel_size: u32 = @as(u32, 1) << @intCast(gs.current_lod);
 
         for (0..poll_result.count) |i| {
             if (poll_result.results[i]) |chunk_result| {
-                self.render_state.world_renderer.uploadChunkData(
-                    &batch,
+                self.render_state.world_renderer.uploadChunkDataAsync(
+                    &self.transfer_pipeline,
+                    cf,
                     chunk_result.coord,
                     chunk_result.faces,
                     chunk_result.face_counts,
@@ -276,17 +307,18 @@ pub const VulkanRenderer = struct {
                     chunk_result.light_count,
                     voxel_size,
                 ) catch |err| {
+                    if (err == error.StagingBufferFull) {
+                        // Ring buffer full — skip, will retry next frame
+                        break;
+                    }
                     std.log.err("Failed to upload chunk ({},{},{}): {}", .{
                         chunk_result.coord.cx, chunk_result.coord.cy, chunk_result.coord.cz, err,
                     });
+                    continue;
                 };
                 mw.freeResult(i);
             }
         }
-
-        batch.submitAndWait() catch |err| {
-            std.log.err("Failed to submit transfer batch: {}", .{err});
-        };
     }
 
     pub fn endFrame(self: *VulkanRenderer) !void {
@@ -336,14 +368,32 @@ pub const VulkanRenderer = struct {
 
         try self.recordCommandBuffer(self.render_state.command_buffers[self.render_state.current_frame], image_index);
 
-        const wait_semaphores = [_]vk.VkSemaphore{self.render_state.image_available_semaphores[self.render_state.current_frame]};
-        const wait_stages = [_]c_uint{vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+        const wait_semaphores = [_]vk.VkSemaphore{
+            self.render_state.image_available_semaphores[self.render_state.current_frame],
+            self.transfer_pipeline.timeline_semaphore,
+        };
+        const wait_stages = [_]c_uint{
+            vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+            vk.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+        };
         const signal_semaphores = [_]vk.VkSemaphore{self.surface_state.render_finished_semaphores.items[image_index]};
+
+        // Timeline semaphore submit info: 0 for binary semaphores (ignored by driver)
+        const wait_values = [_]u64{ 0, self.transfer_pipeline.getGraphicsWaitValue() };
+        const signal_values = [_]u64{0};
+        const timeline_info = vk.VkTimelineSemaphoreSubmitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreValueCount = 2,
+            .pWaitSemaphoreValues = &wait_values,
+            .signalSemaphoreValueCount = 1,
+            .pSignalSemaphoreValues = &signal_values,
+        };
 
         const submit_info = vk.VkSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreCount = 1,
+            .pNext = &timeline_info,
+            .waitSemaphoreCount = 2,
             .pWaitSemaphores = &wait_semaphores,
             .pWaitDstStageMask = &wait_stages,
             .commandBufferCount = 1,
@@ -388,6 +438,21 @@ pub const VulkanRenderer = struct {
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             const fence = &[_]vk.VkFence{self.render_state.in_flight_fences[i]};
             try vk.waitForFences(self.ctx.device, 1, fence, vk.VK_TRUE, std.math.maxInt(u64));
+        }
+
+        // Also wait for pending transfers
+        if (self.transfer_pipeline.timeline_value > 0) {
+            const sems = [_]vk.VkSemaphore{self.transfer_pipeline.timeline_semaphore};
+            const vals = [_]u64{self.transfer_pipeline.timeline_value};
+            const wait_info = vk.VkSemaphoreWaitInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+                .pNext = null,
+                .flags = 0,
+                .semaphoreCount = 1,
+                .pSemaphores = &sems,
+                .pValues = &vals,
+            };
+            try vk.waitSemaphores(self.ctx.device, &wait_info, std.math.maxInt(u64));
         }
 
         vk.destroyImageView(self.ctx.device, self.surface_state.depth_image_view, null);
@@ -767,6 +832,9 @@ pub const VulkanRenderer = struct {
     const DeviceInfo = struct {
         physical_device: vk.VkPhysicalDevice,
         queue_family_index: u32,
+        transfer_queue_family: u32,
+        transfer_queue_index: u32,
+        separate_transfer_family: bool,
     };
 
     fn selectPhysicalDevice(allocator: std.mem.Allocator, instance: vk.VkInstance, surface: vk.VkSurfaceKHR) !DeviceInfo {
@@ -788,19 +856,16 @@ pub const VulkanRenderer = struct {
             try vk.getPhysicalDeviceProperties(device, &props);
             std.log.info("Found GPU: {s}", .{props.deviceName});
 
-            if (try findQueueFamily(allocator, device, surface)) |queue_family| {
-                return .{
-                    .physical_device = device,
-                    .queue_family_index = queue_family,
-                };
+            if (try findQueueFamilies(allocator, device, surface)) |info| {
+                return info;
             }
         }
 
         return error.NoSuitableDevice;
     }
 
-    fn findQueueFamily(allocator: std.mem.Allocator, device: vk.VkPhysicalDevice, surface: vk.VkSurfaceKHR) !?u32 {
-        const tz = tracy.zone(@src(), "findQueueFamily");
+    fn findQueueFamilies(allocator: std.mem.Allocator, device: vk.VkPhysicalDevice, surface: vk.VkSurfaceKHR) !?DeviceInfo {
+        const tz = tracy.zone(@src(), "findQueueFamilies");
         defer tz.end();
 
         var queue_family_count: u32 = 0;
@@ -811,33 +876,115 @@ pub const VulkanRenderer = struct {
 
         try vk.getPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, queue_families.ptr);
 
-        for (queue_families, 0..) |family, i| {
+        // Find graphics+present family
+        var graphics_family: ?u32 = null;
+        for (queue_families[0..queue_family_count], 0..) |family, i| {
+            const idx: u32 = @intCast(i);
             const supports_graphics = (family.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT) != 0;
 
             var present_support: vk.VkBool32 = vk.VK_FALSE;
-            try vk.getPhysicalDeviceSurfaceSupportKHR(device, std.math.cast(u32, i) orelse unreachable, surface, &present_support);
+            try vk.getPhysicalDeviceSurfaceSupportKHR(device, idx, surface, &present_support);
 
             if (supports_graphics and present_support == vk.VK_TRUE) {
-                return std.math.cast(u32, i) orelse unreachable;
+                graphics_family = idx;
+                break;
             }
         }
 
-        return null;
+        const gf = graphics_family orelse return null;
+
+        // Search for dedicated transfer family (TRANSFER but NOT GRAPHICS — DMA engine)
+        for (queue_families[0..queue_family_count], 0..) |family, i| {
+            const idx: u32 = @intCast(i);
+            const has_transfer = (family.queueFlags & vk.VK_QUEUE_TRANSFER_BIT) != 0;
+            const has_graphics = (family.queueFlags & vk.VK_QUEUE_GRAPHICS_BIT) != 0;
+            if (has_transfer and !has_graphics) {
+                std.log.info("Using dedicated transfer queue family {}", .{idx});
+                return .{
+                    .physical_device = device,
+                    .queue_family_index = gf,
+                    .transfer_queue_family = idx,
+                    .transfer_queue_index = 0,
+                    .separate_transfer_family = true,
+                };
+            }
+        }
+
+        // Fallback: same family, second queue if available
+        if (queue_families[gf].queueCount >= 2) {
+            std.log.info("Using second queue in graphics family {} for transfers", .{gf});
+            return .{
+                .physical_device = device,
+                .queue_family_index = gf,
+                .transfer_queue_family = gf,
+                .transfer_queue_index = 1,
+                .separate_transfer_family = false,
+            };
+        }
+
+        // Last resort: same queue
+        std.log.info("Using same queue for graphics and transfers (family {})", .{gf});
+        return .{
+            .physical_device = device,
+            .queue_family_index = gf,
+            .transfer_queue_family = gf,
+            .transfer_queue_index = 0,
+            .separate_transfer_family = false,
+        };
     }
 
-    fn createDevice(physical_device: vk.VkPhysicalDevice, queue_family_index: u32) !vk.VkDevice {
+    fn createDevice(device_info: DeviceInfo) !vk.VkDevice {
         const tz = tracy.zone(@src(), "createDevice");
         defer tz.end();
 
-        const queue_priority: f32 = 1.0;
-        const queue_create_info = vk.VkDeviceQueueCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .pNext = null,
-            .flags = 0,
-            .queueFamilyIndex = queue_family_index,
-            .queueCount = 1,
-            .pQueuePriorities = &queue_priority,
-        };
+        // Build queue create infos
+        var queue_create_infos: [2]vk.VkDeviceQueueCreateInfo = undefined;
+        var queue_create_info_count: u32 = 1;
+
+        if (device_info.separate_transfer_family) {
+            // Two separate families: graphics and transfer
+            const gfx_priority = [_]f32{1.0};
+            queue_create_infos[0] = .{
+                .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .queueFamilyIndex = device_info.queue_family_index,
+                .queueCount = 1,
+                .pQueuePriorities = &gfx_priority,
+            };
+            const xfer_priority = [_]f32{0.5};
+            queue_create_infos[1] = .{
+                .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .queueFamilyIndex = device_info.transfer_queue_family,
+                .queueCount = 1,
+                .pQueuePriorities = &xfer_priority,
+            };
+            queue_create_info_count = 2;
+        } else if (device_info.transfer_queue_index == 1) {
+            // Same family, two queues
+            const priorities = [_]f32{ 1.0, 0.5 };
+            queue_create_infos[0] = .{
+                .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .queueFamilyIndex = device_info.queue_family_index,
+                .queueCount = 2,
+                .pQueuePriorities = &priorities,
+            };
+        } else {
+            // Same family, same queue
+            const priority = [_]f32{1.0};
+            queue_create_infos[0] = .{
+                .sType = vk.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                .pNext = null,
+                .flags = 0,
+                .queueFamilyIndex = device_info.queue_family_index,
+                .queueCount = 1,
+                .pQueuePriorities = &priority,
+            };
+        }
 
         const device_extensions = [_][*:0]const u8{vk.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
@@ -857,6 +1004,7 @@ pub const VulkanRenderer = struct {
         vulkan12_features.descriptorBindingUpdateUnusedWhilePending = vk.VK_TRUE;
         vulkan12_features.descriptorBindingSampledImageUpdateAfterBind = vk.VK_TRUE;
         vulkan12_features.descriptorBindingStorageBufferUpdateAfterBind = vk.VK_TRUE;
+        vulkan12_features.timelineSemaphore = vk.VK_TRUE;
 
         var vulkan13_features: vk.VkPhysicalDeviceVulkan13Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan13Features);
         vulkan13_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
@@ -870,8 +1018,8 @@ pub const VulkanRenderer = struct {
             .sType = vk.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
             .pNext = &vulkan13_features,
             .flags = 0,
-            .queueCreateInfoCount = 1,
-            .pQueueCreateInfos = &queue_create_info,
+            .queueCreateInfoCount = queue_create_info_count,
+            .pQueueCreateInfos = &queue_create_infos,
             .enabledLayerCount = 0,
             .ppEnabledLayerNames = null,
             .enabledExtensionCount = device_extensions.len,
@@ -879,7 +1027,7 @@ pub const VulkanRenderer = struct {
             .pEnabledFeatures = null,
         };
 
-        return try vk.createDevice(physical_device, &create_info, null);
+        return try vk.createDevice(device_info.physical_device, &create_info, null);
     }
 
     fn createDebugMessenger(instance: vk.VkInstance) !vk.VkDebugUtilsMessengerEXT {

@@ -46,6 +46,10 @@ pub const VkDeviceSize = c.VkDeviceSize;
 pub const VkCommandPoolCreateInfo = c.VkCommandPoolCreateInfo;
 pub const VkCommandBufferAllocateInfo = c.VkCommandBufferAllocateInfo;
 pub const VkSemaphoreCreateInfo = c.VkSemaphoreCreateInfo;
+pub const VkSemaphoreTypeCreateInfo = c.VkSemaphoreTypeCreateInfo;
+pub const VkTimelineSemaphoreSubmitInfo = c.VkTimelineSemaphoreSubmitInfo;
+pub const VkSemaphoreWaitInfo = c.VkSemaphoreWaitInfo;
+pub const VkSemaphoreSignalInfo = c.VkSemaphoreSignalInfo;
 pub const VkFenceCreateInfo = c.VkFenceCreateInfo;
 pub const VkSubmitInfo = c.VkSubmitInfo;
 pub const VkPresentInfoKHR = c.VkPresentInfoKHR;
@@ -104,8 +108,10 @@ pub const VK_IMAGE_USAGE_SAMPLED_BIT = c.VK_IMAGE_USAGE_SAMPLED_BIT;
 pub const VK_FORMAT_D32_SFLOAT = c.VK_FORMAT_D32_SFLOAT;
 pub const VK_IMAGE_ASPECT_DEPTH_BIT = c.VK_IMAGE_ASPECT_DEPTH_BIT;
 pub const VK_QUEUE_GRAPHICS_BIT = c.VK_QUEUE_GRAPHICS_BIT;
+pub const VK_QUEUE_TRANSFER_BIT = c.VK_QUEUE_TRANSFER_BIT;
 pub const VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 pub const VK_SHARING_MODE_EXCLUSIVE = c.VK_SHARING_MODE_EXCLUSIVE;
+pub const VK_SHARING_MODE_CONCURRENT = c.VK_SHARING_MODE_CONCURRENT;
 pub const VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 pub const VK_PRESENT_MODE_FIFO_KHR = c.VK_PRESENT_MODE_FIFO_KHR;
 pub const VK_SUBOPTIMAL_KHR = c.VK_SUBOPTIMAL_KHR;
@@ -139,16 +145,26 @@ pub const VK_SAMPLE_COUNT_1_BIT = c.VK_SAMPLE_COUNT_1_BIT;
 pub const VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 pub const VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO = c.VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO = c.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+pub const VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO = c.VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
+pub const VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO = c.VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+pub const VK_SEMAPHORE_TYPE_TIMELINE = c.VK_SEMAPHORE_TYPE_TIMELINE;
+pub const VK_SEMAPHORE_TYPE_BINARY = c.VK_SEMAPHORE_TYPE_BINARY;
 pub const VK_STRUCTURE_TYPE_FENCE_CREATE_INFO = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_SUBMIT_INFO = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
 pub const VK_STRUCTURE_TYPE_PRESENT_INFO_KHR = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
 pub const VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 pub const VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 pub const VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+pub const VK_COMMAND_POOL_CREATE_TRANSIENT_BIT = c.VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
 pub const VK_COMMAND_BUFFER_LEVEL_PRIMARY = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 pub const VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 pub const VK_FENCE_CREATE_SIGNALED_BIT = c.VK_FENCE_CREATE_SIGNALED_BIT;
 pub const VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+pub const VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT = c.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+pub const VK_PIPELINE_STAGE_VERTEX_INPUT_BIT = c.VK_PIPELINE_STAGE_VERTEX_INPUT_BIT;
+pub const VK_PIPELINE_STAGE_VERTEX_SHADER_BIT = c.VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
 pub const VK_SUBPASS_CONTENTS_INLINE = c.VK_SUBPASS_CONTENTS_INLINE;
 
 pub const VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -159,6 +175,7 @@ pub const VK_BUFFER_USAGE_TRANSFER_SRC_BIT = c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 pub const VK_BUFFER_USAGE_TRANSFER_DST_BIT = c.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 pub const VK_BUFFER_USAGE_VERTEX_BUFFER_BIT = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 pub const VK_BUFFER_USAGE_INDEX_BUFFER_BIT = c.VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+pub const VK_WHOLE_SIZE = c.VK_WHOLE_SIZE;
 pub const VK_INDEX_TYPE_UINT16 = c.VK_INDEX_TYPE_UINT16;
 pub const VK_INDEX_TYPE_UINT32 = c.VK_INDEX_TYPE_UINT32;
 pub const VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT = c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
@@ -188,6 +205,7 @@ pub const VK_PIPELINE_STAGE_TRANSFER_BIT = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
 pub const VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT = c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 pub const VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT = c.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
 pub const VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT = c.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+pub const VK_ACCESS_TRANSFER_READ_BIT = c.VK_ACCESS_TRANSFER_READ_BIT;
 pub const VK_ACCESS_TRANSFER_WRITE_BIT = c.VK_ACCESS_TRANSFER_WRITE_BIT;
 pub const VK_ACCESS_SHADER_READ_BIT = c.VK_ACCESS_SHADER_READ_BIT;
 pub const VK_ACCESS_INDIRECT_COMMAND_READ_BIT = c.VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
@@ -1378,5 +1396,35 @@ pub fn getPipelineCacheData(
 ) VulkanError!void {
     const fn_ptr = c.vkGetPipelineCacheData orelse return error.FunctionNotLoaded;
     const result = fn_ptr(device, pipeline_cache, data_size, data);
+    try vkResultToError(result);
+}
+
+pub fn waitSemaphores(
+    device: VkDevice,
+    wait_info: *const VkSemaphoreWaitInfo,
+    timeout: u64,
+) VulkanError!void {
+    const fn_ptr = c.vkWaitSemaphores orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, wait_info, timeout);
+    try vkResultToError(result);
+}
+
+pub fn getSemaphoreCounterValue(
+    device: VkDevice,
+    semaphore: VkSemaphore,
+    value: *u64,
+) VulkanError!void {
+    const fn_ptr = c.vkGetSemaphoreCounterValue orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, semaphore, value);
+    try vkResultToError(result);
+}
+
+pub fn resetCommandPool(
+    device: VkDevice,
+    command_pool: VkCommandPool,
+    flags: c.VkCommandPoolResetFlags,
+) VulkanError!void {
+    const fn_ptr = c.vkResetCommandPool orelse return error.FunctionNotLoaded;
+    const result = fn_ptr(device, command_pool, flags);
     try vkResultToError(result);
 }
