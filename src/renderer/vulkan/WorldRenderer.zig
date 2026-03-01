@@ -185,7 +185,6 @@ pub const WorldRenderer = struct {
                 std.log.err("TLSF light heap full (requested {}, largest free {})", .{
                     light_count, self.light_tlsf.largestFree(),
                 });
-                self.face_tlsf.free(fa.offset);
                 return error.OutOfMemory;
             }
         else
