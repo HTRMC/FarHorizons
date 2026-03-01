@@ -66,11 +66,18 @@ storage: ?*Storage,
 
 debug_screens: u8 = 0,
 delta_time: f32 = 0,
+frame_timing: FrameTiming = .{},
 
 prev_entity_pos: [3]f32,
 prev_camera_pos: zlm.Vec3,
 tick_camera_pos: zlm.Vec3,
 render_entity_pos: [3]f32,
+
+pub const FrameTiming = struct {
+    update_ms: f32 = 0,
+    render_ms: f32 = 0,
+    frame_ms: f32 = 0,
+};
 
 pub const DirtyChunkSet = struct {
     chunks: [WorldState.TOTAL_WORLD_CHUNKS]WorldState.ChunkCoord,

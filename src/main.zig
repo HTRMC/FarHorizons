@@ -278,8 +278,6 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                     input_state.debug_screen_toggle = 1;
                 }
                 if (key == glfw.GLFW_KEY_F5) input_state.debug_screen_toggle = 2;
-                if (key == glfw.GLFW_KEY_F6) input_state.debug_screen_toggle = 3;
-                if (key == glfw.GLFW_KEY_F7) input_state.debug_screen_toggle = 4;
             }
 
             if (action == glfw.GLFW_PRESS) {
@@ -497,7 +495,10 @@ pub fn main() !void {
             }
         }
 
+        var update_start: f64 = 0;
+
         if (menu_ctrl.app_state == .playing) {
+            update_start = glfw.getTime();
             if (game_state) |*gs| {
                 if (input_state.hotbar_scroll_delta != 0.0) {
                     const delta: i32 = if (input_state.hotbar_scroll_delta < 0.0) @as(i32, 1) else @as(i32, -1);
@@ -602,12 +603,21 @@ pub fn main() !void {
 
         ui_manager.tickCursorBlink();
 
+        if (menu_ctrl.app_state == .playing) {
+            if (game_state) |*gs| {
+                gs.frame_timing.update_ms = @floatCast((glfw.getTime() - update_start) * 1000.0);
+            }
+        }
+
+        const render_start = glfw.getTime();
         try renderer.beginFrame();
         try renderer.render();
         try renderer.endFrame();
 
         if (menu_ctrl.app_state == .playing) {
             if (game_state) |*gs| {
+                gs.frame_timing.render_ms = @floatCast((glfw.getTime() - render_start) * 1000.0);
+                gs.frame_timing.frame_ms = delta_time * 1000.0;
                 if (!gs.debug_camera_active) {
                     gs.restoreAfterRender();
                 }

@@ -19,8 +19,8 @@ const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
 const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
-const INITIAL_FACE_CAPACITY: u32 = 400_000;
-const INITIAL_LIGHT_CAPACITY: u32 = 400_000;
+pub const INITIAL_FACE_CAPACITY: u32 = 400_000;
+pub const INITIAL_LIGHT_CAPACITY: u32 = 400_000;
 const MAX_FACES_PER_DRAW: u32 = 16_384;
 const MAX_INDIRECT_COMMANDS: u32 = WorldState.TOTAL_WORLD_CHUNKS * 6;
 

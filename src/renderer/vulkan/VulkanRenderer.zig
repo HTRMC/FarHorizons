@@ -244,7 +244,7 @@ pub const VulkanRenderer = struct {
 
         if (self.game_state) |gs| {
             const DebugOverlay = @import("../../DebugOverlay.zig");
-            DebugOverlay.draw(&self.render_state.text_renderer, gs, self.render_state.world_renderer.draw_count);
+            DebugOverlay.draw(&self.render_state.text_renderer, gs, &self.render_state.world_renderer, self.gpu_allocator);
         }
 
         if (self.ui_manager) |um| {
