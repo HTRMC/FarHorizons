@@ -5,9 +5,9 @@
     <image id="crosshair" src="hud:crosshair"
            width="30" height="30" anchor_x="center" anchor_y="center"/>
 
-    <!-- Hotbar container: bottom-center, sized to hotbar BG (182x22 at 2x = 364x44) -->
+    <!-- Hotbar container: bottom-center, flush at bottom (182x22 at 2x = 364x44) -->
     <panel width="364" height="44" layout="anchor"
-           anchor_x="center" anchor_y="end" offset_y="-2">
+           anchor_x="center" anchor_y="end">
 
       <!-- Hotbar background image -->
       <image id="hotbar_bg" src="hud:hotbar" width="364" height="44"/>
@@ -25,16 +25,16 @@
 
       <!-- Selection highlight (24x23 at 2x = 48x46), offset_x set by binder -->
       <image id="selection" src="hud:selection" width="48" height="46"
-             offset_x="-4" offset_y="-1"/>
+             offset_x="-2" offset_y="-2"/>
 
       <!-- Offhand slot (29x24 at 2x = 58x48), left of hotbar -->
       <image id="offhand" src="hud:offhand" width="58" height="48"
-             offset_x="-62" offset_y="-4"/>
+             offset_x="-58" offset_y="-2"/>
     </panel>
 
     <!-- Block name label: centered, above hotbar -->
     <label id="block_name" text="" color="#FFFFFFE6"
-           anchor_x="center" anchor_y="end" offset_y="-46" visible="false"
+           anchor_x="center" anchor_y="end" offset_y="-44" visible="false"
            shadow="true" shadow_color="#000000AA"/>
 
   </panel>

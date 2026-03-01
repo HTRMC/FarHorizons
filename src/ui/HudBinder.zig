@@ -55,9 +55,8 @@ pub const HudBinder = struct {
             if (tree.getWidget(self.selection_id)) |w| {
                 // Each slot is 20px * 2 (scale) = 40px pitch
                 const slot_pitch: f32 = 40.0;
-                // Selection is 48px wide, hotbar slots start at offset 0 within hotbar container
-                // Offset = slot_index * slot_pitch - (48 - 40) / 2 = slot_index * 40 - 4
-                w.offset_x = @as(f32, @floatFromInt(gs.selected_slot)) * slot_pitch - 4.0;
+                // MC selection is -1px left of hotbar at 1x = -2px at 2x
+                w.offset_x = @as(f32, @floatFromInt(gs.selected_slot)) * slot_pitch - 2.0;
             }
         }
 
