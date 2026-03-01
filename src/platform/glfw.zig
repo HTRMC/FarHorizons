@@ -163,6 +163,10 @@ pub fn getCursorPos(window: *Window, xpos: *f64, ypos: *f64) void {
     c.glfwGetCursorPos(window, xpos, ypos);
 }
 
+pub fn setCursorPos(window: *Window, xpos: f64, ypos: f64) void {
+    c.glfwSetCursorPos(window, xpos, ypos);
+}
+
 pub fn setInputMode(window: *Window, mode: c_int, value: c_int) void {
     c.glfwSetInputMode(window, mode, value);
 }

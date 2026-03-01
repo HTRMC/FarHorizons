@@ -247,6 +247,10 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 input_state.mouse_captured = false;
                 input_state.first_mouse = true;
                 glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+                var win_w: c_int = 0;
+                var win_h: c_int = 0;
+                glfw.getWindowSize(window.?, &win_w, &win_h);
+                glfw.setCursorPos(window.?, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
                 return;
             }
 
