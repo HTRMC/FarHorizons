@@ -660,6 +660,56 @@ pub fn generateTerrainWorld(out: *World) void {
     }
 }
 
+/// Recompute a single output block from its 2x2x2 source neighborhood.
+/// `dst_bx/by/bz` are block coords within the destination world's voxel space.
+/// Returns the majority-vote block type from the 2x2x2 source region.
+pub fn downsampleBlock(src: *const World, src_lod_level: u8, dst_bx: i32, dst_by: i32, dst_bz: i32) BlockType {
+    const src_scale: u32 = @as(u32, 1) << @intCast(src_lod_level);
+    const src_chunks_x: i32 = @intCast(@max(1, WORLD_CHUNKS_X / src_scale));
+    const src_chunks_y: i32 = @intCast(@max(1, WORLD_CHUNKS_Y / src_scale));
+    const src_chunks_z: i32 = @intCast(@max(1, WORLD_CHUNKS_Z / src_scale));
+
+    const src_half_x = @divExact(src_chunks_x * CHUNK_SIZE, 2);
+    const src_half_y = @divExact(src_chunks_y * CHUNK_SIZE, 2);
+    const src_half_z = @divExact(src_chunks_z * CHUNK_SIZE, 2);
+
+    // Map destination block to source world coords (2x scale)
+    const src_wx = dst_bx * 2 - src_half_x;
+    const src_wy = dst_by * 2 - src_half_y;
+    const src_wz = dst_bz * 2 - src_half_z;
+
+    var counts = [_]u32{0} ** 6;
+    var non_air_total: u32 = 0;
+
+    var dy: i32 = 0;
+    while (dy < 2) : (dy += 1) {
+        var dz: i32 = 0;
+        while (dz < 2) : (dz += 1) {
+            var dx: i32 = 0;
+            while (dx < 2) : (dx += 1) {
+                const b = getBlock(src, src_wx + dx, src_wy + dy, src_wz + dz);
+                if (b != .air) {
+                    counts[@intFromEnum(b)] += 1;
+                    non_air_total += 1;
+                }
+            }
+        }
+    }
+
+    if (non_air_total == 0) return .air;
+
+    var best_type: BlockType = .air;
+    var best_count: u32 = 0;
+    for (1..counts.len) |i| {
+        if (counts[i] > best_count) {
+            best_count = counts[i];
+            best_type = @enumFromInt(i);
+        }
+    }
+
+    return best_type;
+}
+
 /// 2x downsample: each output block is the majority vote of 2x2x2 source blocks.
 /// `src_lod_level` is the LOD level of `src` (0 for the base world).
 /// The output will be at LOD level `src_lod_level + 1`.
