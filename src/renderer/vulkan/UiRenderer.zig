@@ -7,9 +7,17 @@ const vk_utils = @import("vk_utils.zig");
 const types = @import("types.zig");
 const UiVertex = types.UiVertex;
 const tracy = @import("../../platform/tracy.zig");
+const app_config = @import("../../app_config.zig");
 
 const MAX_QUADS = 4096;
 const MAX_VERTICES = MAX_QUADS * 6;
+
+pub const SpriteRect = struct {
+    u0: f32,
+    v0: f32,
+    u1: f32,
+    v1: f32,
+};
 
 pub const UiRenderer = struct {
     pipeline: vk.VkPipeline,
@@ -33,6 +41,18 @@ pub const UiRenderer = struct {
     atlas_image_memory: vk.VkDeviceMemory,
     atlas_image_view: vk.VkImageView,
     atlas_sampler: vk.VkSampler,
+
+    // HUD sprite rects (valid after loadHudAtlas)
+    crosshair_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    hotbar_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    selection_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    offhand_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    // Original pixel dimensions of each sprite (for sizing at scale)
+    crosshair_size: [2]f32 = .{ 0, 0 },
+    hotbar_size: [2]f32 = .{ 0, 0 },
+    selection_size: [2]f32 = .{ 0, 0 },
+    offhand_size: [2]f32 = .{ 0, 0 },
+    hud_atlas_loaded: bool = false,
 
     pub fn init(
         shader_compiler: *ShaderCompiler,
@@ -178,15 +198,15 @@ pub const UiRenderer = struct {
         const x1 = x + w;
         const y1 = y + h;
 
-        // UV = (0,0) signals solid color in fragment shader
+        // Negative UV.x signals solid color in fragment shader
         const s = self.clip_scale;
         const cr = [4]f32{ self.clip_rect[0] * s, self.clip_rect[1] * s, self.clip_rect[2] * s, self.clip_rect[3] * s };
-        verts[self.vertex_count + 0] = .{ .px = x0, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
-        verts[self.vertex_count + 1] = .{ .px = x1, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
-        verts[self.vertex_count + 2] = .{ .px = x0, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
-        verts[self.vertex_count + 3] = .{ .px = x1, .py = y0, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
-        verts[self.vertex_count + 4] = .{ .px = x1, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
-        verts[self.vertex_count + 5] = .{ .px = x0, .py = y1, .u = 0, .v = 0, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 0] = .{ .px = x0, .py = y0, .u = -1, .v = -1, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 1] = .{ .px = x1, .py = y0, .u = -1, .v = -1, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 2] = .{ .px = x0, .py = y1, .u = -1, .v = -1, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 3] = .{ .px = x1, .py = y0, .u = -1, .v = -1, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 4] = .{ .px = x1, .py = y1, .u = -1, .v = -1, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[self.vertex_count + 5] = .{ .px = x0, .py = y1, .u = -1, .v = -1, .r = color[0], .g = color[1], .b = color[2], .a = color[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
 
         self.vertex_count += 6;
     }
@@ -258,6 +278,279 @@ pub const UiRenderer = struct {
         self.drawRect(x, y + thickness, thickness, h - thickness * 2, color);
         // Right edge
         self.drawRect(x + w - thickness, y + thickness, thickness, h - thickness * 2, color);
+    }
+
+    /// Draw a sprite from the HUD atlas at the given position and scale.
+    pub fn drawSprite(self: *UiRenderer, sprite: SpriteRect, x: f32, y: f32, w: f32, h: f32, tint: [4]f32) void {
+        self.drawTexturedRect(x, y, w, h, sprite.u0, sprite.v0, sprite.u1, sprite.v1, tint);
+    }
+
+    /// Load HUD sprite textures into a vertical atlas, replacing the 1x1 fallback.
+    pub fn loadHudAtlas(self: *UiRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
+        const base_path = try app_config.getAppDataPath(allocator);
+        defer allocator.free(base_path);
+
+        const sep = std.fs.path.sep_str;
+        const hud_dir = sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "gui" ++ sep ++ "sprites" ++ sep ++ "hud" ++ sep;
+
+        const sprite_names = [_][]const u8{ "crosshair.png", "hotbar.png", "hotbar_selection.png", "hotbar_offhand_left.png" };
+        const sprite_count = sprite_names.len;
+
+        var widths: [sprite_count]c_int = undefined;
+        var heights: [sprite_count]c_int = undefined;
+        var pixels: [sprite_count][*]u8 = undefined;
+        var loaded_count: usize = 0;
+
+        defer for (0..loaded_count) |i| {
+            c.stbi_image_free(pixels[i]);
+        };
+
+        var atlas_width: c_int = 0;
+        var atlas_height: c_int = 0;
+
+        for (sprite_names, 0..) |name, i| {
+            const path = try std.fmt.allocPrintSentinel(allocator, "{s}{s}{s}", .{ base_path, hud_dir, name }, 0);
+            defer allocator.free(path);
+
+            var tw: c_int = 0;
+            var th: c_int = 0;
+            var tc: c_int = 0;
+            pixels[i] = c.stbi_load(path.ptr, &tw, &th, &tc, 4) orelse {
+                std.log.err("Failed to load HUD sprite: {s}", .{name});
+                return error.TextureLoadFailed;
+            };
+            loaded_count += 1;
+            widths[i] = tw;
+            heights[i] = th;
+            if (tw > atlas_width) atlas_width = tw;
+            atlas_height += th;
+        }
+
+        const aw: u32 = @intCast(atlas_width);
+        const ah: u32 = @intCast(atlas_height);
+        const atlas_bytes: usize = @intCast(@as(u64, aw) * @as(u64, ah) * 4);
+
+        // Create staging buffer
+        var staging_buffer: vk.VkBuffer = undefined;
+        var staging_memory: vk.VkDeviceMemory = undefined;
+        try vk_utils.createBuffer(
+            ctx,
+            atlas_bytes,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buffer,
+            &staging_memory,
+        );
+
+        {
+            var data: ?*anyopaque = null;
+            try vk.mapMemory(ctx.device, staging_memory, 0, atlas_bytes, 0, &data);
+            const dst: [*]u8 = @ptrCast(data.?);
+            // Clear to transparent black
+            @memset(dst[0..atlas_bytes], 0);
+
+            // Copy each sprite into the atlas at the correct vertical offset
+            var y_offset: u32 = 0;
+            for (0..sprite_count) |i| {
+                const sw: u32 = @intCast(widths[i]);
+                const sh: u32 = @intCast(heights[i]);
+                const src: [*]const u8 = pixels[i];
+                for (0..sh) |row| {
+                    const dst_offset = (y_offset + @as(u32, @intCast(row))) * aw * 4;
+                    const src_offset = @as(u32, @intCast(row)) * sw * 4;
+                    @memcpy(dst[dst_offset..][0 .. sw * 4], src[src_offset..][0 .. sw * 4]);
+                }
+                y_offset += sh;
+            }
+            vk.unmapMemory(ctx.device, staging_memory);
+        }
+
+        // Destroy old fallback atlas
+        vk.destroyImageView(ctx.device, self.atlas_image_view, null);
+        vk.destroyImage(ctx.device, self.atlas_image, null);
+        vk.freeMemory(ctx.device, self.atlas_image_memory, null);
+
+        // Create new atlas image
+        const image_info = vk.VkImageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .imageType = vk.VK_IMAGE_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
+            .extent = .{ .width = aw, .height = ah, .depth = 1 },
+            .mipLevels = 1,
+            .arrayLayers = 1,
+            .samples = vk.VK_SAMPLE_COUNT_1_BIT,
+            .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
+            .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
+            .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
+            .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+
+        self.atlas_image = try vk.createImage(ctx.device, &image_info, null);
+
+        var mem_requirements: vk.VkMemoryRequirements = undefined;
+        vk.getImageMemoryRequirements(ctx.device, self.atlas_image, &mem_requirements);
+
+        const memory_type_index = try vk_utils.findMemoryType(
+            ctx.physical_device,
+            mem_requirements.memoryTypeBits,
+            vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        );
+
+        self.atlas_image_memory = try vk.allocateMemory(ctx.device, &.{
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_requirements.size,
+            .memoryTypeIndex = memory_type_index,
+        }, null);
+        try vk.bindImageMemory(ctx.device, self.atlas_image, self.atlas_image_memory, 0);
+
+        // Upload via command buffer
+        const cmd_alloc_info = vk.VkCommandBufferAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = ctx.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        };
+
+        var cmd_buffers: [1]vk.VkCommandBuffer = undefined;
+        try vk.allocateCommandBuffers(ctx.device, &cmd_alloc_info, &cmd_buffers);
+        const cmd = cmd_buffers[0];
+
+        try vk.beginCommandBuffer(cmd, &.{
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
+        });
+
+        // Transition to transfer dst
+        const to_transfer = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.atlas_image,
+            .subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        };
+        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_transfer});
+
+        const region = vk.VkBufferImageCopy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
+            .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
+            .imageExtent = .{ .width = aw, .height = ah, .depth = 1 },
+        };
+        vk.cmdCopyBufferToImage(cmd, staging_buffer, self.atlas_image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &[_]vk.VkBufferImageCopy{region});
+
+        // Transition to shader read
+        const to_shader = vk.VkImageMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.atlas_image,
+            .subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        };
+        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_shader});
+
+        try vk.endCommandBuffer(cmd);
+
+        const submit_infos = [_]vk.VkSubmitInfo{.{
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
+        }};
+        try vk.queueSubmit(ctx.graphics_queue, 1, &submit_infos, null);
+        try vk.queueWaitIdle(ctx.graphics_queue);
+        vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd_buffers);
+
+        vk.destroyBuffer(ctx.device, staging_buffer, null);
+        vk.freeMemory(ctx.device, staging_memory, null);
+
+        // Create new image view
+        self.atlas_image_view = try vk.createImageView(ctx.device, &.{
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .image = self.atlas_image,
+            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+            .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
+            .components = .{
+                .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+                .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY,
+            },
+            .subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        }, null);
+
+        // Update descriptor set with new image view (reuse existing sampler)
+        const desc_image_info = vk.VkDescriptorImageInfo{
+            .sampler = self.atlas_sampler,
+            .imageView = self.atlas_image_view,
+            .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+        const write = vk.VkWriteDescriptorSet{
+            .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = null,
+            .dstSet = self.descriptor_set,
+            .dstBinding = 1,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &desc_image_info,
+            .pBufferInfo = null,
+            .pTexelBufferView = null,
+        };
+        vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{write}, 0, null);
+
+        // Compute UV rects for each sprite
+        const faw: f32 = @floatFromInt(atlas_width);
+        const fah: f32 = @floatFromInt(atlas_height);
+        var y_off: f32 = 0;
+
+        // crosshair
+        self.crosshair_size = .{ @floatFromInt(widths[0]), @floatFromInt(heights[0]) };
+        self.crosshair_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[0])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[0]))) / fah };
+        y_off += @floatFromInt(heights[0]);
+
+        // hotbar
+        self.hotbar_size = .{ @floatFromInt(widths[1]), @floatFromInt(heights[1]) };
+        self.hotbar_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[1])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[1]))) / fah };
+        y_off += @floatFromInt(heights[1]);
+
+        // selection
+        self.selection_size = .{ @floatFromInt(widths[2]), @floatFromInt(heights[2]) };
+        self.selection_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[2])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[2]))) / fah };
+        y_off += @floatFromInt(heights[2]);
+
+        // offhand
+        self.offhand_size = .{ @floatFromInt(widths[3]), @floatFromInt(heights[3]) };
+        self.offhand_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[3])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[3]))) / fah };
+
+        self.hud_atlas_loaded = true;
+        std.log.info("HUD atlas loaded: {}x{} ({} sprites)", .{ aw, ah, sprite_count });
     }
 
     // ── Vulkan setup ──

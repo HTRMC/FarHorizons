@@ -13,6 +13,29 @@ pub const EYE_OFFSET: f32 = 1.62;
 pub const TICK_RATE: f32 = 30.0;
 pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
 pub const MAX_LOD: u8 = 5;
+pub const HOTBAR_SIZE: u8 = 9;
+
+pub fn blockName(block: WorldState.BlockType) []const u8 {
+    return switch (block) {
+        .air => "Air",
+        .glass => "Glass",
+        .grass_block => "Grass",
+        .dirt => "Dirt",
+        .stone => "Stone",
+        .glowstone => "Glowstone",
+    };
+}
+
+pub fn blockColor(block: WorldState.BlockType) [4]f32 {
+    return switch (block) {
+        .air => .{ 0.0, 0.0, 0.0, 0.0 },
+        .glass => .{ 0.8, 0.9, 1.0, 0.4 },
+        .grass_block => .{ 0.3, 0.7, 0.2, 1.0 },
+        .dirt => .{ 0.6, 0.4, 0.2, 1.0 },
+        .stone => .{ 0.5, 0.5, 0.5, 1.0 },
+        .glowstone => .{ 1.0, 0.9, 0.5, 1.0 },
+    };
+}
 
 allocator: std.mem.Allocator,
 camera: Camera,
@@ -35,6 +58,11 @@ current_lod: u8,
 lod_worlds: [MAX_LOD]*WorldState.World,
 lod_light_maps: [MAX_LOD]*WorldState.LightMap,
 lod_stale: [MAX_LOD]bool,
+
+// Hotbar
+selected_slot: u8 = 0,
+hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .glass, .glowstone, .air, .air, .air, .air },
+offhand: WorldState.BlockType = .air,
 
 // World persistence
 storage: ?*Storage,
@@ -455,13 +483,15 @@ pub fn breakBlock(self: *GameState) void {
 }
 
 pub fn placeBlock(self: *GameState) void {
+    const block_type = self.hotbar[self.selected_slot];
+    if (block_type == .air) return;
     const hit = self.hit_result orelse return;
     const n = hit.direction.normal();
     const px = hit.block_pos[0] + n[0];
     const py = hit.block_pos[1] + n[1];
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(WorldState.getBlock(self.world, px, py, pz))) return;
-    WorldState.setBlock(self.world, px, py, pz, .glowstone);
+    WorldState.setBlock(self.world, px, py, pz, block_type);
     self.updateLight(px, py, pz);
     self.dirtyLightRadius(px, py, pz);
     self.queueChunkSave(px, py, pz);

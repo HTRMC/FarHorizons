@@ -14,8 +14,8 @@ void main() {
         gl_FragCoord.y < fragClipRect.y || gl_FragCoord.y > fragClipRect.w) {
         discard;
     }
-    // UV of (0,0) signals a solid-color quad (no texture sampling)
-    if (fragUV.x == 0.0 && fragUV.y == 0.0) {
+    // Negative UV.x signals a solid-color quad (no texture sampling)
+    if (fragUV.x < 0.0) {
         outColor = fragColor;
     } else {
         // Sample atlas and multiply by tint color
