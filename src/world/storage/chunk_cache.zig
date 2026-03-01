@@ -77,13 +77,33 @@ pub const ChunkCache = struct {
             }
         }
 
-        const target = self.findEvictSlot();
-        self.slots[target] = .{
-            .key = key,
-            .chunk = chunk.*,
-            .valid = true,
-            .referenced = true,
-        };
+        const evict_idx = self.findEvictSlot();
+        var empty = evict_idx;
+        var j: u32 = 1;
+        while (j < CACHE_SLOTS) : (j += 1) {
+            const next = (evict_idx + j) % CACHE_SLOTS;
+            if (!self.slots[next].valid) break;
+            const natural = self.hashSlot(self.slots[next].key);
+            if (self.shouldShift(natural, empty, next)) {
+                self.slots[empty] = self.slots[next];
+                empty = next;
+            }
+        }
+        self.slots[empty].valid = false;
+
+        var p: u32 = 0;
+        while (p < CACHE_SLOTS) : (p += 1) {
+            const idx = (start + p) % CACHE_SLOTS;
+            if (!self.slots[idx].valid) {
+                self.slots[idx] = .{
+                    .key = key,
+                    .chunk = chunk.*,
+                    .valid = true,
+                    .referenced = true,
+                };
+                return;
+            }
+        }
     }
 
     pub fn invalidate(self: *ChunkCache, key: ChunkKey) void {
