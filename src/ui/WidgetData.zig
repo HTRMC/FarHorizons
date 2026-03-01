@@ -157,6 +157,8 @@ pub const TextInputData = struct {
     }
 };
 
+pub const BlendMode = enum(u8) { normal, inverted };
+
 pub const ImageData = struct {
     // Source path stored as string (namespace:path)
     src: [MAX_TEXT_LEN]u8 = .{0} ** MAX_TEXT_LEN,
@@ -168,6 +170,7 @@ pub const ImageData = struct {
     atlas_h: f32 = 0,
     tint: Color = Color.white,
     nine_slice_border: f32 = 0, // 0 = stretch, >0 = 9-slice inset
+    blend_mode: BlendMode = .normal,
 };
 
 pub const ScrollViewData = struct {

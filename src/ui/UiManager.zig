@@ -98,11 +98,14 @@ pub const UiManager = struct {
         }
     }
 
-    /// Draw all active screens (bottom to top).
+    /// Draw all active screens (bottom to top), each as a separate draw layer.
     pub fn draw(self: *UiManager, ui: *UiRenderer, tr: *TextRenderer) void {
         for (0..self.screen_count) |i| {
             const screen = &self.screens[i];
             if (!screen.active) continue;
+
+            ui.beginLayer();
+
             if (screen.tree.root != NULL_WIDGET) {
                 WidgetOps.drawWidget(&screen.tree, screen.tree.root, ui, tr);
             }
@@ -114,11 +117,14 @@ pub const UiManager = struct {
                     ui.drawRect(0, 0, self.screen_width, self.screen_height, .{ 0, 0, 0, alpha });
                 }
             }
+
+            ui.endLayer();
         }
 
-        // Draw overlays (dropdowns, tooltips) for top screen
+        // Draw overlays (dropdowns, tooltips) for top screen as their own layer
         if (self.topScreen()) |screen| {
             if (screen.active) {
+                ui.beginLayer();
                 const tooltip_id = if (self.hover_timer >= 30) self.hover_widget else NULL_WIDGET;
                 WidgetOps.drawOverlays(
                     &screen.tree,
@@ -130,6 +136,7 @@ pub const UiManager = struct {
                     self.screen_width,
                     self.screen_height,
                 );
+                ui.endLayer();
             }
         }
     }

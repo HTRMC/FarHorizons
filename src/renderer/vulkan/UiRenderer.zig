@@ -11,6 +11,14 @@ const app_config = @import("../../app_config.zig");
 
 const MAX_QUADS = 4096;
 const MAX_VERTICES = MAX_QUADS * 6;
+const MAX_DRAW_LAYERS = 8;
+
+const DrawLayer = struct {
+    normal_start: u32 = 0,
+    normal_count: u32 = 0,
+    inverted_start: u32 = 0,
+    inverted_count: u32 = 0,
+};
 
 pub const SpriteRect = struct {
     u0: f32,
@@ -21,6 +29,7 @@ pub const SpriteRect = struct {
 
 pub const UiRenderer = struct {
     pipeline: vk.VkPipeline,
+    inverted_pipeline: vk.VkPipeline,
     pipeline_layout: vk.VkPipelineLayout,
     descriptor_set_layout: vk.VkDescriptorSetLayout,
     descriptor_pool: vk.VkDescriptorPool,
@@ -28,6 +37,7 @@ pub const UiRenderer = struct {
     vertex_buffer: vk.VkBuffer,
     vertex_buffer_memory: vk.VkDeviceMemory,
     vertex_count: u32,
+    inverted_vertex_count: u32 = 0,
     screen_width: f32,
     screen_height: f32,
     mapped_vertices: ?[*]UiVertex,
@@ -35,6 +45,12 @@ pub const UiRenderer = struct {
     clip_stack: [8][4]f32 = undefined,
     clip_depth: u8 = 0,
     clip_scale: f32 = 1.0,
+
+    // Per-screen draw layers for proper z-ordering
+    draw_layers: [MAX_DRAW_LAYERS]DrawLayer = [_]DrawLayer{.{}} ** MAX_DRAW_LAYERS,
+    draw_layer_count: u8 = 0,
+    layer_normal_start: u32 = 0,
+    layer_inverted_start: u32 = 0,
 
     // Atlas texture (1x1 white fallback if no real atlas)
     atlas_image: vk.VkImage,
@@ -64,6 +80,7 @@ pub const UiRenderer = struct {
 
         var self = UiRenderer{
             .pipeline = null,
+            .inverted_pipeline = null,
             .pipeline_layout = null,
             .descriptor_set_layout = null,
             .descriptor_pool = null,
@@ -91,6 +108,7 @@ pub const UiRenderer = struct {
 
     pub fn deinit(self: *UiRenderer, device: vk.VkDevice) void {
         vk.destroyPipeline(device, self.pipeline, null);
+        vk.destroyPipeline(device, self.inverted_pipeline, null);
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
         vk.destroyDescriptorPool(device, self.descriptor_pool, null);
         vk.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
@@ -107,6 +125,8 @@ pub const UiRenderer = struct {
         vk.mapMemory(device, self.vertex_buffer_memory, 0, MAX_VERTICES * @sizeOf(UiVertex), 0, &data) catch return;
         self.mapped_vertices = @ptrCast(@alignCast(data));
         self.vertex_count = 0;
+        self.inverted_vertex_count = 0;
+        self.draw_layer_count = 0;
     }
 
     pub fn endFrame(self: *UiRenderer, device: vk.VkDevice) void {
@@ -116,31 +136,84 @@ pub const UiRenderer = struct {
         }
     }
 
+    /// Begin a new draw layer. Call before rendering each screen.
+    pub fn beginLayer(self: *UiRenderer) void {
+        self.layer_normal_start = self.vertex_count;
+        self.layer_inverted_start = self.inverted_vertex_count;
+    }
+
+    /// End the current draw layer. Call after rendering each screen.
+    pub fn endLayer(self: *UiRenderer) void {
+        if (self.draw_layer_count >= MAX_DRAW_LAYERS) return;
+        const normal_count = self.vertex_count - self.layer_normal_start;
+        const inverted_count = self.inverted_vertex_count - self.layer_inverted_start;
+        if (normal_count == 0 and inverted_count == 0) return;
+        self.draw_layers[self.draw_layer_count] = .{
+            .normal_start = self.layer_normal_start,
+            .normal_count = normal_count,
+            .inverted_start = self.layer_inverted_start,
+            .inverted_count = inverted_count,
+        };
+        self.draw_layer_count += 1;
+    }
+
     pub fn recordDraw(self: *const UiRenderer, command_buffer: vk.VkCommandBuffer) void {
-        if (self.vertex_count == 0) return;
+        if (self.vertex_count == 0 and self.inverted_vertex_count == 0) return;
 
         const ortho = orthoMatrix(self.screen_width, self.screen_height);
 
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
-        vk.cmdBindDescriptorSets(
-            command_buffer,
-            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-            self.pipeline_layout,
-            0,
-            1,
-            &[_]vk.VkDescriptorSet{self.descriptor_set},
-            0,
-            null,
-        );
-        vk.cmdPushConstants(
-            command_buffer,
-            self.pipeline_layout,
-            vk.VK_SHADER_STAGE_VERTEX_BIT,
-            0,
-            64,
-            &ortho,
-        );
-        vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
+        // Draw per-layer: for each screen layer, draw inverted then normal,
+        // so that later screens' widgets render on top of earlier screens.
+        for (self.draw_layers[0..self.draw_layer_count]) |layer| {
+            if (layer.inverted_count > 0) {
+                vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.inverted_pipeline);
+                vk.cmdBindDescriptorSets(
+                    command_buffer,
+                    vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    self.pipeline_layout,
+                    0,
+                    1,
+                    &[_]vk.VkDescriptorSet{self.descriptor_set},
+                    0,
+                    null,
+                );
+                vk.cmdPushConstants(
+                    command_buffer,
+                    self.pipeline_layout,
+                    vk.VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                    64,
+                    &ortho,
+                );
+                // Inverted vertices are stored at the end of the buffer, growing downward.
+                // layer.inverted_start is the count of inverted verts before this layer started.
+                const first = MAX_VERTICES - layer.inverted_start - layer.inverted_count;
+                vk.cmdDraw(command_buffer, layer.inverted_count, 1, first, 0);
+            }
+
+            if (layer.normal_count > 0) {
+                vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
+                vk.cmdBindDescriptorSets(
+                    command_buffer,
+                    vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    self.pipeline_layout,
+                    0,
+                    1,
+                    &[_]vk.VkDescriptorSet{self.descriptor_set},
+                    0,
+                    null,
+                );
+                vk.cmdPushConstants(
+                    command_buffer,
+                    self.pipeline_layout,
+                    vk.VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                    64,
+                    &ortho,
+                );
+                vk.cmdDraw(command_buffer, layer.normal_count, 1, layer.normal_start, 0);
+            }
+        }
     }
 
     pub fn updateScreenSize(self: *UiRenderer, width: u32, height: u32, scale: f32) void {
@@ -283,6 +356,36 @@ pub const UiRenderer = struct {
     /// Draw a sprite from the HUD atlas at the given position and scale.
     pub fn drawSprite(self: *UiRenderer, sprite: SpriteRect, x: f32, y: f32, w: f32, h: f32, tint: [4]f32) void {
         self.drawTexturedRect(x, y, w, h, sprite.u0, sprite.v0, sprite.u1, sprite.v1, tint);
+    }
+
+    /// Draw a textured rectangle into the inverted-blend region (end of vertex buffer).
+    pub fn drawTexturedRectInverted(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, uv_left: f32, uv_top: f32, uv_right: f32, uv_bottom: f32, tint: [4]f32) void {
+        if (w <= 0 or h <= 0) return;
+        const verts = self.mapped_vertices orelse return;
+        if (self.vertex_count + self.inverted_vertex_count + 6 > MAX_VERTICES) return;
+
+        const base = MAX_VERTICES - self.inverted_vertex_count - 6;
+
+        const x0 = x;
+        const y0 = y;
+        const x1 = x + w;
+        const y1 = y + h;
+
+        const s2 = self.clip_scale;
+        const cr = [4]f32{ self.clip_rect[0] * s2, self.clip_rect[1] * s2, self.clip_rect[2] * s2, self.clip_rect[3] * s2 };
+        verts[base + 0] = .{ .px = x0, .py = y0, .u = uv_left, .v = uv_top, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[base + 1] = .{ .px = x1, .py = y0, .u = uv_right, .v = uv_top, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[base + 2] = .{ .px = x0, .py = y1, .u = uv_left, .v = uv_bottom, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[base + 3] = .{ .px = x1, .py = y0, .u = uv_right, .v = uv_top, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[base + 4] = .{ .px = x1, .py = y1, .u = uv_right, .v = uv_bottom, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+        verts[base + 5] = .{ .px = x0, .py = y1, .u = uv_left, .v = uv_bottom, .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3], .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3] };
+
+        self.inverted_vertex_count += 6;
+    }
+
+    /// Draw a sprite with inverted blending.
+    pub fn drawSpriteInverted(self: *UiRenderer, sprite: SpriteRect, x: f32, y: f32, w: f32, h: f32, tint: [4]f32) void {
+        self.drawTexturedRectInverted(x, y, w, h, sprite.u0, sprite.v0, sprite.u1, sprite.v1, tint);
     }
 
     /// Load HUD sprite textures into a vertical atlas, replacing the 1x1 fallback.
@@ -1057,33 +1160,82 @@ pub const UiRenderer = struct {
             .pDynamicStates = &dynamic_states,
         };
 
-        const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .pNext = &rendering_create_info,
-            .flags = 0,
-            .stageCount = 2,
-            .pStages = &shader_stages,
-            .pVertexInputState = &vertex_input_info,
-            .pInputAssemblyState = &input_assembly,
-            .pTessellationState = null,
-            .pViewportState = &viewport_state,
-            .pRasterizationState = &rasterizer,
-            .pMultisampleState = &multisampling,
-            .pDepthStencilState = &depth_stencil,
-            .pColorBlendState = &color_blending,
-            .pDynamicState = &dynamic_state_info,
-            .layout = self.pipeline_layout,
-            .renderPass = null,
-            .subpass = 0,
-            .basePipelineHandle = null,
-            .basePipelineIndex = -1,
+        // Inverted blend: ONE_MINUS_DST_COLOR for Minecraft-style crosshair
+        const inverted_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
         };
 
-        var pipelines: [1]vk.VkPipeline = undefined;
-        try vk.createGraphicsPipelines(ctx.device, ctx.pipeline_cache, 1, &[_]vk.VkGraphicsPipelineCreateInfo{pipeline_info}, null, &pipelines);
-        self.pipeline = pipelines[0];
+        const inverted_color_blending = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = 0,
+            .attachmentCount = 1,
+            .pAttachments = &inverted_blend_attachment,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
 
-        std.log.info("UI rendering pipeline created", .{});
+        const pipeline_infos = [2]vk.VkGraphicsPipelineCreateInfo{
+            // [0] Normal alpha-blend pipeline
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                .pNext = &rendering_create_info,
+                .flags = 0,
+                .stageCount = 2,
+                .pStages = &shader_stages,
+                .pVertexInputState = &vertex_input_info,
+                .pInputAssemblyState = &input_assembly,
+                .pTessellationState = null,
+                .pViewportState = &viewport_state,
+                .pRasterizationState = &rasterizer,
+                .pMultisampleState = &multisampling,
+                .pDepthStencilState = &depth_stencil,
+                .pColorBlendState = &color_blending,
+                .pDynamicState = &dynamic_state_info,
+                .layout = self.pipeline_layout,
+                .renderPass = null,
+                .subpass = 0,
+                .basePipelineHandle = null,
+                .basePipelineIndex = -1,
+            },
+            // [1] Inverted-blend pipeline
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+                .pNext = &rendering_create_info,
+                .flags = 0,
+                .stageCount = 2,
+                .pStages = &shader_stages,
+                .pVertexInputState = &vertex_input_info,
+                .pInputAssemblyState = &input_assembly,
+                .pTessellationState = null,
+                .pViewportState = &viewport_state,
+                .pRasterizationState = &rasterizer,
+                .pMultisampleState = &multisampling,
+                .pDepthStencilState = &depth_stencil,
+                .pColorBlendState = &inverted_color_blending,
+                .pDynamicState = &dynamic_state_info,
+                .layout = self.pipeline_layout,
+                .renderPass = null,
+                .subpass = 0,
+                .basePipelineHandle = null,
+                .basePipelineIndex = -1,
+            },
+        };
+
+        var pipelines: [2]vk.VkPipeline = undefined;
+        try vk.createGraphicsPipelines(ctx.device, ctx.pipeline_cache, 2, &pipeline_infos, null, &pipelines);
+        self.pipeline = pipelines[0];
+        self.inverted_pipeline = pipelines[1];
+
+        std.log.info("UI rendering pipelines created (normal + inverted)", .{});
     }
 
     fn orthoMatrix(w: f32, h: f32) [16]f32 {

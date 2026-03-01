@@ -2,7 +2,7 @@
   <panel width="fill" height="fill" layout="anchor">
 
     <!-- Crosshair: centered on screen (15x15 at 2x = 30x30) -->
-    <image id="crosshair" src="hud:crosshair"
+    <image id="crosshair" src="hud:crosshair" blend="inverted"
            width="30" height="30" anchor_x="center" anchor_y="center"/>
 
     <!-- Hotbar container: bottom-center, flush at bottom (182x22 at 2x = 364x44) -->

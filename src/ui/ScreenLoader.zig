@@ -305,6 +305,10 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.image.atlas_w = parseFloat(attr.value);
                 } else if (eql(attr.name, "atlas_h")) {
                     data.image.atlas_h = parseFloat(attr.value);
+                } else if (eql(attr.name, "blend")) {
+                    if (eql(attr.value, "inverted")) {
+                        data.image.blend_mode = .inverted;
+                    }
                 }
             }
         },

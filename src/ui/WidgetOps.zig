@@ -224,7 +224,11 @@ pub fn drawWidget(
             const img = &data.image;
             // Check if we have atlas UVs to sample from
             if (img.atlas_w > 0 and img.atlas_h > 0) {
-                ui.drawTexturedRect(r.x, r.y, r.w, r.h, img.atlas_u, img.atlas_v, img.atlas_u + img.atlas_w, img.atlas_v + img.atlas_h, img.tint.toArray());
+                if (img.blend_mode == .inverted) {
+                    ui.drawTexturedRectInverted(r.x, r.y, r.w, r.h, img.atlas_u, img.atlas_v, img.atlas_u + img.atlas_w, img.atlas_v + img.atlas_h, img.tint.toArray());
+                } else {
+                    ui.drawTexturedRect(r.x, r.y, r.w, r.h, img.atlas_u, img.atlas_v, img.atlas_u + img.atlas_w, img.atlas_v + img.atlas_h, img.tint.toArray());
+                }
             } else if (img.tint.a > 0.01) {
                 ui.drawRect(r.x, r.y, r.w, r.h, img.tint.toArray());
             }
