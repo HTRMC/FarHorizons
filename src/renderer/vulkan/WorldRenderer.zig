@@ -15,7 +15,6 @@ const zlm = @import("zlm");
 const WorldState = @import("../../world/WorldState.zig");
 pub const TextureManager = @import("TextureManager.zig").TextureManager;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
-const TransferPipeline = @import("TransferPipeline.zig").TransferPipeline;
 const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
 const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
@@ -216,111 +215,6 @@ pub const WorldRenderer = struct {
         const offset = slot * @sizeOf(ChunkData);
         const dst: *ChunkData = @ptrCast(@alignCast(base_ptr + offset));
         dst.* = self.chunk_data[slot];
-    }
-
-    pub fn uploadChunkDataAsync(
-        self: *WorldRenderer,
-        pipeline: *TransferPipeline,
-        frame_index: u32,
-        coord: WorldState.ChunkCoord,
-        faces: []const FaceData,
-        face_counts: [6]u32,
-        total_face_count: u32,
-        lights: []const LightEntry,
-        light_count: u32,
-        voxel_size: u32,
-    ) !void {
-        const tz = tracy.zone(@src(), "uploadChunkDataAsync");
-        defer tz.end();
-
-        const slot = coord.flatIndex();
-
-        // Save old allocations — only defer-free after all fallible ops succeed,
-        // otherwise a failed upload would leave chunk_*_alloc[slot] referencing a
-        // handle that gets freed later (use-after-free / double-free).
-        const old_face_alloc = self.chunk_face_alloc[slot];
-        const old_light_alloc = self.chunk_light_alloc[slot];
-
-        if (total_face_count == 0) {
-            try pipeline.addPendingChunk(.{
-                .slot = @intCast(slot),
-                .chunk_data = .{
-                    .position = coord.positionScaled(voxel_size),
-                    .light_start = 0,
-                    .face_start = 0,
-                    .face_counts = .{ 0, 0, 0, 0, 0, 0 },
-                    .voxel_size = voxel_size,
-                },
-                .face_alloc = null,
-                .light_alloc = null,
-            });
-            // Success — now safe to defer-free old allocations
-            if (old_face_alloc) |ofa| pipeline.deferFaceFree(frame_index, ofa.handle);
-            if (old_light_alloc) |ola| pipeline.deferLightFree(frame_index, ola.handle);
-            return;
-        }
-
-        // Allocate TLSF ranges immediately (reserves space)
-        const fa = self.face_tlsf.alloc(total_face_count) orelse {
-            std.log.err("TLSF face heap full (requested {}, largest free {})", .{
-                total_face_count, self.face_tlsf.largestFree(),
-            });
-            return error.OutOfMemory;
-        };
-        errdefer self.face_tlsf.free(fa.handle);
-
-        const la = if (light_count > 0)
-            self.light_tlsf.alloc(light_count) orelse {
-                std.log.err("TLSF light heap full (requested {}, largest free {})", .{
-                    light_count, self.light_tlsf.largestFree(),
-                });
-                return error.OutOfMemory;
-            }
-        else
-            TlsfAllocator.Allocation{ .offset = 0, .size = 0, .handle = TlsfAllocator.null_handle };
-        errdefer if (light_count > 0) self.light_tlsf.free(la.handle);
-
-        // Stage and record face data copy
-        {
-            const fb_size: vk.VkDeviceSize = @intCast(@as(u64, total_face_count) * @sizeOf(FaceData));
-            const staging = try pipeline.allocStaging(frame_index, fb_size, @sizeOf(FaceData));
-
-            const dst: [*]FaceData = @ptrCast(@alignCast(staging.mapped_ptr));
-            @memcpy(dst[0..total_face_count], faces[0..total_face_count]);
-
-            const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, fa.offset) * @sizeOf(FaceData));
-            pipeline.recordCopy(frame_index, staging, self.face_alloc.buffer, dst_offset, fb_size);
-        }
-
-        // Stage and record light data copy
-        if (light_count > 0) {
-            const lb_size: vk.VkDeviceSize = @intCast(@as(u64, light_count) * @sizeOf(LightEntry));
-            const staging = try pipeline.allocStaging(frame_index, lb_size, @sizeOf(LightEntry));
-
-            const dst: [*]LightEntry = @ptrCast(@alignCast(staging.mapped_ptr));
-            @memcpy(dst[0..light_count], lights[0..light_count]);
-
-            const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, la.offset) * @sizeOf(LightEntry));
-            pipeline.recordCopy(frame_index, staging, self.light_alloc.buffer, dst_offset, lb_size);
-        }
-
-        // Add to pending (ChunkData written on commitTransfers next frame)
-        try pipeline.addPendingChunk(.{
-            .slot = @intCast(slot),
-            .chunk_data = .{
-                .position = coord.positionScaled(voxel_size),
-                .light_start = la.offset,
-                .face_start = fa.offset,
-                .face_counts = face_counts,
-                .voxel_size = voxel_size,
-            },
-            .face_alloc = fa,
-            .light_alloc = if (light_count > 0) la else null,
-        });
-
-        // All fallible operations succeeded — now safe to defer-free old allocations
-        if (old_face_alloc) |ofa| pipeline.deferFaceFree(frame_index, ofa.handle);
-        if (old_light_alloc) |ola| pipeline.deferLightFree(frame_index, ola.handle);
     }
 
     pub fn buildIndirectCommands(self: *WorldRenderer, ctx: *const VulkanContext, camera_pos: zlm.Vec3) void {

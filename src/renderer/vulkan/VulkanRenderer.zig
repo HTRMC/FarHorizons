@@ -12,6 +12,8 @@ const vk_utils = @import("vk_utils.zig");
 const TransferPipeline = @import("TransferPipeline.zig").TransferPipeline;
 const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
+const LightWorker = @import("../../world/LightWorker.zig").LightWorker;
+const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const GameState = @import("../../GameState.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
 const app_config = @import("../../app_config.zig");
@@ -65,10 +67,18 @@ pub const VulkanRenderer = struct {
     render_state: RenderState,
     pipeline_cache_path: []const u8,
     transfer_pipeline: TransferPipeline,
-    mesh_worker: ?MeshWorker,
+    mesh_worker: ?*MeshWorker,
+    light_worker: ?*LightWorker,
     game_state: ?*GameState,
     ui_manager: ?*UiManager,
     framebuffer_resized: bool,
+
+    // Deferred TLSF frees (per frame slot)
+    deferred_face_frees: [MAX_FRAMES_IN_FLIGHT][256]TlsfAllocator.Handle,
+    deferred_face_free_counts: [MAX_FRAMES_IN_FLIGHT]u32,
+    deferred_light_frees: [MAX_FRAMES_IN_FLIGHT][256]TlsfAllocator.Handle,
+    deferred_light_free_counts: [MAX_FRAMES_IN_FLIGHT]u32,
+    max_graphics_wait_timeline: u64,
 
     pub fn init(allocator: std.mem.Allocator, window: *const Window, game_state: ?*GameState) !*VulkanRenderer {
         const init_zone = tracy.zone(@src(), "VulkanRenderer.init");
@@ -144,9 +154,15 @@ pub const VulkanRenderer = struct {
             .render_state = undefined,
             .transfer_pipeline = undefined,
             .mesh_worker = null,
+            .light_worker = null,
             .game_state = game_state,
             .ui_manager = null,
             .framebuffer_resized = false,
+            .deferred_face_frees = undefined,
+            .deferred_face_free_counts = .{0} ** MAX_FRAMES_IN_FLIGHT,
+            .deferred_light_frees = undefined,
+            .deferred_light_free_counts = .{0} ** MAX_FRAMES_IN_FLIGHT,
+            .max_graphics_wait_timeline = 0,
         };
 
         try self.createCommandPool();
@@ -168,9 +184,7 @@ pub const VulkanRenderer = struct {
 
         if (game_state) |gs| {
             gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
-            self.mesh_worker = MeshWorker.init(allocator, gs.world);
-            self.mesh_worker.?.light_map = gs.light_map;
-            self.mesh_worker.?.startAll();
+            self.startWorkerPipeline(gs);
         }
 
         std.log.info("VulkanRenderer initialized", .{});
@@ -185,9 +199,9 @@ pub const VulkanRenderer = struct {
             std.log.err("vkDeviceWaitIdle failed: {}", .{err});
         };
 
+        self.stopWorkerPipeline();
         self.transfer_pipeline.deinit();
 
-        if (self.mesh_worker) |*mw| mw.deinit();
         self.render_state.deinit(self.ctx.device);
         self.gpu_allocator.deinit();
         vk.destroyCommandPool(self.ctx.device, self.ctx.command_pool, null);
@@ -210,18 +224,92 @@ pub const VulkanRenderer = struct {
     }
 
     pub fn setGameState(self: *VulkanRenderer, gs: ?*GameState) void {
-        if (self.mesh_worker) |*mw| {
-            mw.deinit();
-            self.mesh_worker = null;
-        }
-
+        self.stopWorkerPipeline();
         self.game_state = gs;
 
         if (gs) |game_state| {
             game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
-            self.mesh_worker = MeshWorker.init(self.allocator, game_state.world);
-            self.mesh_worker.?.light_map = game_state.light_map;
-            self.mesh_worker.?.startAll();
+            self.startWorkerPipeline(game_state);
+        }
+    }
+
+    fn startWorkerPipeline(self: *VulkanRenderer, gs: *GameState) void {
+        const wr = &self.render_state.world_renderer;
+
+        // 1. Create + init MeshWorker
+        const mw = self.allocator.create(MeshWorker) catch |err| {
+            std.log.err("Failed to allocate MeshWorker: {}", .{err});
+            return;
+        };
+
+        // 2. Create + init LightWorker
+        const lw = self.allocator.create(LightWorker) catch |err| {
+            std.log.err("Failed to allocate LightWorker: {}", .{err});
+            self.allocator.destroy(mw);
+            return;
+        };
+
+        lw.initInPlace(gs.world, gs.light_map, mw);
+        mw.initInPlace(self.allocator, gs.world, gs.light_map, &lw.light_map_rwlock);
+
+        self.mesh_worker = mw;
+        self.light_worker = lw;
+        gs.light_worker = lw;
+
+        // Set voxel_size based on current LOD
+        mw.voxel_size.store(@as(u32, 1) << @intCast(gs.current_lod), .release);
+
+        // 3. Setup + start TransferPipeline thread
+        self.transfer_pipeline.setupThread(
+            mw,
+            &wr.face_tlsf,
+            &wr.light_tlsf,
+            wr.face_alloc.buffer,
+            wr.light_alloc.buffer,
+        );
+
+        // 4. Start threads (order: mesh first so transfer can consume, then light)
+        mw.start();
+        self.transfer_pipeline.start();
+        lw.start();
+
+        // 5. Enqueue all chunks for initial mesh
+        mw.enqueueAll();
+    }
+
+    fn stopWorkerPipeline(self: *VulkanRenderer) void {
+        // Stop threads in dependency order: light (feeds mesh) → transfer (consumes mesh) → mesh (produces)
+        if (self.light_worker) |lw| {
+            lw.stop();
+        }
+        self.transfer_pipeline.stop();
+        if (self.mesh_worker) |mw| {
+            mw.stop();
+        }
+
+        // Wait for all in-flight GPU transfers before freeing TLSF handles
+        self.transfer_pipeline.waitAllPending();
+
+        // Drain committed queue — free TLSF handles for chunks that were never applied
+        self.drainAndFreeCommitted();
+
+        // Flush deferred frees for all frame slots
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            self.processDeferredFrees(@intCast(i));
+        }
+
+        // Clear references and destroy
+        self.transfer_pipeline.mesh_worker = null;
+        if (self.mesh_worker) |mw| {
+            self.allocator.destroy(mw);
+            self.mesh_worker = null;
+        }
+        if (self.light_worker) |lw| {
+            self.allocator.destroy(lw);
+            self.light_worker = null;
+        }
+        if (self.game_state) |gs| {
+            gs.light_worker = null;
         }
     }
 
@@ -231,45 +319,39 @@ pub const VulkanRenderer = struct {
 
         const cf = self.render_state.current_frame;
 
-        // Wait only for this frame's fence (not all fences)
+        // 1. Wait this frame's fence only
         const fence = [_]vk.VkFence{self.render_state.in_flight_fences[cf]};
         try vk.waitForFences(self.ctx.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
 
-        // Async transfer pipeline: wait for this slot's previous transfer, recycle ring
-        try self.transfer_pipeline.beginTransfer(cf);
-
-        // Commit deferred data from completed transfers (makes it visible to buildIndirectCommands)
-        self.transfer_pipeline.commitTransfers(cf, &self.render_state.world_renderer);
-
         if (self.game_state) |gs| {
             if (!gs.debug_camera_active) {
-                self.pollMeshWorkerAsync(gs);
-                self.transfer_pipeline.submitTransfer(cf) catch |err| {
-                    std.log.err("Failed to submit transfer: {}", .{err});
-                };
-                self.render_state.world_renderer.buildIndirectCommands(&self.ctx, gs.camera.position);
-                self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
+                // 2. Process deferred TLSF frees for this frame slot (safe after fence wait)
+                self.processDeferredFrees(cf);
 
+                // 3. Drain committed chunks from TransferPipeline → apply to WorldRenderer
+                self.drainCommittedChunks(cf);
+
+                // 4. Sync worker world/light_map/voxel_size with current LOD
+                const vs: u32 = @as(u32, 1) << @intCast(gs.current_lod);
+                if (self.mesh_worker) |mw| {
+                    mw.syncWorld(gs.world, gs.light_map, vs);
+                }
+                if (self.light_worker) |lw| {
+                    lw.syncWorld(gs.world, gs.light_map);
+                }
+
+                // 5. Feed any remaining dirty_chunks to MeshWorker
                 if (gs.dirty_chunks.count > 0) {
-                    if (self.mesh_worker) |*mw| {
-                        if (mw.state.load(.acquire) == .idle) {
-                            mw.world = gs.world;
-                            mw.light_map = gs.light_map;
-                            mw.startDirty(gs.dirty_chunks.chunks[0..gs.dirty_chunks.count]);
-                            gs.dirty_chunks.clear();
-                        }
+                    if (self.mesh_worker) |mw| {
+                        mw.enqueueBatch(gs.dirty_chunks.chunks[0..gs.dirty_chunks.count]);
+                        gs.dirty_chunks.clear();
                     }
                 }
-            } else {
-                // No transfers in debug camera mode, just submit empty
-                self.transfer_pipeline.submitTransfer(cf) catch |err| {
-                    std.log.err("Failed to submit transfer: {}", .{err});
-                };
+
+                // 5. Build indirect draw commands
+                self.render_state.world_renderer.buildIndirectCommands(&self.ctx, gs.camera.position);
+                self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
             }
-        } else {
-            self.transfer_pipeline.submitTransfer(cf) catch |err| {
-                std.log.err("Failed to submit transfer: {}", .{err});
-            };
         }
 
         self.render_state.ui_renderer.beginFrame(self.ctx.device);
@@ -287,38 +369,94 @@ pub const VulkanRenderer = struct {
         }
     }
 
-    fn pollMeshWorkerAsync(self: *VulkanRenderer, gs: *GameState) void {
-        const mw = &(self.mesh_worker orelse return);
-        const poll_result = mw.poll() orelse return;
+    fn drainCommittedChunks(self: *VulkanRenderer, cf: u32) void {
+        const CommittedChunk = @import("TransferPipeline.zig").CommittedChunk;
+        var buf: [128]CommittedChunk = undefined;
+        const count = self.transfer_pipeline.drainCommitted(&buf);
 
-        const cf = self.render_state.current_frame;
-        const voxel_size: u32 = @as(u32, 1) << @intCast(gs.current_lod);
+        const wr = &self.render_state.world_renderer;
 
-        for (0..poll_result.count) |i| {
-            if (poll_result.results[i]) |chunk_result| {
-                self.render_state.world_renderer.uploadChunkDataAsync(
-                    &self.transfer_pipeline,
-                    cf,
-                    chunk_result.coord,
-                    chunk_result.faces,
-                    chunk_result.face_counts,
-                    chunk_result.total_face_count,
-                    chunk_result.lights,
-                    chunk_result.light_count,
-                    voxel_size,
-                ) catch |err| {
-                    if (err == error.StagingBufferFull) {
-                        // Ring buffer full — skip, will retry next frame
-                        break;
+        for (buf[0..count]) |entry| {
+            const slot = entry.slot;
+
+            // Defer OLD alloc handles for this frame slot
+            if (wr.chunk_face_alloc[slot]) |fa| {
+                if (fa.handle != TlsfAllocator.null_handle) {
+                    const idx = self.deferred_face_free_counts[cf];
+                    if (idx < 256) {
+                        self.deferred_face_frees[cf][idx] = fa.handle;
+                        self.deferred_face_free_counts[cf] = idx + 1;
                     }
-                    std.log.err("Failed to upload chunk ({},{},{}): {}", .{
-                        chunk_result.coord.cx, chunk_result.coord.cy, chunk_result.coord.cz, err,
-                    });
-                    continue;
-                };
-                mw.freeResult(i);
+                }
+            }
+            if (wr.chunk_light_alloc[slot]) |la| {
+                if (la.handle != TlsfAllocator.null_handle) {
+                    const idx = self.deferred_light_free_counts[cf];
+                    if (idx < 256) {
+                        self.deferred_light_frees[cf][idx] = la.handle;
+                        self.deferred_light_free_counts[cf] = idx + 1;
+                    }
+                }
+            }
+
+            // Apply NEW data
+            wr.chunk_data[slot] = entry.chunk_data;
+            wr.chunk_face_alloc[slot] = entry.face_alloc;
+            wr.chunk_light_alloc[slot] = entry.light_alloc;
+            wr.writeChunkData(slot);
+
+            // Track max timeline for graphics wait
+            self.max_graphics_wait_timeline = @max(self.max_graphics_wait_timeline, entry.timeline_value);
+        }
+    }
+
+    fn drainAndFreeCommitted(self: *VulkanRenderer) void {
+        const CommittedChunk = @import("TransferPipeline.zig").CommittedChunk;
+        var buf: [128]CommittedChunk = undefined;
+        const count = self.transfer_pipeline.drainCommitted(&buf);
+        if (count == 0) return;
+
+        const wr = &self.render_state.world_renderer;
+        const io_val = Io.Threaded.global_single_threaded.io();
+        self.transfer_pipeline.tlsf_mutex.lockUncancelable(io_val);
+        for (buf[0..count]) |entry| {
+            if (entry.face_alloc) |fa| {
+                if (fa.handle != TlsfAllocator.null_handle) {
+                    wr.face_tlsf.free(fa.handle);
+                }
+            }
+            if (entry.light_alloc) |la| {
+                if (la.handle != TlsfAllocator.null_handle) {
+                    wr.light_tlsf.free(la.handle);
+                }
             }
         }
+        self.transfer_pipeline.tlsf_mutex.unlock(io_val);
+    }
+
+    fn processDeferredFrees(self: *VulkanRenderer, cf: u32) void {
+        const io_val = Io.Threaded.global_single_threaded.io();
+        const wr = &self.render_state.world_renderer;
+
+        self.transfer_pipeline.tlsf_mutex.lockUncancelable(io_val);
+
+        const face_count = self.deferred_face_free_counts[cf];
+        for (self.deferred_face_frees[cf][0..face_count]) |handle| {
+            if (handle != TlsfAllocator.null_handle) {
+                wr.face_tlsf.free(handle);
+            }
+        }
+        self.deferred_face_free_counts[cf] = 0;
+
+        const light_count = self.deferred_light_free_counts[cf];
+        for (self.deferred_light_frees[cf][0..light_count]) |handle| {
+            if (handle != TlsfAllocator.null_handle) {
+                wr.light_tlsf.free(handle);
+            }
+        }
+        self.deferred_light_free_counts[cf] = 0;
+
+        self.transfer_pipeline.tlsf_mutex.unlock(io_val);
     }
 
     pub fn endFrame(self: *VulkanRenderer) !void {
@@ -379,7 +517,7 @@ pub const VulkanRenderer = struct {
         const signal_semaphores = [_]vk.VkSemaphore{self.surface_state.render_finished_semaphores.items[image_index]};
 
         // Timeline semaphore submit info: 0 for binary semaphores (ignored by driver)
-        const wait_values = [_]u64{ 0, self.transfer_pipeline.getGraphicsWaitValue() };
+        const wait_values = [_]u64{ 0, self.max_graphics_wait_timeline };
         const signal_values = [_]u64{0};
         const timeline_info = vk.VkTimelineSemaphoreSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
@@ -760,6 +898,7 @@ pub const VulkanRenderer = struct {
         self.ctx.command_pool = try vk.createCommandPool(self.ctx.device, &pool_info, null);
         std.log.info("Command pool created", .{});
     }
+
 
     const InstanceResult = struct {
         instance: vk.VkInstance,

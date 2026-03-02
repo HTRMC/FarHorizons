@@ -5,6 +5,7 @@ const WorldState = @import("world/WorldState.zig");
 const Physics = @import("Physics.zig");
 const Raycast = @import("Raycast.zig");
 const Storage = @import("world/storage/Storage.zig");
+const LightWorker = @import("world/LightWorker.zig").LightWorker;
 
 const GameState = @This();
 
@@ -63,6 +64,7 @@ hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .gla
 offhand: WorldState.BlockType = .air,
 
 storage: ?*Storage,
+light_worker: ?*LightWorker,
 
 debug_screens: u8 = 0,
 delta_time: f32 = 0,
@@ -228,6 +230,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .lod_worlds = lod_worlds_arr,
         .lod_light_maps = lod_light_maps_arr,
         .storage = storage,
+        .light_worker = null,
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
@@ -448,11 +451,19 @@ fn dirtyLightRadius(self: *GameState, wx: i32, wy: i32, wz: i32) void {
 
 pub fn breakBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
-    WorldState.setBlock(self.world, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], .air);
-    self.updateLight(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
-    self.dirtyLightRadius(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
-    self.queueChunkSave(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
-    self.propagateLodBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    const wx = hit.block_pos[0];
+    const wy = hit.block_pos[1];
+    const wz = hit.block_pos[2];
+    WorldState.setBlock(self.world, wx, wy, wz, .air);
+    self.markDirty(wx, wy, wz);
+    if (self.light_worker) |lw| {
+        lw.enqueue(wx, wy, wz);
+    } else {
+        self.updateLight(wx, wy, wz);
+        self.dirtyLightRadius(wx, wy, wz);
+    }
+    self.queueChunkSave(wx, wy, wz);
+    self.propagateLodBlock(wx, wy, wz);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
 }
 
@@ -466,8 +477,13 @@ pub fn placeBlock(self: *GameState) void {
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(WorldState.getBlock(self.world, px, py, pz))) return;
     WorldState.setBlock(self.world, px, py, pz, block_type);
-    self.updateLight(px, py, pz);
-    self.dirtyLightRadius(px, py, pz);
+    self.markDirty(px, py, pz);
+    if (self.light_worker) |lw| {
+        lw.enqueue(px, py, pz);
+    } else {
+        self.updateLight(px, py, pz);
+        self.dirtyLightRadius(px, py, pz);
+    }
     self.queueChunkSave(px, py, pz);
     self.propagateLodBlock(px, py, pz);
     self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());

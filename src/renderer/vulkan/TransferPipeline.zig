@@ -4,30 +4,25 @@ const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
 const types = @import("types.zig");
 const ChunkData = types.ChunkData;
+const FaceData = types.FaceData;
+const LightEntry = types.LightEntry;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const WorldState = @import("../../world/WorldState.zig");
 const render_state_mod = @import("RenderState.zig");
 const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 const tracy = @import("../../platform/tracy.zig");
+const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
+const Io = std.Io;
 
 const RING_BUFFER_SIZE: vk.VkDeviceSize = 8 * 1024 * 1024; // 8MB per slot
-const MAX_PENDING = 64;
+const MAX_COMMITTED = 128;
 
-pub const StagingAlloc = struct {
-    buffer: vk.VkBuffer,
-    offset: vk.VkDeviceSize,
-    mapped_ptr: [*]u8,
-};
-
-pub const PendingChunk = struct {
+pub const CommittedChunk = struct {
     slot: u16,
     chunk_data: ChunkData,
     face_alloc: ?TlsfAllocator.Allocation,
     light_alloc: ?TlsfAllocator.Allocation,
-};
-
-const DeferredFree = struct {
-    handle: TlsfAllocator.Handle,
+    timeline_value: u64,
 };
 
 const RingBuffer = struct {
@@ -50,20 +45,24 @@ pub const TransferPipeline = struct {
 
     timeline_semaphore: vk.VkSemaphore,
     timeline_value: u64,
-    frame_timeline_values: [MAX_FRAMES_IN_FLIGHT]u64,
+    slot_timeline_values: [MAX_FRAMES_IN_FLIGHT]u64,
 
-    pending_chunks: [MAX_PENDING]PendingChunk,
-    pending_count: u32,
+    // Thread control
+    thread: ?std.Thread,
+    shutdown: std.atomic.Value(bool),
 
-    completed_chunks: [MAX_FRAMES_IN_FLIGHT][MAX_PENDING]PendingChunk,
-    completed_counts: [MAX_FRAMES_IN_FLIGHT]u32,
+    // References (set via setupThread)
+    mesh_worker: ?*MeshWorker,
+    face_tlsf: ?*TlsfAllocator,
+    light_tlsf: ?*TlsfAllocator,
+    face_buffer: vk.VkBuffer,
+    light_buffer: vk.VkBuffer,
+    tlsf_mutex: Io.Mutex,
 
-    deferred_face_frees: [MAX_FRAMES_IN_FLIGHT][MAX_PENDING]DeferredFree,
-    deferred_face_free_counts: [MAX_FRAMES_IN_FLIGHT]u32,
-    deferred_light_frees: [MAX_FRAMES_IN_FLIGHT][MAX_PENDING]DeferredFree,
-    deferred_light_free_counts: [MAX_FRAMES_IN_FLIGHT]u32,
-
-    has_commands: [MAX_FRAMES_IN_FLIGHT]bool,
+    // Committed queue (main thread drains this)
+    committed_queue: [MAX_COMMITTED]CommittedChunk,
+    committed_len: u32,
+    committed_mutex: Io.Mutex,
 
     pub fn init(ctx: *const VulkanContext) !TransferPipeline {
         const tz = tracy.zone(@src(), "TransferPipeline.init");
@@ -76,15 +75,19 @@ pub const TransferPipeline = struct {
         self.graphics_queue_family = ctx.queue_family_index;
         self.transfer_queue_family = ctx.transfer_queue_family;
         self.timeline_value = 0;
-        self.pending_count = 0;
-        self.completed_counts = .{0} ** MAX_FRAMES_IN_FLIGHT;
-        self.deferred_face_free_counts = .{0} ** MAX_FRAMES_IN_FLIGHT;
-        self.deferred_light_free_counts = .{0} ** MAX_FRAMES_IN_FLIGHT;
-        self.has_commands = .{false} ** MAX_FRAMES_IN_FLIGHT;
+        self.slot_timeline_values = .{0} ** MAX_FRAMES_IN_FLIGHT;
 
-        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-            self.frame_timeline_values[i] = 0;
-        }
+        // Thread fields
+        self.thread = null;
+        self.shutdown = std.atomic.Value(bool).init(false);
+        self.mesh_worker = null;
+        self.face_tlsf = null;
+        self.light_tlsf = null;
+        self.face_buffer = null;
+        self.light_buffer = null;
+        self.tlsf_mutex = .init;
+        self.committed_len = 0;
+        self.committed_mutex = .init;
 
         // Create ring buffers
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
@@ -158,84 +161,93 @@ pub const TransferPipeline = struct {
         return self;
     }
 
-    pub fn beginTransfer(self: *TransferPipeline, frame_index: u32) !void {
-        const tz = tracy.zone(@src(), "TransferPipeline.beginTransfer");
-        defer tz.end();
+    pub fn setupThread(
+        self: *TransferPipeline,
+        mesh_worker: *MeshWorker,
+        face_tlsf: *TlsfAllocator,
+        light_tlsf: *TlsfAllocator,
+        face_buf: vk.VkBuffer,
+        light_buf: vk.VkBuffer,
+    ) void {
+        self.mesh_worker = mesh_worker;
+        self.face_tlsf = face_tlsf;
+        self.light_tlsf = light_tlsf;
+        self.face_buffer = face_buf;
+        self.light_buffer = light_buf;
+    }
 
-        // Wait for this slot's previous transfer to complete
-        const prev_value = self.frame_timeline_values[frame_index];
-        if (prev_value > 0) {
-            var current_value: u64 = 0;
-            try vk.getSemaphoreCounterValue(self.device, self.timeline_semaphore, &current_value);
-            if (current_value < prev_value) {
-                const sems = [_]vk.VkSemaphore{self.timeline_semaphore};
-                const vals = [_]u64{prev_value};
-                const wait_info = vk.VkSemaphoreWaitInfo{
-                    .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
-                    .pNext = null,
-                    .flags = 0,
-                    .semaphoreCount = 1,
-                    .pSemaphores = &sems,
-                    .pValues = &vals,
-                };
-                try vk.waitSemaphores(self.device, &wait_info, std.math.maxInt(u64));
-            }
-        }
-
-        // Reset ring buffer
-        self.ring_buffers[frame_index].head = 0;
-        self.pending_count = 0;
-        self.has_commands[frame_index] = false;
-
-        // Reset this frame's command pool and begin command buffer
-        try vk.resetCommandPool(self.device, self.command_pools[frame_index], 0);
-        const begin_info = vk.VkCommandBufferBeginInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
-            .pNext = null,
-            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
-            .pInheritanceInfo = null,
+    pub fn start(self: *TransferPipeline) void {
+        self.shutdown.store(false, .release);
+        self.thread = std.Thread.spawn(.{}, workerFn, .{self}) catch |err| {
+            std.log.err("Failed to spawn transfer pipeline thread: {}", .{err});
+            return;
         };
-        try vk.beginCommandBuffer(self.command_buffers[frame_index], &begin_info);
     }
 
-    pub fn commitTransfers(self: *TransferPipeline, frame_index: u32, world_renderer: anytype) void {
-        const tz = tracy.zone(@src(), "TransferPipeline.commitTransfers");
-        defer tz.end();
-
-        // Apply deferred ChunkData writes from completed transfers
-        const count = self.completed_counts[frame_index];
-        for (0..count) |i| {
-            const pc = &self.completed_chunks[frame_index][i];
-            const slot = pc.slot;
-            world_renderer.chunk_data[slot] = pc.chunk_data;
-            world_renderer.chunk_face_alloc[slot] = pc.face_alloc;
-            world_renderer.chunk_light_alloc[slot] = pc.light_alloc;
-            world_renderer.writeChunkData(slot);
+    pub fn stop(self: *TransferPipeline) void {
+        self.shutdown.store(true, .release);
+        // Unblock the worker if it's waiting on mesh_worker output
+        if (self.mesh_worker) |mw| {
+            const io = Io.Threaded.global_single_threaded.io();
+            mw.output_cond.broadcast(io);
         }
-        self.completed_counts[frame_index] = 0;
-
-        // Process deferred TLSF frees
-        const face_free_count = self.deferred_face_free_counts[frame_index];
-        for (0..face_free_count) |i| {
-            const handle = self.deferred_face_frees[frame_index][i].handle;
-            if (handle != TlsfAllocator.null_handle) {
-                world_renderer.face_tlsf.free(handle);
-            }
+        if (self.thread) |t| {
+            t.join();
+            self.thread = null;
         }
-        self.deferred_face_free_counts[frame_index] = 0;
-
-        const light_free_count = self.deferred_light_free_counts[frame_index];
-        for (0..light_free_count) |i| {
-            const handle = self.deferred_light_frees[frame_index][i].handle;
-            if (handle != TlsfAllocator.null_handle) {
-                world_renderer.light_tlsf.free(handle);
-            }
-        }
-        self.deferred_light_free_counts[frame_index] = 0;
     }
 
-    pub fn allocStaging(self: *TransferPipeline, frame_index: u32, size: vk.VkDeviceSize, alignment: vk.VkDeviceSize) !StagingAlloc {
-        const ring = &self.ring_buffers[frame_index];
+    pub fn drainCommitted(self: *TransferPipeline, out_buf: []CommittedChunk) u32 {
+        const io = Io.Threaded.global_single_threaded.io();
+        self.committed_mutex.lockUncancelable(io);
+        defer self.committed_mutex.unlock(io);
+
+        const count = @min(self.committed_len, @as(u32, @intCast(out_buf.len)));
+        if (count > 0) {
+            @memcpy(out_buf[0..count], self.committed_queue[0..count]);
+            // Shift remaining
+            if (count < self.committed_len) {
+                const remaining = self.committed_len - count;
+                std.mem.copyForwards(
+                    CommittedChunk,
+                    self.committed_queue[0..remaining],
+                    self.committed_queue[count..self.committed_len],
+                );
+            }
+            self.committed_len -= count;
+        }
+        return count;
+    }
+
+    pub fn getGraphicsWaitValue(self: *const TransferPipeline) u64 {
+        return self.timeline_value;
+    }
+
+    pub fn waitAllPending(self: *TransferPipeline) void {
+        self.waitTimeline(self.timeline_value);
+    }
+
+    fn waitTimeline(self: *TransferPipeline, value: u64) void {
+        if (value == 0) return;
+        var current_value: u64 = 0;
+        vk.getSemaphoreCounterValue(self.device, self.timeline_semaphore, &current_value) catch return;
+        if (current_value >= value) return;
+
+        const sems = [_]vk.VkSemaphore{self.timeline_semaphore};
+        const vals = [_]u64{value};
+        const wait_info = vk.VkSemaphoreWaitInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+            .pNext = null,
+            .flags = 0,
+            .semaphoreCount = 1,
+            .pSemaphores = &sems,
+            .pValues = &vals,
+        };
+        vk.waitSemaphores(self.device, &wait_info, std.math.maxInt(u64)) catch {};
+    }
+
+    fn allocStaging(self: *TransferPipeline, slot: u32, size: vk.VkDeviceSize, alignment: vk.VkDeviceSize) !struct { buffer: vk.VkBuffer, offset: vk.VkDeviceSize, mapped_ptr: [*]u8 } {
+        const ring = &self.ring_buffers[slot];
         const align_val = if (alignment > 0) alignment else 1;
         const aligned_head = (ring.head + align_val - 1) & ~(align_val - 1);
         if (aligned_head + size > RING_BUFFER_SIZE) {
@@ -250,96 +262,265 @@ pub const TransferPipeline = struct {
         };
     }
 
-    pub fn recordCopy(self: *TransferPipeline, frame_index: u32, staging: StagingAlloc, dst_buffer: vk.VkBuffer, dst_offset: vk.VkDeviceSize, size: vk.VkDeviceSize) void {
-        const regions = [_]vk.VkBufferCopy{.{
-            .srcOffset = staging.offset,
-            .dstOffset = dst_offset,
-            .size = size,
-        }};
-        vk.cmdCopyBuffer(self.command_buffers[frame_index], staging.buffer, dst_buffer, 1, &regions);
-        self.has_commands[frame_index] = true;
-    }
+    fn workerFn(self: *TransferPipeline) void {
+        const io = Io.Threaded.global_single_threaded.io();
+        const mw = self.mesh_worker orelse return;
+        const f_tlsf = self.face_tlsf orelse return;
+        const l_tlsf = self.light_tlsf orelse return;
 
-    pub fn addPendingChunk(self: *TransferPipeline, chunk: PendingChunk) !void {
-        if (self.pending_count >= MAX_PENDING) return error.StagingBufferFull;
-        self.pending_chunks[self.pending_count] = chunk;
-        self.pending_count += 1;
-    }
+        var current_slot: u32 = 0;
 
-    pub fn deferFaceFree(self: *TransferPipeline, frame_index: u32, handle: TlsfAllocator.Handle) void {
-        const count = self.deferred_face_free_counts[frame_index];
-        if (count < MAX_PENDING) {
-            self.deferred_face_frees[frame_index][count] = .{ .handle = handle };
-            self.deferred_face_free_counts[frame_index] = count + 1;
-        } else {
-            std.log.warn("TransferPipeline: deferred face free overflow, TLSF handle leaked", .{});
-        }
-    }
+        while (!self.shutdown.load(.acquire)) {
+            // 1. Wait for mesh results
+            var local_results: [MeshWorker.MAX_OUTPUT]MeshWorker.ChunkResult = undefined;
+            var local_count: u32 = 0;
 
-    pub fn deferLightFree(self: *TransferPipeline, frame_index: u32, handle: TlsfAllocator.Handle) void {
-        const count = self.deferred_light_free_counts[frame_index];
-        if (count < MAX_PENDING) {
-            self.deferred_light_frees[frame_index][count] = .{ .handle = handle };
-            self.deferred_light_free_counts[frame_index] = count + 1;
-        } else {
-            std.log.warn("TransferPipeline: deferred light free overflow, TLSF handle leaked", .{});
-        }
-    }
-
-    pub fn submitTransfer(self: *TransferPipeline, frame_index: u32) !void {
-        const tz = tracy.zone(@src(), "TransferPipeline.submitTransfer");
-        defer tz.end();
-
-        try vk.endCommandBuffer(self.command_buffers[frame_index]);
-
-        if (!self.has_commands[frame_index]) {
-            // Move pending to completed without incrementing timeline
-            const count = self.pending_count;
-            for (0..count) |i| {
-                self.completed_chunks[frame_index][self.completed_counts[frame_index]] = self.pending_chunks[i];
-                self.completed_counts[frame_index] += 1;
+            mw.output_mutex.lockUncancelable(io);
+            while (mw.output_len == 0 and !self.shutdown.load(.acquire)) {
+                mw.output_cond.waitUncancelable(io, &mw.output_mutex);
             }
-            self.pending_count = 0;
-            return;
+            local_count = mw.output_len;
+            if (local_count > 0) {
+                @memcpy(local_results[0..local_count], mw.output_queue[0..local_count]);
+                mw.output_len = 0;
+            }
+            mw.output_mutex.unlock(io);
+            if (local_count > 0) {
+                mw.output_drained_cond.signal(io);
+            }
+
+            if (self.shutdown.load(.acquire)) {
+                // Free any drained results
+                for (local_results[0..local_count]) |r| {
+                    mw.allocator.free(r.faces);
+                    mw.allocator.free(r.lights);
+                }
+                break;
+            }
+
+            // 2. Wait for current ring buffer slot to be available
+            self.waitTimeline(self.slot_timeline_values[current_slot]);
+
+            // 3. Reset ring + begin command buffer
+            self.ring_buffers[current_slot].head = 0;
+            vk.resetCommandPool(self.device, self.command_pools[current_slot], 0) catch |err| {
+                std.log.err("Failed to reset transfer command pool: {}", .{err});
+                for (local_results[0..local_count]) |r| {
+                    mw.allocator.free(r.faces);
+                    mw.allocator.free(r.lights);
+                }
+                continue;
+            };
+            const begin_info = vk.VkCommandBufferBeginInfo{
+                .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+                .pNext = null,
+                .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+                .pInheritanceInfo = null,
+            };
+            vk.beginCommandBuffer(self.command_buffers[current_slot], &begin_info) catch |err| {
+                std.log.err("Failed to begin transfer command buffer: {}", .{err});
+                for (local_results[0..local_count]) |r| {
+                    mw.allocator.free(r.faces);
+                    mw.allocator.free(r.lights);
+                }
+                continue;
+            };
+            var has_commands = false;
+
+            // 4. For each mesh result: TLSF alloc, stage, record copy
+            for (local_results[0..local_count]) |result| {
+                const slot = result.coord.flatIndex();
+
+                if (result.total_face_count == 0) {
+                    // Empty chunk — commit with no alloc
+                    self.pushCommitted(.{
+                        .slot = @intCast(slot),
+                        .chunk_data = .{
+                            .position = result.coord.positionScaled(result.voxel_size),
+                            .light_start = 0,
+                            .face_start = 0,
+                            .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+                            .voxel_size = result.voxel_size,
+                        },
+                        .face_alloc = null,
+                        .light_alloc = null,
+                        .timeline_value = self.timeline_value,
+                    });
+                    mw.allocator.free(result.faces);
+                    mw.allocator.free(result.lights);
+                    continue;
+                }
+
+                // TLSF alloc
+                self.tlsf_mutex.lockUncancelable(io);
+                const face_alloc = f_tlsf.alloc(result.total_face_count);
+                const light_alloc = if (result.light_count > 0) l_tlsf.alloc(result.light_count) else null;
+                self.tlsf_mutex.unlock(io);
+
+                if (face_alloc == null) {
+                    std.log.err("TLSF face heap full (requested {})", .{result.total_face_count});
+                    if (light_alloc) |la_alloc| {
+                        self.tlsf_mutex.lockUncancelable(io);
+                        l_tlsf.free(la_alloc.handle);
+                        self.tlsf_mutex.unlock(io);
+                    }
+                    mw.allocator.free(result.faces);
+                    mw.allocator.free(result.lights);
+                    continue;
+                }
+                const fa = face_alloc.?;
+                const la = light_alloc orelse TlsfAllocator.Allocation{ .offset = 0, .size = 0, .handle = TlsfAllocator.null_handle };
+
+                // Stage face data
+                const fb_size: vk.VkDeviceSize = @intCast(@as(u64, result.total_face_count) * @sizeOf(FaceData));
+                const face_staging = self.allocStaging(current_slot, fb_size, @sizeOf(FaceData)) catch {
+                    // Ring full — free TLSF and skip rest
+                    self.tlsf_mutex.lockUncancelable(io);
+                    f_tlsf.free(fa.handle);
+                    if (light_alloc != null) l_tlsf.free(la.handle);
+                    self.tlsf_mutex.unlock(io);
+                    mw.allocator.free(result.faces);
+                    mw.allocator.free(result.lights);
+                    continue;
+                };
+
+                const face_dst: [*]FaceData = @ptrCast(@alignCast(face_staging.mapped_ptr));
+                @memcpy(face_dst[0..result.total_face_count], result.faces[0..result.total_face_count]);
+
+                const face_dst_offset: vk.VkDeviceSize = @intCast(@as(u64, fa.offset) * @sizeOf(FaceData));
+                const face_regions = [_]vk.VkBufferCopy{.{
+                    .srcOffset = face_staging.offset,
+                    .dstOffset = face_dst_offset,
+                    .size = fb_size,
+                }};
+                vk.cmdCopyBuffer(self.command_buffers[current_slot], face_staging.buffer, self.face_buffer, 1, &face_regions);
+                has_commands = true;
+
+                // Stage light data
+                if (result.light_count > 0 and light_alloc != null) {
+                    const lb_size: vk.VkDeviceSize = @intCast(@as(u64, result.light_count) * @sizeOf(LightEntry));
+                    const light_staging = self.allocStaging(current_slot, lb_size, @sizeOf(LightEntry)) catch {
+                        // Ring full for lights — free light TLSF, still commit faces
+                        self.tlsf_mutex.lockUncancelable(io);
+                        l_tlsf.free(la.handle);
+                        self.tlsf_mutex.unlock(io);
+                        mw.allocator.free(result.faces);
+                        mw.allocator.free(result.lights);
+                        self.pushCommitted(.{
+                            .slot = @intCast(slot),
+                            .chunk_data = .{
+                                .position = result.coord.positionScaled(result.voxel_size),
+                                .light_start = 0,
+                                .face_start = fa.offset,
+                                .face_counts = result.face_counts,
+                                .voxel_size = result.voxel_size,
+                            },
+                            .face_alloc = fa,
+                            .light_alloc = null,
+                            .timeline_value = self.timeline_value + 1,
+                        });
+                        continue;
+                    };
+
+                    const light_dst: [*]LightEntry = @ptrCast(@alignCast(light_staging.mapped_ptr));
+                    @memcpy(light_dst[0..result.light_count], result.lights[0..result.light_count]);
+
+                    const light_dst_offset: vk.VkDeviceSize = @intCast(@as(u64, la.offset) * @sizeOf(LightEntry));
+                    const light_regions = [_]vk.VkBufferCopy{.{
+                        .srcOffset = light_staging.offset,
+                        .dstOffset = light_dst_offset,
+                        .size = lb_size,
+                    }};
+                    vk.cmdCopyBuffer(self.command_buffers[current_slot], light_staging.buffer, self.light_buffer, 1, &light_regions);
+                }
+
+                // Push to committed queue
+                self.pushCommitted(.{
+                    .slot = @intCast(slot),
+                    .chunk_data = .{
+                        .position = result.coord.positionScaled(result.voxel_size),
+                        .light_start = la.offset,
+                        .face_start = fa.offset,
+                        .face_counts = result.face_counts,
+                        .voxel_size = result.voxel_size,
+                    },
+                    .face_alloc = fa,
+                    .light_alloc = if (result.light_count > 0) light_alloc else null,
+                    .timeline_value = self.timeline_value + 1,
+                });
+
+                // Free mesh result heap memory
+                mw.allocator.free(result.faces);
+                mw.allocator.free(result.lights);
+            }
+
+            // 5. End + submit
+            vk.endCommandBuffer(self.command_buffers[current_slot]) catch |err| {
+                std.log.err("Failed to end transfer command buffer: {}", .{err});
+            };
+
+            if (has_commands) {
+                self.timeline_value += 1;
+                self.slot_timeline_values[current_slot] = self.timeline_value;
+
+                const timeline_info = vk.VkTimelineSemaphoreSubmitInfo{
+                    .sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
+                    .pNext = null,
+                    .waitSemaphoreValueCount = 0,
+                    .pWaitSemaphoreValues = null,
+                    .signalSemaphoreValueCount = 1,
+                    .pSignalSemaphoreValues = &[_]u64{self.timeline_value},
+                };
+
+                const signal_semaphores = [_]vk.VkSemaphore{self.timeline_semaphore};
+                const submit_info = vk.VkSubmitInfo{
+                    .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                    .pNext = &timeline_info,
+                    .waitSemaphoreCount = 0,
+                    .pWaitSemaphores = null,
+                    .pWaitDstStageMask = null,
+                    .commandBufferCount = 1,
+                    .pCommandBuffers = &self.command_buffers[current_slot],
+                    .signalSemaphoreCount = 1,
+                    .pSignalSemaphores = &signal_semaphores,
+                };
+                vk.queueSubmit(self.transfer_queue, 1, &[_]vk.VkSubmitInfo{submit_info}, null) catch |err| {
+                    std.log.err("Failed to submit transfer: {}", .{err});
+                };
+            }
+
+            current_slot = (current_slot + 1) % MAX_FRAMES_IN_FLIGHT;
         }
-
-        self.timeline_value += 1;
-        self.frame_timeline_values[frame_index] = self.timeline_value;
-
-        const timeline_info = vk.VkTimelineSemaphoreSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
-            .pNext = null,
-            .waitSemaphoreValueCount = 0,
-            .pWaitSemaphoreValues = null,
-            .signalSemaphoreValueCount = 1,
-            .pSignalSemaphoreValues = &[_]u64{self.timeline_value},
-        };
-
-        const signal_semaphores = [_]vk.VkSemaphore{self.timeline_semaphore};
-        const submit_info = vk.VkSubmitInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .pNext = &timeline_info,
-            .waitSemaphoreCount = 0,
-            .pWaitSemaphores = null,
-            .pWaitDstStageMask = null,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &self.command_buffers[frame_index],
-            .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &signal_semaphores,
-        };
-        try vk.queueSubmit(self.transfer_queue, 1, &[_]vk.VkSubmitInfo{submit_info}, null);
-
-        // Move pending to completed
-        const count = self.pending_count;
-        for (0..count) |i| {
-            self.completed_chunks[frame_index][self.completed_counts[frame_index]] = self.pending_chunks[i];
-            self.completed_counts[frame_index] += 1;
-        }
-        self.pending_count = 0;
     }
 
-    pub fn getGraphicsWaitValue(self: *const TransferPipeline) u64 {
-        return self.timeline_value;
+    fn pushCommitted(self: *TransferPipeline, entry: CommittedChunk) void {
+        const io = Io.Threaded.global_single_threaded.io();
+        var dropped = false;
+        self.committed_mutex.lockUncancelable(io);
+        if (self.committed_len < MAX_COMMITTED) {
+            self.committed_queue[self.committed_len] = entry;
+            self.committed_len += 1;
+        } else {
+            dropped = true;
+        }
+        self.committed_mutex.unlock(io);
+
+        if (dropped) {
+            std.log.warn("TransferPipeline committed queue full, dropping chunk", .{});
+            // Free TLSF handles to prevent leaking GPU buffer space
+            self.tlsf_mutex.lockUncancelable(io);
+            if (entry.face_alloc) |fa| {
+                if (fa.handle != TlsfAllocator.null_handle) {
+                    if (self.face_tlsf) |ft| ft.free(fa.handle);
+                }
+            }
+            if (entry.light_alloc) |la| {
+                if (la.handle != TlsfAllocator.null_handle) {
+                    if (self.light_tlsf) |lt| lt.free(la.handle);
+                }
+            }
+            self.tlsf_mutex.unlock(io);
+        }
     }
 
     pub fn deinit(self: *TransferPipeline) void {
