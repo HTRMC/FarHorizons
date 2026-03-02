@@ -554,7 +554,11 @@ fn propagateLodBlock(self: *GameState, wx: i32, wy: i32, wz: i32) void {
         const dst_wz = dst_vz - half_z;
 
         WorldState.setBlock(self.lod_worlds[lod_usize], dst_wx, dst_wy, dst_wz, new_block);
-        WorldState.updateLightMapFull(self.lod_worlds[lod_usize], self.lod_light_maps[lod_usize], dst_wx, dst_wy, dst_wz);
+        if (self.light_worker) |lw| {
+            lw.enqueueLod(dst_wx, dst_wy, dst_wz, self.lod_worlds[lod_usize], self.lod_light_maps[lod_usize]);
+        } else {
+            WorldState.updateLightMapFull(self.lod_worlds[lod_usize], self.lod_light_maps[lod_usize], dst_wx, dst_wy, dst_wz);
+        }
 
         // Queue save for the affected LOD chunk
         self.queueLodChunkSave(@intCast(lod_usize), dst_vx, dst_vy, dst_vz);
