@@ -10,8 +10,13 @@ pub const MeshWorker = struct {
     const MAX_INPUT = @max(256, WorldState.TOTAL_WORLD_CHUNKS);
     pub const MAX_OUTPUT = 64;
 
+    pub const MeshRequest = struct {
+        coord: WorldState.ChunkCoord,
+        light_only: bool,
+    };
+
     // Input queue
-    input_queue: [MAX_INPUT]WorldState.ChunkCoord,
+    input_queue: [MAX_INPUT]MeshRequest,
     input_len: u32,
     input_mutex: Io.Mutex,
     input_cond: Io.Condition,
@@ -41,6 +46,7 @@ pub const MeshWorker = struct {
         light_count: u32,
         coord: WorldState.ChunkCoord,
         voxel_size: u32,
+        light_only: bool,
     };
 
     pub fn initInPlace(
@@ -88,7 +94,7 @@ pub const MeshWorker = struct {
         }
         // Free any remaining output results
         for (self.output_queue[0..self.output_len]) |r| {
-            self.allocator.free(r.faces);
+            if (!r.light_only) self.allocator.free(r.faces);
             self.allocator.free(r.lights);
         }
         self.output_len = 0;
@@ -108,12 +114,15 @@ pub const MeshWorker = struct {
         self.input_mutex.lockUncancelable(io);
         defer self.input_mutex.unlock(io);
 
-        // Dedup
-        for (self.input_queue[0..self.input_len]) |c| {
-            if (c.eql(coord)) return;
+        // Dedup: full always wins
+        for (self.input_queue[0..self.input_len]) |*r| {
+            if (r.coord.eql(coord)) {
+                r.light_only = false; // upgrade to full
+                return;
+            }
         }
         if (self.input_len < MAX_INPUT) {
-            self.input_queue[self.input_len] = coord;
+            self.input_queue[self.input_len] = .{ .coord = coord, .light_only = false };
             self.input_len += 1;
         }
         self.input_cond.signal(io);
@@ -125,16 +134,40 @@ pub const MeshWorker = struct {
         defer self.input_mutex.unlock(io);
 
         for (coords) |coord| {
-            // Dedup
+            // Dedup: full always wins
             var found = false;
-            for (self.input_queue[0..self.input_len]) |c| {
-                if (c.eql(coord)) {
+            for (self.input_queue[0..self.input_len]) |*r| {
+                if (r.coord.eql(coord)) {
+                    r.light_only = false; // upgrade to full
                     found = true;
                     break;
                 }
             }
             if (!found and self.input_len < MAX_INPUT) {
-                self.input_queue[self.input_len] = coord;
+                self.input_queue[self.input_len] = .{ .coord = coord, .light_only = false };
+                self.input_len += 1;
+            }
+        }
+        self.input_cond.signal(io);
+    }
+
+    pub fn enqueueLightOnlyBatch(self: *MeshWorker, coords: []const WorldState.ChunkCoord) void {
+        const io = Io.Threaded.global_single_threaded.io();
+        self.input_mutex.lockUncancelable(io);
+        defer self.input_mutex.unlock(io);
+
+        for (coords) |coord| {
+            // Dedup: full remesh wins over light-only
+            var found = false;
+            for (self.input_queue[0..self.input_len]) |r| {
+                if (r.coord.eql(coord)) {
+                    // Already queued (full or light-only), don't downgrade
+                    found = true;
+                    break;
+                }
+            }
+            if (!found and self.input_len < MAX_INPUT) {
+                self.input_queue[self.input_len] = .{ .coord = coord, .light_only = true };
                 self.input_len += 1;
             }
         }
@@ -151,9 +184,12 @@ pub const MeshWorker = struct {
             for (0..WorldState.WORLD_CHUNKS_Z) |cz| {
                 for (0..WorldState.WORLD_CHUNKS_X) |cx| {
                     self.input_queue[self.input_len] = .{
-                        .cx = @intCast(cx),
-                        .cy = @intCast(cy),
-                        .cz = @intCast(cz),
+                        .coord = .{
+                            .cx = @intCast(cx),
+                            .cy = @intCast(cy),
+                            .cz = @intCast(cz),
+                        },
+                        .light_only = false,
                     };
                     self.input_len += 1;
                 }
@@ -167,7 +203,7 @@ pub const MeshWorker = struct {
 
         while (!self.shutdown.load(.acquire)) {
             // 1. Wait for input
-            var local_coords: [MAX_INPUT]WorldState.ChunkCoord = undefined;
+            var local_requests: [MAX_INPUT]MeshRequest = undefined;
             var local_count: u32 = 0;
 
             self.input_mutex.lockUncancelable(io);
@@ -176,7 +212,7 @@ pub const MeshWorker = struct {
             }
             local_count = self.input_len;
             if (local_count > 0) {
-                @memcpy(local_coords[0..local_count], self.input_queue[0..local_count]);
+                @memcpy(local_requests[0..local_count], self.input_queue[0..local_count]);
                 self.input_len = 0;
             }
             // Snapshot world/light_map under mutex (synced by main thread via syncWorld)
@@ -188,43 +224,78 @@ pub const MeshWorker = struct {
 
             const vs = self.voxel_size.load(.acquire);
 
-            // 2. Process each coord
-            for (local_coords[0..local_count]) |coord| {
+            // 2. Process each request
+            for (local_requests[0..local_count]) |req| {
                 if (self.shutdown.load(.acquire)) break;
 
-                // Read-lock light map
-                self.light_map_rwlock.lockSharedUncancelable(io);
-                const mesh = WorldState.generateChunkMesh(self.allocator, local_world, coord, local_light_map) catch |err| {
-                    self.light_map_rwlock.unlockShared(io);
-                    std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ coord.cx, coord.cy, coord.cz, err });
-                    continue;
-                };
-                self.light_map_rwlock.unlockShared(io);
+                const coord = req.coord;
 
-                // Push to output queue
-                self.output_mutex.lockUncancelable(io);
-                // If output full, wait for consumer to drain
-                while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
-                    self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
-                }
-                if (self.shutdown.load(.acquire)) {
+                if (req.light_only) {
+                    // Light-only path: only regenerate light data
+                    self.light_map_rwlock.lockSharedUncancelable(io);
+                    const light_result = WorldState.generateChunkLightOnly(self.allocator, local_world, coord, local_light_map) catch |err| {
+                        self.light_map_rwlock.unlockShared(io);
+                        std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ coord.cx, coord.cy, coord.cz, err });
+                        continue;
+                    };
+                    self.light_map_rwlock.unlockShared(io);
+
+                    self.output_mutex.lockUncancelable(io);
+                    while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
+                        self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
+                    }
+                    if (self.shutdown.load(.acquire)) {
+                        self.output_mutex.unlock(io);
+                        self.allocator.free(light_result.lights);
+                        break;
+                    }
+                    self.output_queue[self.output_len] = .{
+                        .faces = &.{},
+                        .face_counts = light_result.face_counts,
+                        .total_face_count = light_result.total_face_count,
+                        .lights = light_result.lights,
+                        .light_count = light_result.light_count,
+                        .coord = coord,
+                        .voxel_size = vs,
+                        .light_only = true,
+                    };
+                    self.output_len += 1;
+                    self.output_cond.signal(io);
                     self.output_mutex.unlock(io);
-                    self.allocator.free(mesh.faces);
-                    self.allocator.free(mesh.lights);
-                    break;
+                } else {
+                    // Full remesh path
+                    self.light_map_rwlock.lockSharedUncancelable(io);
+                    const mesh = WorldState.generateChunkMesh(self.allocator, local_world, coord, local_light_map) catch |err| {
+                        self.light_map_rwlock.unlockShared(io);
+                        std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ coord.cx, coord.cy, coord.cz, err });
+                        continue;
+                    };
+                    self.light_map_rwlock.unlockShared(io);
+
+                    self.output_mutex.lockUncancelable(io);
+                    while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
+                        self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
+                    }
+                    if (self.shutdown.load(.acquire)) {
+                        self.output_mutex.unlock(io);
+                        self.allocator.free(mesh.faces);
+                        self.allocator.free(mesh.lights);
+                        break;
+                    }
+                    self.output_queue[self.output_len] = .{
+                        .faces = mesh.faces,
+                        .face_counts = mesh.face_counts,
+                        .total_face_count = mesh.total_face_count,
+                        .lights = mesh.lights,
+                        .light_count = mesh.light_count,
+                        .coord = coord,
+                        .voxel_size = vs,
+                        .light_only = false,
+                    };
+                    self.output_len += 1;
+                    self.output_cond.signal(io);
+                    self.output_mutex.unlock(io);
                 }
-                self.output_queue[self.output_len] = .{
-                    .faces = mesh.faces,
-                    .face_counts = mesh.face_counts,
-                    .total_face_count = mesh.total_face_count,
-                    .lights = mesh.lights,
-                    .light_count = mesh.light_count,
-                    .coord = coord,
-                    .voxel_size = vs,
-                };
-                self.output_len += 1;
-                self.output_cond.signal(io);
-                self.output_mutex.unlock(io);
             }
         }
     }

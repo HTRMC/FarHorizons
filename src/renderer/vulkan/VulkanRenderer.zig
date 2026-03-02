@@ -379,31 +379,74 @@ pub const VulkanRenderer = struct {
         for (buf[0..count]) |entry| {
             const slot = entry.slot;
 
-            // Defer OLD alloc handles for this frame slot
-            if (wr.chunk_face_alloc[slot]) |fa| {
-                if (fa.handle != TlsfAllocator.null_handle) {
-                    const idx = self.deferred_face_free_counts[cf];
-                    if (idx < 256) {
-                        self.deferred_face_frees[cf][idx] = fa.handle;
-                        self.deferred_face_free_counts[cf] = idx + 1;
-                    }
-                }
-            }
-            if (wr.chunk_light_alloc[slot]) |la| {
-                if (la.handle != TlsfAllocator.null_handle) {
-                    const idx = self.deferred_light_free_counts[cf];
-                    if (idx < 256) {
-                        self.deferred_light_frees[cf][idx] = la.handle;
-                        self.deferred_light_free_counts[cf] = idx + 1;
-                    }
-                }
-            }
+            if (entry.light_only) {
+                // Light-only: only update light_start, keep existing face data
+                // Safety check: face_counts total must match existing geometry
+                var new_total: u32 = 0;
+                for (entry.chunk_data.face_counts) |fc| new_total += fc;
+                var existing_total: u32 = 0;
+                for (wr.chunk_data[slot].face_counts) |fc| existing_total += fc;
 
-            // Apply NEW data
-            wr.chunk_data[slot] = entry.chunk_data;
-            wr.chunk_face_alloc[slot] = entry.face_alloc;
-            wr.chunk_light_alloc[slot] = entry.light_alloc;
-            wr.writeChunkData(slot);
+                if (new_total != existing_total) {
+                    // Geometry changed since light gen — discard stale light-only update
+                    if (entry.light_alloc) |la| {
+                        if (la.handle != TlsfAllocator.null_handle) {
+                            const idx = self.deferred_light_free_counts[cf];
+                            if (idx < 256) {
+                                self.deferred_light_frees[cf][idx] = la.handle;
+                                self.deferred_light_free_counts[cf] = idx + 1;
+                            }
+                        }
+                    }
+                    self.max_graphics_wait_timeline = @max(self.max_graphics_wait_timeline, entry.timeline_value);
+                    continue;
+                }
+
+                // Defer-free old light alloc only (NOT face_alloc)
+                if (wr.chunk_light_alloc[slot]) |la| {
+                    if (la.handle != TlsfAllocator.null_handle) {
+                        const idx = self.deferred_light_free_counts[cf];
+                        if (idx < 256) {
+                            self.deferred_light_frees[cf][idx] = la.handle;
+                            self.deferred_light_free_counts[cf] = idx + 1;
+                        }
+                    }
+                }
+
+                // Update light_start only, keep face_start/face_counts/face_alloc unchanged
+                if (entry.light_alloc) |la| {
+                    wr.chunk_data[slot].light_start = la.offset;
+                }
+                wr.chunk_light_alloc[slot] = entry.light_alloc;
+                wr.writeChunkData(slot);
+            } else {
+                // Full remesh: replace everything
+                // Defer OLD alloc handles for this frame slot
+                if (wr.chunk_face_alloc[slot]) |fa| {
+                    if (fa.handle != TlsfAllocator.null_handle) {
+                        const idx = self.deferred_face_free_counts[cf];
+                        if (idx < 256) {
+                            self.deferred_face_frees[cf][idx] = fa.handle;
+                            self.deferred_face_free_counts[cf] = idx + 1;
+                        }
+                    }
+                }
+                if (wr.chunk_light_alloc[slot]) |la| {
+                    if (la.handle != TlsfAllocator.null_handle) {
+                        const idx = self.deferred_light_free_counts[cf];
+                        if (idx < 256) {
+                            self.deferred_light_frees[cf][idx] = la.handle;
+                            self.deferred_light_free_counts[cf] = idx + 1;
+                        }
+                    }
+                }
+
+                // Apply NEW data
+                wr.chunk_data[slot] = entry.chunk_data;
+                wr.chunk_face_alloc[slot] = entry.face_alloc;
+                wr.chunk_light_alloc[slot] = entry.light_alloc;
+                wr.writeChunkData(slot);
+            }
 
             // Track max timeline for graphics wait
             self.max_graphics_wait_timeline = @max(self.max_graphics_wait_timeline, entry.timeline_value);

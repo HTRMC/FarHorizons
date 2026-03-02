@@ -275,7 +275,400 @@ pub fn computeLightMap(world: *const World, light_map: *LightMap) void {
     }
 }
 
-pub fn updateLightMap(world: *const World, light_map: *LightMap, wx: i32, wy: i32, wz: i32) void {
+pub const LightUpdateResult = struct {
+    min_vx: i32,
+    max_vx: i32,
+    min_vy: i32,
+    max_vy: i32,
+    min_vz: i32,
+    max_vz: i32,
+    any_changed: bool,
+};
+
+pub fn updateLightMapIncremental(world: *const World, light_map: *LightMap, wx: i32, wy: i32, wz: i32, old_block: BlockType) LightUpdateResult {
+    const cvx = wx + @as(i32, WORLD_SIZE_X / 2);
+    const cvy = wy + @as(i32, WORLD_SIZE_Y / 2);
+    const cvz = wz + @as(i32, WORLD_SIZE_Z / 2);
+    if (cvx < 0 or cvx >= WORLD_SIZE_X or cvy < 0 or cvy >= WORLD_SIZE_Y or cvz < 0 or cvz >= WORLD_SIZE_Z) {
+        return .{ .min_vx = 0, .max_vx = 0, .min_vy = 0, .max_vy = 0, .min_vz = 0, .max_vz = 0, .any_changed = false };
+    }
+
+    const vx: usize = @intCast(cvx);
+    const vy: usize = @intCast(cvy);
+    const vz: usize = @intCast(cvz);
+
+    const new_block = getBlockAt(world, vx, vy, vz);
+
+    const bfs_offsets = [6][3]i32{
+        .{ 1, 0, 0 }, .{ -1, 0, 0 },
+        .{ 0, 1, 0 }, .{ 0, -1, 0 },
+        .{ 0, 0, 1 }, .{ 0, 0, -1 },
+    };
+
+    // Track bounding box of modified voxels
+    var bbox_min_vx: i32 = @intCast(vx);
+    var bbox_max_vx: i32 = @intCast(vx);
+    var bbox_min_vy: i32 = @intCast(vy);
+    var bbox_max_vy: i32 = @intCast(vy);
+    var bbox_min_vz: i32 = @intCast(vz);
+    var bbox_max_vz: i32 = @intCast(vz);
+    var any_changed = false;
+
+    const RemovalEntry = struct { evx: u8, evy: u8, evz: u8, old_r: u8, old_g: u8, old_b: u8 };
+    const RgbQueueEntry = struct { evx: u8, evy: u8, evz: u8, r: u8, g: u8, b: u8 };
+    const SkyRemovalEntry = struct { evx: u8, evy: u8, evz: u8, old_level: u8 };
+    const SkyQueueEntry = struct { evx: u8, evy: u8, evz: u8, level: u8 };
+
+    // --- Block light: removal + propagation ---
+    var removal_buf: [128 * 1024]RemovalEntry = undefined;
+    var removal_head: usize = 0;
+    var removal_tail: usize = 0;
+
+    var prop_buf: [128 * 1024]RgbQueueEntry = undefined;
+    var prop_head: usize = 0;
+    var prop_tail: usize = 0;
+
+    // Save old light at changed position
+    const old_light = light_map.block[vy][vz][vx];
+    const new_emit = block_properties.emittedLight(new_block);
+
+    // Seed removal if old block was emitter or we need to clear light
+    const need_block_removal = old_light[0] > 0 or old_light[1] > 0 or old_light[2] > 0;
+    if (need_block_removal) {
+        removal_buf[removal_tail] = .{ .evx = @intCast(vx), .evy = @intCast(vy), .evz = @intCast(vz), .old_r = old_light[0], .old_g = old_light[1], .old_b = old_light[2] };
+        removal_tail += 1;
+        light_map.block[vy][vz][vx] = .{ 0, 0, 0 };
+        any_changed = true;
+    }
+
+    // Phase 1: Removal BFS
+    while (removal_head < removal_tail) {
+        const e = removal_buf[removal_head];
+        removal_head += 1;
+
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, e.evx) + off[0];
+            const ny_i: i32 = @as(i32, e.evy) + off[1];
+            const nz_i: i32 = @as(i32, e.evz) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            if (block_properties.isOpaque(getBlockAt(world, nx, ny, nz))) continue;
+
+            const n = &light_map.block[ny][nz][nx];
+            const old_vals = [3]u8{ e.old_r, e.old_g, e.old_b };
+
+            // Per-channel: if neighbor < parent_old, it was lit by us → clear and continue removal
+            // If neighbor >= parent_old and > 0, it's a boundary → add to propagation
+            var cleared = false;
+            var is_boundary = false;
+            for (0..3) |ch| {
+                if (n[ch] > 0 and n[ch] < old_vals[ch]) {
+                    cleared = true;
+                } else if (n[ch] > 0) {
+                    is_boundary = true;
+                }
+            }
+
+            if (is_boundary and !cleared) {
+                // Pure boundary node — will re-propagate
+                if (prop_tail < prop_buf.len) {
+                    prop_buf[prop_tail] = .{ .evx = @intCast(nx), .evy = @intCast(ny), .evz = @intCast(nz), .r = n[0], .g = n[1], .b = n[2] };
+                    prop_tail += 1;
+                }
+            }
+
+            if (cleared) {
+                if (removal_tail < removal_buf.len) {
+                    removal_buf[removal_tail] = .{ .evx = @intCast(nx), .evy = @intCast(ny), .evz = @intCast(nz), .old_r = n[0], .old_g = n[1], .old_b = n[2] };
+                    removal_tail += 1;
+                }
+                n.* = .{ 0, 0, 0 };
+                bbox_min_vx = @min(bbox_min_vx, nx_i);
+                bbox_max_vx = @max(bbox_max_vx, nx_i);
+                bbox_min_vy = @min(bbox_min_vy, ny_i);
+                bbox_max_vy = @max(bbox_max_vy, ny_i);
+                bbox_min_vz = @min(bbox_min_vz, nz_i);
+                bbox_max_vz = @max(bbox_max_vz, nz_i);
+                any_changed = true;
+            }
+        }
+    }
+
+    // Phase 2: Propagation
+    // Seed new emitter
+    if (new_emit[0] > 0 or new_emit[1] > 0 or new_emit[2] > 0) {
+        light_map.block[vy][vz][vx] = new_emit;
+        if (prop_tail < prop_buf.len) {
+            prop_buf[prop_tail] = .{ .evx = @intCast(vx), .evy = @intCast(vy), .evz = @intCast(vz), .r = new_emit[0], .g = new_emit[1], .b = new_emit[2] };
+            prop_tail += 1;
+        }
+        any_changed = true;
+    }
+
+    // If opaque removed → seed propagation from all 6 neighbors (light can now flow through)
+    if (block_properties.isOpaque(old_block) and !block_properties.isOpaque(new_block)) {
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, @intCast(vx)) + off[0];
+            const ny_i: i32 = @as(i32, @intCast(vy)) + off[1];
+            const nz_i: i32 = @as(i32, @intCast(vz)) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            const nb = light_map.block[ny][nz][nx];
+            if (nb[0] > 0 or nb[1] > 0 or nb[2] > 0) {
+                if (prop_tail < prop_buf.len) {
+                    prop_buf[prop_tail] = .{ .evx = @intCast(nx), .evy = @intCast(ny), .evz = @intCast(nz), .r = nb[0], .g = nb[1], .b = nb[2] };
+                    prop_tail += 1;
+                }
+            }
+        }
+    }
+
+    // Standard max-propagation BFS
+    while (prop_head < prop_tail) {
+        const e = prop_buf[prop_head];
+        prop_head += 1;
+
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, e.evx) + off[0];
+            const ny_i: i32 = @as(i32, e.evy) + off[1];
+            const nz_i: i32 = @as(i32, e.evz) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            if (block_properties.isOpaque(getBlockAt(world, nx, ny, nz))) continue;
+
+            const nr = e.r -| LIGHT_ATTENUATION;
+            const ng = e.g -| LIGHT_ATTENUATION;
+            const nb = e.b -| LIGHT_ATTENUATION;
+
+            if (nr == 0 and ng == 0 and nb == 0) continue;
+
+            const existing = &light_map.block[ny][nz][nx];
+            if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
+
+            var changed = false;
+            if (nr > existing[0]) { existing[0] = nr; changed = true; }
+            if (ng > existing[1]) { existing[1] = ng; changed = true; }
+            if (nb > existing[2]) { existing[2] = nb; changed = true; }
+
+            if (changed) {
+                bbox_min_vx = @min(bbox_min_vx, nx_i);
+                bbox_max_vx = @max(bbox_max_vx, nx_i);
+                bbox_min_vy = @min(bbox_min_vy, ny_i);
+                bbox_max_vy = @max(bbox_max_vy, ny_i);
+                bbox_min_vz = @min(bbox_min_vz, nz_i);
+                bbox_max_vz = @max(bbox_max_vz, nz_i);
+                any_changed = true;
+
+                if (prop_tail < prop_buf.len) {
+                    prop_buf[prop_tail] = .{ .evx = @intCast(nx), .evy = @intCast(ny), .evz = @intCast(nz), .r = existing[0], .g = existing[1], .b = existing[2] };
+                    prop_tail += 1;
+                }
+            }
+        }
+    }
+
+    // --- Sky light: removal + propagation ---
+    var sky_removal_buf: [128 * 1024]SkyRemovalEntry = undefined;
+    var sky_removal_head: usize = 0;
+    var sky_removal_tail: usize = 0;
+
+    var sky_prop_buf: [128 * 1024]SkyQueueEntry = undefined;
+    var sky_prop_head: usize = 0;
+    var sky_prop_tail: usize = 0;
+
+    const old_sky = light_map.sky[vy][vz][vx];
+
+    if (block_properties.isOpaque(new_block) and !block_properties.isOpaque(old_block)) {
+        // Opaque placed — column blocked: clear sky downward + removal BFS
+        // Clear at placed position
+        if (old_sky > 0) {
+            sky_removal_buf[sky_removal_tail] = .{ .evx = @intCast(vx), .evy = @intCast(vy), .evz = @intCast(vz), .old_level = old_sky };
+            sky_removal_tail += 1;
+            light_map.sky[vy][vz][vx] = 0;
+            any_changed = true;
+        }
+
+        // Clear full-brightness sky downward (column was open, now blocked)
+        if (vy > 0) {
+            var dy: usize = vy - 1;
+            while (true) {
+                if (block_properties.isOpaque(getBlockAt(world, vx, dy, vz))) break;
+                if (light_map.sky[dy][vz][vx] == 255) {
+                    sky_removal_buf[sky_removal_tail] = .{ .evx = @intCast(vx), .evy = @intCast(dy), .evz = @intCast(vz), .old_level = 255 };
+                    if (sky_removal_tail < sky_removal_buf.len - 1) sky_removal_tail += 1;
+                    light_map.sky[dy][vz][vx] = 0;
+                    bbox_min_vy = @min(bbox_min_vy, @as(i32, @intCast(dy)));
+                    any_changed = true;
+                } else break; // non-255 means it wasn't direct sky
+                if (dy == 0) break;
+                dy -= 1;
+            }
+        }
+    } else if (!block_properties.isOpaque(new_block) and block_properties.isOpaque(old_block)) {
+        // Opaque removed — column opened: check if sky is clear above
+        var sky_clear = true;
+        var check_y: usize = vy + 1;
+        while (check_y < WORLD_SIZE_Y) : (check_y += 1) {
+            if (block_properties.isOpaque(getBlockAt(world, vx, check_y, vz))) {
+                sky_clear = false;
+                break;
+            }
+        }
+
+        if (sky_clear) {
+            // Set 255 downward from opened position
+            var set_y: usize = vy;
+            while (true) {
+                if (block_properties.isOpaque(getBlockAt(world, vx, set_y, vz))) break;
+                if (light_map.sky[set_y][vz][vx] < 255) {
+                    light_map.sky[set_y][vz][vx] = 255;
+                    if (sky_prop_tail < sky_prop_buf.len) {
+                        sky_prop_buf[sky_prop_tail] = .{ .evx = @intCast(vx), .evy = @intCast(set_y), .evz = @intCast(vz), .level = 255 };
+                        sky_prop_tail += 1;
+                    }
+                    bbox_min_vy = @min(bbox_min_vy, @as(i32, @intCast(set_y)));
+                    any_changed = true;
+                }
+                if (set_y == 0) break;
+                set_y -= 1;
+            }
+        } else {
+            // Not direct sky — seed from neighbors
+            for (bfs_offsets) |off| {
+                const nx_i: i32 = @as(i32, @intCast(vx)) + off[0];
+                const ny_i: i32 = @as(i32, @intCast(vy)) + off[1];
+                const nz_i: i32 = @as(i32, @intCast(vz)) + off[2];
+
+                if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+                const nx: usize = @intCast(nx_i);
+                const ny_u: usize = @intCast(ny_i);
+                const nz: usize = @intCast(nz_i);
+
+                const ns = light_map.sky[ny_u][nz][nx];
+                if (ns > LIGHT_ATTENUATION) {
+                    const new_level = ns - LIGHT_ATTENUATION;
+                    if (new_level > light_map.sky[vy][vz][vx]) {
+                        light_map.sky[vy][vz][vx] = new_level;
+                        if (sky_prop_tail < sky_prop_buf.len) {
+                            sky_prop_buf[sky_prop_tail] = .{ .evx = @intCast(vx), .evy = @intCast(vy), .evz = @intCast(vz), .level = new_level };
+                            sky_prop_tail += 1;
+                        }
+                        any_changed = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Sky removal BFS
+    while (sky_removal_head < sky_removal_tail) {
+        const e = sky_removal_buf[sky_removal_head];
+        sky_removal_head += 1;
+
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, e.evx) + off[0];
+            const ny_i: i32 = @as(i32, e.evy) + off[1];
+            const nz_i: i32 = @as(i32, e.evz) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            if (block_properties.isOpaque(getBlockAt(world, nx, ny, nz))) continue;
+
+            const ns = light_map.sky[ny][nz][nx];
+            if (ns > 0 and ns < e.old_level) {
+                // Was lit by us → clear and continue removal
+                if (sky_removal_tail < sky_removal_buf.len) {
+                    sky_removal_buf[sky_removal_tail] = .{ .evx = @intCast(nx), .evy = @intCast(ny), .evz = @intCast(nz), .old_level = ns };
+                    sky_removal_tail += 1;
+                }
+                light_map.sky[ny][nz][nx] = 0;
+                bbox_min_vx = @min(bbox_min_vx, nx_i);
+                bbox_max_vx = @max(bbox_max_vx, nx_i);
+                bbox_min_vy = @min(bbox_min_vy, ny_i);
+                bbox_max_vy = @max(bbox_max_vy, ny_i);
+                bbox_min_vz = @min(bbox_min_vz, nz_i);
+                bbox_max_vz = @max(bbox_max_vz, nz_i);
+                any_changed = true;
+            } else if (ns >= e.old_level and ns > 0) {
+                // Boundary → re-propagate
+                if (sky_prop_tail < sky_prop_buf.len) {
+                    sky_prop_buf[sky_prop_tail] = .{ .evx = @intCast(nx), .evy = @intCast(ny), .evz = @intCast(nz), .level = ns };
+                    sky_prop_tail += 1;
+                }
+            }
+        }
+    }
+
+    // Sky propagation BFS
+    while (sky_prop_head < sky_prop_tail) {
+        const e = sky_prop_buf[sky_prop_head];
+        sky_prop_head += 1;
+
+        for (bfs_offsets) |off| {
+            const nx_i: i32 = @as(i32, e.evx) + off[0];
+            const ny_i: i32 = @as(i32, e.evy) + off[1];
+            const nz_i: i32 = @as(i32, e.evz) + off[2];
+
+            if (nx_i < 0 or nx_i >= WORLD_SIZE_X or ny_i < 0 or ny_i >= WORLD_SIZE_Y or nz_i < 0 or nz_i >= WORLD_SIZE_Z) continue;
+
+            const nx: usize = @intCast(nx_i);
+            const ny: usize = @intCast(ny_i);
+            const nz: usize = @intCast(nz_i);
+
+            if (block_properties.isOpaque(getBlockAt(world, nx, ny, nz))) continue;
+
+            const new_level = e.level -| LIGHT_ATTENUATION;
+            if (new_level == 0) continue;
+            if (new_level <= light_map.sky[ny][nz][nx]) continue;
+
+            light_map.sky[ny][nz][nx] = new_level;
+            bbox_min_vx = @min(bbox_min_vx, nx_i);
+            bbox_max_vx = @max(bbox_max_vx, nx_i);
+            bbox_min_vy = @min(bbox_min_vy, ny_i);
+            bbox_max_vy = @max(bbox_max_vy, ny_i);
+            bbox_min_vz = @min(bbox_min_vz, nz_i);
+            bbox_max_vz = @max(bbox_max_vz, nz_i);
+            any_changed = true;
+
+            if (sky_prop_tail < sky_prop_buf.len) {
+                sky_prop_buf[sky_prop_tail] = .{ .evx = @intCast(nx), .evy = @intCast(ny), .evz = @intCast(nz), .level = new_level };
+                sky_prop_tail += 1;
+            }
+        }
+    }
+
+    return .{
+        .min_vx = bbox_min_vx,
+        .max_vx = bbox_max_vx,
+        .min_vy = bbox_min_vy,
+        .max_vy = bbox_max_vy,
+        .min_vz = bbox_min_vz,
+        .max_vz = bbox_max_vz,
+        .any_changed = any_changed,
+    };
+}
+
+pub fn updateLightMapFull(world: *const World, light_map: *LightMap, wx: i32, wy: i32, wz: i32) void {
     const bfs_offsets = [6][3]i32{
         .{ 1, 0, 0 }, .{ -1, 0, 0 },
         .{ 0, 1, 0 }, .{ 0, -1, 0 },
@@ -1036,6 +1429,148 @@ pub fn generateChunkMesh(
         .total_face_count = total_face_count,
         .lights = lights,
         .light_count = total_face_count,
+    };
+}
+
+pub const ChunkLightResult = struct {
+    lights: []LightEntry,
+    light_count: u32,
+    face_counts: [6]u32,
+    total_face_count: u32,
+};
+
+pub fn generateChunkLightOnly(
+    allocator: std.mem.Allocator,
+    world: *const World,
+    coord: ChunkCoord,
+    light_map_ptr: ?*const LightMap,
+) !ChunkLightResult {
+    const tz = tracy.zone(@src(), "generateChunkLightOnly");
+    defer tz.end();
+
+    const cx: usize = coord.cx;
+    const cy: usize = coord.cy;
+    const cz: usize = coord.cz;
+
+    const chunk_origin_x: i32 = @as(i32, @intCast(cx)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_X / 2);
+    const chunk_origin_y: i32 = @as(i32, @intCast(cy)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Y / 2);
+    const chunk_origin_z: i32 = @as(i32, @intCast(cz)) * CHUNK_SIZE - @as(i32, WORLD_SIZE_Z / 2);
+
+    var normal_lights: [6]std.ArrayList(LightEntry) = undefined;
+    for (0..6) |i| {
+        normal_lights[i] = .empty;
+    }
+    errdefer for (0..6) |i| {
+        normal_lights[i].deinit(allocator);
+    };
+
+    for (0..CHUNK_SIZE) |by| {
+        for (0..CHUNK_SIZE) |bz| {
+            for (0..CHUNK_SIZE) |bx| {
+                const block = world[cy][cz][cx].blocks[chunkIndex(bx, by, bz)];
+                if (block == .air) continue;
+
+                const ibx: i32 = @intCast(bx);
+                const iby: i32 = @intCast(by);
+                const ibz: i32 = @intCast(bz);
+
+                const wx = chunk_origin_x + ibx;
+                const wy = chunk_origin_y + iby;
+                const wz = chunk_origin_z + ibz;
+
+                const emits = block_properties.emittedLight(block);
+                const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
+
+                for (0..6) |face| {
+                    const fno = face_neighbor_offsets[face];
+                    const neighbor = getNeighborBlock(world, cx, cy, cz, ibx + fno[0], iby + fno[1], ibz + fno[2]);
+
+                    if (block_properties.isOpaque(neighbor)) continue;
+                    if (neighbor == block and block_properties.cullsSelf(block)) continue;
+
+                    var corner_packed: [4]u32 = undefined;
+
+                    if (is_emitter) {
+                        const br5: u32 = @as(u32, emits[0]) >> 3;
+                        const bg5: u32 = @as(u32, emits[1]) >> 3;
+                        const bb5: u32 = @as(u32, emits[2]) >> 3;
+                        const emit_packed: u32 = (31 << 0) | (31 << 5) | (31 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
+                        corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
+                    } else {
+                        for (0..4) |corner| {
+                            const offsets = ao_offsets[face][corner];
+
+                            if (light_map_ptr) |lm| {
+                                var sum_r: u32 = 0;
+                                var sum_g: u32 = 0;
+                                var sum_b: u32 = 0;
+
+                                const face_light = lm.getBlock(wx + fno[0], wy + fno[1], wz + fno[2]);
+                                sum_r += face_light[0];
+                                sum_g += face_light[1];
+                                sum_b += face_light[2];
+
+                                for (0..3) |s| {
+                                    const sl = lm.getBlock(wx + offsets[s][0], wy + offsets[s][1], wz + offsets[s][2]);
+                                    sum_r += sl[0];
+                                    sum_g += sl[1];
+                                    sum_b += sl[2];
+                                }
+
+                                const avg_r: u32 = sum_r / 4;
+                                const avg_g: u32 = sum_g / 4;
+                                const avg_b: u32 = sum_b / 4;
+
+                                var sky_sum: u32 = 0;
+                                sky_sum += lm.getSky(wx + fno[0], wy + fno[1], wz + fno[2]);
+                                for (0..3) |s| {
+                                    sky_sum += lm.getSky(wx + offsets[s][0], wy + offsets[s][1], wz + offsets[s][2]);
+                                }
+                                const sky_avg: u32 = sky_sum / 4;
+
+                                const sr5: u32 = sky_avg >> 3;
+                                const sg5: u32 = sky_avg >> 3;
+                                const sb5: u32 = sky_avg >> 3;
+                                const br5: u32 = avg_r >> 3;
+                                const bg5: u32 = avg_g >> 3;
+                                const bb5: u32 = avg_b >> 3;
+
+                                corner_packed[corner] = sr5 | (sg5 << 5) | (sb5 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
+                            } else {
+                                corner_packed[corner] = 31 | (31 << 5) | (31 << 10);
+                            }
+                        }
+                    }
+
+                    try normal_lights[face].append(allocator, .{ .corners = corner_packed });
+                }
+            }
+        }
+    }
+
+    var face_counts: [6]u32 = undefined;
+    var total_face_count: u32 = 0;
+    for (0..6) |i| {
+        face_counts[i] = @intCast(normal_lights[i].items.len);
+        total_face_count += face_counts[i];
+    }
+
+    const lights = try allocator.alloc(LightEntry, total_face_count);
+    errdefer allocator.free(lights);
+
+    var write_offset: usize = 0;
+    for (0..6) |i| {
+        const litems = normal_lights[i].items;
+        @memcpy(lights[write_offset..][0..litems.len], litems);
+        write_offset += litems.len;
+        normal_lights[i].deinit(allocator);
+    }
+
+    return .{
+        .lights = lights,
+        .light_count = total_face_count,
+        .face_counts = face_counts,
+        .total_face_count = total_face_count,
     };
 }
 

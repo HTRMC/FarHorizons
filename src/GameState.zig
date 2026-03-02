@@ -416,7 +416,7 @@ fn recomputeLight(self: *GameState) void {
 }
 
 fn updateLight(self: *GameState, wx: i32, wy: i32, wz: i32) void {
-    WorldState.updateLightMap(self.world, self.light_map, wx, wy, wz);
+    WorldState.updateLightMapFull(self.world, self.light_map, wx, wy, wz);
 }
 
 fn dirtyLightRadius(self: *GameState, wx: i32, wy: i32, wz: i32) void {
@@ -454,10 +454,11 @@ pub fn breakBlock(self: *GameState) void {
     const wx = hit.block_pos[0];
     const wy = hit.block_pos[1];
     const wz = hit.block_pos[2];
+    const old_block = WorldState.getBlock(self.world, wx, wy, wz);
     WorldState.setBlock(self.world, wx, wy, wz, .air);
     self.markDirty(wx, wy, wz);
     if (self.light_worker) |lw| {
-        lw.enqueue(wx, wy, wz);
+        lw.enqueue(wx, wy, wz, old_block);
     } else {
         self.updateLight(wx, wy, wz);
         self.dirtyLightRadius(wx, wy, wz);
@@ -479,7 +480,7 @@ pub fn placeBlock(self: *GameState) void {
     WorldState.setBlock(self.world, px, py, pz, block_type);
     self.markDirty(px, py, pz);
     if (self.light_worker) |lw| {
-        lw.enqueue(px, py, pz);
+        lw.enqueue(px, py, pz, .air);
     } else {
         self.updateLight(px, py, pz);
         self.dirtyLightRadius(px, py, pz);
@@ -553,7 +554,7 @@ fn propagateLodBlock(self: *GameState, wx: i32, wy: i32, wz: i32) void {
         const dst_wz = dst_vz - half_z;
 
         WorldState.setBlock(self.lod_worlds[lod_usize], dst_wx, dst_wy, dst_wz, new_block);
-        WorldState.updateLightMap(self.lod_worlds[lod_usize], self.lod_light_maps[lod_usize], dst_wx, dst_wy, dst_wz);
+        WorldState.updateLightMapFull(self.lod_worlds[lod_usize], self.lod_light_maps[lod_usize], dst_wx, dst_wy, dst_wz);
 
         // Queue save for the affected LOD chunk
         self.queueLodChunkSave(@intCast(lod_usize), dst_vx, dst_vy, dst_vz);

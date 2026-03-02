@@ -23,6 +23,7 @@ pub const CommittedChunk = struct {
     face_alloc: ?TlsfAllocator.Allocation,
     light_alloc: ?TlsfAllocator.Allocation,
     timeline_value: u64,
+    light_only: bool,
 };
 
 const RingBuffer = struct {
@@ -262,6 +263,11 @@ pub const TransferPipeline = struct {
         };
     }
 
+    fn freeResult(mw: *MeshWorker, result: MeshWorker.ChunkResult) void {
+        if (!result.light_only) mw.allocator.free(result.faces);
+        mw.allocator.free(result.lights);
+    }
+
     fn workerFn(self: *TransferPipeline) void {
         const io = Io.Threaded.global_single_threaded.io();
         const mw = self.mesh_worker orelse return;
@@ -290,11 +296,7 @@ pub const TransferPipeline = struct {
             }
 
             if (self.shutdown.load(.acquire)) {
-                // Free any drained results
-                for (local_results[0..local_count]) |r| {
-                    mw.allocator.free(r.faces);
-                    mw.allocator.free(r.lights);
-                }
+                for (local_results[0..local_count]) |r| freeResult(mw, r);
                 break;
             }
 
@@ -305,10 +307,7 @@ pub const TransferPipeline = struct {
             self.ring_buffers[current_slot].head = 0;
             vk.resetCommandPool(self.device, self.command_pools[current_slot], 0) catch |err| {
                 std.log.err("Failed to reset transfer command pool: {}", .{err});
-                for (local_results[0..local_count]) |r| {
-                    mw.allocator.free(r.faces);
-                    mw.allocator.free(r.lights);
-                }
+                for (local_results[0..local_count]) |r| freeResult(mw, r);
                 continue;
             };
             const begin_info = vk.VkCommandBufferBeginInfo{
@@ -319,10 +318,7 @@ pub const TransferPipeline = struct {
             };
             vk.beginCommandBuffer(self.command_buffers[current_slot], &begin_info) catch |err| {
                 std.log.err("Failed to begin transfer command buffer: {}", .{err});
-                for (local_results[0..local_count]) |r| {
-                    mw.allocator.free(r.faces);
-                    mw.allocator.free(r.lights);
-                }
+                for (local_results[0..local_count]) |r| freeResult(mw, r);
                 continue;
             };
             var has_commands = false;
@@ -331,6 +327,82 @@ pub const TransferPipeline = struct {
             for (local_results[0..local_count]) |result| {
                 const slot = result.coord.flatIndex();
 
+                // --- Light-only path ---
+                if (result.light_only) {
+                    if (result.light_count == 0) {
+                        // No visible faces — commit light-only with no alloc
+                        self.pushCommitted(.{
+                            .slot = @intCast(slot),
+                            .chunk_data = .{
+                                .position = result.coord.positionScaled(result.voxel_size),
+                                .light_start = 0,
+                                .face_start = 0,
+                                .face_counts = result.face_counts,
+                                .voxel_size = result.voxel_size,
+                            },
+                            .face_alloc = null,
+                            .light_alloc = null,
+                            .timeline_value = self.timeline_value,
+                            .light_only = true,
+                        });
+                        mw.allocator.free(result.lights);
+                        continue;
+                    }
+
+                    // Allocate light TLSF only
+                    self.tlsf_mutex.lockUncancelable(io);
+                    const light_alloc = l_tlsf.alloc(result.light_count);
+                    self.tlsf_mutex.unlock(io);
+
+                    if (light_alloc == null) {
+                        std.log.err("TLSF light heap full for light-only (requested {})", .{result.light_count});
+                        mw.allocator.free(result.lights);
+                        continue;
+                    }
+                    const la = light_alloc.?;
+
+                    // Stage light data
+                    const lb_size: vk.VkDeviceSize = @intCast(@as(u64, result.light_count) * @sizeOf(LightEntry));
+                    const light_staging = self.allocStaging(current_slot, lb_size, @sizeOf(LightEntry)) catch {
+                        self.tlsf_mutex.lockUncancelable(io);
+                        l_tlsf.free(la.handle);
+                        self.tlsf_mutex.unlock(io);
+                        mw.allocator.free(result.lights);
+                        continue;
+                    };
+
+                    const light_dst: [*]LightEntry = @ptrCast(@alignCast(light_staging.mapped_ptr));
+                    @memcpy(light_dst[0..result.light_count], result.lights[0..result.light_count]);
+
+                    const light_dst_offset: vk.VkDeviceSize = @intCast(@as(u64, la.offset) * @sizeOf(LightEntry));
+                    const light_regions = [_]vk.VkBufferCopy{.{
+                        .srcOffset = light_staging.offset,
+                        .dstOffset = light_dst_offset,
+                        .size = lb_size,
+                    }};
+                    vk.cmdCopyBuffer(self.command_buffers[current_slot], light_staging.buffer, self.light_buffer, 1, &light_regions);
+                    has_commands = true;
+
+                    self.pushCommitted(.{
+                        .slot = @intCast(slot),
+                        .chunk_data = .{
+                            .position = result.coord.positionScaled(result.voxel_size),
+                            .light_start = la.offset,
+                            .face_start = 0,
+                            .face_counts = result.face_counts,
+                            .voxel_size = result.voxel_size,
+                        },
+                        .face_alloc = null,
+                        .light_alloc = light_alloc,
+                        .timeline_value = self.timeline_value + 1,
+                        .light_only = true,
+                    });
+
+                    mw.allocator.free(result.lights);
+                    continue;
+                }
+
+                // --- Full remesh path ---
                 if (result.total_face_count == 0) {
                     // Empty chunk — commit with no alloc
                     self.pushCommitted(.{
@@ -345,6 +417,7 @@ pub const TransferPipeline = struct {
                         .face_alloc = null,
                         .light_alloc = null,
                         .timeline_value = self.timeline_value,
+                        .light_only = false,
                     });
                     mw.allocator.free(result.faces);
                     mw.allocator.free(result.lights);
@@ -418,6 +491,7 @@ pub const TransferPipeline = struct {
                             .face_alloc = fa,
                             .light_alloc = null,
                             .timeline_value = self.timeline_value + 1,
+                            .light_only = false,
                         });
                         continue;
                     };
@@ -447,6 +521,7 @@ pub const TransferPipeline = struct {
                     .face_alloc = fa,
                     .light_alloc = if (result.light_count > 0) light_alloc else null,
                     .timeline_value = self.timeline_value + 1,
+                    .light_only = false,
                 });
 
                 // Free mesh result heap memory

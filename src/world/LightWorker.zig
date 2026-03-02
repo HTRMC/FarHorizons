@@ -23,6 +23,7 @@ pub const LightWorker = struct {
         wx: i32,
         wy: i32,
         wz: i32,
+        old_block: WorldState.BlockType,
     };
 
     pub fn initInPlace(
@@ -70,16 +71,23 @@ pub const LightWorker = struct {
         self.queue_mutex.unlock(io);
     }
 
-    pub fn enqueue(self: *LightWorker, wx: i32, wy: i32, wz: i32) void {
+    pub fn enqueue(self: *LightWorker, wx: i32, wy: i32, wz: i32, old_block: WorldState.BlockType) void {
         const io = Io.Threaded.global_single_threaded.io();
         self.queue_mutex.lockUncancelable(io);
         defer self.queue_mutex.unlock(io);
 
         if (self.request_len < MAX_REQUESTS) {
-            self.request_queue[self.request_len] = .{ .wx = wx, .wy = wy, .wz = wz };
+            self.request_queue[self.request_len] = .{ .wx = wx, .wy = wy, .wz = wz, .old_block = old_block };
             self.request_len += 1;
         }
         self.queue_cond.signal(io);
+    }
+
+    fn isGeometryDirty(coord: WorldState.ChunkCoord, geo_chunks: []const WorldState.ChunkCoord) bool {
+        for (geo_chunks) |gc| {
+            if (gc.eql(coord)) return true;
+        }
+        return false;
     }
 
     fn workerFn(self: *LightWorker) void {
@@ -108,48 +116,53 @@ pub const LightWorker = struct {
 
             // 2. Process each request
             for (local_requests[0..local_count]) |req| {
-                // Write-lock light map for update
+                // Write-lock light map for incremental update
                 self.light_map_rwlock.lockUncancelable(io);
-                WorldState.updateLightMap(local_world, local_light_map, req.wx, req.wy, req.wz);
+                const light_result = WorldState.updateLightMapIncremental(local_world, local_light_map, req.wx, req.wy, req.wz, req.old_block);
                 self.light_map_rwlock.unlock(io);
 
-                // Compute affected chunk coords (same logic as dirtyLightRadius)
-                const radius = WorldState.LIGHT_MAX_RADIUS + 2;
+                if (!light_result.any_changed) continue;
+
+                // Geometry-dirty chunks (from affectedChunks — max 7)
+                // These are already enqueued as full remesh by dirty_chunks → enqueueBatch in beginFrame
+                const geo = WorldState.affectedChunks(req.wx, req.wy, req.wz);
+
+                // Convert light bounding box (voxel coords) to chunk coords with +1 padding
                 const cs: i32 = WorldState.CHUNK_SIZE;
-                const half_x: i32 = WorldState.WORLD_SIZE_X / 2;
-                const half_y: i32 = WorldState.WORLD_SIZE_Y / 2;
-                const half_z: i32 = WorldState.WORLD_SIZE_Z / 2;
+                const min_cx: i32 = @max(0, @divFloor(light_result.min_vx - 1, cs));
+                const max_cx: i32 = @min(@as(i32, WorldState.WORLD_CHUNKS_X) - 1, @divFloor(light_result.max_vx + 1, cs));
+                const min_cy: i32 = @max(0, @divFloor(light_result.min_vy - 1, cs));
+                const max_cy: i32 = @min(@as(i32, WorldState.WORLD_CHUNKS_Y) - 1, @divFloor(light_result.max_vy + 1, cs));
+                const min_cz: i32 = @max(0, @divFloor(light_result.min_vz - 1, cs));
+                const max_cz: i32 = @min(@as(i32, WorldState.WORLD_CHUNKS_Z) - 1, @divFloor(light_result.max_vz + 1, cs));
 
-                const min_cx: i32 = @max(0, @divFloor(req.wx - radius + half_x, cs));
-                const max_cx: i32 = @min(@as(i32, WorldState.WORLD_CHUNKS_X) - 1, @divFloor(req.wx + radius + half_x, cs));
-                const min_cy: i32 = @max(0, @divFloor(req.wy - radius + half_y, cs));
-                const max_cy: i32 = @min(@as(i32, WorldState.WORLD_CHUNKS_Y) - 1, @divFloor(req.wy + radius + half_y, cs));
-                const min_cz: i32 = @max(0, @divFloor(req.wz - radius + half_z, cs));
-                const max_cz: i32 = @min(@as(i32, WorldState.WORLD_CHUNKS_Z) - 1, @divFloor(req.wz + radius + half_z, cs));
+                var light_only_coords: [WorldState.TOTAL_WORLD_CHUNKS]WorldState.ChunkCoord = undefined;
+                var light_only_count: u32 = 0;
 
-                var coords: [WorldState.TOTAL_WORLD_CHUNKS]WorldState.ChunkCoord = undefined;
-                var count: u32 = 0;
-
-                var cy = min_cy;
-                while (cy <= max_cy) : (cy += 1) {
-                    var cz = min_cz;
-                    while (cz <= max_cz) : (cz += 1) {
-                        var cx = min_cx;
-                        while (cx <= max_cx) : (cx += 1) {
-                            if (count < WorldState.TOTAL_WORLD_CHUNKS) {
-                                coords[count] = .{
-                                    .cx = @intCast(cx),
-                                    .cy = @intCast(cy),
-                                    .cz = @intCast(cz),
-                                };
-                                count += 1;
+                var icy = min_cy;
+                while (icy <= max_cy) : (icy += 1) {
+                    var icz = min_cz;
+                    while (icz <= max_cz) : (icz += 1) {
+                        var icx = min_cx;
+                        while (icx <= max_cx) : (icx += 1) {
+                            const coord = WorldState.ChunkCoord{
+                                .cx = @intCast(icx),
+                                .cy = @intCast(icy),
+                                .cz = @intCast(icz),
+                            };
+                            // Skip geometry-dirty chunks — they get full remesh from beginFrame
+                            if (!isGeometryDirty(coord, geo.coords[0..geo.count])) {
+                                if (light_only_count < WorldState.TOTAL_WORLD_CHUNKS) {
+                                    light_only_coords[light_only_count] = coord;
+                                    light_only_count += 1;
+                                }
                             }
                         }
                     }
                 }
 
-                if (count > 0) {
-                    self.mesh_worker.enqueueBatch(coords[0..count]);
+                if (light_only_count > 0) {
+                    self.mesh_worker.enqueueLightOnlyBatch(light_only_coords[0..light_only_count]);
                 }
             }
         }
