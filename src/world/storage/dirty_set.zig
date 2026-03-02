@@ -2,6 +2,8 @@ const std = @import("std");
 const storage_types = @import("types.zig");
 const WorldState = @import("../WorldState.zig");
 
+const Io = std.Io;
+
 const ChunkKey = storage_types.ChunkKey;
 const RegionCoord = storage_types.RegionCoord;
 const Chunk = WorldState.Chunk;
@@ -63,21 +65,77 @@ pub const DrainResult = struct {
     total_drained: u32,
 };
 
+pub const ChunkPool = struct {
+    pub const POOL_SIZE = 256;
+    const SENTINEL = std.math.maxInt(u32);
+
+    slots: *[POOL_SIZE]Chunk,
+    next: [POOL_SIZE]u32,
+    free_head: u32,
+    mutex: Io.Mutex,
+
+    pub fn init(allocator: std.mem.Allocator) !ChunkPool {
+        const slots = try allocator.create([POOL_SIZE]Chunk);
+        var pool: ChunkPool = .{
+            .slots = slots,
+            .next = undefined,
+            .free_head = 0,
+            .mutex = .init,
+        };
+        for (0..POOL_SIZE - 1) |i| {
+            pool.next[i] = @intCast(i + 1);
+        }
+        pool.next[POOL_SIZE - 1] = SENTINEL;
+        return pool;
+    }
+
+    pub fn deinit(self: *ChunkPool, allocator: std.mem.Allocator) void {
+        allocator.destroy(self.slots);
+    }
+
+    pub fn alloc(self: *ChunkPool) ?*Chunk {
+        const io = Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        if (self.free_head == SENTINEL) return null;
+        const idx = self.free_head;
+        self.free_head = self.next[idx];
+        return &self.slots[idx];
+    }
+
+    pub fn free(self: *ChunkPool, chunk: *Chunk) void {
+        const io = Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        const base = @intFromPtr(&self.slots[0]);
+        const ptr = @intFromPtr(chunk);
+        std.debug.assert(ptr >= base and ptr < base + POOL_SIZE * @sizeOf(Chunk));
+        std.debug.assert((ptr - base) % @sizeOf(Chunk) == 0);
+        const idx: u32 = @intCast((ptr - base) / @sizeOf(Chunk));
+        self.next[idx] = self.free_head;
+        self.free_head = idx;
+    }
+};
+
 pub const DirtySet = struct {
     map: std.AutoHashMap(u64, DirtyEntry),
     allocator: std.mem.Allocator,
+    pool: *ChunkPool,
 
-    pub fn init(allocator: std.mem.Allocator) DirtySet {
+    pub fn init(allocator: std.mem.Allocator, pool: *ChunkPool) !DirtySet {
+        var map = std.AutoHashMap(u64, DirtyEntry).init(allocator);
+        try map.ensureTotalCapacity(ChunkPool.POOL_SIZE);
         return .{
-            .map = std.AutoHashMap(u64, DirtyEntry).init(allocator),
+            .map = map,
             .allocator = allocator,
+            .pool = pool,
         };
     }
 
     pub fn deinit(self: *DirtySet) void {
         var it = self.map.valueIterator();
         while (it.next()) |entry| {
-            self.allocator.destroy(entry.chunk_data);
+            self.pool.free(entry.chunk_data);
         }
         self.map.deinit();
     }
@@ -92,28 +150,25 @@ pub const DirtySet = struct {
             return;
         }
 
-        const heap_chunk = self.allocator.create(Chunk) catch {
-            log.err("Failed to allocate chunk snapshot for dirty set", .{});
+        const pool_chunk = self.pool.alloc() orelse {
+            log.err("Chunk pool exhausted in dirty set", .{});
             return;
         };
-        heap_chunk.* = chunk.*;
+        pool_chunk.* = chunk.*;
 
-        self.map.put(k, .{
+        self.map.putAssumeCapacity(k, .{
             .key = key,
             .region_coord = key.regionCoord(),
             .first_dirty_time = current_time,
             .last_dirty_time = current_time,
-            .chunk_data = heap_chunk,
-        }) catch {
-            self.allocator.destroy(heap_chunk);
-            log.err("Failed to insert into dirty set", .{});
-        };
+            .chunk_data = pool_chunk,
+        });
     }
 
     pub fn remove(self: *DirtySet, key: ChunkKey) void {
         const k = key.toU64();
         if (self.map.fetchRemove(k)) |kv| {
-            self.allocator.destroy(kv.value.chunk_data);
+            self.pool.free(kv.value.chunk_data);
         }
     }
 

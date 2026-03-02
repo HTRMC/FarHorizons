@@ -33,6 +33,7 @@ region_cache: RegionCache,
 chunk_cache: ChunkCacheMod.ChunkCache,
 io_pipeline: IoPipeline,
 default_compression: CompressionAlgo,
+chunk_pool: dirty_set_mod.ChunkPool,
 dirty_set: DirtySet,
 dirty_mutex: Io.Mutex,
 
@@ -72,7 +73,8 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     self.region_dir = region_dir;
     self.region_cache = RegionCache.init(allocator, region_dir);
     self.default_compression = .deflate;
-    self.dirty_set = DirtySet.init(allocator);
+    self.chunk_pool = try dirty_set_mod.ChunkPool.init(allocator);
+    self.dirty_set = try DirtySet.init(allocator, &self.chunk_pool);
     self.dirty_mutex = .init;
 
     self.chunk_cache.initInPlace();
@@ -93,6 +95,7 @@ pub fn deinit(self: *Storage) void {
     self.io_pipeline.stop();
     self.flush();
     self.dirty_set.deinit();
+    self.chunk_pool.deinit(self.allocator);
     self.region_cache.deinit();
     const allocator = self.allocator;
     allocator.free(self.region_dir);
@@ -143,7 +146,7 @@ pub fn tick(self: *Storage) void {
         const batch = &result.batches[bi];
         const batch_data = self.allocator.create(BatchSaveData) catch {
             for (batch.chunks[0..batch.count]) |chunk_ptr| {
-                self.allocator.destroy(chunk_ptr);
+                self.chunk_pool.free(chunk_ptr);
             }
             continue;
         };
@@ -154,6 +157,7 @@ pub fn tick(self: *Storage) void {
             .chunks = batch.chunks,
             .keys = batch.keys,
             .allocator = self.allocator,
+            .pool = &self.chunk_pool,
         };
         self.io_pipeline.submitBatchSave(batch_data);
     }
@@ -183,7 +187,7 @@ pub fn saveAllDirty(self: *Storage) void {
         const region = self.region_cache.getOrOpen(coord) catch {
             log.err("Failed to open region for shutdown save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
             for (batch.chunks[0..batch.count]) |chunk_ptr| {
-                self.allocator.destroy(chunk_ptr);
+                self.chunk_pool.free(chunk_ptr);
             }
             continue;
         };
@@ -212,7 +216,7 @@ pub fn saveAllDirty(self: *Storage) void {
         });
 
         for (batch.chunks[0..batch.count]) |chunk_ptr| {
-            self.allocator.destroy(chunk_ptr);
+            self.chunk_pool.free(chunk_ptr);
         }
     }
 

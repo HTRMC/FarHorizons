@@ -66,12 +66,13 @@ pub const IoPipeline = struct {
         chunks: [MAX_BATCH_SIZE]*Chunk,
         keys: [MAX_BATCH_SIZE]ChunkKey,
         allocator: std.mem.Allocator,
+        pool: *dirty_set_mod.ChunkPool,
 
         pub const MAX_BATCH_SIZE = dirty_set_mod.MAX_BATCH_SIZE;
 
         pub fn deinit(self: *BatchSaveData) void {
             for (self.chunks[0..self.count]) |chunk_ptr| {
-                self.allocator.destroy(chunk_ptr);
+                self.pool.free(chunk_ptr);
             }
             self.allocator.destroy(self);
         }
