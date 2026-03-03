@@ -1,5 +1,6 @@
 const std = @import("std");
 const GameState = @import("GameState.zig");
+const ChunkStreamer = GameState.ChunkStreamer;
 const WorldState = @import("world/WorldState.zig");
 const TextRenderer = @import("renderer/vulkan/TextRenderer.zig").TextRenderer;
 const Raycast = @import("Raycast.zig");
@@ -115,8 +116,15 @@ fn drawF4(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_all
     y += LINE_HEIGHT;
 
     const chunks_loaded = wr.chunk_slot_map.count();
-    const chunks_text = std.fmt.bufPrint(&buf, "Chunks: {d} loaded", .{chunks_loaded}) catch "Chunks: ?";
+    const total_slots = world_renderer_mod.TOTAL_RENDER_CHUNKS;
+    const chunks_text = std.fmt.bufPrint(&buf, "Chunks: {d} / {d} slots", .{ chunks_loaded, total_slots }) catch "Chunks: ?";
     text.drawText(x, y, chunks_text, yellow);
+    y += LINE_HEIGHT;
+
+    const queue_depth = gs.streamer.inputQueueDepth();
+    const rd = ChunkStreamer.RENDER_DISTANCE;
+    const stream_text = std.fmt.bufPrint(&buf, "Streamer: {d} queued, RD={d}", .{ queue_depth, rd }) catch "Streamer: ?";
+    text.drawText(x, y, stream_text, yellow);
     y += LINE_HEIGHT;
 
     const dc_text = std.fmt.bufPrint(&buf, "Draw Calls: {d}", .{wr.draw_count}) catch "Draw Calls: ?";
@@ -210,6 +218,12 @@ fn drawF5(text: *TextRenderer, gs: *GameState) void {
         chunk_count, WorldState.CHUNK_SIZE,
     }) catch "Chunks: ?";
     drawTextRight(text, y, chunks_text, yellow);
+    y += LINE_HEIGHT;
+
+    const rd = ChunkStreamer.RENDER_DISTANCE;
+    const ud = ChunkStreamer.UNLOAD_DISTANCE;
+    const rd_text = std.fmt.bufPrint(&buf, "Render Distance: {d}  Unload: {d}", .{ rd, ud }) catch "RD: ?";
+    drawTextRight(text, y, rd_text, yellow);
     y += LINE_HEIGHT;
 
     const pos = gs.camera.position;

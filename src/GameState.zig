@@ -4,9 +4,13 @@ const Camera = @import("renderer/Camera.zig");
 const WorldState = @import("world/WorldState.zig");
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 const ChunkPool = @import("world/ChunkPool.zig").ChunkPool;
+pub const ChunkStreamer = @import("world/ChunkStreamer.zig").ChunkStreamer;
 const Physics = @import("Physics.zig");
 const Raycast = @import("Raycast.zig");
 const Storage = @import("world/storage/Storage.zig");
+const WorldRenderer = @import("renderer/vulkan/WorldRenderer.zig").WorldRenderer;
+const TlsfAllocator = @import("allocators/TlsfAllocator.zig").TlsfAllocator;
+const MeshWorker = @import("world/MeshWorker.zig").MeshWorker;
 
 const GameState = @This();
 
@@ -64,6 +68,9 @@ hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .gla
 offhand: WorldState.BlockType = .air,
 
 storage: ?*Storage,
+streamer: ChunkStreamer,
+player_chunk: WorldState.ChunkKey,
+streaming_initialized: bool,
 
 debug_screens: u8 = 0,
 delta_time: f32 = 0,
@@ -182,6 +189,9 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .hit_result = null,
         .dirty_chunks = dirty,
         .storage = storage_inst,
+        .streamer = undefined,
+        .player_chunk = spawn_key,
+        .streaming_initialized = false,
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
@@ -365,6 +375,131 @@ fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
     const chunk = self.chunk_map.get(key) orelse return;
     s.markDirty(key.cx, key.cy, key.cz, 0, chunk);
+}
+
+pub fn updateStreaming(
+    self: *GameState,
+    wr: *WorldRenderer,
+    deferred_face_frees: []TlsfAllocator.Handle,
+    deferred_face_free_count: *u32,
+    deferred_light_frees: []TlsfAllocator.Handle,
+    deferred_light_free_count: *u32,
+) void {
+    const pos = self.camera.position;
+    const current_chunk = WorldState.ChunkKey.fromWorldPos(
+        @intFromFloat(@floor(pos.x)),
+        @intFromFloat(@floor(pos.y)),
+        @intFromFloat(@floor(pos.z)),
+    );
+
+    const chunk_changed = !current_chunk.eql(self.player_chunk) or !self.streaming_initialized;
+
+    if (chunk_changed) {
+        self.player_chunk = current_chunk;
+        self.streaming_initialized = true;
+
+        // Request load for chunks within render distance that aren't loaded
+        const rd = ChunkStreamer.RENDER_DISTANCE;
+        var batch: [512]WorldState.ChunkKey = undefined;
+        var batch_len: u32 = 0;
+
+        var dy: i32 = -rd;
+        while (dy <= rd) : (dy += 1) {
+            var dz: i32 = -rd;
+            while (dz <= rd) : (dz += 1) {
+                var dx: i32 = -rd;
+                while (dx <= rd) : (dx += 1) {
+                    if (dx * dx + dy * dy + dz * dz > rd * rd) continue;
+                    const key = WorldState.ChunkKey{
+                        .cx = current_chunk.cx + dx,
+                        .cy = current_chunk.cy + dy,
+                        .cz = current_chunk.cz + dz,
+                    };
+                    if (self.chunk_map.get(key) == null) {
+                        if (batch_len < batch.len) {
+                            batch[batch_len] = key;
+                            batch_len += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (batch_len > 0) {
+            self.streamer.requestLoadBatch(batch[0..batch_len]);
+        }
+    }
+
+    // Drain streamer output
+    var results: [ChunkStreamer.MAX_OUTPUT]ChunkStreamer.LoadResult = undefined;
+    const count = self.streamer.drainOutput(&results);
+    for (results[0..count]) |result| {
+        // Skip if chunk was already loaded (e.g. by sync init or double request)
+        if (self.chunk_map.get(result.key) != null) {
+            self.chunk_pool.release(result.chunk);
+            continue;
+        }
+        self.chunk_map.put(result.key, result.chunk);
+        self.dirty_chunks.add(result.key);
+    }
+
+    // Unload chunks beyond UNLOAD_DISTANCE (budget: max 16 per frame)
+    const ud = ChunkStreamer.UNLOAD_DISTANCE;
+    const ud_sq = ud * ud;
+    var unload_count: u32 = 0;
+    const MAX_UNLOADS: u32 = 16;
+
+    // Collect keys to unload (can't modify map while iterating)
+    var unload_keys: [MAX_UNLOADS]WorldState.ChunkKey = undefined;
+    {
+        var it = self.chunk_map.iterator();
+        while (it.next()) |entry| {
+            if (unload_count >= MAX_UNLOADS) break;
+            const key = entry.key_ptr.*;
+            const dx = key.cx - current_chunk.cx;
+            const dy = key.cy - current_chunk.cy;
+            const dz = key.cz - current_chunk.cz;
+            if (dx * dx + dy * dy + dz * dz > ud_sq) {
+                unload_keys[unload_count] = key;
+                unload_count += 1;
+            }
+        }
+    }
+
+    // Actually unload
+    for (unload_keys[0..unload_count]) |key| {
+        // Free GPU TLSF allocs via deferred mechanism
+        if (wr.chunk_slot_map.get(key)) |slot| {
+            if (wr.chunk_face_alloc[slot]) |fa| {
+                if (fa.handle != TlsfAllocator.null_handle) {
+                    const idx = deferred_face_free_count.*;
+                    if (idx < deferred_face_frees.len) {
+                        deferred_face_frees[idx] = fa.handle;
+                        deferred_face_free_count.* = idx + 1;
+                    }
+                }
+            }
+            if (wr.chunk_light_alloc[slot]) |la| {
+                if (la.handle != TlsfAllocator.null_handle) {
+                    const idx = deferred_light_free_count.*;
+                    if (idx < deferred_light_frees.len) {
+                        deferred_light_frees[idx] = la.handle;
+                        deferred_light_free_count.* = idx + 1;
+                    }
+                }
+            }
+        }
+        wr.releaseSlot(key);
+
+        if (self.chunk_map.remove(key)) |chunk| {
+            self.chunk_pool.release(chunk);
+        }
+    }
+
+    // Tick storage (periodic dirty saves)
+    if (self.storage) |s| {
+        s.tick();
+    }
 }
 
 fn lerpVec3(a: zlm.Vec3, b: zlm.Vec3, t: f32) zlm.Vec3 {

@@ -255,7 +255,11 @@ pub const VulkanRenderer = struct {
         self.mesh_worker = mw;
         self.light_worker = lw;
 
-        // 3. Setup + start TransferPipeline thread
+        // 3. Init + start ChunkStreamer
+        gs.streamer.initInPlace(gs.storage, &gs.chunk_pool);
+        gs.streamer.start();
+
+        // 4. Setup + start TransferPipeline thread
         self.transfer_pipeline.setupThread(
             mw,
             &wr.face_tlsf,
@@ -264,12 +268,12 @@ pub const VulkanRenderer = struct {
             wr.light_alloc.buffer,
         );
 
-        // 4. Start threads (order: mesh first so transfer can consume, then light)
+        // 5. Start threads (order: mesh first so transfer can consume, then light)
         mw.start();
         self.transfer_pipeline.start();
         lw.start();
 
-        // 5. Enqueue all loaded chunks for initial mesh
+        // 6. Enqueue all loaded chunks for initial mesh
         var it = gs.chunk_map.iterator();
         while (it.next()) |entry| {
             mw.enqueue(entry.key_ptr.*);
@@ -277,6 +281,11 @@ pub const VulkanRenderer = struct {
     }
 
     fn stopWorkerPipeline(self: *VulkanRenderer) void {
+        // Stop streamer first (produces chunks for main thread)
+        if (self.game_state) |gs| {
+            gs.streamer.stop();
+        }
+
         // Stop threads in dependency order: light (feeds mesh) → transfer (consumes mesh) → mesh (produces)
         if (self.light_worker) |lw| {
             lw.stop();
@@ -327,20 +336,28 @@ pub const VulkanRenderer = struct {
                 // 3. Drain committed chunks from TransferPipeline → apply to WorldRenderer
                 self.drainCommittedChunks(cf);
 
-                // 4. Sync worker chunk map pointer
-                if (self.mesh_worker) |mw| {
-                    mw.syncChunkMap(&gs.chunk_map);
-                }
+                // 4. Run streaming update (load/unload chunks)
+                // 4. Run streaming update (load/unload chunks)
+                gs.updateStreaming(
+                    &self.render_state.world_renderer,
+                    &self.deferred_face_frees[cf],
+                    &self.deferred_face_free_counts[cf],
+                    &self.deferred_light_frees[cf],
+                    &self.deferred_light_free_counts[cf],
+                );
 
-                // 5. Feed any remaining dirty_chunks to MeshWorker
-                if (gs.dirty_chunks.count > 0) {
-                    if (self.mesh_worker) |mw| {
+                if (self.mesh_worker) |mw| {
+                    // 5. Sync worker chunk map pointer
+                    mw.syncChunkMap(&gs.chunk_map);
+
+                    // 6. Feed any remaining dirty_chunks to MeshWorker
+                    if (gs.dirty_chunks.count > 0) {
                         mw.enqueueBatch(gs.dirty_chunks.keys[0..gs.dirty_chunks.count]);
                         gs.dirty_chunks.clear();
                     }
                 }
 
-                // 5. Build indirect draw commands
+                // 7. Build indirect draw commands
                 self.render_state.world_renderer.buildIndirectCommands(&self.ctx, gs.camera.position);
                 self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
             }

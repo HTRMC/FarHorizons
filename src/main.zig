@@ -578,10 +578,6 @@ pub fn main() !void {
                     gs.interpolateForRender(alpha);
                 }
 
-                if (gs.storage) |s| {
-                    s.tick();
-                }
-
                 menu_ctrl.updateHud(gs);
             }
         }

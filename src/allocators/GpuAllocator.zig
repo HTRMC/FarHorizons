@@ -21,8 +21,8 @@ pub const BufferAllocation = struct {
     mapped_ptr: ?[*]u8,
 };
 
-const DEVICE_LOCAL_SIZE: vk.VkDeviceSize = 32 * 1024 * 1024; // 32MB
-const HOST_VISIBLE_SIZE: vk.VkDeviceSize = 4 * 1024 * 1024; // 4MB
+const DEVICE_LOCAL_SIZE: vk.VkDeviceSize = 64 * 1024 * 1024; // 64MB
+const HOST_VISIBLE_SIZE: vk.VkDeviceSize = 8 * 1024 * 1024; // 8MB
 const STAGING_SIZE: vk.VkDeviceSize = 4 * 1024 * 1024; // 4MB
 
 pub const GpuAllocator = struct {

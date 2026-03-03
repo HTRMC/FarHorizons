@@ -19,12 +19,12 @@ const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
 const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
-pub const INITIAL_FACE_CAPACITY: u32 = 400_000;
-pub const INITIAL_LIGHT_CAPACITY: u32 = 400_000;
+pub const INITIAL_FACE_CAPACITY: u32 = 1_500_000;
+pub const INITIAL_LIGHT_CAPACITY: u32 = 1_500_000;
 const ChunkMap = @import("../../world/ChunkMap.zig").ChunkMap;
 
 const MAX_FACES_PER_DRAW: u32 = 16_384;
-pub const TOTAL_RENDER_CHUNKS: u32 = 256;
+pub const TOTAL_RENDER_CHUNKS: u32 = 2048;
 const MAX_INDIRECT_COMMANDS: u32 = TOTAL_RENDER_CHUNKS * 6;
 
 pub const WorldRenderer = struct {
