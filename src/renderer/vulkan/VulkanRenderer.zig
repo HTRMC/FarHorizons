@@ -12,7 +12,6 @@ const vk_utils = @import("vk_utils.zig");
 const TransferPipeline = @import("TransferPipeline.zig").TransferPipeline;
 const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
-const LightWorker = @import("../../world/LightWorker.zig").LightWorker;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const GameState = @import("../../GameState.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
@@ -68,7 +67,6 @@ pub const VulkanRenderer = struct {
     pipeline_cache_path: []const u8,
     transfer_pipeline: TransferPipeline,
     mesh_worker: ?*MeshWorker,
-    light_worker: ?*LightWorker,
     game_state: ?*GameState,
     ui_manager: ?*UiManager,
     framebuffer_resized: bool,
@@ -154,7 +152,6 @@ pub const VulkanRenderer = struct {
             .render_state = undefined,
             .transfer_pipeline = undefined,
             .mesh_worker = null,
-            .light_worker = null,
             .game_state = game_state,
             .ui_manager = null,
             .framebuffer_resized = false,
@@ -242,18 +239,9 @@ pub const VulkanRenderer = struct {
             return;
         };
 
-        // 2. Create + init LightWorker (stubbed)
-        const lw = self.allocator.create(LightWorker) catch |err| {
-            std.log.err("Failed to allocate LightWorker: {}", .{err});
-            self.allocator.destroy(mw);
-            return;
-        };
-
-        lw.initInPlace();
         mw.initInPlace(self.allocator, &gs.chunk_map);
 
         self.mesh_worker = mw;
-        self.light_worker = lw;
 
         // 3. Init + start ChunkStreamer
         gs.streamer.initInPlace(gs.storage, &gs.chunk_pool);
@@ -268,10 +256,9 @@ pub const VulkanRenderer = struct {
             wr.light_alloc.buffer,
         );
 
-        // 5. Start threads (order: mesh first so transfer can consume, then light)
+        // 5. Start threads (mesh first so transfer can consume)
         mw.start();
         self.transfer_pipeline.start();
-        lw.start();
 
         // 6. Enqueue all loaded chunks for initial mesh
         var it = gs.chunk_map.iterator();
@@ -286,10 +273,7 @@ pub const VulkanRenderer = struct {
             gs.streamer.stop();
         }
 
-        // Stop threads in dependency order: light (feeds mesh) → transfer (consumes mesh) → mesh (produces)
-        if (self.light_worker) |lw| {
-            lw.stop();
-        }
+        // Stop threads in dependency order: transfer (consumes mesh) → mesh (produces)
         self.transfer_pipeline.stop();
         if (self.mesh_worker) |mw| {
             mw.stop();
@@ -311,10 +295,6 @@ pub const VulkanRenderer = struct {
         if (self.mesh_worker) |mw| {
             self.allocator.destroy(mw);
             self.mesh_worker = null;
-        }
-        if (self.light_worker) |lw| {
-            self.allocator.destroy(lw);
-            self.light_worker = null;
         }
     }
 
