@@ -492,10 +492,6 @@ pub fn updateStreaming(
         wr.releaseSlot(key);
 
         if (self.chunk_map.remove(key)) |chunk| {
-            // Save-on-unload: persist any block changes before releasing
-            if (self.storage) |s| {
-                s.saveChunk(key.cx, key.cy, key.cz, 0, chunk) catch {};
-            }
             self.chunk_pool.release(chunk);
         }
     }

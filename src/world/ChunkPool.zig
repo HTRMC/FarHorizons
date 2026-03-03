@@ -31,7 +31,6 @@ pub const ChunkPool = struct {
     }
 
     pub fn release(self: *ChunkPool, chunk: *Chunk) void {
-        chunk.blocks = .{.air} ** BLOCKS_PER_CHUNK;
         self.free_list.append(self.allocator, chunk) catch {
             self.allocator.destroy(chunk);
         };
