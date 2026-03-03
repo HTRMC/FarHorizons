@@ -2,10 +2,11 @@ const std = @import("std");
 const zlm = @import("zlm");
 const Camera = @import("renderer/Camera.zig");
 const WorldState = @import("world/WorldState.zig");
+const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
+const ChunkPool = @import("world/ChunkPool.zig").ChunkPool;
 const Physics = @import("Physics.zig");
 const Raycast = @import("Raycast.zig");
 const Storage = @import("world/storage/Storage.zig");
-const LightWorker = @import("world/LightWorker.zig").LightWorker;
 
 const GameState = @This();
 
@@ -13,8 +14,11 @@ pub const MovementMode = enum { flying, walking };
 pub const EYE_OFFSET: f32 = 1.62;
 pub const TICK_RATE: f32 = 30.0;
 pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
-pub const MAX_LOD: u8 = 5;
 pub const HOTBAR_SIZE: u8 = 9;
+
+// Initial load radius in chunks (per axis from center)
+const LOAD_RADIUS_XZ: i32 = 2;
+const LOAD_RADIUS_Y: i32 = 1;
 
 pub fn blockName(block: WorldState.BlockType) []const u8 {
     return switch (block) {
@@ -40,8 +44,8 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
 
 allocator: std.mem.Allocator,
 camera: Camera,
-world: *WorldState.World,
-light_map: *WorldState.LightMap,
+chunk_map: ChunkMap,
+chunk_pool: ChunkPool,
 entity_pos: [3]f32,
 entity_vel: [3]f32,
 entity_on_ground: bool,
@@ -55,16 +59,11 @@ debug_camera_active: bool,
 overdraw_mode: bool,
 saved_camera: Camera,
 
-current_lod: u8,
-lod_worlds: [MAX_LOD]*WorldState.World,
-lod_light_maps: [MAX_LOD]*WorldState.LightMap,
-
 selected_slot: u8 = 0,
 hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .glass, .glowstone, .air, .air, .air, .air },
 offhand: WorldState.BlockType = .air,
 
 storage: ?*Storage,
-light_worker: ?*LightWorker,
 
 debug_screens: u8 = 0,
 delta_time: f32 = 0,
@@ -82,19 +81,20 @@ pub const FrameTiming = struct {
 };
 
 pub const DirtyChunkSet = struct {
-    chunks: [WorldState.TOTAL_WORLD_CHUNKS]WorldState.ChunkCoord,
+    const MAX_DIRTY = 64;
+    keys: [MAX_DIRTY]WorldState.ChunkKey,
     count: u8,
 
     pub fn empty() DirtyChunkSet {
-        return .{ .chunks = undefined, .count = 0 };
+        return .{ .keys = undefined, .count = 0 };
     }
 
-    pub fn add(self: *DirtyChunkSet, coord: WorldState.ChunkCoord) void {
-        for (self.chunks[0..self.count]) |c| {
-            if (c.eql(coord)) return;
+    pub fn add(self: *DirtyChunkSet, key: WorldState.ChunkKey) void {
+        for (self.keys[0..self.count]) |k| {
+            if (k.eql(key)) return;
         }
-        if (self.count < WorldState.TOTAL_WORLD_CHUNKS) {
-            self.chunks[self.count] = coord;
+        if (self.count < MAX_DIRTY) {
+            self.keys[self.count] = key;
             self.count += 1;
         }
     }
@@ -105,119 +105,74 @@ pub const DirtyChunkSet = struct {
 };
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8) !GameState {
-    const world = try allocator.create(WorldState.World);
-    @memset(std.mem.asBytes(world), 0);
-    const light_map = try allocator.create(WorldState.LightMap);
     const cam = Camera.init(width, height);
+    var chunk_map = ChunkMap.init(allocator);
+    var chunk_pool = ChunkPool.init(allocator);
 
-    var storage = Storage.init(allocator, world_name) catch |err| blk: {
+    const storage_inst = Storage.init(allocator, world_name) catch |err| blk: {
         std.log.warn("Storage init failed: {}, world will not be saved", .{err});
         break :blk null;
     };
 
+    // Load initial chunks around spawn
+    const spawn_key = WorldState.ChunkKey.fromWorldPos(16, 5, 16);
     var any_loaded = false;
-    if (storage != null) {
-        for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
-            for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
-                for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
-                    const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
-                    const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
-                    const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
 
-                    if (storage.?.loadChunk(cx, cy, cz, 0)) |cached_chunk| {
-                        world[cy_u][cz_u][cx_u] = cached_chunk.*;
+    var cy = spawn_key.cy - LOAD_RADIUS_Y;
+    while (cy <= spawn_key.cy + LOAD_RADIUS_Y) : (cy += 1) {
+        var cz = spawn_key.cz - LOAD_RADIUS_XZ;
+        while (cz <= spawn_key.cz + LOAD_RADIUS_XZ) : (cz += 1) {
+            var cx = spawn_key.cx - LOAD_RADIUS_XZ;
+            while (cx <= spawn_key.cx + LOAD_RADIUS_XZ) : (cx += 1) {
+                const key = WorldState.ChunkKey{ .cx = cx, .cy = cy, .cz = cz };
+                const chunk = chunk_pool.acquire();
+
+                var loaded = false;
+                if (storage_inst) |s| {
+                    if (s.loadChunk(cx, cy, cz, 0)) |cached_chunk| {
+                        chunk.* = cached_chunk.*;
+                        loaded = true;
                         any_loaded = true;
                     }
                 }
+
+                if (!loaded) {
+                    WorldState.generateFlatChunk(chunk, key);
+                }
+
+                chunk_map.put(key, chunk);
             }
         }
     }
 
+    // Save newly generated chunks if none were loaded from storage
     if (!any_loaded) {
-        WorldState.generateTerrainWorld(world);
-
-        if (storage != null) {
-            for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
-                for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
-                    for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
-                        const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
-                        const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
-                        const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
-                        storage.?.saveChunk(cx, cy, cz, 0, &world[cy_u][cz_u][cx_u]) catch |err| {
-                            std.log.warn("Failed to save generated chunk ({d},{d},{d}): {}", .{ cx, cy, cz, err });
-                        };
-                    }
-                }
+        if (storage_inst) |s| {
+            var it = chunk_map.iterator();
+            while (it.next()) |entry| {
+                s.saveChunk(entry.key_ptr.cx, entry.key_ptr.cy, entry.key_ptr.cz, 0, entry.value_ptr.*) catch |err| {
+                    std.log.warn("Failed to save generated chunk ({d},{d},{d}): {}", .{ entry.key_ptr.cx, entry.key_ptr.cy, entry.key_ptr.cz, err });
+                };
             }
-            storage.?.flush();
+            s.flush();
         }
     }
 
-    WorldState.computeLightMap(world, light_map);
-
-    var lod_worlds_arr: [MAX_LOD]*WorldState.World = undefined;
-    var lod_light_maps_arr: [MAX_LOD]*WorldState.LightMap = undefined;
-    lod_worlds_arr[0] = world;
-    lod_light_maps_arr[0] = light_map;
-
-    for (1..MAX_LOD) |i| {
-        lod_worlds_arr[i] = try allocator.create(WorldState.World);
-        @memset(std.mem.asBytes(lod_worlds_arr[i]), 0);
-        lod_light_maps_arr[i] = try allocator.create(WorldState.LightMap);
-    }
-
-    for (1..MAX_LOD) |lod_level_usize| {
-        const lod_level: u8 = @intCast(lod_level_usize);
-        var lod_any_loaded = false;
-
-        if (storage != null) {
-            for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
-                for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
-                    for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
-                        const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
-                        const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
-                        const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
-
-                        if (storage.?.loadChunk(cx, cy, cz, lod_level)) |cached_chunk| {
-                            lod_worlds_arr[lod_level_usize][cy_u][cz_u][cx_u] = cached_chunk.*;
-                            lod_any_loaded = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (!lod_any_loaded) {
-            const src = if (lod_level_usize == 1) world else lod_worlds_arr[lod_level_usize - 1];
-            WorldState.downsampleWorld(src, lod_worlds_arr[lod_level_usize], lod_level - 1);
-            WorldState.computeLightMap(lod_worlds_arr[lod_level_usize], lod_light_maps_arr[lod_level_usize]);
-
-            if (storage != null) {
-                for (0..WorldState.WORLD_CHUNKS_Y) |cy_u| {
-                    for (0..WorldState.WORLD_CHUNKS_Z) |cz_u| {
-                        for (0..WorldState.WORLD_CHUNKS_X) |cx_u| {
-                            const cx: i32 = @as(i32, @intCast(cx_u)) - WorldState.WORLD_CHUNKS_X / 2;
-                            const cy: i32 = @as(i32, @intCast(cy_u)) - WorldState.WORLD_CHUNKS_Y / 2;
-                            const cz: i32 = @as(i32, @intCast(cz_u)) - WorldState.WORLD_CHUNKS_Z / 2;
-                            storage.?.saveChunk(cx, cy, cz, lod_level, &lod_worlds_arr[lod_level_usize][cy_u][cz_u][cx_u]) catch |err| {
-                                std.log.warn("Failed to save LOD{d} chunk ({d},{d},{d}): {}", .{ lod_level, cx, cy, cz, err });
-                            };
-                        }
-                    }
-                }
-                storage.?.flush();
-            }
-        } else {
-            WorldState.computeLightMap(lod_worlds_arr[lod_level_usize], lod_light_maps_arr[lod_level_usize]);
+    // Mark all loaded chunks as dirty so they get meshed
+    var dirty = DirtyChunkSet.empty();
+    {
+        var it = chunk_map.iterator();
+        while (it.next()) |entry| {
+            dirty.add(entry.key_ptr.*);
         }
     }
 
     return .{
         .allocator = allocator,
         .camera = cam,
-        .world = world,
-        .light_map = light_map,
-        .entity_pos = .{ 0.0, 64.0, 0.0 },
+        .chunk_map = chunk_map,
+        .chunk_pool = chunk_pool,
+        .entity_pos = .{ 16.0, 5.0, 16.0 },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
         .mode = .flying,
@@ -225,19 +180,15 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .jump_requested = false,
         .jump_cooldown = 0,
         .hit_result = null,
-        .dirty_chunks = DirtyChunkSet.empty(),
-        .current_lod = 0,
-        .lod_worlds = lod_worlds_arr,
-        .lod_light_maps = lod_light_maps_arr,
-        .storage = storage,
-        .light_worker = null,
+        .dirty_chunks = dirty,
+        .storage = storage_inst,
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
-        .prev_entity_pos = .{ 0.0, 64.0, 0.0 },
+        .prev_entity_pos = .{ 16.0, 5.0, 16.0 },
         .prev_camera_pos = cam.position,
         .tick_camera_pos = cam.position,
-        .render_entity_pos = .{ 0.0, 64.0, 0.0 },
+        .render_entity_pos = .{ 16.0, 5.0, 16.0 },
     };
 }
 
@@ -264,12 +215,8 @@ pub fn save(self: *GameState) void {
 
 pub fn deinit(self: *GameState) void {
     if (self.storage) |s| s.deinit();
-    for (1..MAX_LOD) |i| {
-        self.allocator.destroy(self.lod_worlds[i]);
-        self.allocator.destroy(self.lod_light_maps[i]);
-    }
-    self.allocator.destroy(self.lod_light_maps[0]);
-    self.allocator.destroy(self.lod_worlds[0]);
+    self.chunk_map.deinit();
+    self.chunk_pool.deinit();
 }
 
 pub fn toggleDebugCamera(self: *GameState) void {
@@ -311,16 +258,6 @@ pub fn toggleMode(self: *GameState) void {
     }
 }
 
-pub fn switchLod(self: *GameState, lod: u8) void {
-    if (lod >= MAX_LOD or lod == self.current_lod) return;
-
-    self.world = self.lod_worlds[lod];
-    self.light_map = self.lod_light_maps[lod];
-    self.current_lod = lod;
-    self.dirtyAllChunks();
-    std.log.info("Switched to LOD {d}", .{lod});
-}
-
 pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.prev_entity_pos = self.entity_pos;
     self.prev_camera_pos = self.camera.position;
@@ -355,7 +292,7 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
         },
     }
 
-    self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
+    self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
@@ -392,60 +329,8 @@ pub fn restoreAfterRender(self: *GameState) void {
 
 fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     const affected = WorldState.affectedChunks(wx, wy, wz);
-    for (affected.coords[0..affected.count]) |coord| {
-        self.dirty_chunks.add(coord);
-    }
-}
-
-fn dirtyAllChunks(self: *GameState) void {
-    for (0..WorldState.WORLD_CHUNKS_Y) |cy| {
-        for (0..WorldState.WORLD_CHUNKS_Z) |cz| {
-            for (0..WorldState.WORLD_CHUNKS_X) |cx| {
-                self.dirty_chunks.add(.{
-                    .cx = @intCast(cx),
-                    .cy = @intCast(cy),
-                    .cz = @intCast(cz),
-                });
-            }
-        }
-    }
-}
-
-fn recomputeLight(self: *GameState) void {
-    WorldState.computeLightMap(self.world, self.light_map);
-}
-
-fn updateLight(self: *GameState, wx: i32, wy: i32, wz: i32) void {
-    WorldState.updateLightMapFull(self.world, self.light_map, wx, wy, wz);
-}
-
-fn dirtyLightRadius(self: *GameState, wx: i32, wy: i32, wz: i32) void {
-    const radius = WorldState.LIGHT_MAX_RADIUS + 2;
-    const cs: i32 = WorldState.CHUNK_SIZE;
-    const half_x: i32 = WorldState.WORLD_SIZE_X / 2;
-    const half_y: i32 = WorldState.WORLD_SIZE_Y / 2;
-    const half_z: i32 = WorldState.WORLD_SIZE_Z / 2;
-
-    const min_cx = @max(0, @divFloor(wx - radius + half_x, cs));
-    const max_cx = @min(@as(i32, WorldState.WORLD_CHUNKS_X) - 1, @divFloor(wx + radius + half_x, cs));
-    const min_cy = @max(0, @divFloor(wy - radius + half_y, cs));
-    const max_cy = @min(@as(i32, WorldState.WORLD_CHUNKS_Y) - 1, @divFloor(wy + radius + half_y, cs));
-    const min_cz = @max(0, @divFloor(wz - radius + half_z, cs));
-    const max_cz = @min(@as(i32, WorldState.WORLD_CHUNKS_Z) - 1, @divFloor(wz + radius + half_z, cs));
-
-    var cy = min_cy;
-    while (cy <= max_cy) : (cy += 1) {
-        var cz = min_cz;
-        while (cz <= max_cz) : (cz += 1) {
-            var cx = min_cx;
-            while (cx <= max_cx) : (cx += 1) {
-                self.dirty_chunks.add(.{
-                    .cx = @intCast(cx),
-                    .cy = @intCast(cy),
-                    .cz = @intCast(cz),
-                });
-            }
-        }
+    for (affected.keys[0..affected.count]) |key| {
+        self.dirty_chunks.add(key);
     }
 }
 
@@ -454,18 +339,10 @@ pub fn breakBlock(self: *GameState) void {
     const wx = hit.block_pos[0];
     const wy = hit.block_pos[1];
     const wz = hit.block_pos[2];
-    const old_block = WorldState.getBlock(self.world, wx, wy, wz);
-    WorldState.setBlock(self.world, wx, wy, wz, .air);
+    self.chunk_map.setBlock(wx, wy, wz, .air);
     self.markDirty(wx, wy, wz);
-    if (self.light_worker) |lw| {
-        lw.enqueue(wx, wy, wz, old_block);
-    } else {
-        self.updateLight(wx, wy, wz);
-        self.dirtyLightRadius(wx, wy, wz);
-    }
     self.queueChunkSave(wx, wy, wz);
-    self.propagateLodBlock(wx, wy, wz);
-    self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
+    self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
 pub fn placeBlock(self: *GameState) void {
@@ -476,121 +353,18 @@ pub fn placeBlock(self: *GameState) void {
     const px = hit.block_pos[0] + n[0];
     const py = hit.block_pos[1] + n[1];
     const pz = hit.block_pos[2] + n[2];
-    if (WorldState.block_properties.isSolid(WorldState.getBlock(self.world, px, py, pz))) return;
-    WorldState.setBlock(self.world, px, py, pz, block_type);
+    if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
+    self.chunk_map.setBlock(px, py, pz, block_type);
     self.markDirty(px, py, pz);
-    if (self.light_worker) |lw| {
-        lw.enqueue(px, py, pz, .air);
-    } else {
-        self.updateLight(px, py, pz);
-        self.dirtyLightRadius(px, py, pz);
-    }
     self.queueChunkSave(px, py, pz);
-    self.propagateLodBlock(px, py, pz);
-    self.hit_result = Raycast.raycast(self.world, self.camera.position, self.camera.getForward());
+    self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
 fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
-    if (self.storage == null) return;
-
-    const half_x: i32 = WorldState.WORLD_SIZE_X / 2;
-    const half_y: i32 = WorldState.WORLD_SIZE_Y / 2;
-    const half_z: i32 = WorldState.WORLD_SIZE_Z / 2;
-
-    const vx = wx + half_x;
-    const vy = wy + half_y;
-    const vz = wz + half_z;
-    if (vx < 0 or vy < 0 or vz < 0) return;
-    if (vx >= WorldState.WORLD_SIZE_X or vy >= WorldState.WORLD_SIZE_Y or vz >= WorldState.WORLD_SIZE_Z) return;
-
-    const cs: i32 = WorldState.CHUNK_SIZE;
-    const local_cx: usize = @intCast(@divFloor(vx, cs));
-    const local_cy: usize = @intCast(@divFloor(vy, cs));
-    const local_cz: usize = @intCast(@divFloor(vz, cs));
-
-    const storage_cx = @as(i32, @intCast(local_cx)) - WorldState.WORLD_CHUNKS_X / 2;
-    const storage_cy = @as(i32, @intCast(local_cy)) - WorldState.WORLD_CHUNKS_Y / 2;
-    const storage_cz = @as(i32, @intCast(local_cz)) - WorldState.WORLD_CHUNKS_Z / 2;
-
-    self.storage.?.markDirty(
-        storage_cx,
-        storage_cy,
-        storage_cz,
-        0,
-        &self.world[local_cy][local_cz][local_cx],
-    );
-}
-
-fn propagateLodBlock(self: *GameState, wx: i32, wy: i32, wz: i32) void {
-    const half_x: i32 = WorldState.WORLD_SIZE_X / 2;
-    const half_y: i32 = WorldState.WORLD_SIZE_Y / 2;
-    const half_z: i32 = WorldState.WORLD_SIZE_Z / 2;
-
-    // Current block in voxel-space (0-based)
-    var vx = wx + half_x;
-    var vy = wy + half_y;
-    var vz = wz + half_z;
-
-    if (vx < 0 or vy < 0 or vz < 0) return;
-    if (vx >= WorldState.WORLD_SIZE_X or vy >= WorldState.WORLD_SIZE_Y or vz >= WorldState.WORLD_SIZE_Z) return;
-
-    for (1..MAX_LOD) |lod_usize| {
-        // Destination block in voxel-space = source voxel / 2
-        const dst_vx = @divFloor(vx, 2);
-        const dst_vy = @divFloor(vy, 2);
-        const dst_vz = @divFloor(vz, 2);
-
-        // Downsample the single affected block
-        const new_block = WorldState.downsampleBlock(
-            self.lod_worlds[lod_usize - 1],
-            dst_vx,
-            dst_vy,
-            dst_vz,
-        );
-
-        // Convert voxel-space back to world-space for setBlock/updateLightMap
-        const dst_wx = dst_vx - half_x;
-        const dst_wy = dst_vy - half_y;
-        const dst_wz = dst_vz - half_z;
-
-        WorldState.setBlock(self.lod_worlds[lod_usize], dst_wx, dst_wy, dst_wz, new_block);
-        if (self.light_worker) |lw| {
-            lw.enqueueLod(dst_wx, dst_wy, dst_wz, self.lod_worlds[lod_usize], self.lod_light_maps[lod_usize]);
-        } else {
-            WorldState.updateLightMapFull(self.lod_worlds[lod_usize], self.lod_light_maps[lod_usize], dst_wx, dst_wy, dst_wz);
-        }
-
-        // Queue save for the affected LOD chunk
-        self.queueLodChunkSave(@intCast(lod_usize), dst_vx, dst_vy, dst_vz);
-
-        // Chain: this destination becomes the source for the next level
-        vx = dst_vx;
-        vy = dst_vy;
-        vz = dst_vz;
-    }
-}
-
-fn queueLodChunkSave(self: *GameState, lod_level: u8, vx: i32, vy: i32, vz: i32) void {
     const s = self.storage orelse return;
-    if (vx < 0 or vy < 0 or vz < 0) return;
-    if (vx >= WorldState.WORLD_SIZE_X or vy >= WorldState.WORLD_SIZE_Y or vz >= WorldState.WORLD_SIZE_Z) return;
-
-    const cs: i32 = WorldState.CHUNK_SIZE;
-    const local_cx: usize = @intCast(@divFloor(vx, cs));
-    const local_cy: usize = @intCast(@divFloor(vy, cs));
-    const local_cz: usize = @intCast(@divFloor(vz, cs));
-
-    const storage_cx = @as(i32, @intCast(local_cx)) - WorldState.WORLD_CHUNKS_X / 2;
-    const storage_cy = @as(i32, @intCast(local_cy)) - WorldState.WORLD_CHUNKS_Y / 2;
-    const storage_cz = @as(i32, @intCast(local_cz)) - WorldState.WORLD_CHUNKS_Z / 2;
-
-    s.markDirty(
-        storage_cx,
-        storage_cy,
-        storage_cz,
-        lod_level,
-        &self.lod_worlds[lod_level][local_cy][local_cz][local_cx],
-    );
+    const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+    const chunk = self.chunk_map.get(key) orelse return;
+    s.markDirty(key.cx, key.cy, key.cz, 0, chunk);
 }
 
 fn lerpVec3(a: zlm.Vec3, b: zlm.Vec3, t: f32) zlm.Vec3 {

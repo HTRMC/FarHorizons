@@ -1,6 +1,7 @@
 const std = @import("std");
 const GameState = @import("GameState.zig");
 const WorldState = @import("world/WorldState.zig");
+const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 
 const GRAVITY: f32 = 32.0;
 const Y_DRAG: f32 = 0.9866;
@@ -60,7 +61,7 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         const desired = movement[axis];
         if (desired == 0.0) continue;
 
-        const result = collideAxis(state.world, state.entity_pos, desired, axis);
+        const result = collideAxis(&state.chunk_map, state.entity_pos, desired, axis);
         state.entity_pos[axis] += result.distance;
 
         if (result.hit) {
@@ -75,7 +76,7 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
     state.entity_vel[1] *= Y_DRAG;
 }
 
-fn collideAxis(world: *WorldState.World, pos: [3]f32, movement: f32, axis: usize) struct { distance: f32, hit: bool } {
+fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usize) struct { distance: f32, hit: bool } {
     const aabb_min = [3]f32{ pos[0] - HALF_W, pos[1], pos[2] - HALF_W };
     const aabb_max = [3]f32{ pos[0] + HALF_W, pos[1] + HEIGHT, pos[2] + HALF_W };
 
@@ -103,7 +104,7 @@ fn collideAxis(world: *WorldState.World, pos: [3]f32, movement: f32, axis: usize
         while (bz <= bz1) : (bz += 1) {
             var bx: i32 = bx0;
             while (bx <= bx1) : (bx += 1) {
-                const block = WorldState.getBlock(world, bx, by, bz);
+                const block = chunk_map.getBlock(bx, by, bz);
                 if (!WorldState.block_properties.isSolid(block)) continue;
 
                 const coords = [3]i32{ bx, by, bz };

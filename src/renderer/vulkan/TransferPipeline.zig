@@ -18,7 +18,7 @@ const RING_BUFFER_SIZE: vk.VkDeviceSize = 8 * 1024 * 1024; // 8MB per slot
 const MAX_COMMITTED = 128;
 
 pub const CommittedChunk = struct {
-    slot: u16,
+    key: WorldState.ChunkKey,
     chunk_data: ChunkData,
     face_alloc: ?TlsfAllocator.Allocation,
     light_alloc: ?TlsfAllocator.Allocation,
@@ -325,20 +325,20 @@ pub const TransferPipeline = struct {
 
             // 4. For each mesh result: TLSF alloc, stage, record copy
             for (local_results[0..local_count]) |result| {
-                const slot = result.coord.flatIndex();
+                const key = result.key;
 
                 // --- Light-only path ---
                 if (result.light_only) {
                     if (result.light_count == 0) {
                         // No visible faces — commit light-only with no alloc
                         self.pushCommitted(.{
-                            .slot = @intCast(slot),
+                            .key = key,
                             .chunk_data = .{
-                                .position = result.coord.positionScaled(result.voxel_size),
+                                .position = key.position(),
                                 .light_start = 0,
                                 .face_start = 0,
                                 .face_counts = result.face_counts,
-                                .voxel_size = result.voxel_size,
+                                .voxel_size = 1,
                             },
                             .face_alloc = null,
                             .light_alloc = null,
@@ -384,13 +384,13 @@ pub const TransferPipeline = struct {
                     has_commands = true;
 
                     self.pushCommitted(.{
-                        .slot = @intCast(slot),
+                        .key = key,
                         .chunk_data = .{
-                            .position = result.coord.positionScaled(result.voxel_size),
+                            .position = key.position(),
                             .light_start = la.offset,
                             .face_start = 0,
                             .face_counts = result.face_counts,
-                            .voxel_size = result.voxel_size,
+                            .voxel_size = 1,
                         },
                         .face_alloc = null,
                         .light_alloc = light_alloc,
@@ -406,13 +406,13 @@ pub const TransferPipeline = struct {
                 if (result.total_face_count == 0) {
                     // Empty chunk — commit with no alloc
                     self.pushCommitted(.{
-                        .slot = @intCast(slot),
+                        .key = key,
                         .chunk_data = .{
-                            .position = result.coord.positionScaled(result.voxel_size),
+                            .position = key.position(),
                             .light_start = 0,
                             .face_start = 0,
                             .face_counts = .{ 0, 0, 0, 0, 0, 0 },
-                            .voxel_size = result.voxel_size,
+                            .voxel_size = 1,
                         },
                         .face_alloc = null,
                         .light_alloc = null,
@@ -480,13 +480,13 @@ pub const TransferPipeline = struct {
                         mw.allocator.free(result.faces);
                         mw.allocator.free(result.lights);
                         self.pushCommitted(.{
-                            .slot = @intCast(slot),
+                            .key = key,
                             .chunk_data = .{
-                                .position = result.coord.positionScaled(result.voxel_size),
+                                .position = key.position(),
                                 .light_start = 0,
                                 .face_start = fa.offset,
                                 .face_counts = result.face_counts,
-                                .voxel_size = result.voxel_size,
+                                .voxel_size = 1,
                             },
                             .face_alloc = fa,
                             .light_alloc = null,
@@ -510,13 +510,13 @@ pub const TransferPipeline = struct {
 
                 // Push to committed queue
                 self.pushCommitted(.{
-                    .slot = @intCast(slot),
+                    .key = key,
                     .chunk_data = .{
-                        .position = result.coord.positionScaled(result.voxel_size),
+                        .position = key.position(),
                         .light_start = la.offset,
                         .face_start = fa.offset,
                         .face_counts = result.face_counts,
-                        .voxel_size = result.voxel_size,
+                        .voxel_size = 1,
                     },
                     .face_alloc = fa,
                     .light_alloc = if (result.light_count > 0) light_alloc else null,

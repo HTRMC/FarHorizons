@@ -1,6 +1,7 @@
 const std = @import("std");
 const zlm = @import("zlm");
 const WorldState = @import("world/WorldState.zig");
+const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 
 const MAX_RANGE: f32 = 5.0;
 
@@ -29,12 +30,12 @@ pub const BlockHitResult = struct {
     direction: Direction,
 };
 
-pub fn raycast(world: *const WorldState.World, origin: zlm.Vec3, dir: zlm.Vec3) ?BlockHitResult {
+pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?BlockHitResult {
     var block_x: i32 = @intFromFloat(@floor(origin.x));
     var block_y: i32 = @intFromFloat(@floor(origin.y));
     var block_z: i32 = @intFromFloat(@floor(origin.z));
 
-    if (WorldState.block_properties.isSolid(WorldState.getBlock(world, block_x, block_y, block_z))) {
+    if (WorldState.block_properties.isSolid(chunk_map.getBlock(block_x, block_y, block_z))) {
         return .{
             .block_pos = .{ block_x, block_y, block_z },
             .direction = .up,
@@ -92,7 +93,7 @@ pub fn raycast(world: *const WorldState.World, origin: zlm.Vec3, dir: zlm.Vec3) 
             face = if (step_z > 0) .north else .south;
         }
 
-        if (WorldState.block_properties.isSolid(WorldState.getBlock(world, block_x, block_y, block_z))) {
+        if (WorldState.block_properties.isSolid(chunk_map.getBlock(block_x, block_y, block_z))) {
             return .{
                 .block_pos = .{ block_x, block_y, block_z },
                 .direction = face,

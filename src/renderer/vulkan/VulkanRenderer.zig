@@ -242,22 +242,18 @@ pub const VulkanRenderer = struct {
             return;
         };
 
-        // 2. Create + init LightWorker
+        // 2. Create + init LightWorker (stubbed)
         const lw = self.allocator.create(LightWorker) catch |err| {
             std.log.err("Failed to allocate LightWorker: {}", .{err});
             self.allocator.destroy(mw);
             return;
         };
 
-        lw.initInPlace(gs.world, gs.light_map, mw);
-        mw.initInPlace(self.allocator, gs.world, gs.light_map, &lw.light_map_rwlock);
+        lw.initInPlace();
+        mw.initInPlace(self.allocator, &gs.chunk_map);
 
         self.mesh_worker = mw;
         self.light_worker = lw;
-        gs.light_worker = lw;
-
-        // Set voxel_size based on current LOD
-        mw.voxel_size.store(@as(u32, 1) << @intCast(gs.current_lod), .release);
 
         // 3. Setup + start TransferPipeline thread
         self.transfer_pipeline.setupThread(
@@ -273,8 +269,11 @@ pub const VulkanRenderer = struct {
         self.transfer_pipeline.start();
         lw.start();
 
-        // 5. Enqueue all chunks for initial mesh
-        mw.enqueueAll();
+        // 5. Enqueue all loaded chunks for initial mesh
+        var it = gs.chunk_map.iterator();
+        while (it.next()) |entry| {
+            mw.enqueue(entry.key_ptr.*);
+        }
     }
 
     fn stopWorkerPipeline(self: *VulkanRenderer) void {
@@ -308,9 +307,6 @@ pub const VulkanRenderer = struct {
             self.allocator.destroy(lw);
             self.light_worker = null;
         }
-        if (self.game_state) |gs| {
-            gs.light_worker = null;
-        }
     }
 
     pub fn beginFrame(self: *VulkanRenderer) !void {
@@ -331,19 +327,15 @@ pub const VulkanRenderer = struct {
                 // 3. Drain committed chunks from TransferPipeline → apply to WorldRenderer
                 self.drainCommittedChunks(cf);
 
-                // 4. Sync worker world/light_map/voxel_size with current LOD
-                const vs: u32 = @as(u32, 1) << @intCast(gs.current_lod);
+                // 4. Sync worker chunk map pointer
                 if (self.mesh_worker) |mw| {
-                    mw.syncWorld(gs.world, gs.light_map, vs);
-                }
-                if (self.light_worker) |lw| {
-                    lw.syncWorld(gs.world, gs.light_map);
+                    mw.syncChunkMap(&gs.chunk_map);
                 }
 
                 // 5. Feed any remaining dirty_chunks to MeshWorker
                 if (gs.dirty_chunks.count > 0) {
                     if (self.mesh_worker) |mw| {
-                        mw.enqueueBatch(gs.dirty_chunks.chunks[0..gs.dirty_chunks.count]);
+                        mw.enqueueBatch(gs.dirty_chunks.keys[0..gs.dirty_chunks.count]);
                         gs.dirty_chunks.clear();
                     }
                 }
@@ -377,7 +369,21 @@ pub const VulkanRenderer = struct {
         const wr = &self.render_state.world_renderer;
 
         for (buf[0..count]) |entry| {
-            const slot = entry.slot;
+            // Resolve ChunkKey → GPU slot (allocate if new)
+            const slot: u16 = wr.getOrAllocateSlot(entry.key) orelse {
+                // No slot available — free TLSF allocs to prevent leak
+                const io_val = Io.Threaded.global_single_threaded.io();
+                self.transfer_pipeline.tlsf_mutex.lockUncancelable(io_val);
+                if (entry.face_alloc) |fa| {
+                    if (fa.handle != TlsfAllocator.null_handle) wr.face_tlsf.free(fa.handle);
+                }
+                if (entry.light_alloc) |la| {
+                    if (la.handle != TlsfAllocator.null_handle) wr.light_tlsf.free(la.handle);
+                }
+                self.transfer_pipeline.tlsf_mutex.unlock(io_val);
+                self.max_graphics_wait_timeline = @max(self.max_graphics_wait_timeline, entry.timeline_value);
+                continue;
+            };
 
             if (entry.light_only) {
                 // Light-only: only update light_start, keep existing face data

@@ -21,8 +21,11 @@ const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
 pub const INITIAL_FACE_CAPACITY: u32 = 400_000;
 pub const INITIAL_LIGHT_CAPACITY: u32 = 400_000;
+const ChunkMap = @import("../../world/ChunkMap.zig").ChunkMap;
+
 const MAX_FACES_PER_DRAW: u32 = 16_384;
-const MAX_INDIRECT_COMMANDS: u32 = WorldState.TOTAL_WORLD_CHUNKS * 6;
+pub const TOTAL_RENDER_CHUNKS: u32 = 256;
+const MAX_INDIRECT_COMMANDS: u32 = TOTAL_RENDER_CHUNKS * 6;
 
 pub const WorldRenderer = struct {
     texture_manager: TextureManager,
@@ -44,9 +47,15 @@ pub const WorldRenderer = struct {
     face_tlsf: TlsfAllocator,
     light_tlsf: TlsfAllocator,
 
-    chunk_face_alloc: [WorldState.TOTAL_WORLD_CHUNKS]?TlsfAllocator.Allocation,
-    chunk_light_alloc: [WorldState.TOTAL_WORLD_CHUNKS]?TlsfAllocator.Allocation,
-    chunk_data: [WorldState.TOTAL_WORLD_CHUNKS]ChunkData,
+    chunk_face_alloc: [TOTAL_RENDER_CHUNKS]?TlsfAllocator.Allocation,
+    chunk_light_alloc: [TOTAL_RENDER_CHUNKS]?TlsfAllocator.Allocation,
+    chunk_data: [TOTAL_RENDER_CHUNKS]ChunkData,
+
+    // Slot pool: maps ChunkKey → GPU slot index
+    allocator: std.mem.Allocator,
+    chunk_slot_map: std.AutoHashMap(WorldState.ChunkKey, u16),
+    free_slots: [TOTAL_RENDER_CHUNKS]u16,
+    free_slot_count: u32,
 
     draw_count: u32,
 
@@ -63,6 +72,12 @@ pub const WorldRenderer = struct {
         var texture_manager = try TextureManager.init(allocator, ctx);
         errdefer texture_manager.deinit(ctx.device);
 
+        // Initialize free slot stack (all slots available, highest first so lowest pops first)
+        var free_slots: [TOTAL_RENDER_CHUNKS]u16 = undefined;
+        for (0..TOTAL_RENDER_CHUNKS) |i| {
+            free_slots[i] = @intCast(TOTAL_RENDER_CHUNKS - 1 - i);
+        }
+
         var self = WorldRenderer{
             .texture_manager = texture_manager,
             .gpu_alloc = gpu_alloc,
@@ -78,15 +93,19 @@ pub const WorldRenderer = struct {
             .chunk_data_alloc = undefined,
             .face_tlsf = TlsfAllocator.init(INITIAL_FACE_CAPACITY),
             .light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY),
-            .chunk_face_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
-            .chunk_light_alloc = .{null} ** WorldState.TOTAL_WORLD_CHUNKS,
+            .chunk_face_alloc = .{null} ** TOTAL_RENDER_CHUNKS,
+            .chunk_light_alloc = .{null} ** TOTAL_RENDER_CHUNKS,
             .chunk_data = .{ChunkData{
                 .position = .{ 0, 0, 0 },
                 .light_start = 0,
                 .face_start = 0,
                 .face_counts = .{ 0, 0, 0, 0, 0, 0 },
                 .voxel_size = 1,
-            }} ** WorldState.TOTAL_WORLD_CHUNKS,
+            }} ** TOTAL_RENDER_CHUNKS,
+            .allocator = allocator,
+            .chunk_slot_map = std.AutoHashMap(WorldState.ChunkKey, u16).init(allocator),
+            .free_slots = free_slots,
+            .free_slot_count = TOTAL_RENDER_CHUNKS,
             .draw_count = 0,
         };
 
@@ -107,6 +126,7 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "WorldRenderer.deinit");
         defer tz.end();
 
+        self.chunk_slot_map.deinit();
         self.gpu_alloc.destroyBuffer(self.indirect_alloc);
         self.gpu_alloc.destroyBuffer(self.indirect_count_alloc);
         vk.destroyPipeline(device, self.overdraw_pipeline, null);
@@ -120,94 +140,45 @@ pub const WorldRenderer = struct {
         self.texture_manager.deinit(device);
     }
 
-    pub fn uploadChunkData(
-        self: *WorldRenderer,
-        batch: *vk_utils.TransferBatch,
-        coord: WorldState.ChunkCoord,
-        faces: []const FaceData,
-        face_counts: [6]u32,
-        total_face_count: u32,
-        lights: []const LightEntry,
-        light_count: u32,
-        voxel_size: u32,
-    ) !void {
-        const tz = tracy.zone(@src(), "uploadChunkData");
-        defer tz.end();
+    /// Get or allocate a GPU slot for a chunk key. Returns null if no slots available.
+    pub fn getOrAllocateSlot(self: *WorldRenderer, key: WorldState.ChunkKey) ?u16 {
+        // Already has a slot?
+        if (self.chunk_slot_map.get(key)) |slot| return slot;
 
-        const slot = coord.flatIndex();
-
-        if (self.chunk_face_alloc[slot]) |fa| {
-            self.face_tlsf.free(fa.handle);
-            self.chunk_face_alloc[slot] = null;
+        // Allocate from free list
+        if (self.free_slot_count == 0) {
+            std.log.warn("WorldRenderer: no free GPU slots for chunk ({},{},{})", .{ key.cx, key.cy, key.cz });
+            return null;
         }
-        if (self.chunk_light_alloc[slot]) |la| {
-            self.light_tlsf.free(la.handle);
-            self.chunk_light_alloc[slot] = null;
-        }
-
-        if (total_face_count == 0) {
-            self.chunk_data[slot] = .{
-                .position = coord.positionScaled(voxel_size),
-                .light_start = 0,
-                .face_start = 0,
-                .face_counts = .{ 0, 0, 0, 0, 0, 0 },
-                .voxel_size = voxel_size,
-            };
-            self.writeChunkData(slot);
-            return;
-        }
-
-        const fa = self.face_tlsf.alloc(total_face_count) orelse {
-            std.log.err("TLSF face heap full (requested {}, largest free {})", .{
-                total_face_count, self.face_tlsf.largestFree(),
-            });
-            return error.OutOfMemory;
+        self.free_slot_count -= 1;
+        const slot = self.free_slots[self.free_slot_count];
+        self.chunk_slot_map.put(key, slot) catch {
+            // Put failed — return slot to free list
+            self.free_slots[self.free_slot_count] = slot;
+            self.free_slot_count += 1;
+            return null;
         };
-        errdefer self.face_tlsf.free(fa.handle);
+        return slot;
+    }
 
-        const la = if (light_count > 0)
-            self.light_tlsf.alloc(light_count) orelse {
-                std.log.err("TLSF light heap full (requested {}, largest free {})", .{
-                    light_count, self.light_tlsf.largestFree(),
-                });
-                return error.OutOfMemory;
-            }
-        else
-            TlsfAllocator.Allocation{ .offset = 0, .size = 0, .handle = TlsfAllocator.null_handle };
-
-        self.chunk_face_alloc[slot] = fa;
-        if (light_count > 0) self.chunk_light_alloc[slot] = la;
-
-        {
-            const fb_size: vk.VkDeviceSize = @intCast(@as(u64, total_face_count) * @sizeOf(FaceData));
-            const staging = try batch.allocStaging(fb_size);
-
-            const dst: [*]FaceData = @ptrCast(@alignCast(staging.mapped_ptr.?));
-            @memcpy(dst[0..total_face_count], faces[0..total_face_count]);
-
-            const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, fa.offset) * @sizeOf(FaceData));
-            batch.copyRegion(staging.buffer, 0, self.face_alloc.buffer, dst_offset, fb_size);
-        }
-
-        if (light_count > 0) {
-            const lb_size: vk.VkDeviceSize = @intCast(@as(u64, light_count) * @sizeOf(LightEntry));
-            const staging = try batch.allocStaging(lb_size);
-
-            const dst: [*]LightEntry = @ptrCast(@alignCast(staging.mapped_ptr.?));
-            @memcpy(dst[0..light_count], lights[0..light_count]);
-
-            const dst_offset: vk.VkDeviceSize = @intCast(@as(u64, la.offset) * @sizeOf(LightEntry));
-            batch.copyRegion(staging.buffer, 0, self.light_alloc.buffer, dst_offset, lb_size);
-        }
-
+    /// Release a GPU slot for a chunk key. TLSF allocs must be freed separately.
+    pub fn releaseSlot(self: *WorldRenderer, key: WorldState.ChunkKey) void {
+        const slot = self.chunk_slot_map.get(key) orelse return;
+        // Clear chunk data
         self.chunk_data[slot] = .{
-            .position = coord.positionScaled(voxel_size),
-            .light_start = la.offset,
-            .face_start = fa.offset,
-            .face_counts = face_counts,
-            .voxel_size = voxel_size,
+            .position = .{ 0, 0, 0 },
+            .light_start = 0,
+            .face_start = 0,
+            .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+            .voxel_size = 1,
         };
         self.writeChunkData(slot);
+        self.chunk_face_alloc[slot] = null;
+        self.chunk_light_alloc[slot] = null;
+        // Return slot to free list
+        self.free_slots[self.free_slot_count] = slot;
+        self.free_slot_count += 1;
+        _ = self.chunk_slot_map.remove(key);
     }
 
     pub fn writeChunkData(self: *WorldRenderer, slot: usize) void {
@@ -226,8 +197,10 @@ pub const WorldRenderer = struct {
 
         var command_count: u32 = 0;
 
-        for (0..WorldState.TOTAL_WORLD_CHUNKS) |chunk_idx| {
-            const cd = self.chunk_data[chunk_idx];
+        var it = self.chunk_slot_map.iterator();
+        while (it.next()) |entry| {
+            const slot = entry.value_ptr.*;
+            const cd = self.chunk_data[slot];
 
             var total: u32 = 0;
             for (cd.face_counts) |fc| total += fc;
@@ -254,7 +227,7 @@ pub const WorldRenderer = struct {
                     .instance_count = 1,
                     .first_index = 0,
                     .vertex_offset = @intCast((cd.face_start + normal_offset) * 4),
-                    .first_instance = @intCast(chunk_idx),
+                    .first_instance = @intCast(slot),
                 };
                 command_count += 1;
                 normal_offset += fc;
@@ -689,7 +662,7 @@ pub const WorldRenderer = struct {
         );
         try self.uploadStaticIndexBuffer(ctx, ib_capacity);
 
-        const cd_capacity: vk.VkDeviceSize = WorldState.TOTAL_WORLD_CHUNKS * @sizeOf(ChunkData);
+        const cd_capacity: vk.VkDeviceSize = TOTAL_RENDER_CHUNKS * @sizeOf(ChunkData);
         self.chunk_data_alloc = try gpu_alloc.createBuffer(
             cd_capacity,
             vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,

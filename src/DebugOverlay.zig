@@ -85,7 +85,7 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     y += LINE_HEIGHT;
 
     if (gs.hit_result) |hit| {
-        const block = WorldState.getBlock(gs.world, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+        const block = gs.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
         const block_name = GameState.blockName(block);
         const face_name = dirName(hit.direction);
         const target_text = std.fmt.bufPrint(&buf, "Target: {s} @ ({d}, {d}, {d}) [{s}]", .{
@@ -114,15 +114,16 @@ fn drawF4(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_all
     text.drawText(x, y, "Renderer", white);
     y += LINE_HEIGHT;
 
-    const lod_text = std.fmt.bufPrint(&buf, "LOD: {d}", .{gs.current_lod}) catch "LOD: ?";
-    text.drawText(x, y, lod_text, yellow);
+    const chunks_loaded = wr.chunk_slot_map.count();
+    const chunks_text = std.fmt.bufPrint(&buf, "Chunks: {d} loaded", .{chunks_loaded}) catch "Chunks: ?";
+    text.drawText(x, y, chunks_text, yellow);
     y += LINE_HEIGHT;
 
     const dc_text = std.fmt.bufPrint(&buf, "Draw Calls: {d}", .{wr.draw_count}) catch "Draw Calls: ?";
     text.drawText(x, y, dc_text, yellow);
     y += LINE_HEIGHT;
 
-    const dirty_text = std.fmt.bufPrint(&buf, "Dirty Chunks: {d}/{d}", .{ gs.dirty_chunks.count, WorldState.TOTAL_WORLD_CHUNKS }) catch "Dirty Chunks: ?";
+    const dirty_text = std.fmt.bufPrint(&buf, "Dirty Chunks: {d}", .{gs.dirty_chunks.count}) catch "Dirty Chunks: ?";
     text.drawText(x, y, dirty_text, yellow);
     y += LINE_HEIGHT;
 
@@ -204,46 +205,24 @@ fn drawF5(text: *TextRenderer, gs: *GameState) void {
     drawTextRight(text, y, "World", white);
     y += LINE_HEIGHT;
 
-    const chunks_text = std.fmt.bufPrint(&buf, "Chunks: {d}x{d}x{d} ({d}^3 blocks)", .{
-        WorldState.WORLD_CHUNKS_X, WorldState.WORLD_CHUNKS_Y, WorldState.WORLD_CHUNKS_Z, WorldState.CHUNK_SIZE,
+    const chunk_count = gs.chunk_map.count();
+    const chunks_text = std.fmt.bufPrint(&buf, "Loaded Chunks: {d} ({d}^3 blocks each)", .{
+        chunk_count, WorldState.CHUNK_SIZE,
     }) catch "Chunks: ?";
     drawTextRight(text, y, chunks_text, yellow);
     y += LINE_HEIGHT;
 
-    const size_text = std.fmt.bufPrint(&buf, "World Size: {d}x{d}x{d}", .{
-        WorldState.WORLD_SIZE_X, WorldState.WORLD_SIZE_Y, WorldState.WORLD_SIZE_Z,
-    }) catch "World Size: ?";
-    drawTextRight(text, y, size_text, yellow);
+    const pos = gs.camera.position;
+    const player_key = WorldState.ChunkKey.fromWorldPos(
+        @intFromFloat(@floor(pos.x)),
+        @intFromFloat(@floor(pos.y)),
+        @intFromFloat(@floor(pos.z)),
+    );
+    const ck_text = std.fmt.bufPrint(&buf, "Player Chunk: ({d}, {d}, {d})", .{
+        player_key.cx, player_key.cy, player_key.cz,
+    }) catch "Player Chunk: ?";
+    drawTextRight(text, y, ck_text, yellow);
     y += LINE_HEIGHT;
-
-    const lod_text = std.fmt.bufPrint(&buf, "LOD Levels: {d}", .{GameState.MAX_LOD}) catch "LOD Levels: ?";
-    drawTextRight(text, y, lod_text, yellow);
-    y += LINE_HEIGHT;
-
-    const cur_lod_text = std.fmt.bufPrint(&buf, "Current LOD: {d}", .{gs.current_lod}) catch "Current LOD: ?";
-    drawTextRight(text, y, cur_lod_text, yellow);
-    y += LINE_HEIGHT;
-
-    const voxel_size: u32 = @as(u32, 1) << @intCast(gs.current_lod);
-    const vs_text = std.fmt.bufPrint(&buf, "Voxel Size: {d}", .{voxel_size}) catch "Voxel Size: ?";
-    drawTextRight(text, y, vs_text, yellow);
-    y += LINE_HEIGHT;
-
-    // Per-LOD chunk info
-    y += LINE_HEIGHT * 0.5;
-    drawTextRight(text, y, "LOD Chunks", white);
-    y += LINE_HEIGHT;
-
-    const chunks_per_lod = WorldState.TOTAL_WORLD_CHUNKS;
-    for (0..GameState.MAX_LOD) |lod| {
-        const lod_line = std.fmt.bufPrint(&buf, "LOD {d}: {d} chunks", .{ lod, chunks_per_lod }) catch "LOD: ?";
-        drawTextRight(text, y, lod_line, yellow);
-        y += LINE_HEIGHT;
-    }
-
-    const total_chunks = chunks_per_lod * GameState.MAX_LOD;
-    const total_text = std.fmt.bufPrint(&buf, "Total: {d} chunks", .{total_chunks}) catch "Total: ?";
-    drawTextRight(text, y, total_text, yellow);
 }
 
 fn dirName(dir: Raycast.Direction) []const u8 {

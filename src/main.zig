@@ -199,7 +199,6 @@ const InputState = struct {
     debug_toggle_requested: bool = false,
     overdraw_toggle_requested: bool = false,
     debug_screen_toggle: ?u3 = null,
-    lod_switch_requested: ?u8 = null,
     hotbar_scroll_delta: f32 = 0.0,
     hotbar_slot_requested: ?u8 = null,
 };
@@ -281,24 +280,15 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             }
 
             if (action == glfw.GLFW_PRESS) {
-                const ctrl = (mods & glfw.GLFW_MOD_CONTROL) != 0;
-                if (ctrl) {
-                    if (key == glfw.GLFW_KEY_1) input_state.lod_switch_requested = 0;
-                    if (key == glfw.GLFW_KEY_2) input_state.lod_switch_requested = 1;
-                    if (key == glfw.GLFW_KEY_3) input_state.lod_switch_requested = 2;
-                    if (key == glfw.GLFW_KEY_4) input_state.lod_switch_requested = 3;
-                    if (key == glfw.GLFW_KEY_5) input_state.lod_switch_requested = 4;
-                } else {
-                    if (key == glfw.GLFW_KEY_1) input_state.hotbar_slot_requested = 0;
-                    if (key == glfw.GLFW_KEY_2) input_state.hotbar_slot_requested = 1;
-                    if (key == glfw.GLFW_KEY_3) input_state.hotbar_slot_requested = 2;
-                    if (key == glfw.GLFW_KEY_4) input_state.hotbar_slot_requested = 3;
-                    if (key == glfw.GLFW_KEY_5) input_state.hotbar_slot_requested = 4;
-                    if (key == glfw.GLFW_KEY_6) input_state.hotbar_slot_requested = 5;
-                    if (key == glfw.GLFW_KEY_7) input_state.hotbar_slot_requested = 6;
-                    if (key == glfw.GLFW_KEY_8) input_state.hotbar_slot_requested = 7;
-                    if (key == glfw.GLFW_KEY_9) input_state.hotbar_slot_requested = 8;
-                }
+                if (key == glfw.GLFW_KEY_1) input_state.hotbar_slot_requested = 0;
+                if (key == glfw.GLFW_KEY_2) input_state.hotbar_slot_requested = 1;
+                if (key == glfw.GLFW_KEY_3) input_state.hotbar_slot_requested = 2;
+                if (key == glfw.GLFW_KEY_4) input_state.hotbar_slot_requested = 3;
+                if (key == glfw.GLFW_KEY_5) input_state.hotbar_slot_requested = 4;
+                if (key == glfw.GLFW_KEY_6) input_state.hotbar_slot_requested = 5;
+                if (key == glfw.GLFW_KEY_7) input_state.hotbar_slot_requested = 6;
+                if (key == glfw.GLFW_KEY_8) input_state.hotbar_slot_requested = 7;
+                if (key == glfw.GLFW_KEY_9) input_state.hotbar_slot_requested = 8;
             }
 
             if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
@@ -339,7 +329,7 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     const gs = input_state.game_state orelse return;
 
     if (button == glfw.GLFW_MOUSE_BUTTON_LEFT and input_state.mouse_captured) {
-        if (!gs.debug_camera_active and gs.current_lod == 0) {
+        if (!gs.debug_camera_active) {
             gs.breakBlock();
         }
     } else if (button == glfw.GLFW_MOUSE_BUTTON_RIGHT) {
@@ -347,7 +337,7 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
             input_state.mouse_captured = true;
             input_state.first_mouse = true;
             glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
-        } else if (!gs.debug_camera_active and gs.current_lod == 0) {
+        } else if (!gs.debug_camera_active) {
             gs.placeBlock();
         }
     }
@@ -547,11 +537,6 @@ pub fn main() !void {
                 }
 
                 gs.delta_time = delta_time;
-
-                if (input_state.lod_switch_requested) |lod| {
-                    input_state.lod_switch_requested = null;
-                    gs.switchLod(lod);
-                }
 
                 var forward_input: f32 = 0.0;
                 var right_input: f32 = 0.0;
