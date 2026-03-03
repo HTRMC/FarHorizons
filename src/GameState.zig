@@ -5,6 +5,7 @@ const WorldState = @import("world/WorldState.zig");
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 const ChunkPool = @import("world/ChunkPool.zig").ChunkPool;
 pub const ChunkStreamer = @import("world/ChunkStreamer.zig").ChunkStreamer;
+const TerrainGen = @import("world/TerrainGen.zig");
 const Physics = @import("Physics.zig");
 const Raycast = @import("Raycast.zig");
 const Storage = @import("world/storage/Storage.zig");
@@ -32,6 +33,10 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .dirt => "Dirt",
         .stone => "Stone",
         .glowstone => "Glowstone",
+        .sand => "Sand",
+        .snow => "Snow",
+        .water => "Water",
+        .gravel => "Gravel",
     };
 }
 
@@ -43,6 +48,10 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .dirt => .{ 0.6, 0.4, 0.2, 1.0 },
         .stone => .{ 0.5, 0.5, 0.5, 1.0 },
         .glowstone => .{ 1.0, 0.9, 0.5, 1.0 },
+        .sand => .{ 0.82, 0.75, 0.51, 1.0 },
+        .snow => .{ 0.95, 0.97, 1.0, 1.0 },
+        .water => .{ 0.2, 0.4, 0.8, 0.6 },
+        .gravel => .{ 0.5, 0.48, 0.47, 1.0 },
     };
 }
 
@@ -64,9 +73,10 @@ overdraw_mode: bool,
 saved_camera: Camera,
 
 selected_slot: u8 = 0,
-hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .glass, .glowstone, .air, .air, .air, .air },
+hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .sand, .snow, .gravel, .glass, .glowstone, .water },
 offhand: WorldState.BlockType = .air,
 
+world_seed: u64,
 storage: ?*Storage,
 streamer: ChunkStreamer,
 player_chunk: WorldState.ChunkKey,
@@ -112,7 +122,7 @@ pub const DirtyChunkSet = struct {
 };
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8) !GameState {
-    const cam = Camera.init(width, height);
+    var cam = Camera.init(width, height);
     var chunk_map = ChunkMap.init(allocator);
     var chunk_pool = ChunkPool.init(allocator);
 
@@ -121,8 +131,17 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         break :blk null;
     };
 
-    // Load initial chunks around spawn
-    const spawn_key = WorldState.ChunkKey.fromWorldPos(16, 5, 16);
+    const world_seed: u64 = if (storage_inst) |s| s.seed else 0;
+
+    // Compute spawn height from terrain noise
+    const spawn_x: i32 = 16;
+    const spawn_z: i32 = 16;
+    const surface_y = TerrainGen.sampleHeight(spawn_x, spawn_z, world_seed);
+    const spawn_y: f32 = @as(f32, @floatFromInt(surface_y)) + 2.0;
+
+    cam.position = zlm.Vec3.init(16.0, spawn_y + EYE_OFFSET, 16.0);
+
+    const spawn_key = WorldState.ChunkKey.fromWorldPos(spawn_x, @intFromFloat(spawn_y), spawn_z);
     var any_loaded = false;
 
     var cy = spawn_key.cy - LOAD_RADIUS_Y;
@@ -144,7 +163,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
                 }
 
                 if (!loaded) {
-                    WorldState.generateFlatChunk(chunk, key);
+                    TerrainGen.generateChunk(chunk, key, world_seed);
                 }
 
                 chunk_map.put(key, chunk);
@@ -179,7 +198,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .camera = cam,
         .chunk_map = chunk_map,
         .chunk_pool = chunk_pool,
-        .entity_pos = .{ 16.0, 5.0, 16.0 },
+        .entity_pos = .{ 16.0, spawn_y, 16.0 },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
         .mode = .flying,
@@ -188,6 +207,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .jump_cooldown = 0,
         .hit_result = null,
         .dirty_chunks = dirty,
+        .world_seed = world_seed,
         .storage = storage_inst,
         .streamer = undefined,
         .player_chunk = spawn_key,
@@ -195,10 +215,10 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
-        .prev_entity_pos = .{ 16.0, 5.0, 16.0 },
+        .prev_entity_pos = .{ 16.0, spawn_y, 16.0 },
         .prev_camera_pos = cam.position,
         .tick_camera_pos = cam.position,
-        .render_entity_pos = .{ 16.0, 5.0, 16.0 },
+        .render_entity_pos = .{ 16.0, spawn_y, 16.0 },
     };
 }
 

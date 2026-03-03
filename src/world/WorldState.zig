@@ -65,6 +65,10 @@ pub const BlockType = enum(u8) {
     dirt,
     stone,
     glowstone,
+    sand,
+    snow,
+    water,
+    gravel,
 };
 
 pub const block_properties = struct {
@@ -72,18 +76,19 @@ pub const block_properties = struct {
         return switch (block) {
             .air => false,
             .glass => false,
-            .grass_block, .dirt, .stone, .glowstone => true,
+            .water => false,
+            .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel => true,
         };
     }
     pub fn cullsSelf(block: BlockType) bool {
         return switch (block) {
             .air => false,
-            .glass => true,
-            .grass_block, .dirt, .stone, .glowstone => true,
+            .glass, .water => true,
+            .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel => true,
         };
     }
     pub fn isSolid(block: BlockType) bool {
-        return block != .air;
+        return block != .air and block != .water;
     }
     pub fn emittedLight(block: BlockType) [3]u8 {
         return switch (block) {
@@ -339,6 +344,10 @@ pub fn generateChunkMesh(
                         .dirt => 2,
                         .stone => 3,
                         .glowstone => 4,
+                        .sand => 5,
+                        .snow => 6,
+                        .water => 7,
+                        .gravel => 8,
                     };
 
                     var corner_packed: [4]u32 = undefined;

@@ -246,7 +246,7 @@ pub const VulkanRenderer = struct {
         self.mesh_worker = mw;
 
         // 3. Init + start ChunkStreamer
-        gs.streamer.initInPlace(gs.storage, &gs.chunk_pool);
+        gs.streamer.initInPlace(gs.storage, &gs.chunk_pool, gs.world_seed);
         gs.streamer.start();
 
         // 4. Setup + start TransferPipeline thread

@@ -24,11 +24,16 @@ const Chunk = WorldState.Chunk;
 
 const log = std.log.scoped(.storage);
 
+const c_time = struct {
+    extern "c" fn time(timer: ?*i64) i64;
+};
+
 const Storage = @This();
 
 allocator: std.mem.Allocator,
 world_dir: []const u8,
 region_dir: []const u8,
+seed: u64,
 region_cache: RegionCache,
 chunk_cache: ChunkCacheMod.ChunkCache,
 io_pipeline: IoPipeline,
@@ -65,12 +70,15 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     ensureDirExists(io, world_dir);
     ensureDirExists(io, region_dir);
 
+    const seed = loadOrCreateSeed(io, allocator, world_dir);
+
     const self = try allocator.create(Storage);
     errdefer allocator.destroy(self);
 
     self.allocator = allocator;
     self.world_dir = world_dir;
     self.region_dir = region_dir;
+    self.seed = seed;
     self.region_cache = RegionCache.init(allocator, region_dir);
     self.default_compression = .deflate;
     self.chunk_pool = try dirty_set_mod.ChunkPool.init(allocator);
@@ -334,4 +342,46 @@ pub fn invalidateCache(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) void 
 
 fn ensureDirExists(io: Io, path: []const u8) void {
     Dir.createDirAbsolute(io, path, .default_file) catch {};
+}
+
+fn loadOrCreateSeed(io: Io, allocator: std.mem.Allocator, world_dir: []const u8) u64 {
+    const sep = std.fs.path.sep_str;
+    const seed_path = std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "seed.dat", .{world_dir}, 0) catch return 0;
+    defer allocator.free(seed_path);
+
+    // Try to read existing seed
+    if (Dir.openFileAbsolute(io, seed_path, .{})) |file| {
+        defer file.close(io);
+        var buf: [8]u8 = undefined;
+        const n = file.readPositionalAll(io, &buf, 0) catch 0;
+        if (n == 8) {
+            const seed = std.mem.readInt(u64, &buf, .little);
+            log.info("Loaded world seed: {d}", .{seed});
+            return seed;
+        }
+    } else |_| {}
+
+    // Generate new seed from system time
+    const seed: u64 = blk: {
+        const t: u64 = @bitCast(c_time.time(null));
+        // Mix bits for better distribution
+        var s = t;
+        s ^= s >> 33;
+        s *%= 0xff51afd7ed558ccd;
+        s ^= s >> 33;
+        s *%= 0xc4ceb9fe1a85ec53;
+        s ^= s >> 33;
+        break :blk s;
+    };
+
+    // Save to file
+    if (Dir.createFileAbsolute(io, seed_path, .{})) |file| {
+        defer file.close(io);
+        var le_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &le_bytes, seed, .little);
+        file.writePositionalAll(io, &le_bytes, 0) catch {};
+    } else |_| {}
+
+    log.info("Generated new world seed: {d}", .{seed});
+    return seed;
 }

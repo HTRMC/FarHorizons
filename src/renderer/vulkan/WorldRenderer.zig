@@ -19,7 +19,7 @@ const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
 const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
-pub const INITIAL_FACE_CAPACITY: u32 = 1_500_000;
+pub const INITIAL_FACE_CAPACITY: u32 = 4_000_000;
 pub const INITIAL_LIGHT_CAPACITY: u32 = 1_500_000;
 const ChunkMap = @import("../../world/ChunkMap.zig").ChunkMap;
 

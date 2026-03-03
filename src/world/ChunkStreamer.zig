@@ -2,6 +2,7 @@ const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const ChunkPool = @import("ChunkPool.zig").ChunkPool;
 const Storage = @import("storage/Storage.zig");
+const TerrainGen = @import("TerrainGen.zig");
 const Chunk = WorldState.Chunk;
 const Io = std.Io;
 
@@ -25,6 +26,7 @@ pub const ChunkStreamer = struct {
     // State
     storage: ?*Storage,
     chunk_pool: *ChunkPool,
+    seed: u64,
     thread: ?std.Thread,
     shutdown: std.atomic.Value(bool),
 
@@ -37,6 +39,7 @@ pub const ChunkStreamer = struct {
         self: *ChunkStreamer,
         storage: ?*Storage,
         chunk_pool: *ChunkPool,
+        seed: u64,
     ) void {
         self.* = .{
             .input_queue = undefined,
@@ -48,6 +51,7 @@ pub const ChunkStreamer = struct {
             .output_mutex = .init,
             .storage = storage,
             .chunk_pool = chunk_pool,
+            .seed = seed,
             .thread = null,
             .shutdown = std.atomic.Value(bool).init(false),
         };
@@ -177,7 +181,7 @@ pub const ChunkStreamer = struct {
                 }
 
                 if (!loaded) {
-                    WorldState.generateFlatChunk(chunk, key);
+                    TerrainGen.generateChunk(chunk, key, self.seed);
                     // Save newly generated chunk to storage
                     if (self.storage) |s| {
                         s.saveChunk(key.cx, key.cy, key.cz, 0, chunk) catch {};

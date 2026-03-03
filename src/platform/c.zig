@@ -4,4 +4,6 @@ pub const c = @cImport({
     @cInclude("GLFW/glfw3.h");
     @cInclude("shaderc/shaderc.h");
     @cInclude("stb_image.h");
+    @cDefine("FASTNOISE_STATIC_LIB", "1");
+    @cInclude("FastNoise/FastNoise_C.h");
 });
