@@ -292,6 +292,9 @@ pub const VulkanRenderer = struct {
             self.processDeferredFrees(@intCast(i));
         }
 
+        // Release all GPU mesh slots so old world geometry doesn't persist
+        self.render_state.world_renderer.clearAllSlots();
+
         // Clear references and destroy
         self.transfer_pipeline.mesh_worker = null;
         if (self.mesh_worker) |mw| {

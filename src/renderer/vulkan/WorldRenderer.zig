@@ -161,6 +161,38 @@ pub const WorldRenderer = struct {
         return slot;
     }
 
+    /// Release all GPU slots and reset TLSF allocators. Call after stopping the worker pipeline.
+    pub fn clearAllSlots(self: *WorldRenderer) void {
+        const empty_chunk = ChunkData{
+            .position = .{ 0, 0, 0 },
+            .light_start = 0,
+            .face_start = 0,
+            .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+            .voxel_size = 1,
+        };
+
+        var it = self.chunk_slot_map.iterator();
+        while (it.next()) |entry| {
+            const slot = entry.value_ptr.*;
+            self.chunk_data[slot] = empty_chunk;
+            self.writeChunkData(slot);
+            self.chunk_face_alloc[slot] = null;
+            self.chunk_light_alloc[slot] = null;
+        }
+
+        self.chunk_slot_map.clearRetainingCapacity();
+
+        // Reset free slot stack (all slots available, highest first so lowest pops first)
+        for (0..TOTAL_RENDER_CHUNKS) |i| {
+            self.free_slots[i] = @intCast(TOTAL_RENDER_CHUNKS - 1 - i);
+        }
+        self.free_slot_count = TOTAL_RENDER_CHUNKS;
+
+        // Reset TLSF allocators so the new world starts with a clean GPU heap
+        self.face_tlsf = TlsfAllocator.init(INITIAL_FACE_CAPACITY);
+        self.light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY);
+    }
+
     /// Release a GPU slot for a chunk key. TLSF allocs must be freed separately.
     pub fn releaseSlot(self: *WorldRenderer, key: WorldState.ChunkKey) void {
         const slot = self.chunk_slot_map.get(key) orelse return;
