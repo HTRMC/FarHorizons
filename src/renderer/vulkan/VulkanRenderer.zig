@@ -65,6 +65,7 @@ pub const VulkanRenderer = struct {
     surface_state: SurfaceState,
     render_state: RenderState,
     pipeline_cache_path: []const u8,
+    initial_cache_hash: u64,
     transfer_pipeline: TransferPipeline,
     mesh_worker: ?*MeshWorker,
     game_state: ?*GameState,
@@ -148,6 +149,7 @@ pub const VulkanRenderer = struct {
             .ctx = ctx,
             .gpu_allocator = undefined,
             .pipeline_cache_path = pipeline_cache_path,
+            .initial_cache_hash = hashCacheData(pipeline_cache_path, cache_data),
             .surface_state = undefined,
             .render_state = undefined,
             .transfer_pipeline = undefined,
@@ -901,6 +903,13 @@ pub const VulkanRenderer = struct {
         return cache;
     }
 
+    fn hashCacheData(path: []const u8, data: ?[]const u8) u64 {
+        var h = std.hash.XxHash3.init(0);
+        h.update(path);
+        if (data) |d| h.update(d);
+        return h.final();
+    }
+
     fn savePipelineCache(self: *VulkanRenderer) void {
         var data_size: usize = 0;
         vk.getPipelineCacheData(self.ctx.device, self.ctx.pipeline_cache, &data_size, null) catch {
@@ -920,6 +929,12 @@ pub const VulkanRenderer = struct {
             std.log.warn("Pipeline cache: failed to retrieve data", .{});
             return;
         };
+
+        const current_hash = hashCacheData(self.pipeline_cache_path, data[0..data_size]);
+        if (current_hash == self.initial_cache_hash) {
+            std.log.info("Pipeline cache: unchanged, skipping save", .{});
+            return;
+        }
 
         const io = Io.Threaded.global_single_threaded.io();
         Dir.writeFile(.cwd(), io, .{ .sub_path = self.pipeline_cache_path, .data = data[0..data_size] }) catch {
