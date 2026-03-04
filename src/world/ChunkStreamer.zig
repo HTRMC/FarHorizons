@@ -7,9 +7,9 @@ const Chunk = WorldState.Chunk;
 const Io = std.Io;
 
 pub const ChunkStreamer = struct {
-    const MAX_INPUT = 512;
+    const MAX_INPUT = 4096;
     pub const MAX_OUTPUT = 64;
-    pub const RENDER_DISTANCE: i32 = 6;
+    pub const RENDER_DISTANCE: i32 = 16;
     pub const UNLOAD_DISTANCE: i32 = RENDER_DISTANCE + 2;
 
     // Input queue (main → worker)

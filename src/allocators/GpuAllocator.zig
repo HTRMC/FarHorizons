@@ -21,7 +21,7 @@ pub const BufferAllocation = struct {
     mapped_ptr: ?[*]u8,
 };
 
-const DEVICE_LOCAL_SIZE: vk.VkDeviceSize = 64 * 1024 * 1024; // 64MB
+const DEVICE_LOCAL_SIZE: vk.VkDeviceSize = 2048 * 1024 * 1024; // 2GB
 const HOST_VISIBLE_SIZE: vk.VkDeviceSize = 8 * 1024 * 1024; // 8MB
 const STAGING_SIZE: vk.VkDeviceSize = 4 * 1024 * 1024; // 4MB
 

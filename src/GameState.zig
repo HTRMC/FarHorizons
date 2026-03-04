@@ -323,6 +323,39 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     }
 
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+
+    // Request load for missing chunks within render distance (runs at tick rate)
+    if (self.streaming_initialized) {
+        const rd = ChunkStreamer.RENDER_DISTANCE;
+        const pc = self.player_chunk;
+        var batch: [512]WorldState.ChunkKey = undefined;
+        var batch_len: u32 = 0;
+
+        var dy: i32 = -rd;
+        outer: while (dy <= rd) : (dy += 1) {
+            var dz: i32 = -rd;
+            while (dz <= rd) : (dz += 1) {
+                var dx: i32 = -rd;
+                while (dx <= rd) : (dx += 1) {
+                    if (dx * dx + dy * dy + dz * dz > rd * rd) continue;
+                    const key = WorldState.ChunkKey{
+                        .cx = pc.cx + dx,
+                        .cy = pc.cy + dy,
+                        .cz = pc.cz + dz,
+                    };
+                    if (self.chunk_map.get(key) == null) {
+                        batch[batch_len] = key;
+                        batch_len += 1;
+                        if (batch_len >= batch.len) break :outer;
+                    }
+                }
+            }
+        }
+
+        if (batch_len > 0) {
+            self.streamer.requestLoadBatch(batch[0..batch_len]);
+        }
+    }
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
@@ -412,42 +445,9 @@ pub fn updateStreaming(
         @intFromFloat(@floor(pos.z)),
     );
 
-    const chunk_changed = !current_chunk.eql(self.player_chunk) or !self.streaming_initialized;
-
-    if (chunk_changed) {
+    if (!current_chunk.eql(self.player_chunk) or !self.streaming_initialized) {
         self.player_chunk = current_chunk;
         self.streaming_initialized = true;
-
-        // Request load for chunks within render distance that aren't loaded
-        const rd = ChunkStreamer.RENDER_DISTANCE;
-        var batch: [512]WorldState.ChunkKey = undefined;
-        var batch_len: u32 = 0;
-
-        var dy: i32 = -rd;
-        while (dy <= rd) : (dy += 1) {
-            var dz: i32 = -rd;
-            while (dz <= rd) : (dz += 1) {
-                var dx: i32 = -rd;
-                while (dx <= rd) : (dx += 1) {
-                    if (dx * dx + dy * dy + dz * dz > rd * rd) continue;
-                    const key = WorldState.ChunkKey{
-                        .cx = current_chunk.cx + dx,
-                        .cy = current_chunk.cy + dy,
-                        .cz = current_chunk.cz + dz,
-                    };
-                    if (self.chunk_map.get(key) == null) {
-                        if (batch_len < batch.len) {
-                            batch[batch_len] = key;
-                            batch_len += 1;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (batch_len > 0) {
-            self.streamer.requestLoadBatch(batch[0..batch_len]);
-        }
     }
 
     // Drain streamer output
@@ -461,13 +461,25 @@ pub fn updateStreaming(
         }
         self.chunk_map.put(result.key, result.chunk);
         self.dirty_chunks.add(result.key);
+        // Mark neighbors dirty so they re-mesh with the new neighbor present
+        const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
+        for (offsets) |off| {
+            const nk = WorldState.ChunkKey{
+                .cx = result.key.cx + off[0],
+                .cy = result.key.cy + off[1],
+                .cz = result.key.cz + off[2],
+            };
+            if (self.chunk_map.get(nk) != null) {
+                self.dirty_chunks.add(nk);
+            }
+        }
     }
 
     // Unload chunks beyond UNLOAD_DISTANCE (budget: max 16 per frame)
     const ud = ChunkStreamer.UNLOAD_DISTANCE;
     const ud_sq = ud * ud;
     var unload_count: u32 = 0;
-    const MAX_UNLOADS: u32 = 16;
+    const MAX_UNLOADS: u32 = 256;
 
     // Collect keys to unload (can't modify map while iterating)
     var unload_keys: [MAX_UNLOADS]WorldState.ChunkKey = undefined;

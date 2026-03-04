@@ -24,7 +24,7 @@ pub fn init(width: u32, height: u32) Camera {
         .fov = std.math.pi / 4.0,
         .aspect = aspect_ratio,
         .near = 0.1,
-        .far = 500.0,
+        .far = 1000.0,
     };
 }
 

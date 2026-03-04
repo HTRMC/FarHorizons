@@ -1,6 +1,7 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const ChunkMap = @import("ChunkMap.zig").ChunkMap;
+const ChunkStreamer = @import("ChunkStreamer.zig").ChunkStreamer;
 const types = @import("../renderer/vulkan/types.zig");
 const FaceData = types.FaceData;
 const LightEntry = types.LightEntry;
@@ -32,6 +33,7 @@ pub const MeshWorker = struct {
     // State
     allocator: std.mem.Allocator,
     chunk_map: *const ChunkMap,
+    player_chunk: WorldState.ChunkKey,
 
     thread: ?std.Thread,
     shutdown: std.atomic.Value(bool),
@@ -63,6 +65,7 @@ pub const MeshWorker = struct {
             .output_drained_cond = .init,
             .allocator = allocator,
             .chunk_map = chunk_map,
+            .player_chunk = .{ .cx = 0, .cy = 0, .cz = 0 },
             .thread = null,
             .shutdown = std.atomic.Value(bool).init(false),
         };
@@ -96,10 +99,11 @@ pub const MeshWorker = struct {
         self.output_len = 0;
     }
 
-    pub fn syncChunkMap(self: *MeshWorker, chunk_map: *const ChunkMap) void {
+    pub fn syncChunkMap(self: *MeshWorker, chunk_map: *const ChunkMap, player_chunk: WorldState.ChunkKey) void {
         const io = Io.Threaded.global_single_threaded.io();
         self.input_mutex.lockUncancelable(io);
         self.chunk_map = chunk_map;
+        self.player_chunk = player_chunk;
         self.input_mutex.unlock(io);
     }
 
@@ -199,6 +203,29 @@ pub const MeshWorker = struct {
                 // Look up chunk and neighbors from the ChunkMap
                 const chunk = local_chunk_map.get(key) orelse continue;
                 const neighbors = local_chunk_map.getNeighbors(key);
+
+                // Skip meshing if a neighbor within render distance isn't loaded yet
+                // to avoid re-mesh churn during initial streaming. Edge chunks whose
+                // missing neighbors are outside the render sphere mesh immediately.
+                if (!req.light_only) {
+                    const nb_offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
+                    const rd = ChunkStreamer.RENDER_DISTANCE;
+                    const rd_sq = rd * rd;
+                    const pc = self.player_chunk;
+                    var skip = false;
+                    for (neighbors, 0..) |n, i| {
+                        if (n == null) {
+                            const nx = key.cx + nb_offsets[i][0] - pc.cx;
+                            const ny = key.cy + nb_offsets[i][1] - pc.cy;
+                            const nz = key.cz + nb_offsets[i][2] - pc.cz;
+                            if (nx * nx + ny * ny + nz * nz <= rd_sq) {
+                                skip = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (skip) continue;
+                }
 
                 if (req.light_only) {
                     // Light-only path: only regenerate light data

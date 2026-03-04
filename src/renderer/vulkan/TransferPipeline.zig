@@ -15,7 +15,7 @@ const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const Io = std.Io;
 
 const RING_BUFFER_SIZE: vk.VkDeviceSize = 8 * 1024 * 1024; // 8MB per slot
-const MAX_COMMITTED = 128;
+const MAX_COMMITTED = 1024;
 
 pub const CommittedChunk = struct {
     key: WorldState.ChunkKey,

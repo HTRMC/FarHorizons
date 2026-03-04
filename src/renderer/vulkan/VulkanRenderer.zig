@@ -73,9 +73,9 @@ pub const VulkanRenderer = struct {
     framebuffer_resized: bool,
 
     // Deferred TLSF frees (per frame slot)
-    deferred_face_frees: [MAX_FRAMES_IN_FLIGHT][256]TlsfAllocator.Handle,
+    deferred_face_frees: [MAX_FRAMES_IN_FLIGHT][2048]TlsfAllocator.Handle,
     deferred_face_free_counts: [MAX_FRAMES_IN_FLIGHT]u32,
-    deferred_light_frees: [MAX_FRAMES_IN_FLIGHT][256]TlsfAllocator.Handle,
+    deferred_light_frees: [MAX_FRAMES_IN_FLIGHT][2048]TlsfAllocator.Handle,
     deferred_light_free_counts: [MAX_FRAMES_IN_FLIGHT]u32,
     max_graphics_wait_timeline: u64,
 
@@ -333,7 +333,7 @@ pub const VulkanRenderer = struct {
 
                 if (self.mesh_worker) |mw| {
                     // 5. Sync worker chunk map pointer
-                    mw.syncChunkMap(&gs.chunk_map);
+                    mw.syncChunkMap(&gs.chunk_map, gs.player_chunk);
 
                     // 6. Feed any remaining dirty_chunks to MeshWorker
                     if (gs.dirty_chunks.count > 0) {
@@ -365,7 +365,7 @@ pub const VulkanRenderer = struct {
 
     fn drainCommittedChunks(self: *VulkanRenderer, cf: u32) void {
         const CommittedChunk = @import("TransferPipeline.zig").CommittedChunk;
-        var buf: [128]CommittedChunk = undefined;
+        var buf: [1024]CommittedChunk = undefined;
         const count = self.transfer_pipeline.drainCommitted(&buf);
 
         const wr = &self.render_state.world_renderer;
@@ -400,7 +400,7 @@ pub const VulkanRenderer = struct {
                     if (entry.light_alloc) |la| {
                         if (la.handle != TlsfAllocator.null_handle) {
                             const idx = self.deferred_light_free_counts[cf];
-                            if (idx < 256) {
+                            if (idx < 2048) {
                                 self.deferred_light_frees[cf][idx] = la.handle;
                                 self.deferred_light_free_counts[cf] = idx + 1;
                             }
@@ -414,7 +414,7 @@ pub const VulkanRenderer = struct {
                 if (wr.chunk_light_alloc[slot]) |la| {
                     if (la.handle != TlsfAllocator.null_handle) {
                         const idx = self.deferred_light_free_counts[cf];
-                        if (idx < 256) {
+                        if (idx < 2048) {
                             self.deferred_light_frees[cf][idx] = la.handle;
                             self.deferred_light_free_counts[cf] = idx + 1;
                         }
@@ -433,7 +433,7 @@ pub const VulkanRenderer = struct {
                 if (wr.chunk_face_alloc[slot]) |fa| {
                     if (fa.handle != TlsfAllocator.null_handle) {
                         const idx = self.deferred_face_free_counts[cf];
-                        if (idx < 256) {
+                        if (idx < 2048) {
                             self.deferred_face_frees[cf][idx] = fa.handle;
                             self.deferred_face_free_counts[cf] = idx + 1;
                         }
@@ -442,7 +442,7 @@ pub const VulkanRenderer = struct {
                 if (wr.chunk_light_alloc[slot]) |la| {
                     if (la.handle != TlsfAllocator.null_handle) {
                         const idx = self.deferred_light_free_counts[cf];
-                        if (idx < 256) {
+                        if (idx < 2048) {
                             self.deferred_light_frees[cf][idx] = la.handle;
                             self.deferred_light_free_counts[cf] = idx + 1;
                         }
@@ -463,7 +463,7 @@ pub const VulkanRenderer = struct {
 
     fn drainAndFreeCommitted(self: *VulkanRenderer) void {
         const CommittedChunk = @import("TransferPipeline.zig").CommittedChunk;
-        var buf: [128]CommittedChunk = undefined;
+        var buf: [1024]CommittedChunk = undefined;
         const count = self.transfer_pipeline.drainCommitted(&buf);
         if (count == 0) return;
 
