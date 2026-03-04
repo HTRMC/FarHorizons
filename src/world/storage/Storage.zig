@@ -42,6 +42,12 @@ chunk_pool: dirty_set_mod.ChunkPool,
 dirty_set: DirtySet,
 dirty_mutex: Io.Mutex,
 
+// Load timing stats (atomically updated by streamer workers)
+stats_load_count: std.atomic.Value(u64),
+stats_cache_hits: std.atomic.Value(u64),
+stats_region_ns: std.atomic.Value(u64),
+stats_read_ns: std.atomic.Value(u64),
+
 
 pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     const io = Io.Threaded.global_single_threaded.io();
@@ -84,6 +90,10 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     self.chunk_pool = try dirty_set_mod.ChunkPool.init(allocator);
     self.dirty_set = try DirtySet.init(allocator, &self.chunk_pool);
     self.dirty_mutex = .init;
+    self.stats_load_count = std.atomic.Value(u64).init(0);
+    self.stats_cache_hits = std.atomic.Value(u64).init(0);
+    self.stats_region_ns = std.atomic.Value(u64).init(0);
+    self.stats_read_ns = std.atomic.Value(u64).init(0);
 
     self.chunk_cache.initInPlace();
     self.io_pipeline.initInPlace(
@@ -233,18 +243,24 @@ pub fn saveAllDirty(self: *Storage) void {
 
 
 pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chunk {
+    const io = Io.Threaded.global_single_threaded.io();
     const key = ChunkKey.init(cx, cy, cz, lod);
 
+    _ = self.stats_load_count.fetchAdd(1, .monotonic);
+
     if (self.chunk_cache.get(key)) |cached| {
+        _ = self.stats_cache_hits.fetchAdd(1, .monotonic);
         return cached;
     }
 
     const coord = key.regionCoord();
+    const t0 = Io.Clock.now(.awake, io);
     const region = self.region_cache.getOrOpen(coord) catch |err| {
         log.err("loadChunk({d},{d},{d}): open failed: {}", .{ cx, cy, cz, err });
         return null;
     };
     defer self.region_cache.releaseRegion(region);
+    const t1 = Io.Clock.now(.awake, io);
 
     const chunk_index = key.localIndex();
     var chunk: Chunk = undefined;
@@ -253,6 +269,10 @@ pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chu
         return null;
     };
     if (!found) return null;
+    const t2 = Io.Clock.now(.awake, io);
+
+    _ = self.stats_region_ns.fetchAdd(@intCast(t0.durationTo(t1).nanoseconds), .monotonic);
+    _ = self.stats_read_ns.fetchAdd(@intCast(t1.durationTo(t2).nanoseconds), .monotonic);
 
     self.chunk_cache.put(key, &chunk);
 

@@ -556,6 +556,25 @@ fn reportPipelineStats(self: *GameState) void {
         mo,
         co,
     });
+
+    // Storage timing breakdown
+    if (self.storage) |s| {
+        const st_loads = s.stats_load_count.swap(0, .monotonic);
+        const st_hits = s.stats_cache_hits.swap(0, .monotonic);
+        const st_region_ns = s.stats_region_ns.swap(0, .monotonic);
+        const st_read_ns = s.stats_read_ns.swap(0, .monotonic);
+        const st_disk = st_loads - st_hits;
+        if (st_disk > 0) {
+            std.log.info("[Storage] loads:{} hits:{} disk:{} | avg region_open:{d:.0}us read+decomp:{d:.0}us total:{d:.0}us", .{
+                st_loads,
+                st_hits,
+                st_disk,
+                @as(f64, @floatFromInt(st_region_ns)) / @as(f64, @floatFromInt(st_disk)) / 1000.0,
+                @as(f64, @floatFromInt(st_read_ns)) / @as(f64, @floatFromInt(st_disk)) / 1000.0,
+                @as(f64, @floatFromInt(st_region_ns + st_read_ns)) / @as(f64, @floatFromInt(st_disk)) / 1000.0,
+            });
+        }
+    }
 }
 
 fn scanUnloads(self: *GameState) void {
