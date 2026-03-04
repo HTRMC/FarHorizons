@@ -307,6 +307,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 }
             }
         },
+        .saving => {}, // Ignore input while saving
     }
 }
 
@@ -356,6 +357,11 @@ fn framebufferSizeCallback(window: ?*glfw.Window, width: c_int, height: c_int) c
     input_state.framebuffer_resized.* = true;
 }
 
+fn saveWorkerFn(gs: *GameState, done: *std.atomic.Value(bool)) void {
+    gs.save();
+    done.store(true, .release);
+}
+
 pub fn main() !void {
     tracy.waitForConnection();
 
@@ -398,9 +404,19 @@ pub fn main() !void {
     menu_ctrl.registerActions();
 
     var game_state: ?GameState = null;
+    var save_thread: ?std.Thread = null;
+    var save_done = std.atomic.Value(bool).init(false);
     defer {
+        if (save_thread) |t| {
+            t.join();
+            save_thread = null;
+        }
         if (game_state) |*gs| {
-            gs.save();
+            if (save_done.load(.acquire)) {
+                // Save thread already ran — skip redundant save
+            } else {
+                gs.save();
+            }
             renderer.setGameState(null);
             gs.deinit();
         }
@@ -478,18 +494,45 @@ pub fn main() !void {
                 },
                 .return_to_title => {
                     if (game_state) |*gs| {
-                        gs.save();
-                        renderer.setGameState(null);
-                        input_state.game_state = null;
-                        gs.deinit();
-                        game_state = null;
+                        save_done.store(false, .release);
+                        save_thread = std.Thread.spawn(.{}, saveWorkerFn, .{ gs, &save_done }) catch null;
+                        if (save_thread != null) {
+                            // Save runs in background — main loop stays alive
+                            input_state.game_state = null;
+                            input_state.mouse_captured = false;
+                            glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+                            menu_ctrl.app_state = .saving;
+                        } else {
+                            // Fallback: synchronous save
+                            gs.save();
+                            renderer.setGameState(null);
+                            input_state.game_state = null;
+                            gs.deinit();
+                            game_state = null;
+                            menu_ctrl.showTitleMenu();
+                        }
+                    } else {
+                        menu_ctrl.showTitleMenu();
                     }
-                    menu_ctrl.showTitleMenu();
                 },
                 .quit => {
                     break;
                 },
             }
+        }
+
+        // Check if background save completed
+        if (menu_ctrl.app_state == .saving and save_done.load(.acquire)) {
+            if (save_thread) |t| {
+                t.join();
+                save_thread = null;
+            }
+            renderer.setGameState(null);
+            if (game_state) |*gs| {
+                gs.deinit();
+            }
+            game_state = null;
+            menu_ctrl.showTitleMenu();
         }
 
         var update_start: f64 = 0;

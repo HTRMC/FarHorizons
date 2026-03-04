@@ -101,7 +101,7 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
 pub fn deinit(self: *Storage) void {
     self.saveAllDirty();
     self.io_pipeline.stop();
-    self.flush();
+    // Skip flush — gs.save() already fsynced, and region_cache.deinit() closes files cleanly
     self.dirty_set.deinit();
     self.chunk_pool.deinit(self.allocator);
     self.region_cache.deinit();
