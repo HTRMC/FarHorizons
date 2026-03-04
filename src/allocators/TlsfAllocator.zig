@@ -25,9 +25,11 @@ pub const TlsfAllocator = struct {
         next_free: Handle,
     };
 
-    blocks: [max_blocks]Block,
+    const INITIAL_BLOCK_CAPACITY: u16 = 4096;
+
+    blocks: []Block,
     block_count: u16,
-    free_block_stack: [max_blocks]Handle,
+    free_block_stack: []Handle,
     free_stack_top: u16,
 
     fl_bitmap: u32,
@@ -35,19 +37,21 @@ pub const TlsfAllocator = struct {
     free_lists: [FL_MAX][SL_COUNT]Handle,
 
     capacity: u32,
+    block_capacity: u16,
+    backing_allocator: std.mem.Allocator,
 
-    const max_blocks = 32768;
-
-    pub fn init(capacity: u32) TlsfAllocator {
+    pub fn init(allocator: std.mem.Allocator, capacity: u32) TlsfAllocator {
         var self = TlsfAllocator{
-            .blocks = undefined,
+            .blocks = allocator.alloc(Block, INITIAL_BLOCK_CAPACITY) catch @panic("TlsfAllocator: OOM"),
             .block_count = 0,
-            .free_block_stack = undefined,
+            .free_block_stack = allocator.alloc(Handle, INITIAL_BLOCK_CAPACITY) catch @panic("TlsfAllocator: OOM"),
             .free_stack_top = 0,
             .fl_bitmap = 0,
             .sl_bitmap = .{0} ** FL_MAX,
             .free_lists = .{.{null_handle} ** SL_COUNT} ** FL_MAX,
             .capacity = capacity,
+            .block_capacity = INITIAL_BLOCK_CAPACITY,
+            .backing_allocator = allocator,
         };
 
         const handle = self.newBlock().?;
@@ -64,6 +68,60 @@ pub const TlsfAllocator = struct {
         self.insertFreeBlock(handle);
 
         return self;
+    }
+
+    /// Init in-place to avoid stack-allocating the struct.
+    pub fn initInPlace(self: *TlsfAllocator, allocator: std.mem.Allocator, capacity: u32) void {
+        self.backing_allocator = allocator;
+        self.block_count = 0;
+        self.free_stack_top = 0;
+        self.fl_bitmap = 0;
+        @memset(&self.sl_bitmap, 0);
+        for (&self.free_lists) |*fl| @memset(fl, null_handle);
+        self.capacity = capacity;
+        self.block_capacity = INITIAL_BLOCK_CAPACITY;
+        self.blocks = allocator.alloc(Block, INITIAL_BLOCK_CAPACITY) catch @panic("TlsfAllocator: OOM");
+        self.free_block_stack = allocator.alloc(Handle, INITIAL_BLOCK_CAPACITY) catch @panic("TlsfAllocator: OOM");
+
+        const handle = self.newBlock().?;
+        self.blocks[handle] = .{
+            .offset = 0,
+            .size = capacity,
+            .free = true,
+            .recycled = false,
+            .prev_phys = null_handle,
+            .next_phys = null_handle,
+            .prev_free = null_handle,
+            .next_free = null_handle,
+        };
+        self.insertFreeBlock(handle);
+    }
+
+    /// Reset to initial state, keeping existing block capacity and allocator.
+    pub fn reset(self: *TlsfAllocator) void {
+        self.block_count = 0;
+        self.free_stack_top = 0;
+        self.fl_bitmap = 0;
+        @memset(&self.sl_bitmap, 0);
+        for (&self.free_lists) |*fl| @memset(fl, null_handle);
+
+        const handle = self.newBlock().?;
+        self.blocks[handle] = .{
+            .offset = 0,
+            .size = self.capacity,
+            .free = true,
+            .recycled = false,
+            .prev_phys = null_handle,
+            .next_phys = null_handle,
+            .prev_free = null_handle,
+            .next_free = null_handle,
+        };
+        self.insertFreeBlock(handle);
+    }
+
+    pub fn deinit(self: *TlsfAllocator) void {
+        self.backing_allocator.free(self.blocks);
+        self.backing_allocator.free(self.free_block_stack);
     }
 
     pub fn alloc(self: *TlsfAllocator, size: u32) ?Allocation {
@@ -270,6 +328,11 @@ pub const TlsfAllocator = struct {
             if (fl >= SL_BITS) {
                 const round = (@as(u32, 1) << (fl - SL_BITS)) - 1;
                 rounded = size +| round;
+            } else if (rounded > (@as(u32, 1) << fl)) {
+                // Small size (fl < SL_BITS): slIndex maps all sizes in this fl
+                // to sl=0, so a search might find a too-small block. Round up
+                // to the next power of 2 to guarantee the found block fits.
+                rounded = @as(u32, 1) << (fl + 1);
             }
         }
         return mapping(rounded);
@@ -345,10 +408,32 @@ pub const TlsfAllocator = struct {
             self.free_stack_top -= 1;
             return self.free_block_stack[self.free_stack_top];
         }
-        if (self.block_count >= max_blocks) return null;
+        if (self.block_count >= self.block_capacity) {
+            self.grow() catch return null;
+        }
+        if (self.block_count >= null_handle) return null;
         const handle = self.block_count;
         self.block_count += 1;
         return handle;
+    }
+
+    fn grow(self: *TlsfAllocator) std.mem.Allocator.Error!void {
+        const old_cap = self.block_capacity;
+        // Double capacity, capped at null_handle (65535)
+        const new_cap: u16 = if (old_cap <= null_handle / 2) old_cap * 2 else null_handle;
+        if (new_cap <= old_cap) return error.OutOfMemory;
+
+        const new_blocks = try self.backing_allocator.alloc(Block, new_cap);
+        @memcpy(new_blocks[0..self.blocks.len], self.blocks);
+        self.backing_allocator.free(self.blocks);
+        self.blocks = new_blocks;
+
+        const new_stack = try self.backing_allocator.alloc(Handle, new_cap);
+        @memcpy(new_stack[0..self.free_block_stack.len], self.free_block_stack);
+        self.backing_allocator.free(self.free_block_stack);
+        self.free_block_stack = new_stack;
+
+        self.block_capacity = new_cap;
     }
 
     fn recycleBlock(self: *TlsfAllocator, handle: Handle) void {
@@ -369,7 +454,8 @@ pub const TlsfAllocator = struct {
 
 
 test "basic alloc and free" {
-    var a = TlsfAllocator.init(1024);
+    var a = TlsfAllocator.init(std.testing.allocator, 1024);
+    defer a.deinit();
 
     const r1 = a.alloc(100).?;
     try std.testing.expectEqual(0, r1.offset);
@@ -387,7 +473,8 @@ test "basic alloc and free" {
 }
 
 test "merge coalesces adjacent free blocks" {
-    var a = TlsfAllocator.init(1024);
+    var a = TlsfAllocator.init(std.testing.allocator, 1024);
+    defer a.deinit();
 
     const r1 = a.alloc(100).?;
     const r2 = a.alloc(100).?;
@@ -404,19 +491,22 @@ test "merge coalesces adjacent free blocks" {
 }
 
 test "alloc returns null when full" {
-    var a = TlsfAllocator.init(100);
+    var a = TlsfAllocator.init(std.testing.allocator, 100);
+    defer a.deinit();
 
     _ = a.alloc(100).?;
     try std.testing.expect(a.alloc(1) == null);
 }
 
 test "alloc zero returns null" {
-    var a = TlsfAllocator.init(100);
+    var a = TlsfAllocator.init(std.testing.allocator, 100);
+    defer a.deinit();
     try std.testing.expect(a.alloc(0) == null);
 }
 
 test "full alloc-free cycle restores capacity" {
-    var a = TlsfAllocator.init(1024);
+    var a = TlsfAllocator.init(std.testing.allocator, 1024);
+    defer a.deinit();
 
     const r1 = a.alloc(512).?;
     const r2 = a.alloc(512).?;
@@ -432,7 +522,8 @@ test "full alloc-free cycle restores capacity" {
 }
 
 test "many small allocations" {
-    var a = TlsfAllocator.init(1000);
+    var a = TlsfAllocator.init(std.testing.allocator, 1000);
+    defer a.deinit();
     var handles: [100]TlsfAllocator.Handle = undefined;
 
     for (0..100) |i| {
@@ -450,7 +541,8 @@ test "many small allocations" {
 }
 
 test "totalFree and largestFree" {
-    var a = TlsfAllocator.init(1024);
+    var a = TlsfAllocator.init(std.testing.allocator, 1024);
+    defer a.deinit();
 
     try std.testing.expectEqual(1024, a.totalFree());
     try std.testing.expectEqual(1024, a.largestFree());
@@ -466,7 +558,8 @@ test "totalFree and largestFree" {
 }
 
 test "split creates properly linked blocks" {
-    var a = TlsfAllocator.init(1000);
+    var a = TlsfAllocator.init(std.testing.allocator, 1000);
+    defer a.deinit();
 
     const r1 = a.alloc(300).?;
     const r2 = a.alloc(300).?;
@@ -482,7 +575,8 @@ test "split creates properly linked blocks" {
 }
 
 test "free in reverse order merges correctly" {
-    var a = TlsfAllocator.init(1024);
+    var a = TlsfAllocator.init(std.testing.allocator, 1024);
+    defer a.deinit();
 
     const r1 = a.alloc(256).?;
     const r2 = a.alloc(256).?;
@@ -500,7 +594,8 @@ test "free in reverse order merges correctly" {
 }
 
 test "searchMapping rounds up to guarantee block >= requested size" {
-    var a = TlsfAllocator.init(600_000);
+    var a = TlsfAllocator.init(std.testing.allocator, 600_000);
+    defer a.deinit();
 
     var allocs: [50]TlsfAllocator.Allocation = undefined;
     for (0..50) |i| {
@@ -521,7 +616,8 @@ test "searchMapping rounds up to guarantee block >= requested size" {
 }
 
 test "allocAligned basic alignment" {
-    var a = TlsfAllocator.init(4096);
+    var a = TlsfAllocator.init(std.testing.allocator, 4096);
+    defer a.deinit();
 
     const r1 = a.allocAligned(100, 256).?;
     try std.testing.expectEqual(0, r1.offset % 256);
@@ -537,20 +633,23 @@ test "allocAligned basic alignment" {
 }
 
 test "allocAligned returns null for zero" {
-    var a = TlsfAllocator.init(1024);
+    var a = TlsfAllocator.init(std.testing.allocator, 1024);
+    defer a.deinit();
     try std.testing.expect(a.allocAligned(0, 256) == null);
     try std.testing.expect(a.allocAligned(100, 0) == null);
 }
 
 test "allocAligned alignment 1 is same as alloc" {
-    var a = TlsfAllocator.init(1024);
+    var a = TlsfAllocator.init(std.testing.allocator, 1024);
+    defer a.deinit();
     const r = a.allocAligned(100, 1).?;
     try std.testing.expectEqual(0, r.offset);
     try std.testing.expectEqual(100, r.size);
 }
 
 test "allocAligned front waste is reusable" {
-    var a = TlsfAllocator.init(4096);
+    var a = TlsfAllocator.init(std.testing.allocator, 4096);
+    defer a.deinit();
 
     // Allocate a small block to misalign the next free block
     const small = a.alloc(10).?;
@@ -569,4 +668,62 @@ test "alignUp" {
     try std.testing.expectEqual(256, TlsfAllocator.alignUp(1, 256));
     try std.testing.expectEqual(256, TlsfAllocator.alignUp(256, 256));
     try std.testing.expectEqual(512, TlsfAllocator.alignUp(257, 256));
+}
+
+test "dynamic growth handles many allocations" {
+    var a = TlsfAllocator.init(std.testing.allocator, 100_000);
+    defer a.deinit();
+
+    // Allocate more blocks than INITIAL_BLOCK_CAPACITY to trigger growth
+    var handles: [5000]TlsfAllocator.Handle = undefined;
+    for (0..5000) |i| {
+        const r = a.alloc(20).?;
+        handles[i] = r.handle;
+    }
+
+    // Free every other one
+    for (0..5000) |i| {
+        if (i % 2 == 0) a.free(handles[i]);
+    }
+
+    // Allocate again — should reuse freed blocks
+    for (0..2500) |_| {
+        try std.testing.expect(a.alloc(20) != null);
+    }
+}
+
+test "small size search finds large free block" {
+    // Regression: sizes < 16 with fl < SL_BITS could fail to find
+    // a large free block because slIndex mapped all sizes to sl=0,
+    // causing a too-small block to shadow the large one.
+    var a = TlsfAllocator.init(std.testing.allocator, 1_000_000);
+    defer a.deinit();
+
+    // Create a small free gap by allocating, then freeing a small block
+    const r1 = a.alloc(8).?; // size 8, goes to {fl=3, sl=0}
+    const r2 = a.alloc(100).?;
+    a.free(r1.handle); // 8-byte block at {fl=3, sl=0}
+
+    // Now alloc size 12: should NOT fail even though there's an 8-sized
+    // block at the same fl/sl. The large remainder (~999892) should be found.
+    const r3 = a.alloc(12);
+    try std.testing.expect(r3 != null);
+    try std.testing.expect(r3.?.size >= 12);
+    _ = r2;
+}
+
+test "reset preserves capacity" {
+    var a = TlsfAllocator.init(std.testing.allocator, 1024);
+    defer a.deinit();
+
+    _ = a.alloc(100).?;
+    _ = a.alloc(200).?;
+
+    a.reset();
+
+    try std.testing.expectEqual(1024, a.totalFree());
+    try std.testing.expectEqual(1024, a.largestFree());
+
+    const big = a.alloc(1024).?;
+    try std.testing.expectEqual(0, big.offset);
 }

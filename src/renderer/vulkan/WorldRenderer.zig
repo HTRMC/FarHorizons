@@ -85,8 +85,8 @@ pub const WorldRenderer = struct {
         self.model_alloc = undefined;
         self.static_index_alloc = undefined;
         self.chunk_data_alloc = undefined;
-        self.face_tlsf = TlsfAllocator.init(INITIAL_FACE_CAPACITY);
-        self.light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY);
+        self.face_tlsf.initInPlace(allocator, INITIAL_FACE_CAPACITY);
+        self.light_tlsf.initInPlace(allocator, INITIAL_LIGHT_CAPACITY);
         @memset(&self.chunk_face_alloc, null);
         @memset(&self.chunk_light_alloc, null);
         @memset(&self.chunk_data, ChunkData{
@@ -120,6 +120,8 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "WorldRenderer.deinit");
         defer tz.end();
 
+        self.face_tlsf.deinit();
+        self.light_tlsf.deinit();
         self.chunk_slot_map.deinit();
         self.gpu_alloc.destroyBuffer(self.indirect_alloc);
         self.gpu_alloc.destroyBuffer(self.indirect_count_alloc);
@@ -183,8 +185,8 @@ pub const WorldRenderer = struct {
         self.free_slot_count = TOTAL_RENDER_CHUNKS;
 
         // Reset TLSF allocators so the new world starts with a clean GPU heap
-        self.face_tlsf = TlsfAllocator.init(INITIAL_FACE_CAPACITY);
-        self.light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY);
+        self.face_tlsf.reset();
+        self.light_tlsf.reset();
     }
 
     /// Release a GPU slot for a chunk key. TLSF allocs must be freed separately.

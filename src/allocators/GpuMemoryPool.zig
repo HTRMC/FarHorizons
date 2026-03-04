@@ -34,7 +34,7 @@ pub const GpuMemoryPool = struct {
         }
 
         const tlsf = try allocator.create(TlsfAllocator);
-        tlsf.* = TlsfAllocator.init(@intCast(size));
+        tlsf.* = TlsfAllocator.init(allocator, @intCast(size));
 
         const self = try allocator.create(GpuMemoryPool);
         self.* = .{
@@ -52,6 +52,7 @@ pub const GpuMemoryPool = struct {
             vk.unmapMemory(device, self.memory);
         }
         vk.freeMemory(device, self.memory, null);
+        self.tlsf.deinit();
         self.allocator.destroy(self.tlsf);
         self.allocator.destroy(self);
     }
