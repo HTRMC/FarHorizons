@@ -246,7 +246,12 @@ pub const VulkanRenderer = struct {
         self.mesh_worker = mw;
 
         // 3. Init + start ChunkStreamer
-        gs.streamer.initInPlace(gs.storage, &gs.chunk_pool, gs.world_seed);
+        gs.streamer.initInPlace(self.allocator, gs.storage, &gs.chunk_pool, gs.world_seed);
+
+        // Sync player position before starting threads so initial heap ordering is correct
+        gs.streamer.syncPlayerChunk(gs.player_chunk);
+        mw.syncChunkMap(&gs.chunk_map, gs.player_chunk);
+
         gs.streamer.start();
 
         // 4. Setup + start TransferPipeline thread
@@ -331,11 +336,14 @@ pub const VulkanRenderer = struct {
                     &self.deferred_light_free_counts[cf],
                 );
 
+                // 5. Sync player chunk for priority ordering
+                gs.streamer.syncPlayerChunk(gs.player_chunk);
+
                 if (self.mesh_worker) |mw| {
-                    // 5. Sync worker chunk map pointer
+                    // 6. Sync worker chunk map pointer
                     mw.syncChunkMap(&gs.chunk_map, gs.player_chunk);
 
-                    // 6. Feed any remaining dirty_chunks to MeshWorker
+                    // 7. Feed any remaining dirty_chunks to MeshWorker
                     if (gs.dirty_chunks.count > 0) {
                         mw.enqueueBatch(gs.dirty_chunks.keys[0..gs.dirty_chunks.count]);
                         gs.dirty_chunks.clear();

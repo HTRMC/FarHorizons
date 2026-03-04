@@ -324,20 +324,24 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
 
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 
-    // Request load for missing chunks within render distance (runs at tick rate)
+    // Request load for missing chunks within render distance (runs at tick rate).
+    // Push all missing chunks — the dedup set rejects duplicates in O(1) and
+    // the priority queue ensures closest chunks are loaded first.
     if (self.streaming_initialized) {
         const rd = ChunkStreamer.RENDER_DISTANCE;
+        const rd_sq = rd * rd;
         const pc = self.player_chunk;
-        var batch: [512]WorldState.ChunkKey = undefined;
+        const max_batch = 18000; // conservative upper bound for sphere volume at rd=16
+        var batch: [max_batch]WorldState.ChunkKey = undefined;
         var batch_len: u32 = 0;
 
         var dy: i32 = -rd;
-        outer: while (dy <= rd) : (dy += 1) {
+        while (dy <= rd) : (dy += 1) {
             var dz: i32 = -rd;
             while (dz <= rd) : (dz += 1) {
                 var dx: i32 = -rd;
                 while (dx <= rd) : (dx += 1) {
-                    if (dx * dx + dy * dy + dz * dz > rd * rd) continue;
+                    if (dx * dx + dy * dy + dz * dz > rd_sq) continue;
                     const key = WorldState.ChunkKey{
                         .cx = pc.cx + dx,
                         .cy = pc.cy + dy,
@@ -346,7 +350,6 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
                     if (self.chunk_map.get(key) == null) {
                         batch[batch_len] = key;
                         batch_len += 1;
-                        if (batch_len >= batch.len) break :outer;
                     }
                 }
             }

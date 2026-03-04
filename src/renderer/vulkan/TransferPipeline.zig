@@ -303,6 +303,10 @@ pub const TransferPipeline = struct {
             }
 
             // 2. Wait for current ring buffer slot to be available
+            if (self.shutdown.load(.acquire)) {
+                for (local_results[0..local_count]) |r| freeResult(mw, r);
+                break;
+            }
             self.waitTimeline(self.slot_timeline_values[current_slot]);
 
             // 3. Reset ring + begin command buffer
