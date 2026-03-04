@@ -190,7 +190,9 @@ pub const TransferPipeline = struct {
         // Unblock the worker if it's waiting on mesh_worker output
         if (self.mesh_worker) |mw| {
             const io = Io.Threaded.global_single_threaded.io();
+            mw.output_mutex.lockUncancelable(io);
             mw.output_cond.broadcast(io);
+            mw.output_mutex.unlock(io);
         }
         if (self.thread) |t| {
             t.join();

@@ -395,6 +395,7 @@ pub fn main() !void {
     defer {
         if (game_state) |*gs| {
             gs.save();
+            renderer.setGameState(null);
             gs.deinit();
         }
     }

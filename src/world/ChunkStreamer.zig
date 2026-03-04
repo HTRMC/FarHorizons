@@ -67,7 +67,9 @@ pub const ChunkStreamer = struct {
     pub fn stop(self: *ChunkStreamer) void {
         self.shutdown.store(true, .release);
         const io = Io.Threaded.global_single_threaded.io();
+        self.input_mutex.lockUncancelable(io);
         self.input_cond.broadcast(io);
+        self.input_mutex.unlock(io);
         if (self.thread) |t| {
             t.join();
             self.thread = null;
