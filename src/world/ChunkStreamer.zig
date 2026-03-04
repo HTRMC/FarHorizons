@@ -7,13 +7,13 @@ const Chunk = WorldState.Chunk;
 const Io = std.Io;
 
 pub const ChunkStreamer = struct {
-    pub const MAX_OUTPUT = 256;
+    pub const MAX_OUTPUT = 512;
     pub const RENDER_DISTANCE: i32 = 16;
     pub const UNLOAD_DISTANCE: i32 = RENDER_DISTANCE + 2;
 
     // Pre-allocate for full sphere volume (4/3 π r³ ≈ 17157 at rd=16)
     const HEAP_CAPACITY = 18000;
-    const WORKER_BATCH = 8;
+    const WORKER_BATCH = 16;
     const MAX_WORKERS = 6;
 
     const ChunkKey = WorldState.ChunkKey;
