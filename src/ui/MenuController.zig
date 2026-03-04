@@ -15,7 +15,7 @@ const log = std.log.scoped(.UI);
 pub const MAX_WORLDS: u8 = 32;
 pub const MAX_NAME_LEN: u8 = 32;
 
-pub const AppState = enum { title_menu, singleplayer_menu, playing, pause_menu, saving };
+pub const AppState = enum { title_menu, singleplayer_menu, loading, playing, pause_menu, saving };
 pub const Action = enum { load_world, create_world, delete_world, resume_game, return_to_title, quit };
 
 pub const MenuController = struct {

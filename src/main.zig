@@ -180,7 +180,7 @@ fn mouseButtonName(button: c_int) []const u8 {
 }
 
 const DOUBLE_TAP_THRESHOLD: f64 = 0.35;
-const MAX_ACCUMULATOR: f32 = 0.25;
+const MAX_ACCUMULATOR: f32 = 0.5;
 
 const InputState = struct {
     window: *Window,
@@ -307,6 +307,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 }
             }
         },
+        .loading => {}, // Ignore input while loading
         .saving => {}, // Ignore input while saving
     }
 }
@@ -470,10 +471,7 @@ pub fn main() !void {
                             menu_ctrl.hideTitleMenu();
                             const vk_impl: *VulkanRenderer = @ptrCast(@alignCast(renderer.impl));
                             menu_ctrl.loadHud(&vk_impl.render_state.ui_renderer);
-                            menu_ctrl.app_state = .playing;
-                            input_state.mouse_captured = true;
-                            input_state.first_mouse = true;
-                            glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+                            menu_ctrl.app_state = .loading;
                             tick_accumulator = 0.0;
                         }
                     }
@@ -533,6 +531,20 @@ pub fn main() !void {
             }
             game_state = null;
             menu_ctrl.showTitleMenu();
+        }
+
+        // Loading → playing transition: tick world until initial chunks are ready
+        if (menu_ctrl.app_state == .loading) {
+            if (game_state) |*gs| {
+                gs.worldTick();
+                gs.world_tick_pending = true;
+                if (gs.initial_load_ready) {
+                    menu_ctrl.app_state = .playing;
+                    input_state.mouse_captured = true;
+                    input_state.first_mouse = true;
+                    glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+                }
+            }
         }
 
         var update_start: f64 = 0;

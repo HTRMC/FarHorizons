@@ -132,8 +132,34 @@ pub const MeshWorker = struct {
         const io = Io.Threaded.global_single_threaded.io();
         self.input_mutex.lockUncancelable(io);
         self.chunk_map = chunk_map;
+        const old = self.player_chunk;
         self.player_chunk = player_chunk;
+        if (!old.eql(player_chunk)) self.reheapify();
         self.input_mutex.unlock(io);
+    }
+
+    /// Floyd's bottom-up heapify — O(n), in-place. Caller must hold input_mutex.
+    fn reheapify(self: *MeshWorker) void {
+        const items = self.input_heap.items;
+        if (items.len <= 1) return;
+        var i = items.len >> 1;
+        while (i > 0) {
+            i -= 1;
+            const target = items[i];
+            var idx = i;
+            while (true) {
+                var child = (std.math.mul(usize, idx, 2) catch break) | 1;
+                if (child >= items.len) break;
+                const right = child + 1;
+                if (right < items.len and meshDistCmp(self, items[right], items[child]) == .lt) {
+                    child = right;
+                }
+                if (meshDistCmp(self, target, items[child]) == .lt) break;
+                items[idx] = items[child];
+                idx = child;
+            }
+            items[idx] = target;
+        }
     }
 
     pub fn enqueue(self: *MeshWorker, key: ChunkKey) void {

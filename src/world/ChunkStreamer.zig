@@ -148,11 +148,39 @@ pub const ChunkStreamer = struct {
     }
 
     /// Update player chunk for priority ordering. Thread-safe.
+    /// Re-heapifies the input queue when player moves to a different chunk
+    /// so that distance-based priority reflects the new position.
     pub fn syncPlayerChunk(self: *ChunkStreamer, pc: ChunkKey) void {
         const io = Io.Threaded.global_single_threaded.io();
         self.input_mutex.lockUncancelable(io);
+        const old = self.player_chunk;
         self.player_chunk = pc;
+        if (!old.eql(pc)) self.reheapify();
         self.input_mutex.unlock(io);
+    }
+
+    /// Floyd's bottom-up heapify — O(n), in-place. Caller must hold input_mutex.
+    fn reheapify(self: *ChunkStreamer) void {
+        const items = self.input_heap.items;
+        if (items.len <= 1) return;
+        var i = items.len >> 1;
+        while (i > 0) {
+            i -= 1;
+            const target = items[i];
+            var idx = i;
+            while (true) {
+                var child = (std.math.mul(usize, idx, 2) catch break) | 1;
+                if (child >= items.len) break;
+                const right = child + 1;
+                if (right < items.len and chunkDistCmp(self, items[right], items[child]) == .lt) {
+                    child = right;
+                }
+                if (chunkDistCmp(self, target, items[child]) == .lt) break;
+                items[idx] = items[child];
+                idx = child;
+            }
+            items[idx] = target;
+        }
     }
 
     /// Drain completed load results. Returns number of results copied to out_buf.

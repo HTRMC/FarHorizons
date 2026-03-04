@@ -267,10 +267,38 @@ pub const VulkanRenderer = struct {
         mw.start();
         self.transfer_pipeline.start();
 
-        // 6. Enqueue all loaded chunks for initial mesh
-        var it = gs.chunk_map.iterator();
-        while (it.next()) |entry| {
-            mw.enqueue(entry.key_ptr.*);
+        // 6. Request initial load batch if async loading
+        if (!gs.initial_load_ready) {
+            const WorldState = @import("../../world/WorldState.zig");
+            const rd: i32 = 3; // spawn radius for initial load
+            const rd_sq = rd * rd;
+            const pc = gs.player_chunk;
+            var batch: [512]WorldState.ChunkKey = undefined;
+            var batch_len: u32 = 0;
+
+            var dy: i32 = -rd;
+            while (dy <= rd) : (dy += 1) {
+                var dz: i32 = -rd;
+                while (dz <= rd) : (dz += 1) {
+                    var dx: i32 = -rd;
+                    while (dx <= rd) : (dx += 1) {
+                        if (dx * dx + dy * dy + dz * dz > rd_sq) continue;
+                        const key = WorldState.ChunkKey{
+                            .cx = pc.cx + dx,
+                            .cy = pc.cy + dy,
+                            .cz = pc.cz + dz,
+                        };
+                        if (batch_len < batch.len) {
+                            batch[batch_len] = key;
+                            batch_len += 1;
+                        }
+                    }
+                }
+            }
+
+            if (batch_len > 0) {
+                gs.streamer.requestLoadBatch(batch[0..batch_len]);
+            }
         }
     }
 
@@ -320,37 +348,42 @@ pub const VulkanRenderer = struct {
 
         if (self.game_state) |gs| {
             if (!gs.debug_camera_active) {
-                // 2. Process deferred TLSF frees for this frame slot (safe after fence wait)
+                // Always: deferred TLSF frees (usually empty between ticks)
                 self.processDeferredFrees(cf);
 
-                // 3. Drain committed chunks from TransferPipeline → apply to WorldRenderer
-                self.drainCommittedChunks(cf);
-
-                // 4. Run streaming update (load/unload chunks)
-                // 4. Run streaming update (load/unload chunks)
-                gs.updateStreaming(
-                    &self.render_state.world_renderer,
-                    &self.deferred_face_frees[cf],
-                    &self.deferred_face_free_counts[cf],
-                    &self.deferred_light_frees[cf],
-                    &self.deferred_light_free_counts[cf],
-                );
-
-                // 5. Sync player chunk for priority ordering
-                gs.streamer.syncPlayerChunk(gs.player_chunk);
-
+                // Player fast path: feed player-caused dirty chunks EVERY frame
+                // (bypass tick gate for instant responsiveness)
                 if (self.mesh_worker) |mw| {
-                    // 6. Sync worker chunk map pointer
-                    mw.syncChunkMap(&gs.chunk_map, gs.player_chunk);
-
-                    // 7. Feed any remaining dirty_chunks to MeshWorker
-                    if (gs.dirty_chunks.count > 0) {
-                        mw.enqueueBatch(gs.dirty_chunks.keys[0..gs.dirty_chunks.count]);
-                        gs.dirty_chunks.clear();
+                    if (gs.player_dirty_chunks.count > 0) {
+                        mw.enqueueBatch(gs.player_dirty_chunks.keys[0..gs.player_dirty_chunks.count]);
+                        gs.player_dirty_chunks.clear();
                     }
                 }
 
-                // 7. Build indirect draw commands
+                // Tick-gated: only when 30 Hz tick fired since last frame
+                if (gs.world_tick_pending) {
+                    gs.world_tick_pending = false;
+
+                    self.drainCommittedChunks(cf);
+
+                    gs.applyUnloadsToGpu(
+                        &self.render_state.world_renderer,
+                        &self.deferred_face_frees[cf],
+                        &self.deferred_face_free_counts[cf],
+                        &self.deferred_light_frees[cf],
+                        &self.deferred_light_free_counts[cf],
+                    );
+
+                    if (self.mesh_worker) |mw| {
+                        mw.syncChunkMap(&gs.chunk_map, gs.player_chunk);
+                        if (gs.dirty_chunks.count > 0) {
+                            mw.enqueueBatch(gs.dirty_chunks.keys[0..gs.dirty_chunks.count]);
+                            gs.dirty_chunks.clear();
+                        }
+                    }
+                }
+
+                // Always: rebuild draw commands for this frame
                 self.render_state.world_renderer.buildIndirectCommands(&self.ctx, gs.camera.position);
                 self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
             }

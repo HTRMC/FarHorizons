@@ -24,6 +24,7 @@ pub const HOTBAR_SIZE: u8 = 9;
 // Initial load radius in chunks (per axis from center)
 const LOAD_RADIUS_XZ: i32 = 2;
 const LOAD_RADIUS_Y: i32 = 1;
+const MAX_PENDING_UNLOADS: u32 = 256;
 
 pub fn blockName(block: WorldState.BlockType) []const u8 {
     return switch (block) {
@@ -81,6 +82,19 @@ storage: ?*Storage,
 streamer: ChunkStreamer,
 player_chunk: WorldState.ChunkKey,
 streaming_initialized: bool,
+world_tick_pending: bool = false,
+
+// Player-caused dirty chunks — fed to MeshWorker every frame for low latency
+player_dirty_chunks: DirtyChunkSet = DirtyChunkSet.empty(),
+
+// Pending unloads (collected by worldTick, applied by renderer)
+pending_unload_keys: [MAX_PENDING_UNLOADS]WorldState.ChunkKey = undefined,
+pending_unload_count: u16 = 0,
+unload_scan_cursor: u32 = 0,
+
+// Async initial load (ready when player's chunk is loaded+meshed AND count >= target)
+initial_load_target: u32 = 0,
+initial_load_ready: bool = true,
 
 debug_screens: u8 = 0,
 delta_time: f32 = 0,
@@ -123,8 +137,8 @@ pub const DirtyChunkSet = struct {
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8) !GameState {
     var cam = Camera.init(width, height);
-    var chunk_map = ChunkMap.init(allocator);
-    var chunk_pool = ChunkPool.init(allocator);
+    const chunk_map = ChunkMap.init(allocator);
+    const chunk_pool = ChunkPool.init(allocator);
 
     const storage_inst = Storage.init(allocator, world_name) catch |err| blk: {
         std.log.warn("Storage init failed: {}, world will not be saved", .{err});
@@ -142,56 +156,6 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     cam.position = zlm.Vec3.init(16.0, spawn_y + EYE_OFFSET, 16.0);
 
     const spawn_key = WorldState.ChunkKey.fromWorldPos(spawn_x, @intFromFloat(spawn_y), spawn_z);
-    var any_loaded = false;
-
-    var cy = spawn_key.cy - LOAD_RADIUS_Y;
-    while (cy <= spawn_key.cy + LOAD_RADIUS_Y) : (cy += 1) {
-        var cz = spawn_key.cz - LOAD_RADIUS_XZ;
-        while (cz <= spawn_key.cz + LOAD_RADIUS_XZ) : (cz += 1) {
-            var cx = spawn_key.cx - LOAD_RADIUS_XZ;
-            while (cx <= spawn_key.cx + LOAD_RADIUS_XZ) : (cx += 1) {
-                const key = WorldState.ChunkKey{ .cx = cx, .cy = cy, .cz = cz };
-                const chunk = chunk_pool.acquire();
-
-                var loaded = false;
-                if (storage_inst) |s| {
-                    if (s.loadChunk(cx, cy, cz, 0)) |cached_chunk| {
-                        chunk.* = cached_chunk.*;
-                        loaded = true;
-                        any_loaded = true;
-                    }
-                }
-
-                if (!loaded) {
-                    TerrainGen.generateChunk(chunk, key, world_seed);
-                }
-
-                chunk_map.put(key, chunk);
-            }
-        }
-    }
-
-    // Save newly generated chunks if none were loaded from storage
-    if (!any_loaded) {
-        if (storage_inst) |s| {
-            var it = chunk_map.iterator();
-            while (it.next()) |entry| {
-                s.saveChunk(entry.key_ptr.cx, entry.key_ptr.cy, entry.key_ptr.cz, 0, entry.value_ptr.*) catch |err| {
-                    std.log.warn("Failed to save generated chunk ({d},{d},{d}): {}", .{ entry.key_ptr.cx, entry.key_ptr.cy, entry.key_ptr.cz, err });
-                };
-            }
-            s.flush();
-        }
-    }
-
-    // Mark all loaded chunks as dirty so they get meshed
-    var dirty = DirtyChunkSet.empty();
-    {
-        var it = chunk_map.iterator();
-        while (it.next()) |entry| {
-            dirty.add(entry.key_ptr.*);
-        }
-    }
 
     return .{
         .allocator = allocator,
@@ -206,12 +170,14 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .jump_requested = false,
         .jump_cooldown = 0,
         .hit_result = null,
-        .dirty_chunks = dirty,
+        .dirty_chunks = DirtyChunkSet.empty(),
         .world_seed = world_seed,
         .storage = storage_inst,
         .streamer = undefined,
         .player_chunk = spawn_key,
         .streaming_initialized = false,
+        .initial_load_ready = false,
+        .initial_load_target = 75,
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
@@ -325,9 +291,8 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 
     // Request load for missing chunks within render distance (runs at tick rate).
-    // Capped at 1024 per tick — the dedup set skips already-queued chunks in O(1),
-    // so close chunks get found within a few ticks as earlier entries are skipped.
-    // The priority queue ensures closest queued chunks are loaded first regardless.
+    // Iterates center-outward so the first batch contains chunks near the player,
+    // not biased toward the bottom of the sphere.
     if (self.streaming_initialized) {
         const rd = ChunkStreamer.RENDER_DISTANCE;
         const rd_sq = rd * rd;
@@ -335,22 +300,30 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
         var batch: [1024]WorldState.ChunkKey = undefined;
         var batch_len: u32 = 0;
 
-        var dy: i32 = -rd;
-        outer: while (dy <= rd) : (dy += 1) {
-            var dz: i32 = -rd;
-            while (dz <= rd) : (dz += 1) {
-                var dx: i32 = -rd;
-                while (dx <= rd) : (dx += 1) {
-                    if (dx * dx + dy * dy + dz * dz > rd_sq) continue;
-                    const key = WorldState.ChunkKey{
-                        .cx = pc.cx + dx,
-                        .cy = pc.cy + dy,
-                        .cz = pc.cz + dz,
-                    };
-                    if (self.chunk_map.get(key) == null) {
-                        batch[batch_len] = key;
-                        batch_len += 1;
-                        if (batch_len >= batch.len) break :outer;
+        var shell: i32 = 0;
+        outer: while (shell <= rd) : (shell += 1) {
+            var dy: i32 = -shell;
+            while (dy <= shell) : (dy += 1) {
+                var dz: i32 = -shell;
+                while (dz <= shell) : (dz += 1) {
+                    var dx: i32 = -shell;
+                    while (dx <= shell) : (dx += 1) {
+                        // Only process the surface of this Chebyshev shell
+                        if (@max(@abs(dx), @abs(dy), @abs(dz)) != shell) {
+                            dx = shell - 1; // skip interior (next iter → shell)
+                            continue;
+                        }
+                        if (dx * dx + dy * dy + dz * dz > rd_sq) continue;
+                        const key = WorldState.ChunkKey{
+                            .cx = pc.cx + dx,
+                            .cy = pc.cy + dy,
+                            .cz = pc.cz + dz,
+                        };
+                        if (self.chunk_map.get(key) == null) {
+                            batch[batch_len] = key;
+                            batch_len += 1;
+                            if (batch_len >= batch.len) break :outer;
+                        }
                     }
                 }
             }
@@ -360,6 +333,9 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
             self.streamer.requestLoadBatch(batch[0..batch_len]);
         }
     }
+
+    self.worldTick();
+    self.world_tick_pending = true;
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
@@ -394,10 +370,11 @@ pub fn restoreAfterRender(self: *GameState) void {
     }
 }
 
-fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
     const affected = WorldState.affectedChunks(wx, wy, wz);
+    const target = if (player) &self.player_dirty_chunks else &self.dirty_chunks;
     for (affected.keys[0..affected.count]) |key| {
-        self.dirty_chunks.add(key);
+        target.add(key);
     }
 }
 
@@ -407,7 +384,7 @@ pub fn breakBlock(self: *GameState) void {
     const wy = hit.block_pos[1];
     const wz = hit.block_pos[2];
     self.chunk_map.setBlock(wx, wy, wz, .air);
-    self.markDirty(wx, wy, wz);
+    self.markDirty(wx, wy, wz, true);
     self.queueChunkSave(wx, wy, wz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
@@ -422,7 +399,7 @@ pub fn placeBlock(self: *GameState) void {
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
     self.chunk_map.setBlock(px, py, pz, block_type);
-    self.markDirty(px, py, pz);
+    self.markDirty(px, py, pz, true);
     self.queueChunkSave(px, py, pz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
@@ -434,14 +411,8 @@ fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     s.markDirty(key.cx, key.cy, key.cz, 0, chunk);
 }
 
-pub fn updateStreaming(
-    self: *GameState,
-    wr: *WorldRenderer,
-    deferred_face_frees: []TlsfAllocator.Handle,
-    deferred_face_free_count: *u32,
-    deferred_light_frees: []TlsfAllocator.Handle,
-    deferred_light_free_count: *u32,
-) void {
+pub fn worldTick(self: *GameState) void {
+    // Update player chunk from camera position
     const pos = self.camera.position;
     const current_chunk = WorldState.ChunkKey.fromWorldPos(
         @intFromFloat(@floor(pos.x)),
@@ -458,7 +429,7 @@ pub fn updateStreaming(
     var results: [ChunkStreamer.MAX_OUTPUT]ChunkStreamer.LoadResult = undefined;
     const count = self.streamer.drainOutput(&results);
     for (results[0..count]) |result| {
-        // Skip if chunk was already loaded (e.g. by sync init or double request)
+        // Skip if chunk was already loaded (e.g. by double request)
         if (self.chunk_map.get(result.key) != null) {
             self.chunk_pool.release(result.chunk);
             continue;
@@ -479,31 +450,81 @@ pub fn updateStreaming(
         }
     }
 
-    // Unload chunks beyond UNLOAD_DISTANCE (budget: max 16 per frame)
+    // Scan for chunks to unload (incremental cursor)
+    self.scanUnloads();
+
+    // Sync streamer player position + tick storage
+    self.streamer.syncPlayerChunk(self.player_chunk);
+    if (self.storage) |s| {
+        s.tick();
+    }
+
+    // Track initial load readiness
+    if (!self.initial_load_ready) {
+        const chunk_count = self.chunk_map.count();
+        const player_loaded = self.chunk_map.get(self.player_chunk) != null;
+        if (chunk_count >= self.initial_load_target and player_loaded) {
+            self.initial_load_ready = true;
+        }
+    }
+}
+
+fn scanUnloads(self: *GameState) void {
+    // Only scan when previous unloads have been applied
+    if (self.pending_unload_count > 0) return;
+
     const ud = ChunkStreamer.UNLOAD_DISTANCE;
     const ud_sq = ud * ud;
-    var unload_count: u32 = 0;
-    const MAX_UNLOADS: u32 = 256;
+    const pc = self.player_chunk;
+    const SCAN_BUDGET: u32 = 512;
 
-    // Collect keys to unload (can't modify map while iterating)
-    var unload_keys: [MAX_UNLOADS]WorldState.ChunkKey = undefined;
-    {
-        var it = self.chunk_map.iterator();
-        while (it.next()) |entry| {
-            if (unload_count >= MAX_UNLOADS) break;
-            const key = entry.key_ptr.*;
-            const dx = key.cx - current_chunk.cx;
-            const dy = key.cy - current_chunk.cy;
-            const dz = key.cz - current_chunk.cz;
-            if (dx * dx + dy * dy + dz * dz > ud_sq) {
-                unload_keys[unload_count] = key;
-                unload_count += 1;
+    const map_size: u32 = @intCast(self.chunk_map.count());
+    if (map_size == 0) return;
+
+    var scanned: u32 = 0;
+    var skipped: u32 = 0;
+    var it = self.chunk_map.iterator();
+
+    // Skip cursor entries
+    while (skipped < self.unload_scan_cursor) {
+        if (it.next() == null) {
+            // Wrapped around — reset cursor and restart
+            self.unload_scan_cursor = 0;
+            it = self.chunk_map.iterator();
+            break;
+        }
+        skipped += 1;
+    }
+
+    while (scanned < SCAN_BUDGET) : (scanned += 1) {
+        const entry = it.next() orelse {
+            self.unload_scan_cursor = 0;
+            break;
+        };
+        self.unload_scan_cursor += 1;
+
+        const key = entry.key_ptr.*;
+        const dx = key.cx - pc.cx;
+        const dy = key.cy - pc.cy;
+        const dz = key.cz - pc.cz;
+        if (dx * dx + dy * dy + dz * dz > ud_sq) {
+            if (self.pending_unload_count < MAX_PENDING_UNLOADS) {
+                self.pending_unload_keys[self.pending_unload_count] = key;
+                self.pending_unload_count += 1;
             }
         }
     }
+}
 
-    // Actually unload
-    for (unload_keys[0..unload_count]) |key| {
+pub fn applyUnloadsToGpu(
+    self: *GameState,
+    wr: *WorldRenderer,
+    deferred_face_frees: []TlsfAllocator.Handle,
+    deferred_face_free_count: *u32,
+    deferred_light_frees: []TlsfAllocator.Handle,
+    deferred_light_free_count: *u32,
+) void {
+    for (self.pending_unload_keys[0..self.pending_unload_count]) |key| {
         // Free GPU TLSF allocs via deferred mechanism
         if (wr.chunk_slot_map.get(key)) |slot| {
             if (wr.chunk_face_alloc[slot]) |fa| {
@@ -531,11 +552,7 @@ pub fn updateStreaming(
             self.chunk_pool.release(chunk);
         }
     }
-
-    // Tick storage (periodic dirty saves)
-    if (self.storage) |s| {
-        s.tick();
-    }
+    self.pending_unload_count = 0;
 }
 
 fn lerpVec3(a: zlm.Vec3, b: zlm.Vec3, t: f32) zlm.Vec3 {
