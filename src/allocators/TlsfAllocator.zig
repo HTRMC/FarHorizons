@@ -36,7 +36,7 @@ pub const TlsfAllocator = struct {
 
     capacity: u32,
 
-    const max_blocks = 4096;
+    const max_blocks = 32768;
 
     pub fn init(capacity: u32) TlsfAllocator {
         var self = TlsfAllocator{

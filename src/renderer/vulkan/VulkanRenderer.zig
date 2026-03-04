@@ -392,6 +392,8 @@ pub const VulkanRenderer = struct {
                 }
                 self.transfer_pipeline.tlsf_mutex.unlock(io_val);
                 self.max_graphics_wait_timeline = @max(self.max_graphics_wait_timeline, entry.timeline_value);
+                // Re-dirty so the chunk gets retried when slots free up
+                if (self.game_state) |gs| gs.dirty_chunks.add(entry.key);
                 continue;
             };
 

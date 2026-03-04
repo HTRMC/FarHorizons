@@ -24,7 +24,7 @@ pub const INITIAL_LIGHT_CAPACITY: u32 = 48_000_000;
 const ChunkMap = @import("../../world/ChunkMap.zig").ChunkMap;
 
 const MAX_FACES_PER_DRAW: u32 = 16_384;
-pub const TOTAL_RENDER_CHUNKS: u32 = 18_000;
+pub const TOTAL_RENDER_CHUNKS: u32 = 25_000;
 const MAX_INDIRECT_COMMANDS: u32 = TOTAL_RENDER_CHUNKS * 6;
 
 pub const WorldRenderer = struct {
