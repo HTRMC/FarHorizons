@@ -11,7 +11,8 @@ const Io = std.Io;
 pub const MeshWorker = struct {
     const MAX_INPUT = 512;
     pub const MAX_OUTPUT = 64;
-    const WORKER_BATCH = 32;
+    const WORKER_BATCH = 4;
+    const MAX_WORKERS = 6;
 
     const ChunkKey = WorldState.ChunkKey;
 
@@ -42,7 +43,8 @@ pub const MeshWorker = struct {
     chunk_map: *const ChunkMap,
     player_chunk: ChunkKey,
 
-    thread: ?std.Thread,
+    threads: [MAX_WORKERS]?std.Thread,
+    worker_count: u32,
     shutdown: std.atomic.Value(bool),
 
     pub const ChunkResult = struct {
@@ -87,7 +89,8 @@ pub const MeshWorker = struct {
             .allocator = allocator,
             .chunk_map = chunk_map,
             .player_chunk = .{ .cx = 0, .cy = 0, .cz = 0 },
-            .thread = null,
+            .threads = .{null} ** MAX_WORKERS,
+            .worker_count = 0,
             .shutdown = std.atomic.Value(bool).init(false),
         };
         // Re-set context pointer after self.* assignment
@@ -98,10 +101,17 @@ pub const MeshWorker = struct {
     }
 
     pub fn start(self: *MeshWorker) void {
-        self.thread = std.Thread.spawn(.{ .stack_size = 4 * 1024 * 1024 }, workerFn, .{self}) catch |err| {
-            std.log.err("Failed to spawn mesh worker thread: {}", .{err});
-            return;
-        };
+        const cpu_count = std.Thread.getCpuCount() catch 2;
+        const count: u32 = @intCast(std.math.clamp(cpu_count -| 4, 1, MAX_WORKERS));
+        self.worker_count = count;
+
+        for (0..count) |i| {
+            self.threads[i] = std.Thread.spawn(.{ .stack_size = 4 * 1024 * 1024 }, workerFn, .{self}) catch |err| {
+                std.log.err("Failed to spawn mesh worker thread: {}", .{err});
+                continue;
+            };
+        }
+        std.log.info("MeshWorker: {d} worker threads", .{count});
     }
 
     pub fn stop(self: *MeshWorker) void {
@@ -113,9 +123,11 @@ pub const MeshWorker = struct {
         self.output_mutex.lockUncancelable(io);
         self.output_drained_cond.broadcast(io);
         self.output_mutex.unlock(io);
-        if (self.thread) |t| {
-            t.join();
-            self.thread = null;
+        for (0..self.worker_count) |i| {
+            if (self.threads[i]) |t| {
+                t.join();
+                self.threads[i] = null;
+            }
         }
         // Free any remaining output results
         for (self.output_queue[0..self.output_len]) |r| {
@@ -190,7 +202,7 @@ pub const MeshWorker = struct {
             self.input_set.put(key, false) catch continue;
             self.input_heap.push(self.allocator, key) catch continue;
         }
-        self.input_cond.signal(io);
+        self.input_cond.broadcast(io);
     }
 
     pub fn enqueueLightOnlyBatch(self: *MeshWorker, keys: []const ChunkKey) void {
@@ -204,7 +216,7 @@ pub const MeshWorker = struct {
             self.input_set.put(key, true) catch continue;
             self.input_heap.push(self.allocator, key) catch continue;
         }
-        self.input_cond.signal(io);
+        self.input_cond.broadcast(io);
     }
 
     fn workerFn(self: *MeshWorker) void {
