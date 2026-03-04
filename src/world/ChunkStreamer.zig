@@ -7,13 +7,14 @@ const Chunk = WorldState.Chunk;
 const Io = std.Io;
 
 pub const ChunkStreamer = struct {
-    pub const MAX_OUTPUT = 64;
+    pub const MAX_OUTPUT = 128;
     pub const RENDER_DISTANCE: i32 = 16;
     pub const UNLOAD_DISTANCE: i32 = RENDER_DISTANCE + 2;
 
     // Pre-allocate for full sphere volume (4/3 π r³ ≈ 17157 at rd=16)
     const HEAP_CAPACITY = 18000;
-    const WORKER_BATCH = 64;
+    const WORKER_BATCH = 8;
+    const MAX_WORKERS = 6;
 
     const ChunkKey = WorldState.ChunkKey;
     const Heap = std.PriorityQueue(ChunkKey, *ChunkStreamer, chunkDistCmp);
@@ -37,7 +38,8 @@ pub const ChunkStreamer = struct {
     storage: ?*Storage,
     chunk_pool: *ChunkPool,
     seed: u64,
-    thread: ?std.Thread,
+    threads: [MAX_WORKERS]?std.Thread,
+    worker_count: u32,
     shutdown: std.atomic.Value(bool),
 
     pub const LoadResult = struct {
@@ -80,7 +82,8 @@ pub const ChunkStreamer = struct {
             .storage = storage,
             .chunk_pool = chunk_pool,
             .seed = seed,
-            .thread = null,
+            .threads = .{null} ** MAX_WORKERS,
+            .worker_count = 0,
             .shutdown = std.atomic.Value(bool).init(false),
         };
         // Re-set context pointer after self.* assignment overwrote it
@@ -91,10 +94,16 @@ pub const ChunkStreamer = struct {
     }
 
     pub fn start(self: *ChunkStreamer) void {
-        self.thread = std.Thread.spawn(.{ .stack_size = 2 * 1024 * 1024 }, workerFn, .{self}) catch |err| {
-            std.log.err("Failed to spawn chunk streamer thread: {}", .{err});
-            return;
-        };
+        const cpu_count = std.Thread.getCpuCount() catch 2;
+        self.worker_count = @intCast(@min(MAX_WORKERS, @max(1, cpu_count -| 3)));
+        std.log.info("ChunkStreamer: {d} worker threads", .{self.worker_count});
+
+        for (0..self.worker_count) |i| {
+            self.threads[i] = std.Thread.spawn(.{ .stack_size = 2 * 1024 * 1024 }, workerFn, .{self}) catch |err| {
+                std.log.err("Failed to spawn chunk streamer thread {d}: {}", .{ i, err });
+                continue;
+            };
+        }
     }
 
     pub fn stop(self: *ChunkStreamer) void {
@@ -107,9 +116,11 @@ pub const ChunkStreamer = struct {
         self.output_mutex.lockUncancelable(io);
         self.output_drained_cond.broadcast(io);
         self.output_mutex.unlock(io);
-        if (self.thread) |t| {
-            t.join();
-            self.thread = null;
+        for (0..self.worker_count) |i| {
+            if (self.threads[i]) |t| {
+                t.join();
+                self.threads[i] = null;
+            }
         }
         // Release any chunks still in the output queue
         for (self.output_queue[0..self.output_len]) |result| {
@@ -144,7 +155,7 @@ pub const ChunkStreamer = struct {
             self.input_set.put(key, {}) catch continue;
             self.input_heap.push(self.allocator, key) catch continue;
         }
-        self.input_cond.signal(io);
+        self.input_cond.broadcast(io);
     }
 
     /// Update player chunk for priority ordering. Thread-safe.
