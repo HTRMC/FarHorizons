@@ -430,8 +430,7 @@ pub const MenuController = struct {
         }
     }
 
-    fn actionDeleteWorld(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
+    pub fn showDeleteConfirm(self: *MenuController) void {
         if (self.world_count == 0) return;
 
         const tree = self.singleplayerTree() orelse return;
@@ -448,6 +447,10 @@ pub const MenuController = struct {
                 data.label.setText(text);
             }
         }
+    }
+
+    fn actionDeleteWorld(ctx: ?*anyopaque) void {
+        getSelf(ctx).showDeleteConfirm();
     }
 
     fn actionConfirmDelete(ctx: ?*anyopaque) void {

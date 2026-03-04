@@ -247,8 +247,14 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             }
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },
-        .title_menu, .singleplayer_menu => {
+        .title_menu => {
             _ = input_state.ui_manager.handleKey(key, action, mods);
+        },
+        .singleplayer_menu => {
+            const consumed = input_state.ui_manager.handleKey(key, action, mods);
+            if (!consumed and key == glfw.GLFW_KEY_DELETE and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.showDeleteConfirm();
+            }
         },
         .playing => {
             if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
