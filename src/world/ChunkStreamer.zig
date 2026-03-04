@@ -42,6 +42,12 @@ pub const ChunkStreamer = struct {
     worker_count: u32,
     shutdown: std.atomic.Value(bool),
 
+    // Pipeline stats (atomically updated by workers)
+    stats_loaded: std.atomic.Value(u64),
+    stats_generated: std.atomic.Value(u64),
+    stats_stale: std.atomic.Value(u64),
+    stats_output_waits: std.atomic.Value(u64),
+
     pub const LoadResult = struct {
         key: ChunkKey,
         chunk: *Chunk,
@@ -85,6 +91,10 @@ pub const ChunkStreamer = struct {
             .threads = .{null} ** MAX_WORKERS,
             .worker_count = 0,
             .shutdown = std.atomic.Value(bool).init(false),
+            .stats_loaded = std.atomic.Value(u64).init(0),
+            .stats_generated = std.atomic.Value(u64).init(0),
+            .stats_stale = std.atomic.Value(u64).init(0),
+            .stats_output_waits = std.atomic.Value(u64).init(0),
         };
         // Re-set context pointer after self.* assignment overwrote it
         self.input_heap.context = self;
@@ -260,7 +270,10 @@ pub const ChunkStreamer = struct {
                 if (self.shutdown.load(.acquire)) break;
 
                 // Skip stale chunks the player has moved away from
-                if (distSq(key, player_snapshot) > ud_sq) continue;
+                if (distSq(key, player_snapshot) > ud_sq) {
+                    _ = self.stats_stale.fetchAdd(1, .monotonic);
+                    continue;
+                }
 
                 const chunk = self.chunk_pool.acquire();
 
@@ -269,11 +282,13 @@ pub const ChunkStreamer = struct {
                     if (s.loadChunk(key.cx, key.cy, key.cz, 0)) |cached_chunk| {
                         chunk.* = cached_chunk.*;
                         loaded = true;
+                        _ = self.stats_loaded.fetchAdd(1, .monotonic);
                     }
                 }
 
                 if (!loaded) {
                     TerrainGen.generateChunk(chunk, key, self.seed);
+                    _ = self.stats_generated.fetchAdd(1, .monotonic);
                     // Save newly generated chunk to storage
                     if (self.storage) |s| {
                         s.saveChunk(key.cx, key.cy, key.cz, 0, chunk) catch {};
@@ -282,6 +297,7 @@ pub const ChunkStreamer = struct {
 
                 // Push to output queue — wait if full (backpressure)
                 self.output_mutex.lockUncancelable(io);
+                if (self.output_len >= MAX_OUTPUT) _ = self.stats_output_waits.fetchAdd(1, .monotonic);
                 while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
                     self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
                 }

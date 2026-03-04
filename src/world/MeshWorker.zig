@@ -47,6 +47,12 @@ pub const MeshWorker = struct {
     worker_count: u32,
     shutdown: std.atomic.Value(bool),
 
+    // Pipeline stats (atomically updated by workers)
+    stats_meshed: std.atomic.Value(u64),
+    stats_light_only: std.atomic.Value(u64),
+    stats_stale: std.atomic.Value(u64),
+    stats_output_waits: std.atomic.Value(u64),
+
     pub const ChunkResult = struct {
         faces: []FaceData,
         face_counts: [6]u32,
@@ -92,6 +98,10 @@ pub const MeshWorker = struct {
             .threads = .{null} ** MAX_WORKERS,
             .worker_count = 0,
             .shutdown = std.atomic.Value(bool).init(false),
+            .stats_meshed = std.atomic.Value(u64).init(0),
+            .stats_light_only = std.atomic.Value(u64).init(0),
+            .stats_stale = std.atomic.Value(u64).init(0),
+            .stats_output_waits = std.atomic.Value(u64).init(0),
         };
         // Re-set context pointer after self.* assignment
         self.input_heap.context = self;
@@ -257,7 +267,10 @@ pub const MeshWorker = struct {
                 if (self.shutdown.load(.acquire)) break;
 
                 // Skip stale chunks the player has moved away from
-                if (distSq(key, player_snapshot) > ud_sq) continue;
+                if (distSq(key, player_snapshot) > ud_sq) {
+                    _ = self.stats_stale.fetchAdd(1, .monotonic);
+                    continue;
+                }
 
                 // Look up chunk and neighbors from the ChunkMap
                 const chunk = local_chunk_map.get(key) orelse continue;
@@ -271,6 +284,7 @@ pub const MeshWorker = struct {
                     };
 
                     self.output_mutex.lockUncancelable(io);
+                    if (self.output_len >= MAX_OUTPUT) _ = self.stats_output_waits.fetchAdd(1, .monotonic);
                     while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
                         self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
                     }
@@ -291,6 +305,7 @@ pub const MeshWorker = struct {
                     self.output_len += 1;
                     self.output_cond.signal(io);
                     self.output_mutex.unlock(io);
+                    _ = self.stats_light_only.fetchAdd(1, .monotonic);
                 } else {
                     // Full remesh path
                     const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors) catch |err| {
@@ -299,6 +314,7 @@ pub const MeshWorker = struct {
                     };
 
                     self.output_mutex.lockUncancelable(io);
+                    if (self.output_len >= MAX_OUTPUT) _ = self.stats_output_waits.fetchAdd(1, .monotonic);
                     while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
                         self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
                     }
@@ -320,6 +336,7 @@ pub const MeshWorker = struct {
                     self.output_len += 1;
                     self.output_cond.signal(io);
                     self.output_mutex.unlock(io);
+                    _ = self.stats_meshed.fetchAdd(1, .monotonic);
                 }
             }
         }

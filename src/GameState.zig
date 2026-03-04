@@ -12,6 +12,8 @@ const Storage = @import("world/storage/Storage.zig");
 const WorldRenderer = @import("renderer/vulkan/WorldRenderer.zig").WorldRenderer;
 const TlsfAllocator = @import("allocators/TlsfAllocator.zig").TlsfAllocator;
 const MeshWorker = @import("world/MeshWorker.zig").MeshWorker;
+const TransferPipeline = @import("renderer/vulkan/TransferPipeline.zig").TransferPipeline;
+const Io = std.Io;
 
 const GameState = @This();
 
@@ -95,6 +97,11 @@ unload_scan_cursor: u32 = 0,
 // Async initial load (ready when player's chunk is loaded+meshed AND count >= target)
 initial_load_target: u32 = 0,
 initial_load_ready: bool = true,
+
+// Pipeline references for stats reporting (set by renderer)
+mesh_worker: ?*MeshWorker = null,
+transfer_pipeline: ?*TransferPipeline = null,
+stats_last_time: ?Io.Timestamp = null,
 
 debug_screens: u8 = 0,
 delta_time: f32 = 0,
@@ -336,6 +343,9 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
 
     self.worldTick();
     self.world_tick_pending = true;
+
+    // Pipeline stats reporter — sample every 2 seconds
+    self.reportPipelineStats();
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
@@ -467,6 +477,85 @@ pub fn worldTick(self: *GameState) void {
             self.initial_load_ready = true;
         }
     }
+}
+
+fn reportPipelineStats(self: *GameState) void {
+    const io = Io.Threaded.global_single_threaded.io();
+    const now = Io.Clock.now(.awake, io);
+
+    const last = self.stats_last_time orelse {
+        self.stats_last_time = now;
+        return;
+    };
+
+    const elapsed_ns: i64 = @intCast(last.durationTo(now).nanoseconds);
+    if (elapsed_ns < 2_000_000_000) return;
+    self.stats_last_time = now;
+
+    const elapsed_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+
+    // Read + reset streamer counters
+    const s_loaded = self.streamer.stats_loaded.swap(0, .monotonic);
+    const s_generated = self.streamer.stats_generated.swap(0, .monotonic);
+    const s_stale = self.streamer.stats_stale.swap(0, .monotonic);
+    const s_waits = self.streamer.stats_output_waits.swap(0, .monotonic);
+    const s_total = s_loaded + s_generated;
+
+    // Read + reset mesh worker counters
+    var m_meshed: u64 = 0;
+    var m_light: u64 = 0;
+    var m_stale: u64 = 0;
+    var m_waits: u64 = 0;
+    if (self.mesh_worker) |mw| {
+        m_meshed = mw.stats_meshed.swap(0, .monotonic);
+        m_light = mw.stats_light_only.swap(0, .monotonic);
+        m_stale = mw.stats_stale.swap(0, .monotonic);
+        m_waits = mw.stats_output_waits.swap(0, .monotonic);
+    }
+    const m_total = m_meshed + m_light;
+
+    // Read + reset transfer pipeline counters
+    var t_transferred: u64 = 0;
+    var t_dropped: u64 = 0;
+    if (self.transfer_pipeline) |tp| {
+        t_transferred = tp.stats_transferred.swap(0, .monotonic);
+        t_dropped = tp.stats_dropped.swap(0, .monotonic);
+    }
+
+    // Sample queue depths (non-atomic, diagnostic only)
+    const si = self.streamer.input_heap.count();
+    const so = self.streamer.output_len;
+    var mi: usize = 0;
+    var mo: u32 = 0;
+    if (self.mesh_worker) |mw| {
+        mi = mw.input_heap.count();
+        mo = mw.output_len;
+    }
+    var co: u32 = 0;
+    if (self.transfer_pipeline) |tp| {
+        co = tp.committed_len;
+    }
+
+    std.log.info("[Pipeline {d:.1}s] stream: {d:.0}/s (gen:{} disk:{} stale:{} waits:{}) | mesh: {d:.0}/s (full:{} light:{} stale:{} waits:{}) | gpu: {d:.0}/s (drop:{}) | queues: si:{} so:{} mi:{} mo:{} co:{}", .{
+        elapsed_s,
+        @as(f64, @floatFromInt(s_total)) / elapsed_s,
+        s_generated,
+        s_loaded,
+        s_stale,
+        s_waits,
+        @as(f64, @floatFromInt(m_total)) / elapsed_s,
+        m_meshed,
+        m_light,
+        m_stale,
+        m_waits,
+        @as(f64, @floatFromInt(t_transferred)) / elapsed_s,
+        t_dropped,
+        si,
+        so,
+        mi,
+        mo,
+        co,
+    });
 }
 
 fn scanUnloads(self: *GameState) void {

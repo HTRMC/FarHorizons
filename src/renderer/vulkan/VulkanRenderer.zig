@@ -263,7 +263,11 @@ pub const VulkanRenderer = struct {
             wr.light_alloc.buffer,
         );
 
-        // 5. Start threads (mesh first so transfer can consume)
+        // 5. Set pipeline references for stats reporting
+        gs.mesh_worker = mw;
+        gs.transfer_pipeline = &self.transfer_pipeline;
+
+        // 6. Start threads (mesh first so transfer can consume)
         mw.start();
         self.transfer_pipeline.start();
 
@@ -306,6 +310,8 @@ pub const VulkanRenderer = struct {
         // Stop streamer first (produces chunks for main thread)
         if (self.game_state) |gs| {
             gs.streamer.stop();
+            gs.mesh_worker = null;
+            gs.transfer_pipeline = null;
         }
 
         // Stop threads in dependency order: transfer (consumes mesh) → mesh (produces)

@@ -65,6 +65,10 @@ pub const TransferPipeline = struct {
     committed_len: u32,
     committed_mutex: Io.Mutex,
 
+    // Pipeline stats (atomically updated by worker)
+    stats_transferred: std.atomic.Value(u64),
+    stats_dropped: std.atomic.Value(u64),
+
     pub fn init(ctx: *const VulkanContext) !TransferPipeline {
         const tz = tracy.zone(@src(), "TransferPipeline.init");
         defer tz.end();
@@ -89,6 +93,8 @@ pub const TransferPipeline = struct {
         self.tlsf_mutex = .init;
         self.committed_len = 0;
         self.committed_mutex = .init;
+        self.stats_transferred = std.atomic.Value(u64).init(0);
+        self.stats_dropped = std.atomic.Value(u64).init(0);
 
         // Create ring buffers
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
@@ -362,6 +368,7 @@ pub const TransferPipeline = struct {
 
                     if (light_alloc == null) {
                         std.log.err("TLSF light heap full for light-only (requested {})", .{result.light_count});
+                        _ = self.stats_dropped.fetchAdd(1, .monotonic);
                         mw.allocator.free(result.lights);
                         continue;
                     }
@@ -373,6 +380,7 @@ pub const TransferPipeline = struct {
                         self.tlsf_mutex.lockUncancelable(io);
                         l_tlsf.free(la.handle);
                         self.tlsf_mutex.unlock(io);
+                        _ = self.stats_dropped.fetchAdd(1, .monotonic);
                         mw.allocator.free(result.lights);
                         continue;
                     };
@@ -438,6 +446,7 @@ pub const TransferPipeline = struct {
 
                 if (face_alloc == null) {
                     std.log.err("TLSF face heap full (requested {})", .{result.total_face_count});
+                    _ = self.stats_dropped.fetchAdd(1, .monotonic);
                     if (light_alloc) |la_alloc| {
                         self.tlsf_mutex.lockUncancelable(io);
                         l_tlsf.free(la_alloc.handle);
@@ -458,6 +467,7 @@ pub const TransferPipeline = struct {
                     f_tlsf.free(fa.handle);
                     if (light_alloc != null) l_tlsf.free(la.handle);
                     self.tlsf_mutex.unlock(io);
+                    _ = self.stats_dropped.fetchAdd(1, .monotonic);
                     mw.allocator.free(result.faces);
                     mw.allocator.free(result.lights);
                     continue;
@@ -581,8 +591,10 @@ pub const TransferPipeline = struct {
         if (self.committed_len < MAX_COMMITTED) {
             self.committed_queue[self.committed_len] = entry;
             self.committed_len += 1;
+            _ = self.stats_transferred.fetchAdd(1, .monotonic);
         } else {
             dropped = true;
+            _ = self.stats_dropped.fetchAdd(1, .monotonic);
         }
         self.committed_mutex.unlock(io);
 

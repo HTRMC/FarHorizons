@@ -296,6 +296,111 @@ fn computeAoOffsets() [6][4][3][3]i32 {
     return result;
 }
 
+// --- Padded block lookup (eliminates per-block neighbor branching) ---
+
+const PADDED_SIZE = CHUNK_SIZE + 2;
+const PADDED_BLOCKS = PADDED_SIZE * PADDED_SIZE * PADDED_SIZE;
+
+fn paddedIndex(x: usize, y: usize, z: usize) usize {
+    return y * PADDED_SIZE * PADDED_SIZE + z * PADDED_SIZE + x;
+}
+
+/// Comptime padded-index offsets for the 6 face neighbors.
+const padded_face_deltas = computePaddedFaceDeltas();
+
+fn computePaddedFaceDeltas() [6]i32 {
+    var result: [6]i32 = undefined;
+    for (0..6) |f| {
+        const fno = face_neighbor_offsets[f];
+        result[f] = fno[1] * @as(i32, PADDED_SIZE * PADDED_SIZE) + fno[2] * @as(i32, PADDED_SIZE) + fno[0];
+    }
+    return result;
+}
+
+/// Comptime padded-index offsets for AO corner samples.
+const padded_ao_deltas = computePaddedAoDeltas();
+
+fn computePaddedAoDeltas() [6][4][3]i32 {
+    var result: [6][4][3]i32 = undefined;
+    for (0..6) |face| {
+        for (0..4) |corner| {
+            for (0..3) |sample| {
+                const off = ao_offsets[face][corner][sample];
+                result[face][corner][sample] = off[1] * @as(i32, PADDED_SIZE * PADDED_SIZE) + off[2] * @as(i32, PADDED_SIZE) + off[0];
+            }
+        }
+    }
+    return result;
+}
+
+/// Build a 34³ padded block array: center 32³ from chunk, 1-block border from neighbors, .air elsewhere.
+fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, neighbors: [6]?*const Chunk) void {
+    @memset(padded, .air);
+
+    // Copy center 32³ — row by row (x-axis contiguous in memory)
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |z| {
+            @memcpy(
+                padded[paddedIndex(1, y + 1, z + 1)..][0..CHUNK_SIZE],
+                chunk.blocks[chunkIndex(0, y, z)..][0..CHUNK_SIZE],
+            );
+        }
+    }
+
+    // +Z face (0): neighbor's z=0 slice → padded z=PADDED_SIZE-1
+    if (neighbors[0]) |n| {
+        for (0..CHUNK_SIZE) |y| {
+            @memcpy(
+                padded[paddedIndex(1, y + 1, PADDED_SIZE - 1)..][0..CHUNK_SIZE],
+                n.blocks[chunkIndex(0, y, 0)..][0..CHUNK_SIZE],
+            );
+        }
+    }
+    // -Z face (1): neighbor's z=31 slice → padded z=0
+    if (neighbors[1]) |n| {
+        for (0..CHUNK_SIZE) |y| {
+            @memcpy(
+                padded[paddedIndex(1, y + 1, 0)..][0..CHUNK_SIZE],
+                n.blocks[chunkIndex(0, y, CHUNK_SIZE - 1)..][0..CHUNK_SIZE],
+            );
+        }
+    }
+    // -X face (2): neighbor's x=31 → padded x=0
+    if (neighbors[2]) |n| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                padded[paddedIndex(0, y + 1, z + 1)] = n.blocks[chunkIndex(CHUNK_SIZE - 1, y, z)];
+            }
+        }
+    }
+    // +X face (3): neighbor's x=0 → padded x=PADDED_SIZE-1
+    if (neighbors[3]) |n| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                padded[paddedIndex(PADDED_SIZE - 1, y + 1, z + 1)] = n.blocks[chunkIndex(0, y, z)];
+            }
+        }
+    }
+    // +Y face (4): neighbor's y=0 → padded y=PADDED_SIZE-1
+    if (neighbors[4]) |n| {
+        for (0..CHUNK_SIZE) |z| {
+            @memcpy(
+                padded[paddedIndex(1, PADDED_SIZE - 1, z + 1)..][0..CHUNK_SIZE],
+                n.blocks[chunkIndex(0, 0, z)..][0..CHUNK_SIZE],
+            );
+        }
+    }
+    // -Y face (5): neighbor's y=31 → padded y=0
+    if (neighbors[5]) |n| {
+        for (0..CHUNK_SIZE) |z| {
+            @memcpy(
+                padded[paddedIndex(1, 0, z + 1)..][0..CHUNK_SIZE],
+                n.blocks[chunkIndex(0, CHUNK_SIZE - 1, z)..][0..CHUNK_SIZE],
+            );
+        }
+    }
+}
+
 // --- Mesh generation ---
 
 pub fn generateChunkMesh(
@@ -305,6 +410,9 @@ pub fn generateChunkMesh(
 ) !ChunkMeshResult {
     const tz = tracy.zone(@src(), "generateChunkMesh");
     defer tz.end();
+
+    var padded: [PADDED_BLOCKS]BlockType = undefined;
+    buildPaddedBlocks(&padded, chunk, neighbors);
 
     var normal_faces: [6]std.ArrayList(FaceData) = undefined;
     var normal_lights: [6]std.ArrayList(LightEntry) = undefined;
@@ -320,19 +428,15 @@ pub fn generateChunkMesh(
     for (0..CHUNK_SIZE) |by| {
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                const block = chunk.blocks[chunkIndex(bx, by, bz)];
+                const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
+                const block = padded[@intCast(base)];
                 if (block == .air) continue;
-
-                const ibx: i32 = @intCast(bx);
-                const iby: i32 = @intCast(by);
-                const ibz: i32 = @intCast(bz);
 
                 const emits = block_properties.emittedLight(block);
                 const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
 
                 for (0..6) |face| {
-                    const fno = face_neighbor_offsets[face];
-                    const neighbor = getNeighborBlock(chunk, neighbors, ibx + fno[0], iby + fno[1], ibz + fno[2]);
+                    const neighbor = padded[@intCast(base + padded_face_deltas[face])];
 
                     if (block_properties.isOpaque(neighbor)) continue;
                     if (neighbor == block and block_properties.cullsSelf(block)) continue;
@@ -371,13 +475,13 @@ pub fn generateChunkMesh(
                         ao = .{ 0, 0, 0, 0 };
                     } else {
                         for (0..4) |corner| {
-                            const offsets = ao_offsets[face][corner];
-                            const s1 = block_properties.isOpaque(getNeighborBlock(chunk, neighbors, ibx + offsets[0][0], iby + offsets[0][1], ibz + offsets[0][2]));
-                            const s2 = block_properties.isOpaque(getNeighborBlock(chunk, neighbors, ibx + offsets[1][0], iby + offsets[1][1], ibz + offsets[1][2]));
+                            const deltas = padded_ao_deltas[face][corner];
+                            const s1 = block_properties.isOpaque(padded[@intCast(base + deltas[0])]);
+                            const s2 = block_properties.isOpaque(padded[@intCast(base + deltas[1])]);
                             const diag = if (s1 and s2)
                                 true
                             else
-                                block_properties.isOpaque(getNeighborBlock(chunk, neighbors, ibx + offsets[2][0], iby + offsets[2][1], ibz + offsets[2][2]));
+                                block_properties.isOpaque(padded[@intCast(base + deltas[2])]);
                             const raw_ao: u3 = @as(u3, @intFromBool(s1)) + @intFromBool(s2) + @intFromBool(diag);
 
                             const reduction: u3 = @intCast(@min(@as(u32, 3), @as(u32, corner_block_brightness[corner]) / 64));
@@ -442,6 +546,9 @@ pub fn generateChunkLightOnly(
     const tz = tracy.zone(@src(), "generateChunkLightOnly");
     defer tz.end();
 
+    var padded: [PADDED_BLOCKS]BlockType = undefined;
+    buildPaddedBlocks(&padded, chunk, neighbors);
+
     var normal_lights: [6]std.ArrayList(LightEntry) = undefined;
     for (0..6) |i| {
         normal_lights[i] = .empty;
@@ -453,19 +560,15 @@ pub fn generateChunkLightOnly(
     for (0..CHUNK_SIZE) |by| {
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                const block = chunk.blocks[chunkIndex(bx, by, bz)];
+                const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
+                const block = padded[@intCast(base)];
                 if (block == .air) continue;
-
-                const ibx: i32 = @intCast(bx);
-                const iby: i32 = @intCast(by);
-                const ibz: i32 = @intCast(bz);
 
                 const emits = block_properties.emittedLight(block);
                 const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
 
                 for (0..6) |face| {
-                    const fno = face_neighbor_offsets[face];
-                    const neighbor_block = getNeighborBlock(chunk, neighbors, ibx + fno[0], iby + fno[1], ibz + fno[2]);
+                    const neighbor_block = padded[@intCast(base + padded_face_deltas[face])];
 
                     if (block_properties.isOpaque(neighbor_block)) continue;
                     if (neighbor_block == block and block_properties.cullsSelf(block)) continue;
