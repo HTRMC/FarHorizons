@@ -111,6 +111,10 @@ pub const ChunkStreamer = struct {
             t.join();
             self.thread = null;
         }
+        // Release any chunks still in the output queue
+        for (self.output_queue[0..self.output_len]) |result| {
+            self.chunk_pool.release(result.chunk);
+        }
         self.output_len = 0;
         // Free heap/set memory
         self.input_heap.deinit(self.allocator);

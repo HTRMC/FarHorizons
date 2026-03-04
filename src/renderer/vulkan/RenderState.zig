@@ -21,40 +21,32 @@ pub const RenderState = struct {
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence,
     current_frame: u32,
 
-    pub fn create(allocator: std.mem.Allocator, ctx: *const VulkanContext, swapchain_format: vk.VkFormat, gpu_alloc: *GpuAllocator) !RenderState {
+    pub fn initInPlace(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext, swapchain_format: vk.VkFormat, gpu_alloc: *GpuAllocator) !void {
         const create_zone = tracy.zone(@src(), "RenderState.create");
         defer create_zone.end();
 
         var shader_compiler = try ShaderCompiler.init(allocator);
         defer shader_compiler.deinit();
 
-        var world_renderer = try WorldRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
-        errdefer world_renderer.deinit(ctx.device);
+        try self.world_renderer.initInPlace(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
+        errdefer self.world_renderer.deinit(ctx.device);
 
-        var debug_renderer = try DebugRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
-        errdefer debug_renderer.deinit(ctx.device);
+        self.debug_renderer = try DebugRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
+        errdefer self.debug_renderer.deinit(ctx.device);
 
-        var text_renderer = try TextRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
-        errdefer text_renderer.deinit(ctx.device);
+        self.text_renderer = try TextRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
+        errdefer self.text_renderer.deinit(ctx.device);
 
-        var ui_renderer = try UiRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
-        errdefer ui_renderer.deinit(ctx.device);
+        self.ui_renderer = try UiRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
+        errdefer self.ui_renderer.deinit(ctx.device);
 
-        var self = RenderState{
-            .world_renderer = world_renderer,
-            .debug_renderer = debug_renderer,
-            .text_renderer = text_renderer,
-            .ui_renderer = ui_renderer,
-            .command_buffers = [_]vk.VkCommandBuffer{null} ** MAX_FRAMES_IN_FLIGHT,
-            .image_available_semaphores = [_]vk.VkSemaphore{null} ** MAX_FRAMES_IN_FLIGHT,
-            .in_flight_fences = [_]vk.VkFence{null} ** MAX_FRAMES_IN_FLIGHT,
-            .current_frame = 0,
-        };
+        self.command_buffers = [_]vk.VkCommandBuffer{null} ** MAX_FRAMES_IN_FLIGHT;
+        self.image_available_semaphores = [_]vk.VkSemaphore{null} ** MAX_FRAMES_IN_FLIGHT;
+        self.in_flight_fences = [_]vk.VkFence{null} ** MAX_FRAMES_IN_FLIGHT;
+        self.current_frame = 0;
 
         try self.createCommandBuffers(ctx);
         try self.createSyncObjects(ctx.device);
-
-        return self;
     }
 
     pub fn deinit(self: *RenderState, device: vk.VkDevice) void {

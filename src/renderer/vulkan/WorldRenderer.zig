@@ -59,55 +59,51 @@ pub const WorldRenderer = struct {
 
     draw_count: u32,
 
-    pub fn init(
+    pub fn initInPlace(
+        self: *WorldRenderer,
         allocator: std.mem.Allocator,
         shader_compiler: *ShaderCompiler,
         ctx: *const VulkanContext,
         swapchain_format: vk.VkFormat,
         gpu_alloc: *GpuAllocator,
-    ) !WorldRenderer {
+    ) !void {
         const tz = tracy.zone(@src(), "WorldRenderer.init");
         defer tz.end();
 
         var texture_manager = try TextureManager.init(allocator, ctx);
         errdefer texture_manager.deinit(ctx.device);
 
+        self.texture_manager = texture_manager;
+        self.gpu_alloc = gpu_alloc;
+        self.pipeline_layout = null;
+        self.graphics_pipeline = null;
+        self.overdraw_pipeline = null;
+        self.indirect_alloc = undefined;
+        self.indirect_count_alloc = undefined;
+        self.face_alloc = undefined;
+        self.light_alloc = undefined;
+        self.model_alloc = undefined;
+        self.static_index_alloc = undefined;
+        self.chunk_data_alloc = undefined;
+        self.face_tlsf = TlsfAllocator.init(INITIAL_FACE_CAPACITY);
+        self.light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY);
+        @memset(&self.chunk_face_alloc, null);
+        @memset(&self.chunk_light_alloc, null);
+        @memset(&self.chunk_data, ChunkData{
+            .position = .{ 0, 0, 0 },
+            .light_start = 0,
+            .face_start = 0,
+            .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+            .voxel_size = 1,
+        });
+        self.allocator = allocator;
+        self.chunk_slot_map = std.AutoHashMap(WorldState.ChunkKey, u16).init(allocator);
         // Initialize free slot stack (all slots available, highest first so lowest pops first)
-        var free_slots: [TOTAL_RENDER_CHUNKS]u16 = undefined;
         for (0..TOTAL_RENDER_CHUNKS) |i| {
-            free_slots[i] = @intCast(TOTAL_RENDER_CHUNKS - 1 - i);
+            self.free_slots[i] = @intCast(TOTAL_RENDER_CHUNKS - 1 - i);
         }
-
-        var self = WorldRenderer{
-            .texture_manager = texture_manager,
-            .gpu_alloc = gpu_alloc,
-            .pipeline_layout = null,
-            .graphics_pipeline = null,
-            .overdraw_pipeline = null,
-            .indirect_alloc = undefined,
-            .indirect_count_alloc = undefined,
-            .face_alloc = undefined,
-            .light_alloc = undefined,
-            .model_alloc = undefined,
-            .static_index_alloc = undefined,
-            .chunk_data_alloc = undefined,
-            .face_tlsf = TlsfAllocator.init(INITIAL_FACE_CAPACITY),
-            .light_tlsf = TlsfAllocator.init(INITIAL_LIGHT_CAPACITY),
-            .chunk_face_alloc = .{null} ** TOTAL_RENDER_CHUNKS,
-            .chunk_light_alloc = .{null} ** TOTAL_RENDER_CHUNKS,
-            .chunk_data = .{ChunkData{
-                .position = .{ 0, 0, 0 },
-                .light_start = 0,
-                .face_start = 0,
-                .face_counts = .{ 0, 0, 0, 0, 0, 0 },
-                .voxel_size = 1,
-            }} ** TOTAL_RENDER_CHUNKS,
-            .allocator = allocator,
-            .chunk_slot_map = std.AutoHashMap(WorldState.ChunkKey, u16).init(allocator),
-            .free_slots = free_slots,
-            .free_slot_count = TOTAL_RENDER_CHUNKS,
-            .draw_count = 0,
-        };
+        self.free_slot_count = TOTAL_RENDER_CHUNKS;
+        self.draw_count = 0;
 
         try self.createGraphicsPipeline(shader_compiler, ctx, swapchain_format, texture_manager.bindless_descriptor_set_layout);
         errdefer {
@@ -118,8 +114,6 @@ pub const WorldRenderer = struct {
 
         try self.createIndirectBuffer(ctx, gpu_alloc);
         try self.createPersistentBuffers(ctx, gpu_alloc);
-
-        return self;
     }
 
     pub fn deinit(self: *WorldRenderer, device: vk.VkDevice) void {

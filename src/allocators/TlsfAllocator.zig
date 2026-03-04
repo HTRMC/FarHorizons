@@ -76,6 +76,11 @@ pub const TlsfAllocator = struct {
         self.removeFreeBlock(handle);
 
         const block = &self.blocks[handle];
+        if (block.size < size) {
+            // Block too small (should not happen, but guard against corruption)
+            self.insertFreeBlock(handle);
+            return null;
+        }
         const remainder = block.size - size;
 
         if (remainder > 0) {

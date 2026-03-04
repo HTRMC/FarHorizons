@@ -168,7 +168,7 @@ pub const VulkanRenderer = struct {
         self.gpu_allocator = try GpuAllocator.init(allocator, &self.ctx);
         self.transfer_pipeline = try TransferPipeline.init(&self.ctx);
         self.surface_state = try SurfaceState.create(allocator, &self.ctx, self.surface, self.window);
-        self.render_state = try RenderState.create(allocator, &self.ctx, self.surface_state.swapchain_format, self.gpu_allocator);
+        try self.render_state.initInPlace(allocator, &self.ctx, self.surface_state.swapchain_format, self.gpu_allocator);
         const actual_w = self.surface_state.swapchain_extent.width;
         const actual_h = self.surface_state.swapchain_extent.height;
         const ui_scale = @max(1.0, @as(f32, @floatFromInt(actual_h)) / 720.0);
