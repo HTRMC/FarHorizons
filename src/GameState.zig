@@ -98,9 +98,9 @@ pub const FrameTiming = struct {
 };
 
 pub const DirtyChunkSet = struct {
-    const MAX_DIRTY = 64;
+    const MAX_DIRTY = 512;
     keys: [MAX_DIRTY]WorldState.ChunkKey,
-    count: u8,
+    count: u16,
 
     pub fn empty() DirtyChunkSet {
         return .{ .keys = undefined, .count = 0 };
@@ -325,18 +325,18 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 
     // Request load for missing chunks within render distance (runs at tick rate).
-    // Push all missing chunks — the dedup set rejects duplicates in O(1) and
-    // the priority queue ensures closest chunks are loaded first.
+    // Capped at 1024 per tick — the dedup set skips already-queued chunks in O(1),
+    // so close chunks get found within a few ticks as earlier entries are skipped.
+    // The priority queue ensures closest queued chunks are loaded first regardless.
     if (self.streaming_initialized) {
         const rd = ChunkStreamer.RENDER_DISTANCE;
         const rd_sq = rd * rd;
         const pc = self.player_chunk;
-        const max_batch = 18000; // conservative upper bound for sphere volume at rd=16
-        var batch: [max_batch]WorldState.ChunkKey = undefined;
+        var batch: [1024]WorldState.ChunkKey = undefined;
         var batch_len: u32 = 0;
 
         var dy: i32 = -rd;
-        while (dy <= rd) : (dy += 1) {
+        outer: while (dy <= rd) : (dy += 1) {
             var dz: i32 = -rd;
             while (dz <= rd) : (dz += 1) {
                 var dx: i32 = -rd;
@@ -350,6 +350,7 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
                     if (self.chunk_map.get(key) == null) {
                         batch[batch_len] = key;
                         batch_len += 1;
+                        if (batch_len >= batch.len) break :outer;
                     }
                 }
             }

@@ -7,10 +7,13 @@ const Chunk = WorldState.Chunk;
 const Io = std.Io;
 
 pub const ChunkStreamer = struct {
-    const MAX_INPUT = 4096;
     pub const MAX_OUTPUT = 64;
     pub const RENDER_DISTANCE: i32 = 16;
     pub const UNLOAD_DISTANCE: i32 = RENDER_DISTANCE + 2;
+
+    // Pre-allocate for full sphere volume (4/3 π r³ ≈ 17157 at rd=16)
+    const HEAP_CAPACITY = 18000;
+    const WORKER_BATCH = 64;
 
     const ChunkKey = WorldState.ChunkKey;
     const Heap = std.PriorityQueue(ChunkKey, *ChunkStreamer, chunkDistCmp);
@@ -23,10 +26,11 @@ pub const ChunkStreamer = struct {
     input_cond: Io.Condition,
     player_chunk: ChunkKey,
 
-    // Output queue (worker → main)
+    // Output queue (worker → main) with backpressure
     output_queue: [MAX_OUTPUT]LoadResult,
     output_len: u32,
     output_mutex: Io.Mutex,
+    output_drained_cond: Io.Condition,
 
     // State
     allocator: std.mem.Allocator,
@@ -71,6 +75,7 @@ pub const ChunkStreamer = struct {
             .output_queue = undefined,
             .output_len = 0,
             .output_mutex = .init,
+            .output_drained_cond = .init,
             .allocator = allocator,
             .storage = storage,
             .chunk_pool = chunk_pool,
@@ -80,9 +85,9 @@ pub const ChunkStreamer = struct {
         };
         // Re-set context pointer after self.* assignment overwrote it
         self.input_heap.context = self;
-        // Pre-allocate to avoid runtime allocations on hot path
-        self.input_heap.ensureTotalCapacity(allocator, MAX_INPUT) catch {};
-        self.input_set.ensureTotalCapacity(@intCast(MAX_INPUT)) catch {};
+        // Pre-allocate for full sphere to avoid runtime allocations
+        self.input_heap.ensureTotalCapacity(allocator, HEAP_CAPACITY) catch {};
+        self.input_set.ensureTotalCapacity(@intCast(HEAP_CAPACITY)) catch {};
     }
 
     pub fn start(self: *ChunkStreamer) void {
@@ -95,9 +100,13 @@ pub const ChunkStreamer = struct {
     pub fn stop(self: *ChunkStreamer) void {
         self.shutdown.store(true, .release);
         const io = Io.Threaded.global_single_threaded.io();
+        // Wake worker if blocked on input or output backpressure
         self.input_mutex.lockUncancelable(io);
         self.input_cond.broadcast(io);
         self.input_mutex.unlock(io);
+        self.output_mutex.lockUncancelable(io);
+        self.output_drained_cond.broadcast(io);
+        self.output_mutex.unlock(io);
         if (self.thread) |t| {
             t.join();
             self.thread = null;
@@ -146,7 +155,10 @@ pub const ChunkStreamer = struct {
     pub fn drainOutput(self: *ChunkStreamer, out_buf: []LoadResult) u32 {
         const io = Io.Threaded.global_single_threaded.io();
         self.output_mutex.lockUncancelable(io);
-        defer self.output_mutex.unlock(io);
+        defer {
+            self.output_drained_cond.signal(io);
+            self.output_mutex.unlock(io);
+        }
 
         const n = @min(self.output_len, @as(u32, @intCast(out_buf.len)));
         if (n > 0) {
@@ -177,8 +189,9 @@ pub const ChunkStreamer = struct {
         const io = Io.Threaded.global_single_threaded.io();
 
         while (!self.shutdown.load(.acquire)) {
-            // 1. Pop one item from heap (closest chunk first)
-            var key: ChunkKey = undefined;
+            // 1. Drain a batch from the heap (closest chunks first)
+            var local_keys: [WORKER_BATCH]ChunkKey = undefined;
+            var local_count: u32 = 0;
 
             self.input_mutex.lockUncancelable(io);
             while (self.input_heap.count() == 0 and !self.shutdown.load(.acquire)) {
@@ -188,42 +201,59 @@ pub const ChunkStreamer = struct {
                 self.input_mutex.unlock(io);
                 break;
             }
-            key = self.input_heap.pop().?;
-            _ = self.input_set.remove(key);
+            while (local_count < WORKER_BATCH) {
+                const key = self.input_heap.pop() orelse break;
+                _ = self.input_set.remove(key);
+                local_keys[local_count] = key;
+                local_count += 1;
+            }
+            const player_snapshot = self.player_chunk;
             self.input_mutex.unlock(io);
 
-            // 2. Process the chunk
-            const chunk = self.chunk_pool.acquire();
+            // 2. Process the batch
+            const ud: i64 = UNLOAD_DISTANCE;
+            const ud_sq = ud * ud;
+            for (local_keys[0..local_count]) |key| {
+                if (self.shutdown.load(.acquire)) break;
 
-            var loaded = false;
-            if (self.storage) |s| {
-                if (s.loadChunk(key.cx, key.cy, key.cz, 0)) |cached_chunk| {
-                    chunk.* = cached_chunk.*;
-                    loaded = true;
-                }
-            }
+                // Skip stale chunks the player has moved away from
+                if (distSq(key, player_snapshot) > ud_sq) continue;
 
-            if (!loaded) {
-                TerrainGen.generateChunk(chunk, key, self.seed);
-                // Save newly generated chunk to storage
+                const chunk = self.chunk_pool.acquire();
+
+                var loaded = false;
                 if (self.storage) |s| {
-                    s.saveChunk(key.cx, key.cy, key.cz, 0, chunk) catch {};
+                    if (s.loadChunk(key.cx, key.cy, key.cz, 0)) |cached_chunk| {
+                        chunk.* = cached_chunk.*;
+                        loaded = true;
+                    }
                 }
-            }
 
-            // Push to output queue
-            self.output_mutex.lockUncancelable(io);
-            if (self.output_len < MAX_OUTPUT) {
+                if (!loaded) {
+                    TerrainGen.generateChunk(chunk, key, self.seed);
+                    // Save newly generated chunk to storage
+                    if (self.storage) |s| {
+                        s.saveChunk(key.cx, key.cy, key.cz, 0, chunk) catch {};
+                    }
+                }
+
+                // Push to output queue — wait if full (backpressure)
+                self.output_mutex.lockUncancelable(io);
+                while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
+                    self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
+                }
+                if (self.shutdown.load(.acquire)) {
+                    self.output_mutex.unlock(io);
+                    self.chunk_pool.release(chunk);
+                    break;
+                }
                 self.output_queue[self.output_len] = .{
                     .key = key,
                     .chunk = chunk,
                 };
                 self.output_len += 1;
-            } else {
-                // Output full — release chunk back to pool
-                self.chunk_pool.release(chunk);
+                self.output_mutex.unlock(io);
             }
-            self.output_mutex.unlock(io);
         }
     }
 };

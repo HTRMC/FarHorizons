@@ -9,8 +9,9 @@ const tracy = @import("../platform/tracy.zig");
 const Io = std.Io;
 
 pub const MeshWorker = struct {
-    const MAX_INPUT = 256;
+    const MAX_INPUT = 512;
     pub const MAX_OUTPUT = 64;
+    const WORKER_BATCH = 32;
 
     const ChunkKey = WorldState.ChunkKey;
 
@@ -184,9 +185,10 @@ pub const MeshWorker = struct {
         const io = Io.Threaded.global_single_threaded.io();
 
         while (!self.shutdown.load(.acquire)) {
-            // 1. Pop one item from heap (closest chunk first)
-            var key: ChunkKey = undefined;
-            var light_only: bool = undefined;
+            // 1. Drain a batch from the heap (closest chunks first)
+            var local_keys: [WORKER_BATCH]ChunkKey = undefined;
+            var local_light_only: [WORKER_BATCH]bool = undefined;
+            var local_count: u32 = 0;
             var local_chunk_map: *const ChunkMap = undefined;
 
             self.input_mutex.lockUncancelable(io);
@@ -197,99 +199,90 @@ pub const MeshWorker = struct {
                 self.input_mutex.unlock(io);
                 break;
             }
-            key = self.input_heap.pop().?;
-            // Read authoritative light_only from set (may have been upgraded since push)
-            light_only = self.input_set.get(key) orelse false;
-            _ = self.input_set.remove(key);
-            // Snapshot chunk_map pointer under mutex
+            while (local_count < WORKER_BATCH) {
+                const k = self.input_heap.pop() orelse break;
+                // Read authoritative light_only from set (may have been upgraded since push)
+                local_light_only[local_count] = self.input_set.get(k) orelse false;
+                _ = self.input_set.remove(k);
+                local_keys[local_count] = k;
+                local_count += 1;
+            }
+            // Snapshot chunk_map pointer and player position under mutex
             local_chunk_map = self.chunk_map;
+            const player_snapshot = self.player_chunk;
             self.input_mutex.unlock(io);
 
-            // 2. Process the request
-            // Look up chunk and neighbors from the ChunkMap
-            const chunk = local_chunk_map.get(key) orelse continue;
-            const neighbors = local_chunk_map.getNeighbors(key);
+            // 2. Process the batch
+            const ud: i64 = ChunkStreamer.UNLOAD_DISTANCE;
+            const ud_sq = ud * ud;
+            for (local_keys[0..local_count], local_light_only[0..local_count]) |key, light_only| {
+                if (self.shutdown.load(.acquire)) break;
 
-            // Skip meshing if a neighbor within render distance isn't loaded yet
-            // to avoid re-mesh churn during initial streaming. Edge chunks whose
-            // missing neighbors are outside the render sphere mesh immediately.
-            if (!light_only) {
-                const nb_offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
-                const rd = ChunkStreamer.RENDER_DISTANCE;
-                const rd_sq = rd * rd;
-                const pc = self.player_chunk;
-                var skip = false;
-                for (neighbors, 0..) |n, i| {
-                    if (n == null) {
-                        const nx = key.cx + nb_offsets[i][0] - pc.cx;
-                        const ny = key.cy + nb_offsets[i][1] - pc.cy;
-                        const nz = key.cz + nb_offsets[i][2] - pc.cz;
-                        if (nx * nx + ny * ny + nz * nz <= rd_sq) {
-                            skip = true;
-                            break;
-                        }
+                // Skip stale chunks the player has moved away from
+                if (distSq(key, player_snapshot) > ud_sq) continue;
+
+                // Look up chunk and neighbors from the ChunkMap
+                const chunk = local_chunk_map.get(key) orelse continue;
+                const neighbors = local_chunk_map.getNeighbors(key);
+
+                if (light_only) {
+                    // Light-only path: only regenerate light data
+                    const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors) catch |err| {
+                        std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
+                        continue;
+                    };
+
+                    self.output_mutex.lockUncancelable(io);
+                    while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
+                        self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
                     }
-                }
-                if (skip) continue;
-            }
-
-            if (light_only) {
-                // Light-only path: only regenerate light data
-                const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors) catch |err| {
-                    std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
-                    continue;
-                };
-
-                self.output_mutex.lockUncancelable(io);
-                while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
-                    self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
-                }
-                if (self.shutdown.load(.acquire)) {
+                    if (self.shutdown.load(.acquire)) {
+                        self.output_mutex.unlock(io);
+                        self.allocator.free(light_result.lights);
+                        break;
+                    }
+                    self.output_queue[self.output_len] = .{
+                        .faces = &.{},
+                        .face_counts = light_result.face_counts,
+                        .total_face_count = light_result.total_face_count,
+                        .lights = light_result.lights,
+                        .light_count = light_result.light_count,
+                        .key = key,
+                        .light_only = true,
+                    };
+                    self.output_len += 1;
+                    self.output_cond.signal(io);
                     self.output_mutex.unlock(io);
-                    self.allocator.free(light_result.lights);
-                    break;
-                }
-                self.output_queue[self.output_len] = .{
-                    .faces = &.{},
-                    .face_counts = light_result.face_counts,
-                    .total_face_count = light_result.total_face_count,
-                    .lights = light_result.lights,
-                    .light_count = light_result.light_count,
-                    .key = key,
-                    .light_only = true,
-                };
-                self.output_len += 1;
-                self.output_cond.signal(io);
-                self.output_mutex.unlock(io);
-            } else {
-                // Full remesh path
-                const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors) catch |err| {
-                    std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
-                    continue;
-                };
+                } else {
+                    // Full remesh path
+                    const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors) catch |err| {
+                        std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
+                        continue;
+                    };
 
-                self.output_mutex.lockUncancelable(io);
-                while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
-                    self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
-                }
-                if (self.shutdown.load(.acquire)) {
+                    self.output_mutex.lockUncancelable(io);
+                    while (self.output_len >= MAX_OUTPUT and !self.shutdown.load(.acquire)) {
+                        self.output_drained_cond.waitUncancelable(io, &self.output_mutex);
+                    }
+                    if (self.shutdown.load(.acquire)) {
+                        self.output_mutex.unlock(io);
+                        self.allocator.free(mesh.faces);
+                        self.allocator.free(mesh.lights);
+                        break;
+                    }
+                    self.output_queue[self.output_len] = .{
+                        .faces = mesh.faces,
+                        .face_counts = mesh.face_counts,
+                        .total_face_count = mesh.total_face_count,
+                        .lights = mesh.lights,
+                        .light_count = mesh.light_count,
+                        .key = key,
+                        .light_only = false,
+                    };
+                    self.output_len += 1;
+                    self.output_cond.signal(io);
                     self.output_mutex.unlock(io);
-                    self.allocator.free(mesh.faces);
-                    self.allocator.free(mesh.lights);
-                    break;
                 }
-                self.output_queue[self.output_len] = .{
-                    .faces = mesh.faces,
-                    .face_counts = mesh.face_counts,
-                    .total_face_count = mesh.total_face_count,
-                    .lights = mesh.lights,
-                    .light_count = mesh.light_count,
-                    .key = key,
-                    .light_only = false,
-                };
-                self.output_len += 1;
-                self.output_cond.signal(io);
-                self.output_mutex.unlock(io);
             }
         }
     }
