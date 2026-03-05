@@ -504,11 +504,13 @@ fn reportPipelineStats(self: *GameState) void {
     // Read + reset mesh worker counters
     var m_meshed: u64 = 0;
     var m_light: u64 = 0;
+    var m_hidden: u64 = 0;
     var m_stale: u64 = 0;
     var m_waits: u64 = 0;
     if (self.mesh_worker) |mw| {
         m_meshed = mw.stats_meshed.swap(0, .monotonic);
         m_light = mw.stats_light_only.swap(0, .monotonic);
+        m_hidden = mw.stats_hidden.swap(0, .monotonic);
         m_stale = mw.stats_stale.swap(0, .monotonic);
         m_waits = mw.stats_output_waits.swap(0, .monotonic);
     }
@@ -536,7 +538,7 @@ fn reportPipelineStats(self: *GameState) void {
         co = tp.committed_len;
     }
 
-    std.log.info("[Pipeline {d:.1}s] stream: {d:.0}/s (gen:{} disk:{} stale:{} waits:{}) | mesh: {d:.0}/s (full:{} light:{} stale:{} waits:{}) | gpu: {d:.0}/s (drop:{}) | queues: si:{} so:{} mi:{} mo:{} co:{}", .{
+    std.log.info("[Pipeline {d:.1}s] stream: {d:.0}/s (gen:{} disk:{} stale:{} waits:{}) | mesh: {d:.0}/s (full:{} light:{} hidden:{} stale:{} waits:{}) | gpu: {d:.0}/s (drop:{}) | queues: si:{} so:{} mi:{} mo:{} co:{}", .{
         elapsed_s,
         @as(f64, @floatFromInt(s_total)) / elapsed_s,
         s_generated,
@@ -546,6 +548,7 @@ fn reportPipelineStats(self: *GameState) void {
         @as(f64, @floatFromInt(m_total)) / elapsed_s,
         m_meshed,
         m_light,
+        m_hidden,
         m_stale,
         m_waits,
         @as(f64, @floatFromInt(t_transferred)) / elapsed_s,

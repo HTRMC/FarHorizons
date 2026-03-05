@@ -401,6 +401,69 @@ fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, nei
     }
 }
 
+/// Returns true if this chunk will produce zero mesh faces:
+/// all blocks are opaque AND all 6 neighbor boundary faces are opaque.
+pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
+    // 1. Check all blocks in the chunk are opaque
+    for (&chunk.blocks) |b| {
+        if (!block_properties.isOpaque(b)) return false;
+    }
+
+    // 2. Check each neighbor's boundary face is fully opaque
+    for (0..6) |face| {
+        const n = neighbors[face] orelse return false;
+        const nb = &n.blocks;
+
+        switch (face) {
+            0 => { // +Z: neighbor z=0
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |x| {
+                        if (!block_properties.isOpaque(nb[chunkIndex(x, y, 0)])) return false;
+                    }
+                }
+            },
+            1 => { // -Z: neighbor z=31
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |x| {
+                        if (!block_properties.isOpaque(nb[chunkIndex(x, y, CHUNK_SIZE - 1)])) return false;
+                    }
+                }
+            },
+            2 => { // -X: neighbor x=31
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |z| {
+                        if (!block_properties.isOpaque(nb[chunkIndex(CHUNK_SIZE - 1, y, z)])) return false;
+                    }
+                }
+            },
+            3 => { // +X: neighbor x=0
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |z| {
+                        if (!block_properties.isOpaque(nb[chunkIndex(0, y, z)])) return false;
+                    }
+                }
+            },
+            4 => { // +Y: neighbor y=0
+                for (0..CHUNK_SIZE) |z| {
+                    for (0..CHUNK_SIZE) |x| {
+                        if (!block_properties.isOpaque(nb[chunkIndex(x, 0, z)])) return false;
+                    }
+                }
+            },
+            5 => { // -Y: neighbor y=31
+                for (0..CHUNK_SIZE) |z| {
+                    for (0..CHUNK_SIZE) |x| {
+                        if (!block_properties.isOpaque(nb[chunkIndex(x, CHUNK_SIZE - 1, z)])) return false;
+                    }
+                }
+            },
+            else => unreachable,
+        }
+    }
+
+    return true;
+}
+
 // --- Mesh generation ---
 
 pub fn generateChunkMesh(

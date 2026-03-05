@@ -50,6 +50,7 @@ pub const MeshWorker = struct {
     // Pipeline stats (atomically updated by workers)
     stats_meshed: std.atomic.Value(u64),
     stats_light_only: std.atomic.Value(u64),
+    stats_hidden: std.atomic.Value(u64),
     stats_stale: std.atomic.Value(u64),
     stats_output_waits: std.atomic.Value(u64),
 
@@ -100,6 +101,7 @@ pub const MeshWorker = struct {
             .shutdown = std.atomic.Value(bool).init(false),
             .stats_meshed = std.atomic.Value(u64).init(0),
             .stats_light_only = std.atomic.Value(u64).init(0),
+            .stats_hidden = std.atomic.Value(u64).init(0),
             .stats_stale = std.atomic.Value(u64).init(0),
             .stats_output_waits = std.atomic.Value(u64).init(0),
         };
@@ -275,6 +277,12 @@ pub const MeshWorker = struct {
                 // Look up chunk and neighbors from the ChunkMap
                 const chunk = local_chunk_map.get(key) orelse continue;
                 const neighbors = local_chunk_map.getNeighbors(key);
+
+                // Skip fully hidden chunks (all opaque + all neighbor boundaries opaque)
+                if (!light_only and WorldState.isFullyHidden(chunk, neighbors)) {
+                    _ = self.stats_hidden.fetchAdd(1, .monotonic);
+                    continue;
+                }
 
                 if (light_only) {
                     // Light-only path: only regenerate light data
