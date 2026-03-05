@@ -3,6 +3,7 @@ const Window = @import("platform/Window.zig").Window;
 const Renderer = @import("renderer/Renderer.zig").Renderer;
 const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRenderer;
 const GameState = @import("GameState.zig");
+const WorldState = @import("world/WorldState.zig");
 const MenuController = @import("ui/MenuController.zig").MenuController;
 const UiManager = @import("ui/UiManager.zig").UiManager;
 const glfw = @import("platform/glfw.zig");
@@ -460,8 +461,10 @@ pub fn main() !void {
                     else
                         menu_ctrl.getSelectedWorldName();
 
+                    const world_type_override: ?WorldState.WorldType = if (action == .create_world) menu_ctrl.selected_world_type else null;
+
                     if (world_name.len > 0) {
-                        game_state = GameState.init(allocator, 1280, 720, world_name) catch |err| blk: {
+                        game_state = GameState.init(allocator, 1280, 720, world_name, world_type_override) catch |err| blk: {
                             std.log.err("Failed to load world '{s}': {}", .{ world_name, err });
                             break :blk null;
                         };

@@ -246,7 +246,7 @@ pub const VulkanRenderer = struct {
         self.mesh_worker = mw;
 
         // 3. Init + start ChunkStreamer
-        gs.streamer.initInPlace(self.allocator, gs.storage, &gs.chunk_pool, gs.world_seed);
+        gs.streamer.initInPlace(self.allocator, gs.storage, &gs.chunk_pool, gs.world_seed, gs.world_type);
 
         // Sync player position before starting threads so initial heap ordering is correct
         gs.streamer.syncPlayerChunk(gs.player_chunk);

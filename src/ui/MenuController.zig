@@ -45,6 +45,8 @@ pub const MenuController = struct {
     delete_label_id: WidgetId = NULL_WIDGET,
     world_search_input_id: WidgetId = NULL_WIDGET,
     create_world_input_id: WidgetId = NULL_WIDGET,
+    world_type_label_id: WidgetId = NULL_WIDGET,
+    selected_world_type: @import("../world/WorldState.zig").WorldType = .normal,
 
     pub fn init(ui_manager: *UiManager, allocator: std.mem.Allocator) MenuController {
         var self = MenuController{
@@ -79,6 +81,7 @@ pub const MenuController = struct {
     fn cacheCreateWorldWidgetIds(self: *MenuController) void {
         const tree = self.createWorldTree() orelse return;
         self.create_world_input_id = tree.findById("create_world_input") orelse NULL_WIDGET;
+        self.world_type_label_id = tree.findById("world_type_label") orelse NULL_WIDGET;
     }
 
     fn titleTree(self: *MenuController) ?*WidgetTree {
@@ -108,6 +111,7 @@ pub const MenuController = struct {
         reg.register("play_world", actionPlayWorld, ctx);
         reg.register("show_create_world", actionShowCreateWorld, ctx);
         reg.register("confirm_create_world", actionConfirmCreateWorld, ctx);
+        reg.register("toggle_world_type", actionToggleWorldType, ctx);
         reg.register("cancel_create_world", actionCancelCreateWorld, ctx);
         reg.register("delete_world", actionDeleteWorld, ctx);
         reg.register("confirm_delete", actionConfirmDelete, ctx);
@@ -284,6 +288,7 @@ pub const MenuController = struct {
             self.ui_manager.removeTopScreen();
             self.create_world_screen_loaded = false;
             self.create_world_input_id = NULL_WIDGET;
+            self.world_type_label_id = NULL_WIDGET;
         }
         if (self.singleplayer_screen_loaded) {
             self.ui_manager.removeTopScreen();
@@ -304,6 +309,7 @@ pub const MenuController = struct {
             self.ui_manager.removeTopScreen();
             self.create_world_screen_loaded = false;
             self.create_world_input_id = NULL_WIDGET;
+            self.world_type_label_id = NULL_WIDGET;
         }
         if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
@@ -397,6 +403,7 @@ pub const MenuController = struct {
             self.singleplayer_screen_loaded = false;
             self.resetSingleplayerWidgetIds();
         }
+        self.selected_world_type = .normal;
         if (self.ui_manager.loadScreenFromFile("create_world_menu.xml", self.allocator)) {
             self.create_world_screen_loaded = true;
             self.cacheCreateWorldWidgetIds();
@@ -413,12 +420,35 @@ pub const MenuController = struct {
         }
     }
 
+    fn actionToggleWorldType(ctx: ?*anyopaque) void {
+        const WorldType = @import("../world/WorldState.zig").WorldType;
+        const self = getSelf(ctx);
+        self.selected_world_type = switch (self.selected_world_type) {
+            .normal => .debug,
+            .debug => .normal,
+        };
+        self.updateWorldTypeLabel();
+        _ = WorldType;
+    }
+
+    fn updateWorldTypeLabel(self: *MenuController) void {
+        if (self.world_type_label_id == NULL_WIDGET) return;
+        const tree = self.createWorldTree() orelse return;
+        if (tree.getData(self.world_type_label_id)) |data| {
+            data.label.setText(switch (self.selected_world_type) {
+                .normal => "World Type: Normal",
+                .debug => "World Type: Debug",
+            });
+        }
+    }
+
     fn actionCancelCreateWorld(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
         if (self.create_world_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.create_world_screen_loaded = false;
             self.create_world_input_id = NULL_WIDGET;
+            self.world_type_label_id = NULL_WIDGET;
         }
         if (self.ui_manager.loadScreenFromFile("singleplayer_menu.xml", self.allocator)) {
             self.singleplayer_screen_loaded = true;

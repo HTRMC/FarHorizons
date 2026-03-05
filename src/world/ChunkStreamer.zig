@@ -38,6 +38,7 @@ pub const ChunkStreamer = struct {
     storage: ?*Storage,
     chunk_pool: *ChunkPool,
     seed: u64,
+    world_type: WorldState.WorldType,
     threads: [MAX_WORKERS]?std.Thread,
     worker_count: u32,
     shutdown: std.atomic.Value(bool),
@@ -73,6 +74,7 @@ pub const ChunkStreamer = struct {
         storage: ?*Storage,
         chunk_pool: *ChunkPool,
         seed: u64,
+        world_type: WorldState.WorldType,
     ) void {
         self.* = .{
             .input_heap = Heap.initContext(self),
@@ -88,6 +90,7 @@ pub const ChunkStreamer = struct {
             .storage = storage,
             .chunk_pool = chunk_pool,
             .seed = seed,
+            .world_type = world_type,
             .threads = .{null} ** MAX_WORKERS,
             .worker_count = 0,
             .shutdown = std.atomic.Value(bool).init(false),
@@ -288,7 +291,10 @@ pub const ChunkStreamer = struct {
                 }
 
                 if (!loaded) {
-                    TerrainGen.generateChunk(chunk, key, self.seed);
+                    switch (self.world_type) {
+                        .normal => TerrainGen.generateChunk(chunk, key, self.seed),
+                        .debug => WorldState.generateDebugChunk(chunk, key),
+                    }
                     _ = self.stats_generated.fetchAdd(1, .monotonic);
                     // Save newly generated chunk to storage
                     if (self.storage) |s| {

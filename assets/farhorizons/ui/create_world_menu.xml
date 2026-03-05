@@ -7,6 +7,11 @@
       <label text="World Name" color="#AAAAAAFF"/>
       <text_input id="create_world_input" placeholder="My World"
                   width="fill" height="32" max_len="32"/>
+      <label text="World Type" color="#AAAAAAFF"/>
+      <button width="fill" height="36" background="#444466FF" shadow="true"
+              on_click="toggle_world_type">
+        <label id="world_type_label" text="World Type: Normal" color="#FFFFFFFF"/>
+      </button>
       <panel direction="row" gap="8" width="fill">
         <button text="Create" width="fill" height="40" flex_grow="1"
                 background="#338833FF" shadow="true" on_click="confirm_create_world"/>

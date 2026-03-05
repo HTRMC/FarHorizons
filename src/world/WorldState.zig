@@ -58,6 +58,11 @@ pub const face_neighbor_offsets = [6][3]i32{
     .{ 0, -1, 0 },
 };
 
+pub const WorldType = enum(u8) {
+    normal,
+    debug,
+};
+
 pub const BlockType = enum(u8) {
     air,
     glass,
@@ -69,22 +74,48 @@ pub const BlockType = enum(u8) {
     snow,
     water,
     gravel,
+    cobblestone,
+    oak_log,
+    oak_planks,
+    bricks,
+    bedrock,
+    gold_ore,
+    iron_ore,
+    coal_ore,
+    diamond_ore,
+    sponge,
+    pumice,
+    wool,
+    gold_block,
+    iron_block,
+    diamond_block,
+    bookshelf,
+    obsidian,
+    oak_leaves,
 };
 
 pub const block_properties = struct {
     pub fn isOpaque(block: BlockType) bool {
         return switch (block) {
-            .air => false,
-            .glass => false,
-            .water => false,
-            .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel => true,
+            .air, .glass, .water, .oak_leaves => false,
+            .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
+            .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
+            .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
+            .sponge, .pumice, .wool, .gold_block, .iron_block,
+            .diamond_block, .bookshelf, .obsidian,
+            => true,
         };
     }
     pub fn cullsSelf(block: BlockType) bool {
         return switch (block) {
             .air => false,
-            .glass, .water => true,
-            .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel => true,
+            .glass, .water, .oak_leaves => true,
+            .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
+            .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
+            .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
+            .sponge, .pumice, .wool, .gold_block, .iron_block,
+            .diamond_block, .bookshelf, .obsidian,
+            => true,
         };
     }
     pub fn isSolid(block: BlockType) bool {
@@ -192,6 +223,49 @@ pub fn generateFlatChunk(chunk: *Chunk, key: ChunkKey) void {
             for (0..CHUNK_SIZE) |bx| {
                 chunk.blocks[chunkIndex(bx, by, bz)] = block_type;
             }
+        }
+    }
+}
+
+/// Debug world: places one of each block type in a grid at y=0, stone floor at y=-1.
+pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
+    chunk.blocks = .{.air} ** BLOCKS_PER_CHUNK;
+
+    const COLS = 6;
+    const SPACING = 2;
+
+    // Stone floor at y = -1
+    if (key.cy == -1) {
+        for (0..CHUNK_SIZE) |bz| {
+            for (0..CHUNK_SIZE) |bx| {
+                chunk.blocks[chunkIndex(bx, CHUNK_SIZE - 1, bz)] = .stone;
+            }
+        }
+        return;
+    }
+
+    if (key.cy != 0) return;
+
+    // Enumerate all non-air block types
+    const fields = @typeInfo(BlockType).@"enum".fields;
+    inline for (fields, 0..) |field, i| {
+        const bt: BlockType = @enumFromInt(field.value);
+        if (bt == .air) continue;
+
+        const idx = i - 1; // skip air
+        const col = idx % COLS;
+        const row = idx / COLS;
+
+        // World position of this block
+        const wx: i32 = @intCast(col * SPACING);
+        const wz: i32 = @intCast(row * SPACING);
+
+        // Check if this block falls within this chunk
+        const lx = wx - key.cx * CHUNK_SIZE;
+        const lz = wz - key.cz * CHUNK_SIZE;
+
+        if (lx >= 0 and lx < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE) {
+            chunk.blocks[chunkIndex(@intCast(lx), 0, @intCast(lz))] = bt;
         }
     }
 }
@@ -515,6 +589,24 @@ pub fn generateChunkMesh(
                         .snow => 6,
                         .water => 7,
                         .gravel => 8,
+                        .cobblestone => 9,
+                        .oak_log => if (face == 4 or face == 5) @as(u8, 27) else 10,
+                        .oak_planks => 11,
+                        .bricks => 12,
+                        .bedrock => 13,
+                        .gold_ore => 14,
+                        .iron_ore => 15,
+                        .coal_ore => 16,
+                        .diamond_ore => 17,
+                        .sponge => 18,
+                        .pumice => 19,
+                        .wool => 20,
+                        .gold_block => 21,
+                        .iron_block => 22,
+                        .diamond_block => 23,
+                        .bookshelf => 24,
+                        .obsidian => 25,
+                        .oak_leaves => 26,
                     };
 
                     var corner_packed: [4]u32 = undefined;

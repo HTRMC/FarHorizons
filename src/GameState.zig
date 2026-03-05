@@ -40,6 +40,24 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .snow => "Snow",
         .water => "Water",
         .gravel => "Gravel",
+        .cobblestone => "Cobblestone",
+        .oak_log => "Oak Log",
+        .oak_planks => "Oak Planks",
+        .bricks => "Bricks",
+        .bedrock => "Bedrock",
+        .gold_ore => "Gold Ore",
+        .iron_ore => "Iron Ore",
+        .coal_ore => "Coal Ore",
+        .diamond_ore => "Diamond Ore",
+        .sponge => "Sponge",
+        .pumice => "Pumice",
+        .wool => "Wool",
+        .gold_block => "Gold Block",
+        .iron_block => "Iron Block",
+        .diamond_block => "Diamond Block",
+        .bookshelf => "Bookshelf",
+        .obsidian => "Obsidian",
+        .oak_leaves => "Oak Leaves",
     };
 }
 
@@ -55,6 +73,24 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .snow => .{ 0.95, 0.97, 1.0, 1.0 },
         .water => .{ 0.2, 0.4, 0.8, 0.6 },
         .gravel => .{ 0.5, 0.48, 0.47, 1.0 },
+        .cobblestone => .{ 0.45, 0.45, 0.45, 1.0 },
+        .oak_log => .{ 0.55, 0.36, 0.2, 1.0 },
+        .oak_planks => .{ 0.7, 0.55, 0.33, 1.0 },
+        .bricks => .{ 0.6, 0.3, 0.25, 1.0 },
+        .bedrock => .{ 0.2, 0.2, 0.2, 1.0 },
+        .gold_ore => .{ 0.75, 0.7, 0.4, 1.0 },
+        .iron_ore => .{ 0.6, 0.55, 0.5, 1.0 },
+        .coal_ore => .{ 0.3, 0.3, 0.3, 1.0 },
+        .diamond_ore => .{ 0.4, 0.7, 0.8, 1.0 },
+        .sponge => .{ 0.8, 0.8, 0.3, 1.0 },
+        .pumice => .{ 0.6, 0.58, 0.55, 1.0 },
+        .wool => .{ 0.9, 0.9, 0.9, 1.0 },
+        .gold_block => .{ 0.9, 0.8, 0.2, 1.0 },
+        .iron_block => .{ 0.8, 0.8, 0.8, 1.0 },
+        .diamond_block => .{ 0.4, 0.9, 0.9, 1.0 },
+        .bookshelf => .{ 0.55, 0.4, 0.25, 1.0 },
+        .obsidian => .{ 0.15, 0.1, 0.2, 1.0 },
+        .oak_leaves => .{ 0.2, 0.5, 0.15, 0.8 },
     };
 }
 
@@ -80,6 +116,7 @@ hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .san
 offhand: WorldState.BlockType = .air,
 
 world_seed: u64,
+world_type: WorldState.WorldType,
 storage: ?*Storage,
 streamer: ChunkStreamer,
 player_chunk: WorldState.ChunkKey,
@@ -142,7 +179,7 @@ pub const DirtyChunkSet = struct {
     }
 };
 
-pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8) !GameState {
+pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8, world_type_override: ?WorldState.WorldType) !GameState {
     var cam = Camera.init(width, height);
     const chunk_map = ChunkMap.init(allocator);
     const chunk_pool = ChunkPool.init(allocator);
@@ -153,14 +190,22 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     };
 
     const world_seed: u64 = if (storage_inst) |s| s.seed else 0;
+    const world_type: WorldState.WorldType = if (world_type_override) |wt| wt else if (storage_inst) |s| s.world_type else .normal;
 
-    // Compute spawn height from terrain noise
-    const spawn_x: i32 = 16;
-    const spawn_z: i32 = 16;
-    const surface_y = TerrainGen.sampleHeight(spawn_x, spawn_z, world_seed);
-    const spawn_y: f32 = @as(f32, @floatFromInt(surface_y)) + 2.0;
+    // Save world type for new worlds
+    if (world_type_override != null) {
+        Storage.saveWorldType(allocator, world_name, world_type);
+    }
 
-    cam.position = zlm.Vec3.init(16.0, spawn_y + EYE_OFFSET, 16.0);
+    // Compute spawn position
+    const spawn_x: i32 = if (world_type == .debug) 5 else 16;
+    const spawn_z: i32 = if (world_type == .debug) 4 else 16;
+    const spawn_y: f32 = if (world_type == .debug)
+        3.0
+    else
+        @as(f32, @floatFromInt(TerrainGen.sampleHeight(spawn_x, spawn_z, world_seed))) + 2.0;
+
+    cam.position = zlm.Vec3.init(@floatFromInt(spawn_x), spawn_y + EYE_OFFSET, @floatFromInt(spawn_z));
 
     const spawn_key = WorldState.ChunkKey.fromWorldPos(spawn_x, @intFromFloat(spawn_y), spawn_z);
 
@@ -169,7 +214,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .camera = cam,
         .chunk_map = chunk_map,
         .chunk_pool = chunk_pool,
-        .entity_pos = .{ 16.0, spawn_y, 16.0 },
+        .entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
         .mode = .flying,
@@ -179,6 +224,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .hit_result = null,
         .dirty_chunks = DirtyChunkSet.empty(),
         .world_seed = world_seed,
+        .world_type = world_type,
         .storage = storage_inst,
         .streamer = undefined,
         .player_chunk = spawn_key,
@@ -188,10 +234,10 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
-        .prev_entity_pos = .{ 16.0, spawn_y, 16.0 },
+        .prev_entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
         .prev_camera_pos = cam.position,
         .tick_camera_pos = cam.position,
-        .render_entity_pos = .{ 16.0, spawn_y, 16.0 },
+        .render_entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
     };
 }
 

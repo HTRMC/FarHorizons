@@ -34,6 +34,7 @@ allocator: std.mem.Allocator,
 world_dir: []const u8,
 region_dir: []const u8,
 seed: u64,
+world_type: WorldState.WorldType,
 region_cache: RegionCache,
 chunk_cache: ChunkCacheMod.ChunkCache,
 io_pipeline: IoPipeline,
@@ -77,6 +78,7 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     ensureDirExists(io, region_dir);
 
     const seed = loadOrCreateSeed(io, allocator, world_dir);
+    const world_type = loadWorldType(io, allocator, world_dir);
 
     const self = try allocator.create(Storage);
     errdefer allocator.destroy(self);
@@ -85,6 +87,7 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     self.world_dir = world_dir;
     self.region_dir = region_dir;
     self.seed = seed;
+    self.world_type = world_type;
     self.region_cache = RegionCache.init(allocator, region_dir);
     self.default_compression = .zstd;
     self.chunk_pool = try dirty_set_mod.ChunkPool.init(allocator);
@@ -404,4 +407,38 @@ fn loadOrCreateSeed(io: Io, allocator: std.mem.Allocator, world_dir: []const u8)
 
     log.info("Generated new world seed: {d}", .{seed});
     return seed;
+}
+
+fn loadWorldType(io: Io, allocator: std.mem.Allocator, world_dir: []const u8) WorldState.WorldType {
+    const sep = std.fs.path.sep_str;
+    const path = std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "world_type.dat", .{world_dir}, 0) catch return .normal;
+    defer allocator.free(path);
+
+    if (Dir.openFileAbsolute(io, path, .{})) |file| {
+        defer file.close(io);
+        var buf: [1]u8 = undefined;
+        const n = file.readPositionalAll(io, &buf, 0) catch 0;
+        if (n == 1) {
+            inline for (@typeInfo(WorldState.WorldType).@"enum".fields) |field| {
+                if (buf[0] == field.value) return @enumFromInt(field.value);
+            }
+        }
+    } else |_| {}
+    return .normal;
+}
+
+pub fn saveWorldType(allocator: std.mem.Allocator, world_name: []const u8, world_type: WorldState.WorldType) void {
+    const io = Io.Threaded.global_single_threaded.io();
+    const sep = std.fs.path.sep_str;
+    const base_path = app_config.getAppDataPath(allocator) catch return;
+    defer allocator.free(base_path);
+
+    const path = std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "worlds" ++ sep ++ "{s}" ++ sep ++ "world_type.dat", .{ base_path, world_name }, 0) catch return;
+    defer allocator.free(path);
+
+    if (Dir.createFileAbsolute(io, path, .{})) |file| {
+        defer file.close(io);
+        const buf = [1]u8{@intFromEnum(world_type)};
+        file.writePositionalAll(io, &buf, 0) catch {};
+    } else |_| {}
 }
