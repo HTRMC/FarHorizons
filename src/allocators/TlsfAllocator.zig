@@ -133,7 +133,7 @@ pub const TlsfAllocator = struct {
 
         self.removeFreeBlock(handle);
 
-        const block = &self.blocks[handle];
+        var block = &self.blocks[handle];
         if (block.size < size) {
             // Block too small (should not happen, but guard against corruption)
             self.insertFreeBlock(handle);
@@ -142,7 +142,10 @@ pub const TlsfAllocator = struct {
         const remainder = block.size - size;
 
         if (remainder > 0) {
+            // newBlock() may call grow() which reallocates self.blocks,
+            // invalidating `block`. Re-derive after newBlock().
             if (self.newBlock()) |split_handle| {
+                block = &self.blocks[handle];
                 self.blocks[split_handle] = .{
                     .offset = block.offset + size,
                     .size = remainder,
@@ -164,6 +167,7 @@ pub const TlsfAllocator = struct {
             }
         }
 
+        block = &self.blocks[handle];
         block.free = false;
         return .{ .offset = block.offset, .size = block.size, .handle = handle };
     }
@@ -182,13 +186,16 @@ pub const TlsfAllocator = struct {
 
         self.removeFreeBlock(handle);
 
-        const block = &self.blocks[handle];
+        var block = &self.blocks[handle];
         const aligned_offset = alignUp(block.offset, alignment);
         const front_waste = aligned_offset - block.offset;
 
         // Split off front waste as a free block
         if (front_waste > 0) {
+            // newBlock() may call grow() which reallocates self.blocks,
+            // invalidating `block`. Re-derive after newBlock().
             if (self.newBlock()) |front_handle| {
+                block = &self.blocks[handle];
                 self.blocks[front_handle] = .{
                     .offset = block.offset,
                     .size = front_waste,
@@ -210,9 +217,12 @@ pub const TlsfAllocator = struct {
         }
 
         // Split off back remainder
+        // Re-derive block pointer in case front split triggered grow
+        block = &self.blocks[handle];
         const remainder = block.size - size;
         if (remainder > 0) {
             if (self.newBlock()) |split_handle| {
+                block = &self.blocks[handle];
                 self.blocks[split_handle] = .{
                     .offset = block.offset + size,
                     .size = remainder,
@@ -232,6 +242,7 @@ pub const TlsfAllocator = struct {
             }
         }
 
+        block = &self.blocks[handle];
         block.free = false;
         return .{ .offset = block.offset, .size = block.size, .handle = handle };
     }
