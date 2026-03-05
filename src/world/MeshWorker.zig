@@ -12,7 +12,7 @@ pub const MeshWorker = struct {
     const MAX_INPUT = 512;
     pub const MAX_OUTPUT = 64;
     const WORKER_BATCH = 4;
-    const MAX_WORKERS = 6;
+    const MAX_WORKERS = 24;
 
     const ChunkKey = WorldState.ChunkKey;
 
@@ -114,7 +114,8 @@ pub const MeshWorker = struct {
 
     pub fn start(self: *MeshWorker) void {
         const cpu_count = std.Thread.getCpuCount() catch 2;
-        const count: u32 = @intCast(std.math.clamp(cpu_count -| 4, 1, MAX_WORKERS));
+        // Use ~1/4 of logical cores for mesh (CPU-heavy), min 2
+        const count: u32 = @intCast(@min(MAX_WORKERS, @max(2, cpu_count / 4)));
         self.worker_count = count;
 
         for (0..count) |i| {
@@ -276,6 +277,16 @@ pub const MeshWorker = struct {
 
                 // Look up chunk and neighbors from the ChunkMap
                 const chunk = local_chunk_map.get(key) orelse continue;
+
+                // Skip all-air chunks immediately (no geometry possible)
+                if (!light_only and chunk.blocks[0] == .air) blk: {
+                    for (&chunk.blocks) |b| {
+                        if (b != .air) break :blk;
+                    }
+                    _ = self.stats_hidden.fetchAdd(1, .monotonic);
+                    continue;
+                }
+
                 const neighbors = local_chunk_map.getNeighbors(key);
 
                 // Skip fully hidden chunks (all opaque + all neighbor boundaries opaque)

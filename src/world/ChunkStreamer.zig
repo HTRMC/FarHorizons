@@ -14,7 +14,7 @@ pub const ChunkStreamer = struct {
     // Pre-allocate for full sphere volume (4/3 π r³ ≈ 17157 at rd=16)
     const HEAP_CAPACITY = 18000;
     const WORKER_BATCH = 16;
-    const MAX_WORKERS = 6;
+    const MAX_WORKERS = 12;
 
     const ChunkKey = WorldState.ChunkKey;
     const Heap = std.PriorityQueue(ChunkKey, *ChunkStreamer, chunkDistCmp);
@@ -105,7 +105,8 @@ pub const ChunkStreamer = struct {
 
     pub fn start(self: *ChunkStreamer) void {
         const cpu_count = std.Thread.getCpuCount() catch 2;
-        self.worker_count = @intCast(@min(MAX_WORKERS, @max(1, cpu_count -| 3)));
+        // Use ~1/8 of logical cores for streaming (I/O-bound), min 2
+        self.worker_count = @intCast(@min(MAX_WORKERS, @max(2, cpu_count / 8)));
         std.log.info("ChunkStreamer: {d} worker threads", .{self.worker_count});
 
         for (0..self.worker_count) |i| {
