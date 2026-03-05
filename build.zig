@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zlm", zlm_dep.module("zlm"));
 
     const tracy_enabled = b.option(bool, "tracy", "Enable Tracy profiling") orelse false;
-    const zstd_enabled = b.option(bool, "zstd", "Enable ZSTD compression (requires lib/zstd/ source)") orelse false;
+    const zstd_enabled = b.option(bool, "zstd", "Enable ZSTD compression") orelse true;
 
     const options = b.addOptions();
     options.addOption(bool, "tracy_enabled", tracy_enabled);
