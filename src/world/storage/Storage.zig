@@ -1,5 +1,4 @@
 const std = @import("std");
-const build_options = @import("build_options");
 const WorldState = @import("../WorldState.zig");
 const storage_types = @import("types.zig");
 const RegionFile = @import("region_file.zig").RegionFile;
@@ -8,7 +7,6 @@ const ChunkCacheMod = @import("chunk_cache.zig");
 const IoPipeline = @import("io_pipeline.zig").IoPipeline;
 const dirty_set_mod = @import("dirty_set.zig");
 const app_config = @import("../../app_config.zig");
-const compression = @import("compression.zig");
 
 const Io = std.Io;
 const Dir = Io.Dir;
@@ -88,7 +86,7 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     self.region_dir = region_dir;
     self.seed = seed;
     self.region_cache = RegionCache.init(allocator, region_dir);
-    self.default_compression = if (compression.zstd_enabled) .zstd else .deflate;
+    self.default_compression = .zstd;
     self.chunk_pool = try dirty_set_mod.ChunkPool.init(allocator);
     self.dirty_set = try DirtySet.init(allocator, &self.chunk_pool);
     self.dirty_mutex = .init;
