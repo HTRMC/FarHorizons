@@ -127,7 +127,9 @@ fn drawF4(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_all
     text.drawText(x, y, stream_text, yellow);
     y += LINE_HEIGHT;
 
-    const dc_text = std.fmt.bufPrint(&buf, "Draw Calls: {d}", .{wr.draw_count}) catch "Draw Calls: ?";
+    var total_dc: u32 = 0;
+    for (wr.draw_counts) |dc| total_dc += dc;
+    const dc_text = std.fmt.bufPrint(&buf, "Draw Calls: {d}", .{total_dc}) catch "Draw Calls: ?";
     text.drawText(x, y, dc_text, yellow);
     y += LINE_HEIGHT;
 

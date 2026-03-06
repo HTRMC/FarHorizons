@@ -63,6 +63,9 @@ pub const WorldType = enum(u8) {
     debug,
 };
 
+pub const LAYER_COUNT = 3;
+pub const RenderLayer = enum(u2) { solid, cutout, translucent };
+
 pub const BlockType = enum(u8) {
     air,
     glass,
@@ -121,6 +124,13 @@ pub const block_properties = struct {
     pub fn isSolid(block: BlockType) bool {
         return block != .air and block != .water;
     }
+    pub fn renderLayer(block: BlockType) RenderLayer {
+        return switch (block) {
+            .glass, .water => .translucent,
+            .oak_leaves => .cutout,
+            else => .solid,
+        };
+    }
     pub fn emittedLight(block: BlockType) [3]u8 {
         return switch (block) {
             .glowstone => .{ 255, 200, 100 },
@@ -174,16 +184,25 @@ pub const ChunkKey = struct {
 
 pub const ChunkMeshResult = struct {
     faces: []FaceData,
-    face_counts: [6]u32,
+    layer_face_counts: [LAYER_COUNT][6]u32,
     total_face_count: u32,
     lights: []LightEntry,
     light_count: u32,
+
+    /// Sum face counts across all layers for each normal direction.
+    pub fn totalFaceCounts(self: ChunkMeshResult) [6]u32 {
+        var out: [6]u32 = .{ 0, 0, 0, 0, 0, 0 };
+        for (0..LAYER_COUNT) |l| {
+            for (0..6) |n| out[n] += self.layer_face_counts[l][n];
+        }
+        return out;
+    }
 };
 
 pub const ChunkLightResult = struct {
     lights: []LightEntry,
     light_count: u32,
-    face_counts: [6]u32,
+    layer_face_counts: [LAYER_COUNT][6]u32,
     total_face_count: u32,
 };
 
@@ -551,15 +570,19 @@ pub fn generateChunkMesh(
     var padded: [PADDED_BLOCKS]BlockType = undefined;
     buildPaddedBlocks(&padded, chunk, neighbors);
 
-    var normal_faces: [6]std.ArrayList(FaceData) = undefined;
-    var normal_lights: [6]std.ArrayList(LightEntry) = undefined;
-    for (0..6) |i| {
-        normal_faces[i] = .empty;
-        normal_lights[i] = .empty;
+    var layer_faces: [LAYER_COUNT][6]std.ArrayList(FaceData) = undefined;
+    var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_faces[l][n] = .empty;
+            layer_lights[l][n] = .empty;
+        }
     }
-    errdefer for (0..6) |i| {
-        normal_faces[i].deinit(allocator);
-        normal_lights[i].deinit(allocator);
+    errdefer for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_faces[l][n].deinit(allocator);
+            layer_lights[l][n].deinit(allocator);
+        }
     };
 
     for (0..CHUNK_SIZE) |by| {
@@ -654,18 +677,21 @@ pub fn generateChunkMesh(
                         ao,
                     );
 
-                    try normal_faces[face].append(allocator, face_data);
-                    try normal_lights[face].append(allocator, .{ .corners = corner_packed });
+                    const layer = @intFromEnum(block_properties.renderLayer(block));
+                    try layer_faces[layer][face].append(allocator, face_data);
+                    try layer_lights[layer][face].append(allocator, .{ .corners = corner_packed });
                 }
             }
         }
     }
 
-    var face_counts: [6]u32 = undefined;
+    var layer_face_counts: [LAYER_COUNT][6]u32 = undefined;
     var total_face_count: u32 = 0;
-    for (0..6) |i| {
-        face_counts[i] = @intCast(normal_faces[i].items.len);
-        total_face_count += face_counts[i];
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_face_counts[l][n] = @intCast(layer_faces[l][n].items.len);
+            total_face_count += layer_face_counts[l][n];
+        }
     }
 
     const faces = try allocator.alloc(FaceData, total_face_count);
@@ -674,19 +700,21 @@ pub fn generateChunkMesh(
     errdefer allocator.free(lights);
 
     var write_offset: usize = 0;
-    for (0..6) |i| {
-        const fitems = normal_faces[i].items;
-        const litems = normal_lights[i].items;
-        @memcpy(faces[write_offset..][0..fitems.len], fitems);
-        @memcpy(lights[write_offset..][0..litems.len], litems);
-        write_offset += fitems.len;
-        normal_faces[i].deinit(allocator);
-        normal_lights[i].deinit(allocator);
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            const fitems = layer_faces[l][n].items;
+            const litems = layer_lights[l][n].items;
+            @memcpy(faces[write_offset..][0..fitems.len], fitems);
+            @memcpy(lights[write_offset..][0..litems.len], litems);
+            write_offset += fitems.len;
+            layer_faces[l][n].deinit(allocator);
+            layer_lights[l][n].deinit(allocator);
+        }
     }
 
     return .{
         .faces = faces,
-        .face_counts = face_counts,
+        .layer_face_counts = layer_face_counts,
         .total_face_count = total_face_count,
         .lights = lights,
         .light_count = total_face_count,
@@ -704,12 +732,16 @@ pub fn generateChunkLightOnly(
     var padded: [PADDED_BLOCKS]BlockType = undefined;
     buildPaddedBlocks(&padded, chunk, neighbors);
 
-    var normal_lights: [6]std.ArrayList(LightEntry) = undefined;
-    for (0..6) |i| {
-        normal_lights[i] = .empty;
+    var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_lights[l][n] = .empty;
+        }
     }
-    errdefer for (0..6) |i| {
-        normal_lights[i].deinit(allocator);
+    errdefer for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_lights[l][n].deinit(allocator);
+        }
     };
 
     for (0..CHUNK_SIZE) |by| {
@@ -742,34 +774,39 @@ pub fn generateChunkLightOnly(
                         corner_packed = .{ full_sky, full_sky, full_sky, full_sky };
                     }
 
-                    try normal_lights[face].append(allocator, .{ .corners = corner_packed });
+                    const layer = @intFromEnum(block_properties.renderLayer(block));
+                    try layer_lights[layer][face].append(allocator, .{ .corners = corner_packed });
                 }
             }
         }
     }
 
-    var face_counts: [6]u32 = undefined;
+    var layer_face_counts: [LAYER_COUNT][6]u32 = undefined;
     var total_face_count: u32 = 0;
-    for (0..6) |i| {
-        face_counts[i] = @intCast(normal_lights[i].items.len);
-        total_face_count += face_counts[i];
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_face_counts[l][n] = @intCast(layer_lights[l][n].items.len);
+            total_face_count += layer_face_counts[l][n];
+        }
     }
 
     const lights = try allocator.alloc(LightEntry, total_face_count);
     errdefer allocator.free(lights);
 
     var write_offset: usize = 0;
-    for (0..6) |i| {
-        const litems = normal_lights[i].items;
-        @memcpy(lights[write_offset..][0..litems.len], litems);
-        write_offset += litems.len;
-        normal_lights[i].deinit(allocator);
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            const litems = layer_lights[l][n].items;
+            @memcpy(lights[write_offset..][0..litems.len], litems);
+            write_offset += litems.len;
+            layer_lights[l][n].deinit(allocator);
+        }
     }
 
     return .{
         .lights = lights,
         .light_count = total_face_count,
-        .face_counts = face_counts,
+        .layer_face_counts = layer_face_counts,
         .total_face_count = total_face_count,
     };
 }
@@ -858,8 +895,9 @@ test "single block in air produces 6 faces" {
 
     try testing.expectEqual(@as(u32, 6), result.total_face_count);
 
+    const fc = result.totalFaceCounts();
     for (0..6) |i| {
-        try testing.expectEqual(@as(u32, 1), result.face_counts[i]);
+        try testing.expectEqual(@as(u32, 1), fc[i]);
     }
 
     for (result.faces) |face| {
@@ -882,12 +920,13 @@ test "two adjacent blocks share face - culled" {
 
     try testing.expectEqual(@as(u32, 10), result.total_face_count);
 
-    try testing.expectEqual(@as(u32, 1), result.face_counts[2]);
-    try testing.expectEqual(@as(u32, 1), result.face_counts[3]);
-    try testing.expectEqual(@as(u32, 2), result.face_counts[0]);
-    try testing.expectEqual(@as(u32, 2), result.face_counts[1]);
-    try testing.expectEqual(@as(u32, 2), result.face_counts[4]);
-    try testing.expectEqual(@as(u32, 2), result.face_counts[5]);
+    const fc = result.totalFaceCounts();
+    try testing.expectEqual(@as(u32, 1), fc[2]);
+    try testing.expectEqual(@as(u32, 1), fc[3]);
+    try testing.expectEqual(@as(u32, 2), fc[0]);
+    try testing.expectEqual(@as(u32, 2), fc[1]);
+    try testing.expectEqual(@as(u32, 2), fc[4]);
+    try testing.expectEqual(@as(u32, 2), fc[5]);
 }
 
 test "face_counts sum equals total_face_count" {
@@ -903,7 +942,8 @@ test "face_counts sum equals total_face_count" {
     defer testing.allocator.free(result.lights);
 
     var sum: u32 = 0;
-    for (result.face_counts) |fc| sum += fc;
+    const fc = result.totalFaceCounts();
+    for (fc) |c| sum += c;
     try testing.expectEqual(sum, result.total_face_count);
     try testing.expectEqual(result.total_face_count, @as(u32, @intCast(result.faces.len)));
 }
@@ -916,9 +956,10 @@ test "normal indices in faces match their group" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
+    const fc = result.totalFaceCounts();
     var offset: usize = 0;
     for (0..6) |normal_idx| {
-        const count = result.face_counts[normal_idx];
+        const count = fc[normal_idx];
         for (offset..offset + count) |i| {
             const u = unpackFace(result.faces[i]);
             try testing.expectEqual(@as(u3, @intCast(normal_idx)), u.normal_index);
@@ -951,8 +992,10 @@ test "cross-chunk boundary face culling" {
     try testing.expectEqual(@as(u32, 5), result0.total_face_count);
     try testing.expectEqual(@as(u32, 5), result1.total_face_count);
 
-    try testing.expectEqual(@as(u32, 0), result0.face_counts[3]);
-    try testing.expectEqual(@as(u32, 0), result1.face_counts[2]);
+    const fc0 = result0.totalFaceCounts();
+    const fc1 = result1.totalFaceCounts();
+    try testing.expectEqual(@as(u32, 0), fc0[3]);
+    try testing.expectEqual(@as(u32, 0), fc1[2]);
 }
 
 test "empty chunk produces no faces" {
@@ -1053,9 +1096,10 @@ fn unpackAo(fd: FaceData) [4]u2 {
 }
 
 fn findFaceByNormal(result: ChunkMeshResult, normal: u3) ?FaceData {
+    const fc = result.totalFaceCounts();
     var offset: usize = 0;
     for (0..6) |i| {
-        const count = result.face_counts[i];
+        const count = fc[i];
         if (i == normal) {
             if (count > 0) return result.faces[offset];
             return null;
@@ -1090,12 +1134,13 @@ test "AO: block on flat surface has correct top face AO" {
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
+    const fc = result.totalFaceCounts();
     var offset: usize = 0;
     for (0..4) |i| {
-        offset += result.face_counts[i];
+        offset += fc[i];
     }
     var center_top: ?FaceData = null;
-    for (offset..offset + result.face_counts[4]) |i| {
+    for (offset..offset + fc[4]) |i| {
         const u = unpackFace(result.faces[i]);
         if (u.x == 5 and u.y == 5 and u.z == 5) {
             center_top = result.faces[i];

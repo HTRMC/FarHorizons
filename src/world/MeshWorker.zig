@@ -56,7 +56,7 @@ pub const MeshWorker = struct {
 
     pub const ChunkResult = struct {
         faces: []FaceData,
-        face_counts: [6]u32,
+        layer_face_counts: [WorldState.LAYER_COUNT][6]u32,
         total_face_count: u32,
         lights: []LightEntry,
         light_count: u32,
@@ -314,7 +314,7 @@ pub const MeshWorker = struct {
                     }
                     self.output_queue[self.output_len] = .{
                         .faces = &.{},
-                        .face_counts = light_result.face_counts,
+                        .layer_face_counts = light_result.layer_face_counts,
                         .total_face_count = light_result.total_face_count,
                         .lights = light_result.lights,
                         .light_count = light_result.light_count,
@@ -345,7 +345,7 @@ pub const MeshWorker = struct {
                     }
                     self.output_queue[self.output_len] = .{
                         .faces = mesh.faces,
-                        .face_counts = mesh.face_counts,
+                        .layer_face_counts = mesh.layer_face_counts,
                         .total_face_count = mesh.total_face_count,
                         .lights = mesh.lights,
                         .light_count = mesh.light_count,

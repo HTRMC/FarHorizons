@@ -25,6 +25,7 @@ const ChunkMap = @import("../../world/ChunkMap.zig").ChunkMap;
 
 const MAX_FACES_PER_DRAW: u32 = 16_384;
 pub const TOTAL_RENDER_CHUNKS: u32 = 25_000;
+const LAYER_COUNT = WorldState.LAYER_COUNT;
 const MAX_INDIRECT_COMMANDS: u32 = TOTAL_RENDER_CHUNKS * 6;
 
 pub const WorldRenderer = struct {
@@ -32,6 +33,7 @@ pub const WorldRenderer = struct {
     gpu_alloc: *GpuAllocator,
     pipeline_layout: vk.VkPipelineLayout,
     graphics_pipeline: vk.VkPipeline,
+    translucent_pipeline: vk.VkPipeline,
     overdraw_pipeline: vk.VkPipeline,
 
     indirect_alloc: BufferAllocation,
@@ -50,6 +52,7 @@ pub const WorldRenderer = struct {
     chunk_face_alloc: [TOTAL_RENDER_CHUNKS]?TlsfAllocator.Allocation,
     chunk_light_alloc: [TOTAL_RENDER_CHUNKS]?TlsfAllocator.Allocation,
     chunk_data: [TOTAL_RENDER_CHUNKS]ChunkData,
+    chunk_layer_counts: [TOTAL_RENDER_CHUNKS][LAYER_COUNT][6]u32,
 
     // Slot pool: maps ChunkKey → GPU slot index
     allocator: std.mem.Allocator,
@@ -57,7 +60,7 @@ pub const WorldRenderer = struct {
     free_slots: [TOTAL_RENDER_CHUNKS]u16,
     free_slot_count: u32,
 
-    draw_count: u32,
+    draw_counts: [LAYER_COUNT]u32,
 
     pub fn initInPlace(
         self: *WorldRenderer,
@@ -77,6 +80,7 @@ pub const WorldRenderer = struct {
         self.gpu_alloc = gpu_alloc;
         self.pipeline_layout = null;
         self.graphics_pipeline = null;
+        self.translucent_pipeline = null;
         self.overdraw_pipeline = null;
         self.indirect_alloc = undefined;
         self.indirect_count_alloc = undefined;
@@ -103,11 +107,13 @@ pub const WorldRenderer = struct {
             self.free_slots[i] = @intCast(TOTAL_RENDER_CHUNKS - 1 - i);
         }
         self.free_slot_count = TOTAL_RENDER_CHUNKS;
-        self.draw_count = 0;
+        @memset(&self.chunk_layer_counts, .{ .{ 0, 0, 0, 0, 0, 0 } } ** LAYER_COUNT);
+        self.draw_counts = .{ 0, 0, 0 };
 
         try self.createGraphicsPipeline(shader_compiler, ctx, swapchain_format, texture_manager.bindless_descriptor_set_layout);
         errdefer {
             vk.destroyPipeline(ctx.device, self.overdraw_pipeline, null);
+            vk.destroyPipeline(ctx.device, self.translucent_pipeline, null);
             vk.destroyPipeline(ctx.device, self.graphics_pipeline, null);
             vk.destroyPipelineLayout(ctx.device, self.pipeline_layout, null);
         }
@@ -126,6 +132,7 @@ pub const WorldRenderer = struct {
         self.gpu_alloc.destroyBuffer(self.indirect_alloc);
         self.gpu_alloc.destroyBuffer(self.indirect_count_alloc);
         vk.destroyPipeline(device, self.overdraw_pipeline, null);
+        vk.destroyPipeline(device, self.translucent_pipeline, null);
         vk.destroyPipeline(device, self.graphics_pipeline, null);
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
         self.gpu_alloc.destroyBuffer(self.face_alloc);
@@ -223,7 +230,7 @@ pub const WorldRenderer = struct {
 
         const commands: [*]DrawCommand = @ptrCast(@alignCast(self.indirect_alloc.mapped_ptr orelse return));
 
-        var command_count: u32 = 0;
+        var layer_counts: [LAYER_COUNT]u32 = .{ 0, 0, 0 };
 
         var it = self.chunk_slot_map.iterator();
         while (it.next()) |entry| {
@@ -235,45 +242,46 @@ pub const WorldRenderer = struct {
             if (total == 0) continue;
 
             const cs: i32 = @as(i32, WorldState.CHUNK_SIZE) * @as(i32, @intCast(@max(1, cd.voxel_size)));
-
             const pd = aabbSignedDist(camera_pos.x, camera_pos.y, camera_pos.z, cd.position, cs);
+            const lfc = self.chunk_layer_counts[slot];
 
-            var normal_offset: u32 = 0;
-            for (0..6) |normal_idx| {
-                const fc = cd.face_counts[normal_idx];
-                if (fc == 0) {
-                    continue;
-                }
-
-                if (!isNormalVisible(normal_idx, pd)) {
+            // Faces are stored: [layer0_n0..n5][layer1_n0..n5][layer2_n0..n5]
+            var layer_offset: u32 = 0;
+            for (0..LAYER_COUNT) |layer| {
+                var normal_offset: u32 = 0;
+                for (0..6) |normal_idx| {
+                    const fc = lfc[layer][normal_idx];
+                    if (fc > 0 and isNormalVisible(normal_idx, pd)) {
+                        const cmd_idx = layer * MAX_INDIRECT_COMMANDS + layer_counts[layer];
+                        commands[cmd_idx] = .{
+                            .index_count = fc * 6,
+                            .instance_count = 1,
+                            .first_index = 0,
+                            .vertex_offset = @intCast((cd.face_start + layer_offset + normal_offset) * 4),
+                            .first_instance = @intCast(slot),
+                        };
+                        layer_counts[layer] += 1;
+                    }
                     normal_offset += fc;
-                    continue;
                 }
-
-                commands[command_count] = .{
-                    .index_count = fc * 6,
-                    .instance_count = 1,
-                    .first_index = 0,
-                    .vertex_offset = @intCast((cd.face_start + normal_offset) * 4),
-                    .first_instance = @intCast(slot),
-                };
-                command_count += 1;
-                normal_offset += fc;
+                layer_offset += normal_offset;
             }
         }
 
-        const count_ptr: *u32 = @ptrCast(@alignCast(self.indirect_count_alloc.mapped_ptr orelse return));
-        count_ptr.* = command_count;
+        const count_base: [*]u32 = @ptrCast(@alignCast(self.indirect_count_alloc.mapped_ptr orelse return));
+        for (0..LAYER_COUNT) |l| {
+            count_base[l] = layer_counts[l];
+        }
 
-        self.draw_count = command_count;
+        self.draw_counts = layer_counts;
     }
 
     pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool) void {
-        if (self.draw_count == 0) return;
+        var total_draws: u32 = 0;
+        for (self.draw_counts) |dc| total_draws += dc;
+        if (total_draws == 0) return;
 
-        const pipeline = if (overdraw_active) self.overdraw_pipeline else self.graphics_pipeline;
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-
+        // Bind shared state
         vk.cmdBindDescriptorSets(
             command_buffer,
             vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -305,15 +313,39 @@ pub const WorldRenderer = struct {
             @ptrCast(&contrast),
         );
 
-        vk.cmdDrawIndexedIndirectCount(
-            command_buffer,
-            self.indirect_alloc.buffer,
-            0,
-            self.indirect_count_alloc.buffer,
-            0,
-            MAX_INDIRECT_COMMANDS,
-            @sizeOf(vk.VkDrawIndexedIndirectCommand),
-        );
+        const cmd_stride: u32 = @sizeOf(vk.VkDrawIndexedIndirectCommand);
+        const count_stride: u32 = @sizeOf(u32);
+
+        // Pass 1: Opaque (no blend, depth write)
+        // Pass 2: Cutout (same pipeline as opaque for now)
+        for (0..2) |layer| {
+            if (self.draw_counts[layer] == 0) continue;
+            const pipeline = if (overdraw_active) self.overdraw_pipeline else self.graphics_pipeline;
+            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            vk.cmdDrawIndexedIndirectCount(
+                command_buffer,
+                self.indirect_alloc.buffer,
+                @as(vk.VkDeviceSize, layer) * MAX_INDIRECT_COMMANDS * cmd_stride,
+                self.indirect_count_alloc.buffer,
+                @as(vk.VkDeviceSize, layer) * count_stride,
+                MAX_INDIRECT_COMMANDS,
+                cmd_stride,
+            );
+        }
+
+        // Pass 3: Translucent (alpha blend, no depth write)
+        if (self.draw_counts[2] > 0 and !overdraw_active) {
+            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.translucent_pipeline);
+            vk.cmdDrawIndexedIndirectCount(
+                command_buffer,
+                self.indirect_alloc.buffer,
+                @as(vk.VkDeviceSize, 2) * MAX_INDIRECT_COMMANDS * cmd_stride,
+                self.indirect_count_alloc.buffer,
+                @as(vk.VkDeviceSize, 2) * count_stride,
+                MAX_INDIRECT_COMMANDS,
+                cmd_stride,
+            );
+        }
     }
 
     fn createGraphicsPipeline(
@@ -448,10 +480,11 @@ pub const WorldRenderer = struct {
             .maxDepthBounds = 1.0,
         };
 
+        // Opaque: no blending
         const color_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
-            .blendEnable = vk.VK_TRUE,
-            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
-            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .blendEnable = vk.VK_FALSE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
             .colorBlendOp = vk.VK_BLEND_OP_ADD,
             .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
             .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
@@ -534,6 +567,71 @@ pub const WorldRenderer = struct {
         var pipelines: [1]vk.VkPipeline = undefined;
         try vk.createGraphicsPipelines(device, ctx.pipeline_cache, 1, pipeline_infos, null, &pipelines);
         self.graphics_pipeline = pipelines[0];
+
+        // Translucent pipeline: alpha blend, depth test but no depth write
+        const translucent_depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .depthTestEnable = vk.VK_TRUE,
+            .depthWriteEnable = vk.VK_FALSE,
+            .depthCompareOp = vk.VK_COMPARE_OP_LESS,
+            .depthBoundsTestEnable = vk.VK_FALSE,
+            .stencilTestEnable = vk.VK_FALSE,
+            .front = std.mem.zeroes(vk.VkStencilOpState),
+            .back = std.mem.zeroes(vk.VkStencilOpState),
+            .minDepthBounds = 0.0,
+            .maxDepthBounds = 1.0,
+        };
+
+        const translucent_blend_attachment = vk.VkPipelineColorBlendAttachmentState{
+            .blendEnable = vk.VK_TRUE,
+            .srcColorBlendFactor = vk.VK_BLEND_FACTOR_SRC_ALPHA,
+            .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            .colorBlendOp = vk.VK_BLEND_OP_ADD,
+            .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE,
+            .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO,
+            .alphaBlendOp = vk.VK_BLEND_OP_ADD,
+            .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT,
+        };
+
+        const translucent_color_blending = vk.VkPipelineColorBlendStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .logicOpEnable = vk.VK_FALSE,
+            .logicOp = 0,
+            .attachmentCount = 1,
+            .pAttachments = &translucent_blend_attachment,
+            .blendConstants = .{ 0.0, 0.0, 0.0, 0.0 },
+        };
+
+        const translucent_pipeline_info = vk.VkGraphicsPipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &rendering_create_info,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &translucent_depth_stencil,
+            .pColorBlendState = &translucent_color_blending,
+            .pDynamicState = &dynamic_state_info,
+            .layout = self.pipeline_layout,
+            .renderPass = null,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        const translucent_pipeline_infos = &[_]vk.VkGraphicsPipelineCreateInfo{translucent_pipeline_info};
+        var translucent_pipelines: [1]vk.VkPipeline = undefined;
+        try vk.createGraphicsPipelines(device, ctx.pipeline_cache, 1, translucent_pipeline_infos, null, &translucent_pipelines);
+        self.translucent_pipeline = translucent_pipelines[0];
 
         const overdraw_frag_spirv = try shader_compiler.compile("overdraw.frag", .fragment);
         defer shader_compiler.allocator.free(overdraw_frag_spirv);
@@ -633,7 +731,7 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "createIndirectBuffer");
         defer tz.end();
 
-        const buffer_size: vk.VkDeviceSize = MAX_INDIRECT_COMMANDS * @sizeOf(vk.VkDrawIndexedIndirectCommand);
+        const buffer_size: vk.VkDeviceSize = @as(u64, MAX_INDIRECT_COMMANDS) * LAYER_COUNT * @sizeOf(vk.VkDrawIndexedIndirectCommand);
 
         self.indirect_alloc = try gpu_alloc.createBuffer(
             buffer_size,
@@ -645,15 +743,15 @@ pub const WorldRenderer = struct {
         @memset(dst[0..@intCast(buffer_size)], 0);
 
         self.indirect_count_alloc = try gpu_alloc.createBuffer(
-            @sizeOf(u32),
+            @sizeOf(u32) * LAYER_COUNT,
             vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             .host_visible,
         );
 
-        const count_ptr: *u32 = @ptrCast(@alignCast(self.indirect_count_alloc.mapped_ptr.?));
-        count_ptr.* = 0;
+        const count_base: [*]u32 = @ptrCast(@alignCast(self.indirect_count_alloc.mapped_ptr.?));
+        for (0..LAYER_COUNT) |l| count_base[l] = 0;
 
-        std.log.info("Indirect draw buffers created (max {} draw commands)", .{MAX_INDIRECT_COMMANDS});
+        std.log.info("Indirect draw buffers created (max {} draw commands per layer, {} layers)", .{ MAX_INDIRECT_COMMANDS, LAYER_COUNT });
     }
 
     fn createPersistentBuffers(self: *WorldRenderer, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {

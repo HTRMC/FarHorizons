@@ -500,6 +500,7 @@ pub const VulkanRenderer = struct {
 
                 // Apply NEW data
                 wr.chunk_data[slot] = entry.chunk_data;
+                wr.chunk_layer_counts[slot] = entry.layer_face_counts;
                 wr.chunk_face_alloc[slot] = entry.face_alloc;
                 wr.chunk_light_alloc[slot] = entry.light_alloc;
                 wr.writeChunkData(slot);

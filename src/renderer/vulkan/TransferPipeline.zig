@@ -24,6 +24,7 @@ pub const CommittedChunk = struct {
     light_alloc: ?TlsfAllocator.Allocation,
     timeline_value: u64,
     light_only: bool,
+    layer_face_counts: [WorldState.LAYER_COUNT][6]u32,
 };
 
 const RingBuffer = struct {
@@ -276,6 +277,14 @@ pub const TransferPipeline = struct {
         mw.allocator.free(result.lights);
     }
 
+    fn totalFaceCounts(lfc: [WorldState.LAYER_COUNT][6]u32) [6]u32 {
+        var result: [6]u32 = .{ 0, 0, 0, 0, 0, 0 };
+        for (0..WorldState.LAYER_COUNT) |l| {
+            for (0..6) |n| result[n] += lfc[l][n];
+        }
+        return result;
+    }
+
     fn workerFn(self: *TransferPipeline) void {
         const io = Io.Threaded.global_single_threaded.io();
         const mw = self.mesh_worker orelse return;
@@ -349,13 +358,14 @@ pub const TransferPipeline = struct {
                                 .position = key.position(),
                                 .light_start = 0,
                                 .face_start = 0,
-                                .face_counts = result.face_counts,
+                                .face_counts = totalFaceCounts(result.layer_face_counts),
                                 .voxel_size = 1,
                             },
                             .face_alloc = null,
                             .light_alloc = null,
                             .timeline_value = self.timeline_value,
                             .light_only = true,
+                            .layer_face_counts = result.layer_face_counts,
                         });
                         mw.allocator.free(result.lights);
                         continue;
@@ -403,13 +413,14 @@ pub const TransferPipeline = struct {
                             .position = key.position(),
                             .light_start = la.offset,
                             .face_start = 0,
-                            .face_counts = result.face_counts,
+                            .face_counts = totalFaceCounts(result.layer_face_counts),
                             .voxel_size = 1,
                         },
                         .face_alloc = null,
                         .light_alloc = light_alloc,
                         .timeline_value = self.timeline_value + 1,
                         .light_only = true,
+                        .layer_face_counts = result.layer_face_counts,
                     });
 
                     mw.allocator.free(result.lights);
@@ -432,6 +443,7 @@ pub const TransferPipeline = struct {
                         .light_alloc = null,
                         .timeline_value = self.timeline_value,
                         .light_only = false,
+                        .layer_face_counts = .{ .{ 0, 0, 0, 0, 0, 0 } } ** WorldState.LAYER_COUNT,
                     });
                     mw.allocator.free(result.faces);
                     mw.allocator.free(result.lights);
@@ -501,13 +513,14 @@ pub const TransferPipeline = struct {
                                 .position = key.position(),
                                 .light_start = 0,
                                 .face_start = fa.offset,
-                                .face_counts = result.face_counts,
+                                .face_counts = totalFaceCounts(result.layer_face_counts),
                                 .voxel_size = 1,
                             },
                             .face_alloc = fa,
                             .light_alloc = null,
                             .timeline_value = self.timeline_value + 1,
                             .light_only = false,
+                            .layer_face_counts = result.layer_face_counts,
                         });
                         continue;
                     };
@@ -531,13 +544,14 @@ pub const TransferPipeline = struct {
                         .position = key.position(),
                         .light_start = la.offset,
                         .face_start = fa.offset,
-                        .face_counts = result.face_counts,
+                        .face_counts = totalFaceCounts(result.layer_face_counts),
                         .voxel_size = 1,
                     },
                     .face_alloc = fa,
                     .light_alloc = if (result.light_count > 0) light_alloc else null,
                     .timeline_value = self.timeline_value + 1,
                     .light_only = false,
+                    .layer_face_counts = result.layer_face_counts,
                 });
 
                 // Free mesh result heap memory
