@@ -21,10 +21,7 @@ const CS = CHUNK_SIZE;
 const DENSITY_SCALE: f32 = 684.412;
 const SELECTOR_SCALE_XZ: f32 = 8.555;
 const SELECTOR_SCALE_Y: f32 = 4.278;
-const DENSITY_OCTAVES: u32 = 16;
-const SELECTOR_OCTAVES: u32 = 8;
-const HEIGHT_MOD_OCTAVES: u32 = 10;
-const ROUGHNESS_OCTAVES: u32 = 16;
+// Octave counts now defined by NoiseGen.init() in Noise.zig
 
 // Infdev sea level = 64, world height = 128.
 // We map: Infdev y=0 → our y=-64, Infdev y=64 → our y=0, Infdev y=127 → our y=63.
@@ -35,11 +32,6 @@ const INFDEV_SEA_LEVEL: f32 = 64.0;
 // Our chunks use STEP=4 for XZ, but vertical bias must use Infdev's scale.
 const INFDEV_Y_STEP: f32 = 8.0;
 
-// Measured: FN2 raw Perlin range ~[-0.595, 0.791] (via outputMinMax over large grids).
-// Java improved Perlin range ~[-1.0, 1.0] (theoretical max after trilinear interpolation).
-// Scale FN2 output by ~1.27 to match Java's amplitude.
-const FN2_SCALE: f32 = 1.27;
-
 // --- Cave parameters (matching Infdev) ---
 const CAVE_SCAN_RANGE: i32 = 4; // Infdev scans ±8 for 16-block chunks; ±4 for 32-block
 const CAVE_LAVA_Y: i32 = -54; // Infdev y=10 → our y = 10-64 = -54
@@ -48,18 +40,10 @@ const CAVE_LAVA_Y: i32 = -54; // Infdev y=10 → our y = 10-64 = -54
 const Biome = enum { plains, desert, tundra, mountains };
 
 pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
-    var noise = Noise.init() orelse {
-        std.log.err("[TerrainGen] FastNoise2 init failed, falling back to flat chunk", .{});
-        WorldState.generateFlatChunk(chunk, key);
-        return;
-    };
-    defer noise.deinit();
-
-    const seed_i32: i32 = @truncate(@as(i64, @bitCast(seed)));
+    const ng = Noise.NoiseGen.init(seed);
     const origin = key.position();
 
     // Infdev coarse grid: world pos / 4 = grid index.
-    // Our grid starts at chunk origin / STEP.
     const gx_start: i32 = @divFloor(origin[0], Noise.STEP);
     const gy_start: i32 = @divFloor(origin[1], Noise.STEP);
     const gz_start: i32 = @divFloor(origin[2], Noise.STEP);
@@ -67,16 +51,16 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
     // --- 2D grids: height modifier and roughness ---
     var height_mod: [Noise.SC2]f32 = undefined;
     var roughness: [Noise.SC2]f32 = undefined;
-    noise.infdevFbm2D(&height_mod, gx_start, gz_start, seed_i32 +% 100, 1.0, HEIGHT_MOD_OCTAVES);
-    noise.infdevFbm2D(&roughness, gx_start, gz_start, seed_i32 +% 200, 100.0, ROUGHNESS_OCTAVES);
+    ng.height_mod.fillGrid2D(&height_mod, gx_start, gz_start, 1.0, 1.0);
+    ng.roughness.fillGrid2D(&roughness, gx_start, gz_start, 100.0, 100.0);
 
     // --- 3D grids: density A, density B, selector ---
     var density_a: [Noise.SC3]f32 = undefined;
     var density_b: [Noise.SC3]f32 = undefined;
     var selector: [Noise.SC3]f32 = undefined;
-    noise.infdevFbm3D(&density_a, gx_start, gy_start, gz_start, seed_i32, DENSITY_SCALE, DENSITY_SCALE, DENSITY_OCTAVES);
-    noise.infdevFbm3D(&density_b, gx_start, gy_start, gz_start, seed_i32 +% 9999, DENSITY_SCALE, DENSITY_SCALE, DENSITY_OCTAVES);
-    noise.infdevFbm3D(&selector, gx_start, gy_start, gz_start, seed_i32 +% 55555, SELECTOR_SCALE_XZ, SELECTOR_SCALE_Y, SELECTOR_OCTAVES);
+    ng.density_a.fillGrid3D(&density_a, gx_start, gy_start, gz_start, DENSITY_SCALE, DENSITY_SCALE, DENSITY_SCALE);
+    ng.density_b.fillGrid3D(&density_b, gx_start, gy_start, gz_start, DENSITY_SCALE, DENSITY_SCALE, DENSITY_SCALE);
+    ng.selector.fillGrid3D(&selector, gx_start, gy_start, gz_start, SELECTOR_SCALE_XZ, SELECTOR_SCALE_Y, SELECTOR_SCALE_XZ);
 
     // --- Fill chunk ---
     chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
@@ -85,9 +69,9 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
 
     for (0..CS) |bz| {
         for (0..CS) |bx| {
-            // 2D height modifiers scaled for FN2 (Infdev lines 70-98)
-            const hmod_raw = Noise.bilerp2D(&height_mod, bx, bz) * FN2_SCALE;
-            const rough_raw = Noise.bilerp2D(&roughness, bx, bz) * FN2_SCALE;
+            // 2D height modifiers (Infdev lines 70-98)
+            const hmod_raw = Noise.bilerp2D(&height_mod, bx, bz);
+            const rough_raw = Noise.bilerp2D(&roughness, bx, bz);
 
             // var65 = height scale factor (Infdev lines 70-73, 87, 96)
             var var65 = @min((hmod_raw + 256.0) / 512.0, 1.0);
@@ -114,10 +98,10 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
                 const wy_f: f32 = @floatFromInt(wy);
                 const idx = WorldState.chunkIndex(bx, by, bz);
 
-                // Trilinear interpolation of 3D noise, scaled for FN2
-                const da = Noise.trilerp3D(&density_a, bx, by, bz) * FN2_SCALE / 512.0;
-                const db = Noise.trilerp3D(&density_b, bx, by, bz) * FN2_SCALE / 512.0;
-                const sel_raw = Noise.trilerp3D(&selector, bx, by, bz) * FN2_SCALE;
+                // Trilinear interpolation of 3D noise (exact Infdev formulas, no scaling needed)
+                const da = Noise.trilerp3D(&density_a, bx, by, bz) / 512.0;
+                const db = Noise.trilerp3D(&density_b, bx, by, bz) / 512.0;
+                const sel_raw = Noise.trilerp3D(&selector, bx, by, bz);
 
                 // Selector: Infdev line 111 — (sel/10 + 1) / 2
                 const sel = std.math.clamp((sel_raw / 10.0 + 1.0) / 2.0, 0.0, 1.0);
@@ -151,11 +135,7 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
 }
 
 fn surfacePass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
-    // Simple surface decoration: grass on top, dirt below, sand near sea level
-    const seed_i32: i32 = @truncate(@as(i64, @bitCast(seed)));
-    var noise = Noise.init() orelse return;
-    defer noise.deinit();
-
+    _ = seed;
     for (0..CS) |bz| {
         for (0..CS) |bx| {
             var depth: i32 = -1;
@@ -173,7 +153,7 @@ fn surfacePass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
 
                 if (depth < 0) continue;
 
-                chunk.blocks[idx] = selectBlock(depth, wy, seed_i32);
+                chunk.blocks[idx] = selectBlock(depth, wy, 0);
                 depth += 1;
             }
         }
@@ -466,21 +446,15 @@ fn carveEllipsoid(
 // ============================================================
 
 pub fn sampleHeight(wx: i32, wz: i32, seed: u64) i32 {
-    var noise = Noise.init() orelse return 0;
-    defer noise.deinit();
+    const ng = Noise.NoiseGen.init(seed);
 
-    const seed_i32: i32 = @truncate(@as(i64, @bitCast(seed)));
-    const fx: f32 = @floatFromInt(wx);
-    const fz: f32 = @floatFromInt(wz);
+    // Grid-space coordinates (coarse grid index, not block coords)
+    const gx: f64 = @as(f64, @floatFromInt(wx)) / Noise.STEP;
+    const gz: f64 = @as(f64, @floatFromInt(wz)) / Noise.STEP;
 
-    // Grid-space coordinates
-    const gx: f32 = fx / Noise.STEP;
-    const gz: f32 = fz / Noise.STEP;
-
-    // Height modifier and roughness (2D) — sampleFbm2D is standard FBm, not inverted
-    // For spawn height we use a rough approximation
-    const hmod_raw = noise.sampleFbm2D(gx, gz, seed_i32 +% 100, 1.0, HEIGHT_MOD_OCTAVES) * FN2_SCALE;
-    const rough_raw = noise.sampleFbm2D(gx, gz, seed_i32 +% 200, 100.0, ROUGHNESS_OCTAVES) * FN2_SCALE;
+    // Height modifier and roughness (2D) — now using proper inverted FBm
+    const hmod_raw: f32 = @floatCast(ng.height_mod.sample3D(gx * 1.0, 0, gz * 1.0));
+    const rough_raw: f32 = @floatCast(ng.roughness.sample3D(gx * 100.0, 0, gz * 100.0));
 
     var var65 = @min((hmod_raw + 256.0) / 512.0, 1.0);
     var var67 = @abs(rough_raw / 8000.0) * 3.0 - 3.0;
@@ -495,20 +469,21 @@ pub fn sampleHeight(wx: i32, wz: i32, seed: u64) i32 {
     var67 = var67 * 17.0 / 16.0;
 
     const surface_grid = 8.5 + var67 * 4.0;
-    // Convert from Infdev grid units (step=8) to world Y
     const surface_y = surface_grid * INFDEV_Y_STEP - INFDEV_SEA_LEVEL;
 
     // Walk down from above surface to find where density > 0
     var y: f32 = surface_y + 40.0;
     while (y > surface_y - 40.0) : (y -= 1.0) {
-        const gy: f32 = (y + INFDEV_SEA_LEVEL) / INFDEV_Y_STEP;
-        const da = noise.sampleInfdevFbm3D(gx, gy, gz, seed_i32, DENSITY_SCALE, DENSITY_SCALE, DENSITY_OCTAVES) * FN2_SCALE / 512.0;
-        const db = noise.sampleInfdevFbm3D(gx, gy, gz, seed_i32 +% 9999, DENSITY_SCALE, DENSITY_SCALE, DENSITY_OCTAVES) * FN2_SCALE / 512.0;
-        const sel_raw = noise.sampleInfdevFbm3D(gx, gy, gz, seed_i32 +% 55555, SELECTOR_SCALE_XZ, SELECTOR_SCALE_Y, SELECTOR_OCTAVES) * FN2_SCALE;
+        const gy: f64 = @as(f64, y + INFDEV_SEA_LEVEL) / INFDEV_Y_STEP;
+        const da: f32 = @floatCast(ng.density_a.sample3D(gx * DENSITY_SCALE, gy * DENSITY_SCALE, gz * DENSITY_SCALE) / 512.0);
+        const db: f32 = @floatCast(ng.density_b.sample3D(gx * DENSITY_SCALE, gy * DENSITY_SCALE, gz * DENSITY_SCALE) / 512.0);
+        const sel_raw: f32 = @floatCast(ng.selector.sample3D(gx * SELECTOR_SCALE_XZ, gy * SELECTOR_SCALE_Y, gz * SELECTOR_SCALE_XZ));
         const sel = std.math.clamp((sel_raw / 10.0 + 1.0) / 2.0, 0.0, 1.0);
         const blended = da * (1.0 - sel) + db * sel;
 
-        var bias = (gy - surface_grid) * 12.0 / var65;
+        const sg: f32 = @floatCast(surface_grid);
+        const gyf: f32 = @floatCast(gy);
+        var bias = (gyf - sg) * 12.0 / var65;
         if (bias < 0.0) bias *= 4.0;
 
         if (blended - bias > 0.0) return @intFromFloat(y + 1.0);
