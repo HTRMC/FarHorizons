@@ -235,8 +235,6 @@ pub const RegionFile = struct {
         blocks: *const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType,
         algo: CompressionAlgo,
     ) !void {
-        const t0 = std.Io.Clock.now(.awake, self.io);
-
         var encoded = try chunk_codec.encode(self.mem_allocator, blocks);
         defer encoded.deinit();
 
@@ -247,8 +245,6 @@ pub const RegionFile = struct {
             const len = try compression.compress(algo, encoded.data, &compressed_buf);
             break :blk compressed_buf[0..len];
         };
-
-        const t1 = std.Io.Clock.now(.awake, self.io);
 
         const sectors_needed = storage_types.sectorsNeeded(compressed_data.len);
         if (sectors_needed == 0) return;
@@ -264,8 +260,6 @@ pub const RegionFile = struct {
             self.allocator_bitmap.free(new_offset, sectors_needed);
             return error.IoError;
         };
-
-        const t2 = std.Io.Clock.now(.awake, self.io);
 
         const old_entry = self.cot[chunk_index];
         if (old_entry.isPresent()) {
@@ -284,14 +278,6 @@ pub const RegionFile = struct {
         self.header.total_sectors = self.allocator_bitmap.total_sectors;
 
         try self.commitHeader();
-
-        const t3 = std.Io.Clock.now(.awake, self.io);
-        const encode_us = @divTrunc(@as(i64, @intCast(t0.durationTo(t1).nanoseconds)), 1000);
-        const write_us = @divTrunc(@as(i64, @intCast(t1.durationTo(t2).nanoseconds)), 1000);
-        const commit_us = @divTrunc(@as(i64, @intCast(t2.durationTo(t3).nanoseconds)), 1000);
-        log.debug("[writeChunk] idx={d} encode={d}us write={d}us commit={d}us size={d}B", .{
-            chunk_index, encode_us, write_us, commit_us, compressed_data.len,
-        });
     }
 
     pub fn writeChunkBatch(
@@ -475,9 +461,7 @@ pub const RegionFile = struct {
         self.pwriteAll(cot_data[0 .. CHUNKS_PER_REGION * @sizeOf(ChunkOffsetEntry)], cot_offset) catch
             return error.IoError;
 
-        const fsync1_start = std.Io.Clock.now(.awake, self.io);
         self.fsync() catch {};
-        const fsync1_us = @divTrunc(@as(i64, @intCast(fsync1_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds)), 1000);
 
         var meta_page: [SECTOR_SIZE]u8 = [_]u8{0} ** SECTOR_SIZE;
 
@@ -496,11 +480,7 @@ pub const RegionFile = struct {
         const meta_offset: u64 = if (inactive == 0) storage_types.OFFSET_META_A else storage_types.OFFSET_META_B;
         self.pwriteAll(&meta_page, meta_offset) catch return error.IoError;
 
-        const fsync2_start = std.Io.Clock.now(.awake, self.io);
         self.fsync() catch {};
-        const fsync2_us = @divTrunc(@as(i64, @intCast(fsync2_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds)), 1000);
-
-        log.debug("[commitHeader] fsync1={d}us fsync2={d}us", .{ fsync1_us, fsync2_us });
 
         self.active_slot = inactive;
     }
