@@ -298,6 +298,15 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 if (key == glfw.GLFW_KEY_9) input_state.hotbar_slot_requested = 8;
             }
 
+            if ((key == glfw.GLFW_KEY_EQUAL or key == glfw.GLFW_KEY_KP_ADD) and (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT)) {
+                input_state.move_speed = @min(input_state.move_speed * 1.25, 500.0);
+                input_log.info("Fly speed: {d:.1}", .{input_state.move_speed});
+            }
+            if ((key == glfw.GLFW_KEY_MINUS or key == glfw.GLFW_KEY_KP_SUBTRACT) and (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT)) {
+                input_state.move_speed = @max(input_state.move_speed / 1.25, 1.0);
+                input_log.info("Fly speed: {d:.1}", .{input_state.move_speed});
+            }
+
             if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
                 const now = glfw.getTime();
                 if (now - input_state.last_space_press_time < DOUBLE_TAP_THRESHOLD) {

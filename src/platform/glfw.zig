@@ -64,6 +64,10 @@ pub const GLFW_KEY_HOME = c.GLFW_KEY_HOME;
 pub const GLFW_KEY_END = c.GLFW_KEY_END;
 pub const GLFW_MOD_SHIFT = c.GLFW_MOD_SHIFT;
 pub const GLFW_MOD_CONTROL = c.GLFW_MOD_CONTROL;
+pub const GLFW_KEY_MINUS = c.GLFW_KEY_MINUS;
+pub const GLFW_KEY_EQUAL = c.GLFW_KEY_EQUAL;
+pub const GLFW_KEY_KP_ADD = c.GLFW_KEY_KP_ADD;
+pub const GLFW_KEY_KP_SUBTRACT = c.GLFW_KEY_KP_SUBTRACT;
 
 pub const GlfwError = error{
     InitFailed,
