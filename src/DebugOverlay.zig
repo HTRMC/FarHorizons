@@ -44,15 +44,13 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     text.drawText(x, y, "FarHorizons", white);
     y += LINE_HEIGHT;
 
-    const fps: f32 = if (gs.delta_time > 0) 1.0 / gs.delta_time else 0;
-    const ms = gs.delta_time * 1000.0;
-    const fps_text = std.fmt.bufPrint(&buf, "FPS: {d:.0} ({d:.1}ms)", .{ fps, ms }) catch "FPS: ?";
+    const ft = gs.frame_timing;
+    const fps_text = std.fmt.bufPrint(&buf, "FPS: {d:.0} ({d:.1}ms)", .{ ft.smooth_fps, ft.smooth_frame_ms }) catch "FPS: ?";
     text.drawText(x, y, fps_text, yellow);
     y += LINE_HEIGHT;
 
-    const ft = gs.frame_timing;
     const timing_text = std.fmt.bufPrint(&buf, "Update: {d:.1}ms  Render: {d:.1}ms  Frame: {d:.1}ms", .{
-        ft.update_ms, ft.render_ms, ft.frame_ms,
+        ft.smooth_update_ms, ft.smooth_render_ms, ft.smooth_frame_ms,
     }) catch "Timing: ?";
     text.drawText(x, y, timing_text, yellow);
     y += LINE_HEIGHT;

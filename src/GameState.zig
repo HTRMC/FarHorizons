@@ -153,6 +153,20 @@ pub const FrameTiming = struct {
     update_ms: f32 = 0,
     render_ms: f32 = 0,
     frame_ms: f32 = 0,
+    smooth_update_ms: f32 = 0,
+    smooth_render_ms: f32 = 0,
+    smooth_frame_ms: f32 = 0,
+    smooth_fps: f32 = 0,
+
+    const alpha: f32 = 0.05;
+
+    pub fn smooth(self: *FrameTiming, dt: f32) void {
+        self.smooth_update_ms += alpha * (self.update_ms - self.smooth_update_ms);
+        self.smooth_render_ms += alpha * (self.render_ms - self.smooth_render_ms);
+        self.smooth_frame_ms += alpha * (self.frame_ms - self.smooth_frame_ms);
+        const fps: f32 = if (dt > 0) 1.0 / dt else 0;
+        self.smooth_fps += alpha * (fps - self.smooth_fps);
+    }
 };
 
 pub const DirtyChunkSet = struct {

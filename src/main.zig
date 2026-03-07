@@ -673,6 +673,7 @@ pub fn main() !void {
             if (game_state) |*gs| {
                 gs.frame_timing.render_ms = @floatCast((glfw.getTime() - render_start) * 1000.0);
                 gs.frame_timing.frame_ms = delta_time * 1000.0;
+                gs.frame_timing.smooth(delta_time);
                 if (!gs.debug_camera_active) {
                     gs.restoreAfterRender();
                 }
