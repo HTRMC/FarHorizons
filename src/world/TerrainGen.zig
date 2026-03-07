@@ -1,6 +1,7 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const Noise = @import("Noise.zig");
+const TreeGen = @import("TreeGen.zig");
 
 const Chunk = WorldState.Chunk;
 const ChunkKey = WorldState.ChunkKey;
@@ -132,6 +133,9 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
 
     // --- Worm-carve caves ---
     carveCaves(chunk, key, seed);
+
+    // --- Plant trees ---
+    TreeGen.plantTrees(chunk, key, seed);
 }
 
 fn surfacePass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
@@ -447,7 +451,10 @@ fn carveEllipsoid(
 
 pub fn sampleHeight(wx: i32, wz: i32, seed: u64) i32 {
     const ng = Noise.NoiseGen.init(seed);
+    return sampleHeightWithNoise(wx, wz, &ng);
+}
 
+pub fn sampleHeightWithNoise(wx: i32, wz: i32, ng: *const Noise.NoiseGen) i32 {
     // Grid-space coordinates (coarse grid index, not block coords)
     const gx: f64 = @as(f64, @floatFromInt(wx)) / Noise.STEP;
     const gz: f64 = @as(f64, @floatFromInt(wz)) / Noise.STEP;
