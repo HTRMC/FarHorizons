@@ -1,15 +1,12 @@
-const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const TerrainGen = @import("TerrainGen.zig");
 const Noise = @import("Noise.zig");
 
 const Chunk = WorldState.Chunk;
 const ChunkKey = WorldState.ChunkKey;
-const BlockType = WorldState.BlockType;
 const CHUNK_SIZE = WorldState.CHUNK_SIZE;
 const CS: i32 = CHUNK_SIZE;
 
-// Trees can extend ~3 blocks beyond their base chunk, well within 1-chunk range for 32-block chunks.
 const TREE_SCAN_RANGE: i32 = 1;
 
 const TreeRng = struct {
@@ -48,51 +45,27 @@ pub fn plantTrees(chunk: *Chunk, key: ChunkKey, seed: u64) void {
                 0x54524545;
 
             var rng = TreeRng.init(col_seed);
-            const num_attempts = rng.bounded(6) + 2; // 2-7 trees per 32x32 column
+            const num_attempts = rng.bounded(6) + 2;
 
             for (0..num_attempts) |_| {
                 const local_x: i32 = @intCast(rng.bounded(@intCast(CS)));
                 const local_z: i32 = @intCast(rng.bounded(@intCast(CS)));
                 const wx = scan_cx * CS + local_x;
                 const wz = scan_cz * CS + local_z;
-                const height: i32 = @intCast(rng.bounded(3) + 4); // 4-6, matches MC
+                const height: i32 = @intCast(rng.bounded(3) + 4);
                 const corner_seed = rng.next();
 
-                // Find the actual surface by scanning chunk data when possible,
-                // fall back to noise-based height for cross-chunk trees.
-                const bx = wx - origin[0];
-                const bz = wz - origin[2];
-                const in_chunk_xz = bx >= 0 and bx < CS and bz >= 0 and bz < CS;
+                // Grid-interpolated height matches chunk gen exactly.
+                // All chunks compute the same value, so trees are seamless.
+                const wy = TerrainGen.sampleGridSurfaceHeight(wx, wz, &ng);
+                if (wy < 0) continue;
 
-                const wy = if (in_chunk_xz)
-                    findSurface(chunk, origin, @intCast(bx), @intCast(bz))
-                else
-                    TerrainGen.sampleHeightWithNoise(wx, wz, &ng);
-
-                if (wy < 0) continue; // don't place below sea level
-
-                // Tree spans [wy-1, wy+height+1]; skip if outside chunk Y range
                 if (wy + height + 1 < chunk_min_y or wy - 1 >= chunk_max_y) continue;
 
                 placeTree(chunk, origin, wx, wy, wz, height, corner_seed);
             }
         }
     }
-}
-
-/// Scan a column in the chunk data top-down to find the first air/water block
-/// above a grass_block or dirt. Returns world Y of the air block (tree base),
-/// or -1 if no valid surface found.
-fn findSurface(chunk: *Chunk, origin: [3]i32, bx: usize, bz: usize) i32 {
-    var by: usize = CHUNK_SIZE;
-    while (by > 0) {
-        by -= 1;
-        const block = chunk.blocks[WorldState.chunkIndex(bx, by, bz)];
-        if (block == .grass_block or block == .dirt) {
-            return origin[1] + @as(i32, @intCast(by)) + 1;
-        }
-    }
-    return -1;
 }
 
 fn placeTree(chunk: *Chunk, origin: [3]i32, wx: i32, wy: i32, wz: i32, height: i32, corner_seed: u64) void {
@@ -113,8 +86,6 @@ fn placeTree(chunk: *Chunk, origin: [3]i32, wx: i32, wy: i32, wz: i32, height: i
                 const is_corner = @abs(dx) == radius and @abs(dz) == radius;
                 var place = true;
                 if (is_corner) {
-                    // MC: nextInt(2) != 0 && var19 != 0
-                    // Always consume RNG at corners for consistency across chunks
                     const rand_val = corner_rng.bounded(2);
                     if (rand_val == 0 or layer_offset == 0) {
                         place = false;

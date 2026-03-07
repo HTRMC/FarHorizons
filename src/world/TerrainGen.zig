@@ -497,3 +497,152 @@ pub fn sampleHeightWithNoise(wx: i32, wz: i32, ng: *const Noise.NoiseGen) i32 {
     }
     return @intFromFloat(surface_y);
 }
+
+// ============================================================
+// Grid-interpolated surface height (matches chunk gen exactly)
+// ============================================================
+
+/// Sample surface height using the same grid-interpolated noise as generateChunk.
+/// Returns the world Y of the first air block above the noise surface.
+/// All chunks compute identical results for the same (wx, wz), enabling
+/// seamless cross-chunk tree placement.
+pub fn sampleGridSurfaceHeight(wx: i32, wz: i32, ng: *const Noise.NoiseGen) i32 {
+    const STEP: i32 = Noise.STEP;
+    const GRID: i32 = @divExact(@as(i32, CS), STEP);
+
+    // Determine grid cell for this column
+    const home_cx = @divFloor(wx, @as(i32, CS));
+    const home_cz = @divFloor(wz, @as(i32, CS));
+    const bx: u32 = @intCast(wx - home_cx * @as(i32, CS));
+    const bz: u32 = @intCast(wz - home_cz * @as(i32, CS));
+
+    const sx: i32 = @intCast(bx / Noise.STEP);
+    const sz: i32 = @intCast(bz / Noise.STEP);
+    const fx: f32 = @as(f32, @floatFromInt(bx % Noise.STEP)) / @as(f32, Noise.STEP);
+    const fz: f32 = @as(f32, @floatFromInt(bz % Noise.STEP)) / @as(f32, Noise.STEP);
+
+    const gx0 = home_cx * GRID + sx;
+    const gx1 = gx0 + 1;
+    const gz0 = home_cz * GRID + sz;
+    const gz1 = gz0 + 1;
+
+    // 2D noise at 4 XZ corners (matches fillGrid2D)
+    const hm = gridSample2D(&ng.height_mod, gx0, gx1, gz0, gz1, 1.0);
+    const rg = gridSample2D(&ng.roughness, gx0, gx1, gz0, gz1, 100.0);
+    const hmod_raw = bilerp4(hm, fx, fz);
+    const rough_raw = bilerp4(rg, fx, fz);
+
+    // Surface parameters (identical to generateChunk lines 73-94)
+    var var65 = @min((hmod_raw + 256.0) / 512.0, 1.0);
+    var var67 = @abs(rough_raw / 8000.0) * 3.0 - 3.0;
+    if (var67 < 0.0) {
+        var67 = @max(var67 / 2.0, -1.0);
+        var67 = var67 / 1.4 / 2.0;
+        var65 = 0.0;
+    } else {
+        var67 = @min(var67, 1.0) / 6.0;
+    }
+    var65 += 0.5;
+    var67 = var67 * 17.0 / 16.0;
+    const surface_grid = 8.5 + var67 * 4.0;
+
+    // Search range around 2D surface estimate
+    const surface_est: f32 = surface_grid * INFDEV_Y_STEP - INFDEV_SEA_LEVEL;
+    const search_top: i32 = @as(i32, @intFromFloat(@ceil(surface_est))) + 16;
+    const search_bot: i32 = @as(i32, @intFromFloat(@floor(surface_est))) - 16;
+
+    // Cache 3D grid values; resample when crossing a Y grid cell boundary
+    var prev_gy0: i32 = std.math.maxInt(i32);
+    var corners_lo: [3][4]f32 = undefined;
+    var corners_hi: [3][4]f32 = undefined;
+
+    var wy = search_top;
+    while (wy >= search_bot) : (wy -= 1) {
+        const cky = @divFloor(wy, @as(i32, CS));
+        const by: u32 = @intCast(wy - cky * @as(i32, CS));
+        const sy: i32 = @intCast(by / Noise.STEP);
+        const fy: f32 = @as(f32, @floatFromInt(by % Noise.STEP)) / @as(f32, Noise.STEP);
+        const gy0 = cky * GRID + sy;
+
+        if (gy0 != prev_gy0) {
+            prev_gy0 = gy0;
+            const gy1 = gy0 + 1;
+            corners_lo[0] = gridSample3D(&ng.density_a, gx0, gx1, gy0, gz0, gz1, DENSITY_SCALE, DENSITY_SCALE, DENSITY_SCALE);
+            corners_hi[0] = gridSample3D(&ng.density_a, gx0, gx1, gy1, gz0, gz1, DENSITY_SCALE, DENSITY_SCALE, DENSITY_SCALE);
+            corners_lo[1] = gridSample3D(&ng.density_b, gx0, gx1, gy0, gz0, gz1, DENSITY_SCALE, DENSITY_SCALE, DENSITY_SCALE);
+            corners_hi[1] = gridSample3D(&ng.density_b, gx0, gx1, gy1, gz0, gz1, DENSITY_SCALE, DENSITY_SCALE, DENSITY_SCALE);
+            corners_lo[2] = gridSample3D(&ng.selector, gx0, gx1, gy0, gz0, gz1, SELECTOR_SCALE_XZ, SELECTOR_SCALE_Y, SELECTOR_SCALE_XZ);
+            corners_hi[2] = gridSample3D(&ng.selector, gx0, gx1, gy1, gz0, gz1, SELECTOR_SCALE_XZ, SELECTOR_SCALE_Y, SELECTOR_SCALE_XZ);
+        }
+
+        const da = trilerp8(corners_lo[0], corners_hi[0], fx, fy, fz) / 512.0;
+        const db = trilerp8(corners_lo[1], corners_hi[1], fx, fy, fz) / 512.0;
+        const sel_raw = trilerp8(corners_lo[2], corners_hi[2], fx, fy, fz);
+
+        const sel = std.math.clamp((sel_raw / 10.0 + 1.0) / 2.0, 0.0, 1.0);
+        const blended = da * (1.0 - sel) + db * sel;
+
+        const wy_f: f32 = @floatFromInt(wy);
+        const grid_y = (wy_f + INFDEV_SEA_LEVEL) / INFDEV_Y_STEP;
+        var bias = (grid_y - surface_grid) * 12.0 / var65;
+        if (bias < 0.0) bias *= 4.0;
+
+        if (blended - bias > 0.0) return wy + 1;
+    }
+    return @intFromFloat(surface_est);
+}
+
+/// Sample OctavePerlin at an integer grid point, matching fillGrid3D exactly.
+fn octaveAt(octave: *const Noise.OctavePerlin, gx: i32, gy: i32, gz: i32, x_scale: f64, y_scale: f64, z_scale: f64) f32 {
+    var total: f32 = 0;
+    var freq: f64 = 1.0;
+    const gx_f: f64 = @floatFromInt(gx);
+    const gy_f: f64 = @floatFromInt(gy);
+    const gz_f: f64 = @floatFromInt(gz);
+    for (0..octave.num_octaves) |i| {
+        const amp: f32 = @floatCast(1.0 / freq);
+        total += @as(f32, @floatCast(octave.perlin[i].sample3D(
+            gx_f * x_scale * freq,
+            gy_f * y_scale * freq,
+            gz_f * z_scale * freq,
+        ))) * amp;
+        freq /= 2.0;
+    }
+    return total;
+}
+
+/// Sample 2D noise at 4 XZ grid corners (y=0), matching fillGrid2D.
+fn gridSample2D(octave: *const Noise.OctavePerlin, gx0: i32, gx1: i32, gz0: i32, gz1: i32, scale: f64) [4]f32 {
+    return .{
+        octaveAt(octave, gx0, 0, gz0, scale, 0, scale),
+        octaveAt(octave, gx1, 0, gz0, scale, 0, scale),
+        octaveAt(octave, gx0, 0, gz1, scale, 0, scale),
+        octaveAt(octave, gx1, 0, gz1, scale, 0, scale),
+    };
+}
+
+/// Sample 3D noise at 4 XZ corners for a single Y level, matching fillGrid3D.
+fn gridSample3D(octave: *const Noise.OctavePerlin, gx0: i32, gx1: i32, gy: i32, gz0: i32, gz1: i32, x_scale: f64, y_scale: f64, z_scale: f64) [4]f32 {
+    return .{
+        octaveAt(octave, gx0, gy, gz0, x_scale, y_scale, z_scale),
+        octaveAt(octave, gx1, gy, gz0, x_scale, y_scale, z_scale),
+        octaveAt(octave, gx0, gy, gz1, x_scale, y_scale, z_scale),
+        octaveAt(octave, gx1, gy, gz1, x_scale, y_scale, z_scale),
+    };
+}
+
+fn bilerp4(c: [4]f32, fx: f32, fz: f32) f32 {
+    const top = c[0] + (c[1] - c[0]) * fx;
+    const bot = c[2] + (c[3] - c[2]) * fx;
+    return top + (bot - top) * fz;
+}
+
+fn trilerp8(lo: [4]f32, hi: [4]f32, fx: f32, fy: f32, fz: f32) f32 {
+    const c00 = lo[0] + (lo[1] - lo[0]) * fx;
+    const c01 = lo[2] + (lo[3] - lo[2]) * fx;
+    const c10 = hi[0] + (hi[1] - hi[0]) * fx;
+    const c11 = hi[2] + (hi[3] - hi[2]) * fx;
+    const c0 = c00 + (c01 - c00) * fz;
+    const c1 = c10 + (c11 - c10) * fz;
+    return c0 + (c1 - c0) * fy;
+}
