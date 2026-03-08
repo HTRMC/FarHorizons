@@ -48,6 +48,7 @@ pub const GLFW_KEY_F5 = c.GLFW_KEY_F5;
 pub const GLFW_KEY_F6 = c.GLFW_KEY_F6;
 pub const GLFW_KEY_F7 = c.GLFW_KEY_F7;
 pub const GLFW_KEY_F11 = c.GLFW_KEY_F11;
+pub const GLFW_KEY_G = c.GLFW_KEY_G;
 pub const GLFW_PRESS = c.GLFW_PRESS;
 pub const GLFW_RELEASE = c.GLFW_RELEASE;
 pub const GLFW_REPEAT = c.GLFW_REPEAT;

@@ -146,6 +146,7 @@ transfer_pipeline: ?*TransferPipeline = null,
 stats_last_time: ?Io.Timestamp = null,
 
 debug_screens: u8 = 0,
+show_chunk_borders: bool = false,
 delta_time: f32 = 0,
 frame_timing: FrameTiming = .{},
 

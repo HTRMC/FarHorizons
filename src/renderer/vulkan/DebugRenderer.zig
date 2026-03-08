@@ -359,6 +359,47 @@ pub const DebugRenderer = struct {
         count = addLine(vertices, count, x1, y0, z1, x1, y1, z1, yellow);
         count = addLine(vertices, count, x0, y0, z1, x0, y1, z1, yellow);
 
+        // Chunk border wireframes (F3+G)
+        if (game_state.show_chunk_borders) {
+            const WorldState = @import("../../world/WorldState.zig");
+            const CS: f32 = @floatFromInt(WorldState.CHUNK_SIZE);
+            const pc = game_state.player_chunk;
+            const border_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 };
+            const RADIUS = 3;
+
+            var ci: i32 = pc.cx - RADIUS;
+            while (ci <= pc.cx + RADIUS) : (ci += 1) {
+                var cj: i32 = pc.cy - RADIUS;
+                while (cj <= pc.cy + RADIUS) : (cj += 1) {
+                    var ck: i32 = pc.cz - RADIUS;
+                    while (ck <= pc.cz + RADIUS) : (ck += 1) {
+                        if (count + 24 > DEBUG_LINE_MAX_VERTICES) break;
+                        const cx0: f32 = @as(f32, @floatFromInt(ci)) * CS;
+                        const cy0: f32 = @as(f32, @floatFromInt(cj)) * CS;
+                        const cz0: f32 = @as(f32, @floatFromInt(ck)) * CS;
+                        const cx1 = cx0 + CS;
+                        const cy1 = cy0 + CS;
+                        const cz1 = cz0 + CS;
+                        // Bottom face
+                        count = addLine(vertices, count, cx0, cy0, cz0, cx1, cy0, cz0, border_color);
+                        count = addLine(vertices, count, cx1, cy0, cz0, cx1, cy0, cz1, border_color);
+                        count = addLine(vertices, count, cx1, cy0, cz1, cx0, cy0, cz1, border_color);
+                        count = addLine(vertices, count, cx0, cy0, cz1, cx0, cy0, cz0, border_color);
+                        // Top face
+                        count = addLine(vertices, count, cx0, cy1, cz0, cx1, cy1, cz0, border_color);
+                        count = addLine(vertices, count, cx1, cy1, cz0, cx1, cy1, cz1, border_color);
+                        count = addLine(vertices, count, cx1, cy1, cz1, cx0, cy1, cz1, border_color);
+                        count = addLine(vertices, count, cx0, cy1, cz1, cx0, cy1, cz0, border_color);
+                        // Verticals
+                        count = addLine(vertices, count, cx0, cy0, cz0, cx0, cy1, cz0, border_color);
+                        count = addLine(vertices, count, cx1, cy0, cz0, cx1, cy1, cz0, border_color);
+                        count = addLine(vertices, count, cx1, cy0, cz1, cx1, cy1, cz1, border_color);
+                        count = addLine(vertices, count, cx0, cy0, cz1, cx0, cy1, cz1, border_color);
+                    }
+                }
+            }
+        }
+
         if (game_state.hit_result) |hit| {
             const bx0: f32 = @floatFromInt(hit.block_pos[0]);
             const by0: f32 = @floatFromInt(hit.block_pos[1]);

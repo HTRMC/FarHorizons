@@ -199,6 +199,9 @@ const InputState = struct {
     mode_toggle_requested: bool = false,
     debug_toggle_requested: bool = false,
     overdraw_toggle_requested: bool = false,
+    chunk_borders_toggle_requested: bool = false,
+    f3_held: bool = false,
+    f3_consumed: bool = false,
     debug_screen_toggle: ?u3 = null,
     hotbar_scroll_delta: f32 = 0.0,
     hotbar_slot_requested: ?u8 = null,
@@ -274,10 +277,28 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 input_state.debug_toggle_requested = true;
             }
 
+            // F3 held state tracking
+            if (key == glfw.GLFW_KEY_F3) {
+                if (action == glfw.GLFW_PRESS) {
+                    input_state.f3_held = true;
+                    input_state.f3_consumed = false;
+                } else if (action == glfw.GLFW_RELEASE) {
+                    if (!input_state.f3_consumed) {
+                        input_state.debug_screen_toggle = 0;
+                    }
+                    input_state.f3_held = false;
+                }
+            }
+
             if (action == glfw.GLFW_PRESS) {
                 const shift = (mods & glfw.GLFW_MOD_SHIFT) != 0;
 
-                if (key == glfw.GLFW_KEY_F3) input_state.debug_screen_toggle = 0;
+                // F3+G: toggle chunk borders
+                if (key == glfw.GLFW_KEY_G and input_state.f3_held) {
+                    input_state.chunk_borders_toggle_requested = true;
+                    input_state.f3_consumed = true;
+                }
+
                 if (key == glfw.GLFW_KEY_F4 and shift) {
                     input_state.overdraw_toggle_requested = true;
                 } else if (key == glfw.GLFW_KEY_F4 and !shift) {
@@ -603,6 +624,11 @@ pub fn main() !void {
                 if (input_state.overdraw_toggle_requested) {
                     input_state.overdraw_toggle_requested = false;
                     gs.overdraw_mode = !gs.overdraw_mode;
+                }
+
+                if (input_state.chunk_borders_toggle_requested) {
+                    input_state.chunk_borders_toggle_requested = false;
+                    gs.show_chunk_borders = !gs.show_chunk_borders;
                 }
 
                 if (input_state.debug_screen_toggle) |bit| {
