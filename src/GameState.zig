@@ -460,6 +460,9 @@ fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
     const target = if (player) &self.player_dirty_chunks else &self.dirty_chunks;
     for (affected.keys[0..affected.count]) |key| {
         target.add(key);
+        if (self.light_maps.get(key)) |lm| {
+            lm.dirty = true;
+        }
     }
 }
 
@@ -524,6 +527,7 @@ pub fn worldTick(self: *GameState) void {
         self.light_maps.put(result.key, lm) catch {};
         self.dirty_chunks.add(result.key);
         // Mark neighbors dirty so they re-mesh with the new neighbor present
+        // Also mark their LightMaps dirty so light recomputes with the new chunk's data
         const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
         for (offsets) |off| {
             const nk = WorldState.ChunkKey{
@@ -533,6 +537,9 @@ pub fn worldTick(self: *GameState) void {
             };
             if (self.chunk_map.get(nk) != null) {
                 self.dirty_chunks.add(nk);
+                if (self.light_maps.get(nk)) |nlm| {
+                    nlm.dirty = true;
+                }
             }
         }
     }

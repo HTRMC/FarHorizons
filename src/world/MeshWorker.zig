@@ -319,7 +319,7 @@ pub const MeshWorker = struct {
                 }
                 if (light_map) |lm| {
                     if (lm.dirty) {
-                        LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm);
+                        _ = LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm);
                     }
                 }
 

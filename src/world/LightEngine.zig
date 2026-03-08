@@ -87,12 +87,13 @@ const SkyQueueEntry = struct {
 
 const MAX_QUEUE = BLOCKS_PER_CHUNK * 2;
 
+/// Returns a 6-bit mask of faces that have nonzero boundary light (for cascade).
 pub fn computeChunkLight(
     chunk: *const WorldState.Chunk,
     neighbors: [6]?*const WorldState.Chunk,
     neighbor_lights: [6]?*const LightMap,
     light_map: *LightMap,
-) void {
+) u6 {
     @memset(std.mem.asBytes(&light_map.block_light), 0);
     @memset(&light_map.sky_light, 0);
 
@@ -100,6 +101,83 @@ pub fn computeChunkLight(
     computeBlockLight(chunk, neighbors, neighbor_lights, light_map);
 
     light_map.dirty = false;
+
+    // Check boundary faces for nonzero light > attenuation (can propagate further)
+    var boundary_mask: u6 = 0;
+    // +X face (3): check x=31
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |z| {
+            const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
+            const bl = light_map.block_light[idx];
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+                boundary_mask |= (1 << 3);
+                break;
+            }
+        }
+        if (boundary_mask & (1 << 3) != 0) break;
+    }
+    // -X face (2): check x=0
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |z| {
+            const idx = chunkIndex(0, y, z);
+            const bl = light_map.block_light[idx];
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+                boundary_mask |= (1 << 2);
+                break;
+            }
+        }
+        if (boundary_mask & (1 << 2) != 0) break;
+    }
+    // +Z face (0): check z=31
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |x| {
+            const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
+            const bl = light_map.block_light[idx];
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+                boundary_mask |= (1 << 0);
+                break;
+            }
+        }
+        if (boundary_mask & (1 << 0) != 0) break;
+    }
+    // -Z face (1): check z=0
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |x| {
+            const idx = chunkIndex(x, y, 0);
+            const bl = light_map.block_light[idx];
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+                boundary_mask |= (1 << 1);
+                break;
+            }
+        }
+        if (boundary_mask & (1 << 1) != 0) break;
+    }
+    // +Y face (4): check y=31
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |x| {
+            const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
+            const bl = light_map.block_light[idx];
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+                boundary_mask |= (1 << 4);
+                break;
+            }
+        }
+        if (boundary_mask & (1 << 4) != 0) break;
+    }
+    // -Y face (5): check y=0
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |x| {
+            const idx = chunkIndex(x, 0, z);
+            const bl = light_map.block_light[idx];
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+                boundary_mask |= (1 << 5);
+                break;
+            }
+        }
+        if (boundary_mask & (1 << 5) != 0) break;
+    }
+
+    return boundary_mask;
 }
 
 fn computeSkyLight(
