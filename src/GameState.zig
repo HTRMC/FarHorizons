@@ -15,6 +15,7 @@ const Storage = @import("world/storage/Storage.zig");
 const WorldRenderer = @import("renderer/vulkan/WorldRenderer.zig").WorldRenderer;
 const TlsfAllocator = @import("allocators/TlsfAllocator.zig").TlsfAllocator;
 const MeshWorker = @import("world/MeshWorker.zig").MeshWorker;
+const SurfaceHeightMap = @import("world/SurfaceHeightMap.zig").SurfaceHeightMap;
 const TransferPipeline = @import("renderer/vulkan/TransferPipeline.zig").TransferPipeline;
 const Io = std.Io;
 
@@ -103,6 +104,7 @@ chunk_map: ChunkMap,
 chunk_pool: ChunkPool,
 light_maps: std.AutoHashMap(WorldState.ChunkKey, *LightMap),
 light_map_pool: LightMapPool,
+surface_height_map: SurfaceHeightMap,
 entity_pos: [3]f32,
 entity_vel: [3]f32,
 entity_on_ground: bool,
@@ -205,6 +207,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     const chunk_pool = ChunkPool.init(allocator);
     const light_maps = std.AutoHashMap(WorldState.ChunkKey, *LightMap).init(allocator);
     const light_map_pool = LightMapPool.init(allocator);
+    const surface_height_map = SurfaceHeightMap.init(allocator);
 
     const storage_inst = Storage.init(allocator, world_name) catch |err| blk: {
         std.log.warn("Storage init failed: {}, world will not be saved", .{err});
@@ -238,6 +241,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .chunk_pool = chunk_pool,
         .light_maps = light_maps,
         .light_map_pool = light_map_pool,
+        .surface_height_map = surface_height_map,
         .entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
@@ -294,6 +298,7 @@ pub fn deinit(self: *GameState) void {
     }
     self.light_maps.deinit();
     self.light_map_pool.deinit();
+    self.surface_height_map.deinit();
     self.chunk_map.deinit();
     self.chunk_pool.deinit();
 }
@@ -488,6 +493,11 @@ pub fn breakBlock(self: *GameState) void {
     const wy = hit.block_pos[1];
     const wz = hit.block_pos[2];
     self.chunk_map.setBlock(wx, wy, wz, .air);
+    // Rebuild surface height for this column (broken block may have been the surface)
+    const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+    const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
+    const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
+    self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
     self.markDirty(wx, wy, wz, true);
     self.queueChunkSave(wx, wy, wz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
@@ -503,6 +513,13 @@ pub fn placeBlock(self: *GameState) void {
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
     self.chunk_map.setBlock(px, py, pz, block_type);
+    // Update surface height if placing an opaque block
+    if (WorldState.block_properties.isOpaque(block_type)) {
+        const key = WorldState.ChunkKey.fromWorldPos(px, py, pz);
+        const local_x: usize = @intCast(@mod(px, @as(i32, WorldState.CHUNK_SIZE)));
+        const local_z: usize = @intCast(@mod(pz, @as(i32, WorldState.CHUNK_SIZE)));
+        self.surface_height_map.updateBlockPlaced(key.cx, key.cz, local_x, local_z, py);
+    }
     self.markDirty(px, py, pz, true);
     self.queueChunkSave(px, py, pz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
@@ -539,6 +556,7 @@ pub fn worldTick(self: *GameState) void {
             continue;
         }
         self.chunk_map.put(result.key, result.chunk);
+        self.surface_height_map.updateFromChunk(result.key, result.chunk);
         const lm = self.light_map_pool.acquire();
         self.light_maps.put(result.key, lm) catch {};
         self.dirty_chunks.add(result.key);
@@ -764,6 +782,10 @@ pub fn applyUnloadsToGpu(
         }
         if (self.chunk_map.remove(key)) |chunk| {
             self.chunk_pool.release(chunk);
+        }
+        // Clean up surface height column if no chunks remain in this column
+        if (!SurfaceHeightMap.hasChunksInColumn(key.cx, key.cz, &self.chunk_map)) {
+            self.surface_height_map.removeColumn(key.cx, key.cz);
         }
     }
     self.pending_unload_count = 0;

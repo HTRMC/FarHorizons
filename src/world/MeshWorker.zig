@@ -5,6 +5,8 @@ const ChunkStreamer = @import("ChunkStreamer.zig").ChunkStreamer;
 const LightMapMod = @import("LightMap.zig");
 const LightMap = LightMapMod.LightMap;
 const LightEngine = @import("LightEngine.zig");
+const SurfaceHeightMapMod = @import("SurfaceHeightMap.zig");
+const SurfaceHeightMap = SurfaceHeightMapMod.SurfaceHeightMap;
 const types = @import("../renderer/vulkan/types.zig");
 const FaceData = types.FaceData;
 const LightEntry = types.LightEntry;
@@ -47,6 +49,7 @@ pub const MeshWorker = struct {
     allocator: std.mem.Allocator,
     chunk_map: *const ChunkMap,
     light_maps: *const LightMaps,
+    surface_height_map: *const SurfaceHeightMap,
     player_chunk: ChunkKey,
 
     threads: [MAX_WORKERS]?std.Thread,
@@ -89,6 +92,7 @@ pub const MeshWorker = struct {
         allocator: std.mem.Allocator,
         chunk_map: *const ChunkMap,
         light_maps: *const LightMaps,
+        surface_height_map: *const SurfaceHeightMap,
     ) void {
         self.* = .{
             .input_heap = Heap.initContext(self),
@@ -103,6 +107,7 @@ pub const MeshWorker = struct {
             .allocator = allocator,
             .chunk_map = chunk_map,
             .light_maps = light_maps,
+            .surface_height_map = surface_height_map,
             .player_chunk = .{ .cx = 0, .cy = 0, .cz = 0 },
             .threads = .{null} ** MAX_WORKERS,
             .worker_count = 0,
@@ -161,11 +166,12 @@ pub const MeshWorker = struct {
         self.input_set.deinit();
     }
 
-    pub fn syncChunkMap(self: *MeshWorker, chunk_map: *const ChunkMap, light_maps: *const LightMaps, player_chunk: ChunkKey) void {
+    pub fn syncChunkMap(self: *MeshWorker, chunk_map: *const ChunkMap, light_maps: *const LightMaps, surface_height_map: *const SurfaceHeightMap, player_chunk: ChunkKey) void {
         const io = Io.Threaded.global_single_threaded.io();
         self.input_mutex.lockUncancelable(io);
         self.chunk_map = chunk_map;
         self.light_maps = light_maps;
+        self.surface_height_map = surface_height_map;
         const old = self.player_chunk;
         self.player_chunk = player_chunk;
         if (!old.eql(player_chunk)) self.reheapify();
@@ -267,9 +273,10 @@ pub const MeshWorker = struct {
                 local_keys[local_count] = k;
                 local_count += 1;
             }
-            // Snapshot chunk_map and light_maps pointers and player position under mutex
+            // Snapshot chunk_map, light_maps, surface_height_map pointers and player position under mutex
             local_chunk_map = self.chunk_map;
             const local_light_maps: *const LightMaps = self.light_maps;
+            const local_shm: *const SurfaceHeightMap = self.surface_height_map;
             const player_snapshot = self.player_chunk;
             self.input_mutex.unlock(io);
 
@@ -319,7 +326,8 @@ pub const MeshWorker = struct {
                 }
                 if (light_map) |lm| {
                     if (lm.dirty) {
-                        const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm);
+                        const surface_heights = local_shm.getHeights(key.cx, key.cz);
+                        const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm, key.cy, surface_heights);
                         // Enqueue face neighbors whose boundary light changed
                         // so they re-mesh with updated padded border values
                         if (boundary_mask != 0) {

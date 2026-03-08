@@ -96,11 +96,13 @@ pub fn computeChunkLight(
     neighbors: [6]?*const WorldState.Chunk,
     neighbor_lights: [6]?*const LightMap,
     light_map: *LightMap,
+    chunk_cy: i32,
+    surface_heights: ?*const [CHUNK_SIZE * CHUNK_SIZE]i32,
 ) u6 {
     @memset(std.mem.asBytes(&light_map.block_light), 0);
     @memset(&light_map.sky_light, 0);
 
-    computeSkyLight(chunk, neighbors, neighbor_lights, light_map);
+    computeSkyLight(chunk, neighbors, neighbor_lights, light_map, chunk_cy, surface_heights);
     computeBlockLight(chunk, neighbors, neighbor_lights, light_map);
 
     light_map.dirty = false;
@@ -185,50 +187,36 @@ pub fn computeChunkLight(
 
 fn computeSkyLight(
     chunk: *const WorldState.Chunk,
-    neighbors: [6]?*const WorldState.Chunk,
+    _: [6]?*const WorldState.Chunk,
     neighbor_lights: [6]?*const LightMap,
     light_map: *LightMap,
+    chunk_cy: i32,
+    surface_heights: ?*const [CHUNK_SIZE * CHUNK_SIZE]i32,
 ) void {
     var queue: [MAX_QUEUE]SkyQueueEntry = undefined;
     var head: u32 = 0;
     var tail: u32 = 0;
 
-    // Phase 1: Column scan — fill skylight from top down
-    // Sky is open if: no chunk above, OR the above chunk's LightMap has full
-    // sky light (255) at y=0 for this column (meaning sky reaches down to there).
-    // This correctly handles multi-chunk terrain: cave ceilings block sky even
-    // if the immediate block above is air.
-    const above_lm: ?*const LightMap = neighbor_lights[4];
-    const has_above = neighbors[4] != null;
+    // Phase 1: Column fill using pre-computed surface height map.
+    // For each (x,z) column, sky light (255) fills all non-opaque blocks whose
+    // world Y is above the surface height (highest opaque block in the column).
+    // Downward propagation through air has zero attenuation (like Cubyz).
+    const chunk_base_y: i32 = chunk_cy * @as(i32, CHUNK_SIZE);
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
-            var sky_open = false;
-            if (!has_above) {
-                // No chunk above — sky is open
-                sky_open = true;
-            } else if (above_lm) |alm| {
-                if (!alm.dirty) {
-                    // Check if sky reaches the bottom of the above chunk at this column
-                    sky_open = alm.sky_light[chunkIndex(x, 0, z)] == 255;
-                }
-                // If above LightMap is dirty, conservatively assume sky blocked
-            }
-            // If above chunk exists but has no LightMap, assume sky blocked
+            const col_idx = z * CHUNK_SIZE + x;
+            const sh: i32 = if (surface_heights) |sh| sh[col_idx] else std.math.minInt(i32);
 
-            if (sky_open) {
-                // Also verify the block just above us isn't opaque
-                const above_block = getBlock(chunk, neighbors, @intCast(x), CHUNK_SIZE, @intCast(z));
-                if (block_properties.isOpaque(above_block)) continue;
-
-                var y: i32 = CHUNK_SIZE - 1;
-                while (y >= 0) : (y -= 1) {
-                    const uy: usize = @intCast(y);
-                    if (block_properties.isOpaque(chunk.blocks[chunkIndex(x, uy, z)])) break;
-                    light_map.sky_light[chunkIndex(x, uy, z)] = 255;
-                    if (tail < MAX_QUEUE) {
-                        queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = @intCast(z), .dir = 6, .level = 255 };
-                        tail += 1;
-                    }
+            var y: i32 = CHUNK_SIZE - 1;
+            while (y >= 0) : (y -= 1) {
+                const world_y = chunk_base_y + y;
+                if (world_y <= sh) break; // at or below surface — no sky
+                const uy: usize = @intCast(y);
+                if (block_properties.isOpaque(chunk.blocks[chunkIndex(x, uy, z)])) break;
+                light_map.sky_light[chunkIndex(x, uy, z)] = 255;
+                if (tail < MAX_QUEUE) {
+                    queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = @intCast(z), .dir = 6, .level = 255 };
+                    tail += 1;
                 }
             }
         }
@@ -578,7 +566,7 @@ test "glowstone emitter lights surrounding blocks" {
 
     const lm = try allocLightMap();
     defer testing.allocator.destroy(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     // Emitter itself should have full light
     const emit = lm.block_light[chunkIndex(16, 16, 16)];
@@ -604,7 +592,7 @@ test "block light attenuates to zero" {
 
     const lm = try allocLightMap();
     defer testing.allocator.destroy(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     // Glowstone emits 100 on blue channel. 100/8 = 12.5 steps, so at distance 13 should be 0.
     const far = lm.block_light[chunkIndex(16, 16, 16 + 13)];
@@ -623,7 +611,7 @@ test "opaque block stops light propagation" {
 
     const lm = try allocLightMap();
     defer testing.allocator.destroy(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     const behind = lm.block_light[chunkIndex(18, 16, 16)];
     const no_wall_level = 255 - 2 * ATTENUATION;
@@ -636,7 +624,7 @@ test "sky light fills air chunk with no above neighbor" {
 
     const lm = try allocLightMap();
     defer testing.allocator.destroy(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(0, 0, 0)]);
     try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 16, 16)]);
@@ -654,7 +642,7 @@ test "sky light blocked by opaque block above" {
 
     const lm = try allocLightMap();
     defer testing.allocator.destroy(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     try testing.expectEqual(@as(u8, 0), lm.sky_light[chunkIndex(16, 0, 16)]);
 }
@@ -666,7 +654,7 @@ test "block light propagates across chunk boundary via neighbor light map" {
 
     const lm_a = try allocLightMap();
     defer testing.allocator.destroy(lm_a);
-    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a);
+    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
 
     try testing.expectEqual(@as(u8, 255), lm_a.block_light[chunkIndex(CHUNK_SIZE - 1, 16, 16)][0]);
 
@@ -680,7 +668,7 @@ test "block light propagates across chunk boundary via neighbor light map" {
     var b_neighbors = no_neighbors;
     b_neighbors[2] = chunk_a;
 
-    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b);
+    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b, 0, null);
 
     const received = lm_b.block_light[chunkIndex(0, 16, 16)];
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), received[0]);
@@ -689,62 +677,86 @@ test "block light propagates across chunk boundary via neighbor light map" {
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), further[0]);
 }
 
-test "sky light propagates across chunk boundary via column scan" {
-    // Chunk A (all air, no above neighbor) has full skylight
-    const chunk_a = try allocChunk();
-    defer testing.allocator.destroy(chunk_a);
-    const lm_a = try allocLightMap();
-    defer testing.allocator.destroy(lm_a);
-    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a);
+test "sky light propagates vertically via surface height map" {
+    // Chunk at cy=-1 (world y -32 to -1), no surface above → all sky
+    const chunk = try allocChunk();
+    defer testing.allocator.destroy(chunk);
 
-    // Chunk B (all air) with chunk A as +Y neighbor
-    // Column scan sees non-opaque block at y=0 in chunk_a → sky open → fills all blocks
-    const chunk_b = try allocChunk();
-    defer testing.allocator.destroy(chunk_b);
+    const lm = try allocLightMap();
+    defer testing.allocator.destroy(lm);
+    // Surface height = MIN means no opaque blocks anywhere → sky open everywhere
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, -1, null);
 
-    var b_neighbors = no_neighbors;
-    b_neighbors[4] = chunk_a;
-    var b_neighbor_lights = no_light_neighbors;
-    b_neighbor_lights[4] = lm_a;
+    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, CHUNK_SIZE - 1, 16)]);
+    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 0, 16)]);
+}
 
-    const lm_b = try allocLightMap();
-    defer testing.allocator.destroy(lm_b);
-    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b);
+test "surface height blocks sky in chunk below surface" {
+    // Chunk at cy=0 (world y 0-31), surface height at y=50 → all blocks below surface
+    const chunk = try allocChunk();
+    defer testing.allocator.destroy(chunk);
 
-    try testing.expectEqual(@as(u8, 255), lm_b.sky_light[chunkIndex(16, CHUNK_SIZE - 1, 16)]);
-    try testing.expectEqual(@as(u8, 255), lm_b.sky_light[chunkIndex(16, 0, 16)]);
+    var surface: [CHUNK_SIZE * CHUNK_SIZE]i32 = undefined;
+    @memset(&surface, 50); // surface at y=50, entire chunk is below
+
+    const lm = try allocLightMap();
+    defer testing.allocator.destroy(lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, &surface);
+
+    // All blocks are below surface height → no sky light from column scan
+    try testing.expectEqual(@as(u8, 0), lm.sky_light[chunkIndex(16, CHUNK_SIZE - 1, 16)]);
+    try testing.expectEqual(@as(u8, 0), lm.sky_light[chunkIndex(16, 0, 16)]);
+}
+
+test "surface height partially blocks chunk" {
+    // Chunk at cy=1 (world y 32-63), surface at y=40 → blocks below 40, open above
+    const chunk = try allocChunk();
+    defer testing.allocator.destroy(chunk);
+
+    var surface: [CHUNK_SIZE * CHUNK_SIZE]i32 = undefined;
+    @memset(&surface, 40); // surface at world y=40
+
+    const lm = try allocLightMap();
+    defer testing.allocator.destroy(lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 1, &surface);
+
+    // y=31 → world_y=63, above surface → sky light
+    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 31, 16)]);
+    // y=10 → world_y=42, above surface → sky light
+    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 10, 16)]);
+    // y=9 → world_y=41, above surface → sky light
+    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 9, 16)]);
+    // y=8 → world_y=40, AT surface → no direct sky, but gets BFS from y=9 (255-8=247)
+    try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.sky_light[chunkIndex(16, 8, 16)]);
+    // y=0 → world_y=32, below surface → only BFS propagation (255 - 9*8 = 183)
+    try testing.expectEqual(@as(u8, 255 - 9 * ATTENUATION), lm.sky_light[chunkIndex(16, 0, 16)]);
 }
 
 test "sky light propagates laterally across chunk boundary" {
-    // Chunk A has full skylight (no above, all air)
+    // Chunk A has full skylight (no surface heights → all sky open)
     const chunk_a = try allocChunk();
     defer testing.allocator.destroy(chunk_a);
     const lm_a = try allocLightMap();
     defer testing.allocator.destroy(lm_a);
-    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a);
+    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
 
-    // Chunk B has an opaque ceiling and no sky access — but chunk A is its -X neighbor
-    // Sky light from A should propagate through boundary at x=0
+    // Chunk B: surface height blocks sky from above, but chunk A is its -X neighbor
+    // Use surface heights that indicate opaque blocks above this chunk
     const chunk_b = try allocChunk();
     defer testing.allocator.destroy(chunk_b);
-    // Add above neighbor to block column scan
-    const chunk_above = try allocChunk();
-    defer testing.allocator.destroy(chunk_above);
-    // Fill chunk_above bottom layer with stone to block sky
-    for (0..CHUNK_SIZE) |z| {
-        for (0..CHUNK_SIZE) |x| {
-            chunk_above.blocks[chunkIndex(x, 0, z)] = .stone;
-        }
-    }
+
+    // Surface height = 100 means opaque block at world Y=100, well above cy=0 chunk (y 0-31)
+    var b_surface: [CHUNK_SIZE * CHUNK_SIZE]i32 = undefined;
+    @memset(&b_surface, 100);
+
     var b_neighbors = no_neighbors;
-    b_neighbors[4] = chunk_above; // +Y neighbor has stone floor → blocks sky
     b_neighbors[2] = chunk_a; // -X neighbor has sky light
     var b_neighbor_lights = no_light_neighbors;
     b_neighbor_lights[2] = lm_a;
 
     const lm_b = try allocLightMap();
     defer testing.allocator.destroy(lm_b);
-    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b);
+    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b, 0, &b_surface);
 
     // x=0 in chunk B should receive sky from chunk A's x=31 (255 - 8 = 247)
     const received = lm_b.sky_light[chunkIndex(0, 16, 16)];
@@ -762,7 +774,7 @@ test "boundary mask set for face with light above attenuation" {
 
     const lm = try allocLightMap();
     defer testing.allocator.destroy(lm);
-    const mask = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm);
+    const mask = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     try testing.expect(mask & (1 << 3) != 0);
 }
@@ -774,7 +786,7 @@ test "boundary mask not set for face with no light" {
 
     const lm = try allocLightMap();
     defer testing.allocator.destroy(lm);
-    const mask = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm);
+    const mask = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     // Red channel 255 reaches all boundaries (255 - 16*8 = 127 > 8)
     try testing.expectEqual(@as(u6, 0b111111), mask);
@@ -787,7 +799,7 @@ test "dirty flag cleared after compute" {
     defer testing.allocator.destroy(lm);
     try testing.expect(lm.dirty);
 
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
     try testing.expect(!lm.dirty);
 }
 
@@ -798,7 +810,7 @@ test "bidirectional boundary propagation" {
 
     const lm_a = try allocLightMap();
     defer testing.allocator.destroy(lm_a);
-    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a);
+    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
 
     const chunk_b = try allocChunk();
     defer testing.allocator.destroy(chunk_b);
@@ -809,7 +821,7 @@ test "bidirectional boundary propagation" {
     var b_neighbors = no_neighbors;
     b_neighbors[2] = chunk_a;
 
-    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b);
+    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b, 0, null);
 
     // Light at chunk A boundary (x=31): 255 - 1*8 = 247
     // Light entering chunk B at x=0: 247 - 8 = 239

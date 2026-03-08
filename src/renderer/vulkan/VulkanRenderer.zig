@@ -241,7 +241,7 @@ pub const VulkanRenderer = struct {
             return;
         };
 
-        mw.initInPlace(self.allocator, &gs.chunk_map, &gs.light_maps);
+        mw.initInPlace(self.allocator, &gs.chunk_map, &gs.light_maps, &gs.surface_height_map);
 
         self.mesh_worker = mw;
 
@@ -250,7 +250,7 @@ pub const VulkanRenderer = struct {
 
         // Sync player position before starting threads so initial heap ordering is correct
         gs.streamer.syncPlayerChunk(gs.player_chunk);
-        mw.syncChunkMap(&gs.chunk_map, &gs.light_maps, gs.player_chunk);
+        mw.syncChunkMap(&gs.chunk_map, &gs.light_maps, &gs.surface_height_map, gs.player_chunk);
 
         gs.streamer.start();
 
@@ -381,7 +381,7 @@ pub const VulkanRenderer = struct {
                     );
 
                     if (self.mesh_worker) |mw| {
-                        mw.syncChunkMap(&gs.chunk_map, &gs.light_maps, gs.player_chunk);
+                        mw.syncChunkMap(&gs.chunk_map, &gs.light_maps, &gs.surface_height_map, gs.player_chunk);
                         if (gs.dirty_chunks.count > 0) {
                             mw.enqueueBatch(gs.dirty_chunks.keys[0..gs.dirty_chunks.count]);
                             gs.dirty_chunks.clear();
