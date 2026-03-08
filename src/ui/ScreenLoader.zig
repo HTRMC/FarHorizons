@@ -27,13 +27,13 @@ const log = std.log.scoped(.UI);
 const MAX_DEPTH = 32;
 
 pub fn loadScreen(tree: *WidgetTree, passthrough: *bool, filename: []const u8, allocator: std.mem.Allocator) bool {
-    const base_path = app_config.getAppDataPath(allocator) catch return false;
-    defer allocator.free(base_path);
+    const assets_path = app_config.getAssetsPath(allocator) catch return false;
+    defer allocator.free(assets_path);
 
     const file_path = std.fmt.allocPrint(
         allocator,
-        "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "ui" ++ sep ++ "{s}",
-        .{ base_path, filename },
+        "{s}" ++ sep ++ "ui" ++ sep ++ "{s}",
+        .{ assets_path, filename },
     ) catch return false;
     defer allocator.free(file_path);
 

@@ -39,11 +39,14 @@ pub fn init(allocator: std.mem.Allocator) !Self {
     const tz = tracy.zone(@src(), "ShaderCompiler.init");
     defer tz.end();
 
-    const base_path = try app_config.getAppDataPath(allocator);
-    defer allocator.free(base_path);
+    const assets_path = try app_config.getAssetsPath(allocator);
+    defer allocator.free(assets_path);
 
-    const shader_base_path = try std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "shaders", .{base_path});
-    const cache_dir_path = try std.fmt.allocPrint(allocator, "{s}" ++ sep ++ ".shader_cache", .{base_path});
+    const app_data_path = try app_config.getAppDataPath(allocator);
+    defer allocator.free(app_data_path);
+
+    const shader_base_path = try std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "shaders", .{assets_path});
+    const cache_dir_path = try std.fmt.allocPrint(allocator, "{s}" ++ sep ++ ".shader_cache", .{app_data_path});
 
     const io = Io.Threaded.global_single_threaded.io();
 

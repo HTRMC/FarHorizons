@@ -7,6 +7,16 @@ const Dir = Io.Dir;
 
 const sep = std.fs.path.sep_str;
 
+pub fn getAssetsPath(allocator: std.mem.Allocator) ![]const u8 {
+    const tz = tracy.zone(@src(), "getAssetsPath");
+    defer tz.end();
+
+    const io = Io.Threaded.global_single_threaded.io();
+    const exe_dir = try std.process.executableDirPathAlloc(io, allocator);
+    defer allocator.free(exe_dir);
+    return std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons", .{exe_dir});
+}
+
 pub fn getAppDataPath(allocator: std.mem.Allocator) ![]const u8 {
     const tz = tracy.zone(@src(), "getAppDataPath");
     defer tz.end();

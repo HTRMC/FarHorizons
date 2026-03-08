@@ -1,0 +1,14 @@
+"AppBuild"
+{
+	"AppID" "764705"
+	"Desc" "FarHorizons build"
+	"BuildOutput" "output"
+	"ContentRoot" ""
+	"SetLive" ""
+
+	"Depots"
+	{
+		"764706" "depot_windows.vdf"
+		"764707" "depot_linux.vdf"
+	}
+}

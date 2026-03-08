@@ -98,8 +98,8 @@ pub const TextureManager = struct {
         const tz = tracy.zone(@src(), "createTextureImage");
         defer tz.end();
 
-        const base_path = try app_config.getAppDataPath(allocator);
-        defer allocator.free(base_path);
+        const assets_path = try app_config.getAssetsPath(allocator);
+        defer allocator.free(assets_path);
 
         const sep = std.fs.path.sep_str;
 
@@ -126,7 +126,7 @@ pub const TextureManager = struct {
         const dst: [*]u8 = @ptrCast(data.?);
 
         for (0..BLOCK_TEXTURE_COUNT) |i| {
-            const texture_path = try std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "block" ++ sep ++ "{s}", .{ base_path, block_texture_names[i] }, 0);
+            const texture_path = try std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "textures" ++ sep ++ "block" ++ sep ++ "{s}", .{ assets_path, block_texture_names[i] }, 0);
             defer allocator.free(texture_path);
 
             var tw: c_int = 0;

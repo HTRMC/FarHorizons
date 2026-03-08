@@ -10,6 +10,10 @@ zig-out/
 *.swo
 *~
 
+# Build output
+build/
+steam/output/
+
 # OS
 .DS_Store
 Thumbs.db

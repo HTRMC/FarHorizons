@@ -345,13 +345,13 @@ pub const TextRenderer = struct {
         const tz = tracy.zone(@src(), "TextRenderer.createFontImage");
         defer tz.end();
 
-        const base_path = try app_config.getAppDataPath(allocator);
-        defer allocator.free(base_path);
+        const assets_path = try app_config.getAssetsPath(allocator);
+        defer allocator.free(assets_path);
 
         const texture_path = try std.fmt.allocPrintSentinel(
             allocator,
-            "{s}" ++ sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "font" ++ sep ++ "ascii.png",
-            .{base_path},
+            "{s}" ++ sep ++ "textures" ++ sep ++ "font" ++ sep ++ "ascii.png",
+            .{assets_path},
             0,
         );
         defer allocator.free(texture_path);

@@ -358,11 +358,11 @@ pub const UiRenderer = struct {
     }
 
     pub fn loadHudAtlas(self: *UiRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
-        const base_path = try app_config.getAppDataPath(allocator);
-        defer allocator.free(base_path);
+        const assets_path = try app_config.getAssetsPath(allocator);
+        defer allocator.free(assets_path);
 
         const sep = std.fs.path.sep_str;
-        const hud_dir = sep ++ "assets" ++ sep ++ "farhorizons" ++ sep ++ "textures" ++ sep ++ "gui" ++ sep ++ "sprites" ++ sep ++ "hud" ++ sep;
+        const hud_dir = sep ++ "textures" ++ sep ++ "gui" ++ sep ++ "sprites" ++ sep ++ "hud" ++ sep;
 
         const sprite_names = [_][]const u8{ "crosshair.png", "hotbar.png", "hotbar_selection.png", "hotbar_offhand_left.png" };
         const sprite_count = sprite_names.len;
@@ -380,7 +380,7 @@ pub const UiRenderer = struct {
         var atlas_height: c_int = 0;
 
         for (sprite_names, 0..) |name, i| {
-            const path = try std.fmt.allocPrintSentinel(allocator, "{s}{s}{s}", .{ base_path, hud_dir, name }, 0);
+            const path = try std.fmt.allocPrintSentinel(allocator, "{s}{s}{s}", .{ assets_path, hud_dir, name }, 0);
             defer allocator.free(path);
 
             var tw: c_int = 0;

@@ -1,0 +1,12 @@
+"DepotBuildConfig"
+{
+	"DepotID" "764706"
+	"ContentRoot" "..\build\windows\bin"
+	"FileMapping"
+	{
+		"LocalPath" "*"
+		"DepotPath" "."
+		"Recursive" "1"
+	}
+	"FileExclusion" "*.pdb"
+}
