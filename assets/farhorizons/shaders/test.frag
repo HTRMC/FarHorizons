@@ -65,5 +65,7 @@ void main() {
     float brightness = max(light.r, max(light.g, light.b));
     float effective_ao = mix(1.0, ao, brightness);
 
-    outColor = texture(tex, vec3(fragUV, float(fragTexIndex))) * vec4(light * effective_ao, 1.0);
+    vec4 texColor = texture(tex, vec3(fragUV, float(fragTexIndex)));
+    if (texColor.a == 0.0) discard;
+    outColor = texColor * vec4(light * effective_ao, 1.0);
 }

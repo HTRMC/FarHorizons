@@ -112,7 +112,8 @@ pub const block_properties = struct {
     pub fn cullsSelf(block: BlockType) bool {
         return switch (block) {
             .air => false,
-            .glass, .water, .oak_leaves => true,
+            .glass, .water => true,
+            .oak_leaves => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
             .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
