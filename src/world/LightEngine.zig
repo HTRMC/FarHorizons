@@ -59,11 +59,14 @@ fn getBlock(chunk: *const WorldState.Chunk, neighbors: [6]?*const WorldState.Chu
 
 fn getNeighborLight(neighbor_lights: [6]?*const LightMap, face: usize, x: usize, y: usize, z: usize) [3]u8 {
     const lm = neighbor_lights[face] orelse return .{ 0, 0, 0 };
+    // Skip dirty neighbors — their data is stale and will be recomputed
+    if (lm.dirty) return .{ 0, 0, 0 };
     return lm.block_light[chunkIndex(x, y, z)];
 }
 
 fn getNeighborSkyLight(neighbor_lights: [6]?*const LightMap, face: usize, x: usize, y: usize, z: usize) u8 {
     const lm = neighbor_lights[face] orelse return 0;
+    if (lm.dirty) return 0;
     return lm.sky_light[chunkIndex(x, y, z)];
 }
 
