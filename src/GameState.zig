@@ -4,6 +4,9 @@ const Camera = @import("renderer/Camera.zig");
 const WorldState = @import("world/WorldState.zig");
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 const ChunkPool = @import("world/ChunkPool.zig").ChunkPool;
+const LightMapMod = @import("world/LightMap.zig");
+const LightMap = LightMapMod.LightMap;
+const LightMapPool = LightMapMod.LightMapPool;
 pub const ChunkStreamer = @import("world/ChunkStreamer.zig").ChunkStreamer;
 const TerrainGen = @import("world/TerrainGen.zig");
 const Physics = @import("Physics.zig");
@@ -98,6 +101,8 @@ allocator: std.mem.Allocator,
 camera: Camera,
 chunk_map: ChunkMap,
 chunk_pool: ChunkPool,
+light_maps: std.AutoHashMap(WorldState.ChunkKey, *LightMap),
+light_map_pool: LightMapPool,
 entity_pos: [3]f32,
 entity_vel: [3]f32,
 entity_on_ground: bool,
@@ -197,6 +202,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     var cam = Camera.init(width, height);
     const chunk_map = ChunkMap.init(allocator);
     const chunk_pool = ChunkPool.init(allocator);
+    const light_maps = std.AutoHashMap(WorldState.ChunkKey, *LightMap).init(allocator);
+    const light_map_pool = LightMapPool.init(allocator);
 
     const storage_inst = Storage.init(allocator, world_name) catch |err| blk: {
         std.log.warn("Storage init failed: {}, world will not be saved", .{err});
@@ -228,6 +235,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .camera = cam,
         .chunk_map = chunk_map,
         .chunk_pool = chunk_pool,
+        .light_maps = light_maps,
+        .light_map_pool = light_map_pool,
         .entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
@@ -278,6 +287,12 @@ pub fn save(self: *GameState) void {
 
 pub fn deinit(self: *GameState) void {
     if (self.storage) |s| s.deinit();
+    var lm_it = self.light_maps.iterator();
+    while (lm_it.next()) |entry| {
+        self.light_map_pool.release(entry.value_ptr.*);
+    }
+    self.light_maps.deinit();
+    self.light_map_pool.deinit();
     self.chunk_map.deinit();
     self.chunk_pool.deinit();
 }
@@ -505,6 +520,8 @@ pub fn worldTick(self: *GameState) void {
             continue;
         }
         self.chunk_map.put(result.key, result.chunk);
+        const lm = self.light_map_pool.acquire();
+        self.light_maps.put(result.key, lm) catch {};
         self.dirty_chunks.add(result.key);
         // Mark neighbors dirty so they re-mesh with the new neighbor present
         const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
@@ -719,6 +736,9 @@ pub fn applyUnloadsToGpu(
         }
         wr.releaseSlot(key);
 
+        if (self.light_maps.fetchRemove(key)) |lm_kv| {
+            self.light_map_pool.release(lm_kv.value);
+        }
         if (self.chunk_map.remove(key)) |chunk| {
             self.chunk_pool.release(chunk);
         }
