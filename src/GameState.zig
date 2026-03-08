@@ -465,6 +465,21 @@ fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
             lm.dirty = true;
         }
     }
+    // Always dirty face-neighbor LightMaps so light propagation updates
+    // (block changes can affect light reaching neighboring chunks)
+    const base_key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+    const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
+    for (offsets) |off| {
+        const nk = WorldState.ChunkKey{
+            .cx = base_key.cx + off[0],
+            .cy = base_key.cy + off[1],
+            .cz = base_key.cz + off[2],
+        };
+        if (self.light_maps.get(nk)) |nlm| {
+            nlm.dirty = true;
+        }
+        target.add(nk);
+    }
 }
 
 pub fn breakBlock(self: *GameState) void {

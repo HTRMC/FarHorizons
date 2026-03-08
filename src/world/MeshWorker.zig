@@ -319,7 +319,26 @@ pub const MeshWorker = struct {
                 }
                 if (light_map) |lm| {
                     if (lm.dirty) {
-                        _ = LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm);
+                        const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm);
+                        // Enqueue face neighbors whose boundary light changed
+                        // so they re-mesh with updated padded border values
+                        if (boundary_mask != 0) {
+                            var cascade_keys: [6]ChunkKey = undefined;
+                            var cascade_count: usize = 0;
+                            for (0..6) |i| {
+                                if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                    cascade_keys[cascade_count] = .{
+                                        .cx = key.cx + offsets[i][0],
+                                        .cy = key.cy + offsets[i][1],
+                                        .cz = key.cz + offsets[i][2],
+                                    };
+                                    cascade_count += 1;
+                                }
+                            }
+                            if (cascade_count > 0) {
+                                self.enqueueLightOnlyBatch(cascade_keys[0..cascade_count]);
+                            }
+                        }
                     }
                 }
 

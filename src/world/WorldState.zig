@@ -521,10 +521,10 @@ fn buildPaddedLight(
         }
     }
 
-    // Copy border from neighbor LightMaps (skip dirty ones — their stale
-    // values can cause dark seams at chunk boundaries)
+    // Copy border from neighbor LightMaps (use current values even if dirty —
+    // the mesh will be re-generated when the neighbor's light is recomputed)
     // +Z face (0): neighbor's z=0 → padded z=PADDED_SIZE-1
-    if (neighbor_lights[0]) |n| if (!n.dirty) {
+    if (neighbor_lights[0]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, y, 0);
@@ -533,9 +533,9 @@ fn buildPaddedLight(
                 padded_block[pi] = n.block_light[ci];
             }
         }
-    };
+    }
     // -Z face (1): neighbor's z=31 → padded z=0
-    if (neighbor_lights[1]) |n| if (!n.dirty) {
+    if (neighbor_lights[1]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, y, CHUNK_SIZE - 1);
@@ -544,9 +544,9 @@ fn buildPaddedLight(
                 padded_block[pi] = n.block_light[ci];
             }
         }
-    };
+    }
     // -X face (2): neighbor's x=31 → padded x=0
-    if (neighbor_lights[2]) |n| if (!n.dirty) {
+    if (neighbor_lights[2]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
                 const ci = chunkIndex(CHUNK_SIZE - 1, y, z);
@@ -555,9 +555,9 @@ fn buildPaddedLight(
                 padded_block[pi] = n.block_light[ci];
             }
         }
-    };
+    }
     // +X face (3): neighbor's x=0 → padded x=PADDED_SIZE-1
-    if (neighbor_lights[3]) |n| if (!n.dirty) {
+    if (neighbor_lights[3]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
                 const ci = chunkIndex(0, y, z);
@@ -566,9 +566,9 @@ fn buildPaddedLight(
                 padded_block[pi] = n.block_light[ci];
             }
         }
-    };
+    }
     // +Y face (4): neighbor's y=0 → padded y=PADDED_SIZE-1
-    if (neighbor_lights[4]) |n| if (!n.dirty) {
+    if (neighbor_lights[4]) |n| {
         for (0..CHUNK_SIZE) |z| {
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, 0, z);
@@ -577,9 +577,9 @@ fn buildPaddedLight(
                 padded_block[pi] = n.block_light[ci];
             }
         }
-    };
+    }
     // -Y face (5): neighbor's y=31 → padded y=0
-    if (neighbor_lights[5]) |n| if (!n.dirty) {
+    if (neighbor_lights[5]) |n| {
         for (0..CHUNK_SIZE) |z| {
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, CHUNK_SIZE - 1, z);
@@ -588,7 +588,7 @@ fn buildPaddedLight(
                 padded_block[pi] = n.block_light[ci];
             }
         }
-    };
+    }
 }
 
 /// Pack sky and block light values into the 30-bit GPU format.
