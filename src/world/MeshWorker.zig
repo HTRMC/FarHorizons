@@ -2,11 +2,16 @@ const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const ChunkMap = @import("ChunkMap.zig").ChunkMap;
 const ChunkStreamer = @import("ChunkStreamer.zig").ChunkStreamer;
+const LightMapMod = @import("LightMap.zig");
+const LightMap = LightMapMod.LightMap;
+const LightEngine = @import("LightEngine.zig");
 const types = @import("../renderer/vulkan/types.zig");
 const FaceData = types.FaceData;
 const LightEntry = types.LightEntry;
 const tracy = @import("../platform/tracy.zig");
 const Io = std.Io;
+
+const LightMaps = std.AutoHashMap(WorldState.ChunkKey, *LightMap);
 
 pub const MeshWorker = struct {
     const MAX_INPUT = 512;
@@ -41,6 +46,7 @@ pub const MeshWorker = struct {
     // State
     allocator: std.mem.Allocator,
     chunk_map: *const ChunkMap,
+    light_maps: *const LightMaps,
     player_chunk: ChunkKey,
 
     threads: [MAX_WORKERS]?std.Thread,
@@ -82,6 +88,7 @@ pub const MeshWorker = struct {
         self: *MeshWorker,
         allocator: std.mem.Allocator,
         chunk_map: *const ChunkMap,
+        light_maps: *const LightMaps,
     ) void {
         self.* = .{
             .input_heap = Heap.initContext(self),
@@ -95,6 +102,7 @@ pub const MeshWorker = struct {
             .output_drained_cond = .init,
             .allocator = allocator,
             .chunk_map = chunk_map,
+            .light_maps = light_maps,
             .player_chunk = .{ .cx = 0, .cy = 0, .cz = 0 },
             .threads = .{null} ** MAX_WORKERS,
             .worker_count = 0,
@@ -153,10 +161,11 @@ pub const MeshWorker = struct {
         self.input_set.deinit();
     }
 
-    pub fn syncChunkMap(self: *MeshWorker, chunk_map: *const ChunkMap, player_chunk: ChunkKey) void {
+    pub fn syncChunkMap(self: *MeshWorker, chunk_map: *const ChunkMap, light_maps: *const LightMaps, player_chunk: ChunkKey) void {
         const io = Io.Threaded.global_single_threaded.io();
         self.input_mutex.lockUncancelable(io);
         self.chunk_map = chunk_map;
+        self.light_maps = light_maps;
         const old = self.player_chunk;
         self.player_chunk = player_chunk;
         if (!old.eql(player_chunk)) self.reheapify();
@@ -258,8 +267,9 @@ pub const MeshWorker = struct {
                 local_keys[local_count] = k;
                 local_count += 1;
             }
-            // Snapshot chunk_map pointer and player position under mutex
+            // Snapshot chunk_map and light_maps pointers and player position under mutex
             local_chunk_map = self.chunk_map;
+            const local_light_maps: *const LightMaps = self.light_maps;
             const player_snapshot = self.player_chunk;
             self.input_mutex.unlock(io);
 
@@ -295,9 +305,27 @@ pub const MeshWorker = struct {
                     continue;
                 }
 
+                // Compute light for this chunk
+                const light_map: ?*LightMap = local_light_maps.get(key);
+                var neighbor_lights: [6]?*const LightMap = .{null} ** 6;
+                const offsets = WorldState.face_neighbor_offsets;
+                for (0..6) |i| {
+                    const nk = ChunkKey{
+                        .cx = key.cx + offsets[i][0],
+                        .cy = key.cy + offsets[i][1],
+                        .cz = key.cz + offsets[i][2],
+                    };
+                    neighbor_lights[i] = local_light_maps.get(nk);
+                }
+                if (light_map) |lm| {
+                    if (lm.dirty) {
+                        LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm);
+                    }
+                }
+
                 if (light_only) {
                     // Light-only path: only regenerate light data
-                    const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors) catch |err| {
+                    const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
                         std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                         continue;
                     };
@@ -327,7 +355,7 @@ pub const MeshWorker = struct {
                     _ = self.stats_light_only.fetchAdd(1, .monotonic);
                 } else {
                     // Full remesh path
-                    const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors) catch |err| {
+                    const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
                         std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                         continue;
                     };

@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("../renderer/vulkan/types.zig");
 const FaceData = types.FaceData;
 const LightEntry = types.LightEntry;
+const LightMap = @import("LightMap.zig").LightMap;
 const tracy = @import("../platform/tracy.zig");
 
 pub const CHUNK_SIZE = 32;
@@ -495,6 +496,108 @@ fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, nei
     }
 }
 
+/// Build padded 34³ light volumes from center LightMap + 6 neighbor LightMaps.
+fn buildPaddedLight(
+    padded_sky: *[PADDED_BLOCKS]u8,
+    padded_block: *[PADDED_BLOCKS][3]u8,
+    light_map: ?*const LightMap,
+    neighbor_lights: [6]?*const LightMap,
+) void {
+    // Default: full sky, no block light
+    @memset(padded_sky, 255);
+    @memset(padded_block, .{ 0, 0, 0 });
+
+    const lm = light_map orelse return;
+
+    // Copy center 32³
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |z| {
+            for (0..CHUNK_SIZE) |x| {
+                const ci = chunkIndex(x, y, z);
+                const pi = paddedIndex(x + 1, y + 1, z + 1);
+                padded_sky[pi] = lm.sky_light[ci];
+                padded_block[pi] = lm.block_light[ci];
+            }
+        }
+    }
+
+    // +Z face (0): neighbor's z=0 → padded z=PADDED_SIZE-1
+    if (neighbor_lights[0]) |n| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |x| {
+                const ci = chunkIndex(x, y, 0);
+                const pi = paddedIndex(x + 1, y + 1, PADDED_SIZE - 1);
+                padded_sky[pi] = n.sky_light[ci];
+                padded_block[pi] = n.block_light[ci];
+            }
+        }
+    }
+    // -Z face (1): neighbor's z=31 → padded z=0
+    if (neighbor_lights[1]) |n| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |x| {
+                const ci = chunkIndex(x, y, CHUNK_SIZE - 1);
+                const pi = paddedIndex(x + 1, y + 1, 0);
+                padded_sky[pi] = n.sky_light[ci];
+                padded_block[pi] = n.block_light[ci];
+            }
+        }
+    }
+    // -X face (2): neighbor's x=31 → padded x=0
+    if (neighbor_lights[2]) |n| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                const ci = chunkIndex(CHUNK_SIZE - 1, y, z);
+                const pi = paddedIndex(0, y + 1, z + 1);
+                padded_sky[pi] = n.sky_light[ci];
+                padded_block[pi] = n.block_light[ci];
+            }
+        }
+    }
+    // +X face (3): neighbor's x=0 → padded x=PADDED_SIZE-1
+    if (neighbor_lights[3]) |n| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                const ci = chunkIndex(0, y, z);
+                const pi = paddedIndex(PADDED_SIZE - 1, y + 1, z + 1);
+                padded_sky[pi] = n.sky_light[ci];
+                padded_block[pi] = n.block_light[ci];
+            }
+        }
+    }
+    // +Y face (4): neighbor's y=0 → padded y=PADDED_SIZE-1
+    if (neighbor_lights[4]) |n| {
+        for (0..CHUNK_SIZE) |z| {
+            for (0..CHUNK_SIZE) |x| {
+                const ci = chunkIndex(x, 0, z);
+                const pi = paddedIndex(x + 1, PADDED_SIZE - 1, z + 1);
+                padded_sky[pi] = n.sky_light[ci];
+                padded_block[pi] = n.block_light[ci];
+            }
+        }
+    }
+    // -Y face (5): neighbor's y=31 → padded y=0
+    if (neighbor_lights[5]) |n| {
+        for (0..CHUNK_SIZE) |z| {
+            for (0..CHUNK_SIZE) |x| {
+                const ci = chunkIndex(x, CHUNK_SIZE - 1, z);
+                const pi = paddedIndex(x + 1, 0, z + 1);
+                padded_sky[pi] = n.sky_light[ci];
+                padded_block[pi] = n.block_light[ci];
+            }
+        }
+    }
+}
+
+/// Pack sky and block light values into the 30-bit GPU format.
+fn packLight(sky_val: u8, block_light_val: [3]u8) u32 {
+    const s5: u32 = @as(u32, sky_val) >> 3;
+    const br5: u32 = @as(u32, block_light_val[0]) >> 3;
+    const bg5: u32 = @as(u32, block_light_val[1]) >> 3;
+    const bb5: u32 = @as(u32, block_light_val[2]) >> 3;
+    return (s5 << 0) | (s5 << 5) | (s5 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
+}
+
 /// Returns true if this chunk will produce zero mesh faces:
 /// all blocks are opaque AND all 6 neighbor boundary faces are opaque.
 pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
@@ -564,12 +667,18 @@ pub fn generateChunkMesh(
     allocator: std.mem.Allocator,
     chunk: *const Chunk,
     neighbors: [6]?*const Chunk,
+    light_map: ?*const LightMap,
+    neighbor_lights: [6]?*const LightMap,
 ) !ChunkMeshResult {
     const tz = tracy.zone(@src(), "generateChunkMesh");
     defer tz.end();
 
     var padded: [PADDED_BLOCKS]BlockType = undefined;
     buildPaddedBlocks(&padded, chunk, neighbors);
+
+    var padded_sky: [PADDED_BLOCKS]u8 = undefined;
+    var padded_block_light: [PADDED_BLOCKS][3]u8 = undefined;
+    buildPaddedLight(&padded_sky, &padded_block_light, light_map, neighbor_lights);
 
     var layer_faces: [LAYER_COUNT][6]std.ArrayList(FaceData) = undefined;
     var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
@@ -633,6 +742,8 @@ pub fn generateChunkMesh(
                         .oak_leaves => 26,
                     };
 
+                    // Sample light from the padded light volume at the face neighbor position
+                    const face_neighbor_idx: usize = @intCast(base + padded_face_deltas[face]);
                     var corner_packed: [4]u32 = undefined;
                     var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
 
@@ -644,9 +755,38 @@ pub fn generateChunkMesh(
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                         corner_block_brightness = .{ 255, 255, 255, 255 };
                     } else {
-                        // No light map — full sky brightness
-                        const full_sky: u32 = 31 | (31 << 5) | (31 << 10);
-                        corner_packed = .{ full_sky, full_sky, full_sky, full_sky };
+                        // Sample light at each AO corner position for smooth per-corner light
+                        for (0..4) |corner| {
+                            const deltas = padded_ao_deltas[face][corner];
+                            // Average the face neighbor + 3 AO neighbor light values
+                            var sky_sum: u32 = @as(u32, padded_sky[face_neighbor_idx]);
+                            var blk_sum: [3]u32 = .{
+                                @as(u32, padded_block_light[face_neighbor_idx][0]),
+                                @as(u32, padded_block_light[face_neighbor_idx][1]),
+                                @as(u32, padded_block_light[face_neighbor_idx][2]),
+                            };
+                            var count: u32 = 1;
+
+                            for (0..3) |s| {
+                                const sample_idx: usize = @intCast(base + deltas[s]);
+                                if (!block_properties.isOpaque(padded[sample_idx])) {
+                                    sky_sum += @as(u32, padded_sky[sample_idx]);
+                                    blk_sum[0] += @as(u32, padded_block_light[sample_idx][0]);
+                                    blk_sum[1] += @as(u32, padded_block_light[sample_idx][1]);
+                                    blk_sum[2] += @as(u32, padded_block_light[sample_idx][2]);
+                                    count += 1;
+                                }
+                            }
+
+                            const avg_sky: u8 = @intCast(sky_sum / count);
+                            const avg_blk: [3]u8 = .{
+                                @intCast(blk_sum[0] / count),
+                                @intCast(blk_sum[1] / count),
+                                @intCast(blk_sum[2] / count),
+                            };
+                            corner_packed[corner] = packLight(avg_sky, avg_blk);
+                            corner_block_brightness[corner] = @intCast(@max(blk_sum[0] / count, @max(blk_sum[1] / count, blk_sum[2] / count)));
+                        }
                     }
 
                     var ao: [4]u2 = undefined;
@@ -726,12 +866,18 @@ pub fn generateChunkLightOnly(
     allocator: std.mem.Allocator,
     chunk: *const Chunk,
     neighbors: [6]?*const Chunk,
+    light_map: ?*const LightMap,
+    neighbor_lights: [6]?*const LightMap,
 ) !ChunkLightResult {
     const tz = tracy.zone(@src(), "generateChunkLightOnly");
     defer tz.end();
 
     var padded: [PADDED_BLOCKS]BlockType = undefined;
     buildPaddedBlocks(&padded, chunk, neighbors);
+
+    var padded_sky: [PADDED_BLOCKS]u8 = undefined;
+    var padded_block_light: [PADDED_BLOCKS][3]u8 = undefined;
+    buildPaddedLight(&padded_sky, &padded_block_light, light_map, neighbor_lights);
 
     var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
     for (0..LAYER_COUNT) |l| {
@@ -761,6 +907,7 @@ pub fn generateChunkLightOnly(
                     if (block_properties.isOpaque(neighbor_block)) continue;
                     if (neighbor_block == block and block_properties.cullsSelf(block)) continue;
 
+                    const face_neighbor_idx2: usize = @intCast(base + padded_face_deltas[face]);
                     var corner_packed: [4]u32 = undefined;
 
                     if (is_emitter) {
@@ -770,9 +917,11 @@ pub fn generateChunkLightOnly(
                         const emit_packed: u32 = (31 << 0) | (31 << 5) | (31 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                     } else {
-                        // No light map — full sky brightness
-                        const full_sky: u32 = 31 | (31 << 5) | (31 << 10);
-                        corner_packed = .{ full_sky, full_sky, full_sky, full_sky };
+                        // Sample light at the face neighbor position
+                        const face_sky = padded_sky[face_neighbor_idx2];
+                        const face_blk = padded_block_light[face_neighbor_idx2];
+                        const lp = packLight(face_sky, face_blk);
+                        corner_packed = .{ lp, lp, lp, lp };
                     }
 
                     const layer = @intFromEnum(block_properties.renderLayer(block));
