@@ -12,6 +12,10 @@
       <!-- Hotbar background image -->
       <image id="hotbar_bg" src="hud:hotbar" width="364" height="44"/>
 
+      <!-- Selection highlight (24x23 at 2x = 48x46), offset_x set by binder -->
+      <image id="selection" src="hud:selection" width="48" height="46"
+             offset_x="-2" offset_y="-2"/>
+
       <!-- 9 slot color panels: each 24x24, at slot pitch 40px, inset 6px -->
       <panel id="slot_0" width="24" height="24" offset_x="6"   offset_y="6"/>
       <panel id="slot_1" width="24" height="24" offset_x="46"  offset_y="6"/>
@@ -22,10 +26,6 @@
       <panel id="slot_6" width="24" height="24" offset_x="246" offset_y="6"/>
       <panel id="slot_7" width="24" height="24" offset_x="286" offset_y="6"/>
       <panel id="slot_8" width="24" height="24" offset_x="326" offset_y="6"/>
-
-      <!-- Selection highlight (24x23 at 2x = 48x46), offset_x set by binder -->
-      <image id="selection" src="hud:selection" width="48" height="46"
-             offset_x="-2" offset_y="-2"/>
 
       <!-- Offhand slot (29x24 at 2x = 58x48), left of hotbar -->
       <image id="offhand" src="hud:offhand" width="58" height="48"
