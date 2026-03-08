@@ -194,19 +194,32 @@ fn computeSkyLight(
     var tail: u32 = 0;
 
     // Phase 1: Column scan — fill skylight from top down
-    // If there's no chunk above, sky is open
+    // Sky is open if: no chunk above, OR the above chunk's LightMap has full
+    // sky light (255) at y=0 for this column (meaning sky reaches down to there).
+    // This correctly handles multi-chunk terrain: cave ceilings block sky even
+    // if the immediate block above is air.
+    const above_lm: ?*const LightMap = neighbor_lights[4];
     const has_above = neighbors[4] != null;
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
-            // Check if sky is open above this column
-            var sky_open = !has_above;
-            if (!sky_open) {
-                // Check if neighbor above has opaque block at y=0 for this x,z
-                const above_block = getBlock(chunk, neighbors, @intCast(x), CHUNK_SIZE, @intCast(z));
-                sky_open = !block_properties.isOpaque(above_block);
+            var sky_open = false;
+            if (!has_above) {
+                // No chunk above — sky is open
+                sky_open = true;
+            } else if (above_lm) |alm| {
+                if (!alm.dirty) {
+                    // Check if sky reaches the bottom of the above chunk at this column
+                    sky_open = alm.sky_light[chunkIndex(x, 0, z)] == 255;
+                }
+                // If above LightMap is dirty, conservatively assume sky blocked
             }
+            // If above chunk exists but has no LightMap, assume sky blocked
 
             if (sky_open) {
+                // Also verify the block just above us isn't opaque
+                const above_block = getBlock(chunk, neighbors, @intCast(x), CHUNK_SIZE, @intCast(z));
+                if (block_properties.isOpaque(above_block)) continue;
+
                 var y: i32 = CHUNK_SIZE - 1;
                 while (y >= 0) : (y -= 1) {
                     const uy: usize = @intCast(y);
