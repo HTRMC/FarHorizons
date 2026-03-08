@@ -1036,12 +1036,13 @@ fn makeEmptyChunk() Chunk {
 }
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
+const no_light_neighbors: [6]?*const LightMap = .{ null, null, null, null, null, null };
 
 test "single block in air produces 6 faces" {
     var chunk = makeEmptyChunk();
     chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1066,7 +1067,7 @@ test "two adjacent blocks share face - culled" {
     chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
     chunk.blocks[chunkIndex(6, 5, 5)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1089,7 +1090,7 @@ test "face_counts sum equals total_face_count" {
         }
     }
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1104,7 +1105,7 @@ test "normal indices in faces match their group" {
     var chunk = makeEmptyChunk();
     chunk.blocks[chunkIndex(10, 10, 10)] = .grass_block;
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1133,11 +1134,11 @@ test "cross-chunk boundary face culling" {
     var neighbors1 = no_neighbors;
     neighbors1[2] = &chunk0;
 
-    const result0 = try generateChunkMesh(testing.allocator, &chunk0, neighbors0);
+    const result0 = try generateChunkMesh(testing.allocator, &chunk0, neighbors0, null, no_light_neighbors);
     defer testing.allocator.free(result0.faces);
     defer testing.allocator.free(result0.lights);
 
-    const result1 = try generateChunkMesh(testing.allocator, &chunk1, neighbors1);
+    const result1 = try generateChunkMesh(testing.allocator, &chunk1, neighbors1, null, no_light_neighbors);
     defer testing.allocator.free(result1.faces);
     defer testing.allocator.free(result1.lights);
 
@@ -1152,7 +1153,7 @@ test "cross-chunk boundary face culling" {
 
 test "empty chunk produces no faces" {
     const chunk = makeEmptyChunk();
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1165,7 +1166,7 @@ test "glass does not cull adjacent non-glass" {
     chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
     chunk.blocks[chunkIndex(6, 5, 5)] = .glass;
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1177,7 +1178,7 @@ test "glass-glass adjacency culls shared face" {
     chunk.blocks[chunkIndex(5, 5, 5)] = .glass;
     chunk.blocks[chunkIndex(6, 5, 5)] = .glass;
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1190,7 +1191,7 @@ test "light count equals face count (1:1 mapping)" {
         chunk.blocks[chunkIndex(x, 5, 5)] = .stone;
     }
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1231,7 +1232,7 @@ test "world boundary blocks have all outer faces" {
     var chunk = makeEmptyChunk();
     chunk.blocks[chunkIndex(0, 0, 0)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1265,7 +1266,7 @@ test "AO: single block in air has no occlusion" {
     var chunk = makeEmptyChunk();
     chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1282,7 +1283,7 @@ test "AO: block on flat surface has correct top face AO" {
         }
     }
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1301,8 +1302,9 @@ test "AO: block on flat surface has correct top face AO" {
     }
 
     const ao = unpackAo(center_top.?);
+    // Center block's top face: no blocks above (y=6) → no occlusion
     for (ao) |level| {
-        try testing.expectEqual(@as(u2, 3), level);
+        try testing.expectEqual(@as(u2, 0), level);
     }
 }
 
@@ -1313,7 +1315,7 @@ test "AO: block in corner has maximum occlusion on enclosed corner" {
     chunk.blocks[chunkIndex(5, 6, 5)] = .stone;
     chunk.blocks[chunkIndex(5, 5, 6)] = .stone;
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_light_neighbors);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 

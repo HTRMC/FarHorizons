@@ -685,3 +685,10 @@ pub fn main() !void {
 
     std.log.info("Shutting down...", .{});
 }
+
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("world/WorldState.zig");
+        _ = @import("world/LightEngine.zig");
+    }
+}
