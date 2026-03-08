@@ -160,3 +160,150 @@ fn approach(current: f32, target: f32, max_delta: f32) f32 {
     if (diff < -max_delta) return current - max_delta;
     return target;
 }
+
+// ============================================================
+// Tests
+// ============================================================
+
+const testing = std.testing;
+
+test "approach: moves toward target within delta" {
+    try testing.expectEqual(@as(f32, 5.0), approach(0.0, 10.0, 5.0));
+    try testing.expectEqual(@as(f32, -5.0), approach(0.0, -10.0, 5.0));
+}
+
+test "approach: snaps to target when within delta" {
+    try testing.expectEqual(@as(f32, 3.0), approach(2.0, 3.0, 5.0));
+    try testing.expectEqual(@as(f32, -1.0), approach(0.0, -1.0, 5.0));
+}
+
+test "approach: zero delta means no movement" {
+    try testing.expectEqual(@as(f32, 5.0), approach(5.0, 10.0, 0.0));
+}
+
+test "approach: already at target" {
+    try testing.expectEqual(@as(f32, 7.0), approach(7.0, 7.0, 1.0));
+}
+
+test "floori: positive values" {
+    try testing.expectEqual(@as(i32, 0), floori(0.0));
+    try testing.expectEqual(@as(i32, 0), floori(0.5));
+    try testing.expectEqual(@as(i32, 0), floori(0.999));
+    try testing.expectEqual(@as(i32, 1), floori(1.0));
+}
+
+test "floori: negative values" {
+    try testing.expectEqual(@as(i32, -1), floori(-0.001));
+    try testing.expectEqual(@as(i32, -1), floori(-0.5));
+    try testing.expectEqual(@as(i32, -1), floori(-1.0));
+    try testing.expectEqual(@as(i32, -2), floori(-1.001));
+}
+
+test "overlapsOtherAxes: overlapping block" {
+    const aabb_min = [3]f32{ 0.0, 0.0, 0.0 };
+    const aabb_max = [3]f32{ 1.0, 2.0, 1.0 };
+    const block = [3]i32{ 0, 0, 0 };
+
+    // Skip axis 0 (x), check y and z — block [0,0,0] spans [0,1) in each dim
+    // aabb y=[0,2), block y=[0,1) — overlap in y
+    // aabb z=[0,1), block z=[0,1) — tricky: aabb_max[z]=1.0, block_min+eps ~ block at z=0
+    // overlapsOtherAxes uses EPSILON tolerance
+    try testing.expect(overlapsOtherAxes(aabb_min, aabb_max, block, 0));
+}
+
+test "overlapsOtherAxes: non-overlapping block" {
+    const aabb_min = [3]f32{ 0.0, 0.0, 0.0 };
+    const aabb_max = [3]f32{ 1.0, 2.0, 1.0 };
+    const block = [3]i32{ 0, 5, 0 }; // block at y=5, aabb goes to y=2
+
+    try testing.expect(!overlapsOtherAxes(aabb_min, aabb_max, block, 0));
+}
+
+test "overlapsOtherAxes: flush edge is not overlap" {
+    // AABB exactly touching block edge — should NOT overlap (uses EPSILON tolerance)
+    const aabb_min = [3]f32{ 0.0, 0.0, 0.0 };
+    const aabb_max = [3]f32{ 1.0, 1.0, 1.0 };
+    const block = [3]i32{ 0, 1, 0 }; // block starts at y=1, aabb ends at y=1
+
+    // Checking skip_axis=0: check y and z
+    // y: aabb_max[1]=1.0, block_min=1, so aabb_max <= block_min + EPSILON → no overlap
+    try testing.expect(!overlapsOtherAxes(aabb_min, aabb_max, block, 0));
+}
+
+test "collideAxis: no collision in empty chunk" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try testing.allocator.create(WorldState.Chunk);
+    defer testing.allocator.destroy(chunk);
+    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
+
+    const pos = [3]f32{ 5.0, 5.0, 5.0 };
+    const result = collideAxis(&map, pos, 1.0, 0);
+    try testing.expectEqual(@as(f32, 1.0), result.distance);
+    try testing.expect(!result.hit);
+}
+
+test "collideAxis: collision with solid block" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try testing.allocator.create(WorldState.Chunk);
+    defer testing.allocator.destroy(chunk);
+    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+
+    // Place stone at (10, 5, 5)
+    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .stone;
+    map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
+
+    // Entity at x=8.0 (HALF_W=0.4, so right edge at 8.4), moving +x toward block at x=10
+    // Block face at x=10, entity AABB max x = 8.4 + movement
+    const pos = [3]f32{ 8.0, 5.0, 5.5 };
+    const result = collideAxis(&map, pos, 5.0, 0);
+
+    // Should hit: gap = 10.0 - 8.4 = 1.6, so distance should be 1.6
+    try testing.expect(result.hit);
+    try testing.expectApproxEqAbs(@as(f32, 1.6), result.distance, 1e-5);
+}
+
+test "collideAxis: negative movement collision" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try testing.allocator.create(WorldState.Chunk);
+    defer testing.allocator.destroy(chunk);
+    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+
+    // Place stone at (3, 5, 5) — block spans x=[3,4)
+    chunk.blocks[WorldState.chunkIndex(3, 5, 5)] = .stone;
+    map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
+
+    // Entity at x=5.0 (left edge at 4.6), moving -x toward block ending at x=4
+    const pos = [3]f32{ 5.0, 5.0, 5.5 };
+    const result = collideAxis(&map, pos, -5.0, 0);
+
+    // Should hit: block top at x=4, entity min at 4.6, gap = 4.0 - 4.6 = -0.6
+    try testing.expect(result.hit);
+    try testing.expectApproxEqAbs(@as(f32, -0.6), result.distance, 1e-5);
+}
+
+test "collideAxis: water is not solid" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try testing.allocator.create(WorldState.Chunk);
+    defer testing.allocator.destroy(chunk);
+    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+
+    // Place water at (10, 5, 5)
+    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .water;
+    map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
+
+    const pos = [3]f32{ 8.0, 5.0, 5.5 };
+    const result = collideAxis(&map, pos, 5.0, 0);
+
+    // Water is not solid, so no collision
+    try testing.expect(!result.hit);
+    try testing.expectEqual(@as(f32, 5.0), result.distance);
+}

@@ -459,3 +459,286 @@ pub fn trilerp3D(grid: *const [SC3]f32, bx: usize, by: usize, bz: usize) f32 {
 
     return c0 + (c1 - c0) * fy;
 }
+
+// ============================================================
+// Tests
+// ============================================================
+
+const testing = std.testing;
+
+test "Rng: splitmix64 produces deterministic sequence" {
+    var rng1 = Rng.init(12345);
+    var rng2 = Rng.init(12345);
+    for (0..100) |_| {
+        try testing.expectEqual(rng1.next(), rng2.next());
+    }
+}
+
+test "Rng: different seeds produce different sequences" {
+    var rng1 = Rng.init(0);
+    var rng2 = Rng.init(1);
+    // At least one of the first 10 outputs should differ
+    var all_same = true;
+    for (0..10) |_| {
+        if (rng1.next() != rng2.next()) all_same = false;
+    }
+    try testing.expect(!all_same);
+}
+
+test "Rng: nextF64 produces values in [0, 1)" {
+    var rng = Rng.init(42);
+    for (0..1000) |_| {
+        const v = rng.nextF64();
+        try testing.expect(v >= 0.0 and v < 1.0);
+    }
+}
+
+test "Rng: bounded stays within range" {
+    var rng = Rng.init(99);
+    for (0..1000) |_| {
+        const v = rng.bounded(10);
+        try testing.expect(v < 10);
+    }
+}
+
+test "Perlin: init produces valid permutation table" {
+    var rng = Rng.init(42);
+    const p = Perlin.init(&rng);
+
+    // First 256 entries should be a permutation of 0..255
+    var seen = [_]bool{false} ** 256;
+    for (0..256) |i| {
+        const val: usize = @intCast(p.perm[i]);
+        try testing.expect(val < 256);
+        seen[val] = true;
+    }
+    for (seen) |s| try testing.expect(s);
+
+    // Second half should mirror first half
+    for (0..256) |i| {
+        try testing.expectEqual(p.perm[i], p.perm[i + 256]);
+    }
+}
+
+test "Perlin: sample3D output is bounded [-1, 1]" {
+    var rng = Rng.init(42);
+    const p = Perlin.init(&rng);
+
+    // Sample a range of coordinates
+    var i: i32 = -50;
+    while (i < 50) : (i += 1) {
+        const x = @as(f64, @floatFromInt(i)) * 0.1;
+        const v = p.sample3D(x, x * 0.7, x * 1.3);
+        try testing.expect(v >= -1.0 and v <= 1.0);
+    }
+}
+
+test "Perlin: sample3D is deterministic" {
+    var rng = Rng.init(42);
+    const p = Perlin.init(&rng);
+
+    const v1 = p.sample3D(1.5, 2.5, 3.5);
+    const v2 = p.sample3D(1.5, 2.5, 3.5);
+    try testing.expectEqual(v1, v2);
+}
+
+test "Perlin: sample3D varies with input" {
+    var rng = Rng.init(42);
+    const p = Perlin.init(&rng);
+
+    const v1 = p.sample3D(0.0, 0.0, 0.0);
+    const v2 = p.sample3D(1.0, 0.0, 0.0);
+    const v3 = p.sample3D(0.0, 1.0, 0.0);
+    // Not all the same
+    try testing.expect(v1 != v2 or v1 != v3);
+}
+
+test "Perlin: sample3D at integer coordinates returns 0" {
+    // Perlin noise has the property that gradients at integer coordinates produce 0
+    // when the fractional part is 0 (all fade values are 0)
+    var rng = Rng.init(42);
+    const p = Perlin.init(&rng);
+
+    // At integer grid points, fractional parts xf=yf=zf=0, so fade(0)=0
+    // and the lerp chain collapses to grad(p[AA], 0, 0, 0) which is always 0
+    const v = p.sample3D(
+        -p.x_off + 10.0,
+        -p.y_off + 20.0,
+        -p.z_off + 30.0,
+    );
+    try testing.expectApproxEqAbs(@as(f64, 0.0), v, 1e-10);
+}
+
+test "Perlin: SIMD sample3D_vec matches scalar sample3D" {
+    var rng = Rng.init(42);
+    const p = Perlin.init(&rng);
+
+    const xs = [VEC_LEN]f64{ 0.5, 1.3, -2.7, 100.1 };
+    const ys = [VEC_LEN]f64{ 0.1, -0.5, 3.14, 0.0 };
+    const zs = [VEC_LEN]f64{ -1.0, 2.0, 0.0, -50.5 };
+
+    const vec_result = p.sample3D_vec(xs, ys, zs);
+
+    inline for (0..VEC_LEN) |lane| {
+        const scalar = p.sample3D(xs[lane], ys[lane], zs[lane]);
+        try testing.expectApproxEqAbs(scalar, vec_result[lane], 1e-10);
+    }
+}
+
+test "Perlin: SIMD matches scalar for negative coordinates" {
+    var rng = Rng.init(99);
+    const p = Perlin.init(&rng);
+
+    const xs = [VEC_LEN]f64{ -100.5, -0.001, -255.9, -1.0 };
+    const ys = [VEC_LEN]f64{ -50.3, -128.0, -0.5, -999.0 };
+    const zs = [VEC_LEN]f64{ -1.0, -1.0, -1.0, -1.0 };
+
+    const vec_result = p.sample3D_vec(xs, ys, zs);
+
+    inline for (0..VEC_LEN) |lane| {
+        const scalar = p.sample3D(xs[lane], ys[lane], zs[lane]);
+        try testing.expectApproxEqAbs(scalar, vec_result[lane], 1e-10);
+    }
+}
+
+test "Perlin: fade curve properties" {
+    // fade(0) = 0, fade(1) = 1, fade(0.5) = 0.5 (symmetry)
+    try testing.expectApproxEqAbs(@as(f64, 0.0), Perlin.fade(0.0), 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, 1.0), Perlin.fade(1.0), 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, 0.5), Perlin.fade(0.5), 1e-15);
+}
+
+test "OctavePerlin: more octaves produces different output" {
+    var rng1 = Rng.init(42);
+    var rng2 = Rng.init(42);
+    const oct1 = OctavePerlin.init(&rng1, 1);
+    const oct4 = OctavePerlin.init(&rng2, 4);
+
+    const v1 = oct1.sample3D(1.0, 2.0, 3.0);
+    const v4 = oct4.sample3D(1.0, 2.0, 3.0);
+
+    // First octave is same perlin, but 4-octave adds detail (they share octave 0
+    // due to same seed, so v1 == first octave of v4, but v4 has more)
+    // Actually with inverted FBm, freq starts at 1 and halves, so they diverge
+    try testing.expect(v1 != v4);
+}
+
+test "OctavePerlin: 2D is consistent with 3D at z=0" {
+    var rng1 = Rng.init(42);
+    var rng2 = Rng.init(42);
+    const oct1 = OctavePerlin.init(&rng1, 4);
+    const oct2 = OctavePerlin.init(&rng2, 4);
+
+    const v2d = oct1.sample2D(5.0, 10.0);
+    const v3d = oct2.sample3D(5.0, 0.0, 10.0);
+    try testing.expectApproxEqAbs(v2d, v3d, 1e-10);
+}
+
+test "bilerp2D: at grid points returns exact grid value" {
+    var grid: [SC2]f32 = undefined;
+    for (0..SC2) |i| grid[i] = @floatFromInt(i);
+
+    // At grid-aligned positions (multiples of STEP), should return exact grid value
+    const val = bilerp2D(&grid, 0, 0);
+    try testing.expectEqual(grid[0], val);
+
+    const val2 = bilerp2D(&grid, STEP, 0);
+    try testing.expectEqual(grid[1], val2);
+
+    const val3 = bilerp2D(&grid, 0, STEP);
+    try testing.expectEqual(grid[SC], val3);
+}
+
+test "bilerp2D: midpoint is average of corners" {
+    var grid = [_]f32{0} ** SC2;
+    grid[0] = 0;
+    grid[1] = 10;
+    grid[SC] = 20;
+    grid[SC + 1] = 30;
+
+    const mid = bilerp2D(&grid, STEP / 2, STEP / 2);
+    // At midpoint, fx=fz=0.5: lerp(0.5, lerp(0.5, 0, 10), lerp(0.5, 20, 30)) = lerp(0.5, 5, 25) = 15
+    try testing.expectApproxEqAbs(@as(f32, 15.0), mid, 1e-5);
+}
+
+test "trilerp3D: at grid points returns exact grid value" {
+    var grid: [SC3]f32 = undefined;
+    for (0..SC3) |i| grid[i] = @floatFromInt(i);
+
+    const val = trilerp3D(&grid, 0, 0, 0);
+    try testing.expectEqual(grid[0], val);
+}
+
+test "trilerp3D: midpoint interpolation" {
+    var grid = [_]f32{0} ** SC3;
+    // Set 8 corners of first cell
+    grid[0 * SC * SC + 0 * SC + 0] = 0; // (0,0,0)
+    grid[0 * SC * SC + 0 * SC + 1] = 8; // (1,0,0) x+
+    grid[0 * SC * SC + 1 * SC + 0] = 0; // (0,0,1) z+
+    grid[0 * SC * SC + 1 * SC + 1] = 8; // (1,0,1)
+    grid[1 * SC * SC + 0 * SC + 0] = 0; // (0,1,0) y+
+    grid[1 * SC * SC + 0 * SC + 1] = 8; // (1,1,0)
+    grid[1 * SC * SC + 1 * SC + 0] = 0; // (0,1,1)
+    grid[1 * SC * SC + 1 * SC + 1] = 8; // (1,1,1)
+
+    // At midpoint, all fractions are 0.5
+    const mid = trilerp3D(&grid, STEP / 2, STEP / 2, STEP / 2);
+    try testing.expectApproxEqAbs(@as(f32, 4.0), mid, 1e-5);
+}
+
+test "NoiseGen: deterministic from same seed" {
+    const ng1 = NoiseGen.init(12345);
+    const ng2 = NoiseGen.init(12345);
+
+    const v1 = ng1.density_a.sample3D(10.0, 20.0, 30.0);
+    const v2 = ng2.density_a.sample3D(10.0, 20.0, 30.0);
+    try testing.expectEqual(v1, v2);
+
+    const s1 = ng1.selector.sample3D(5.0, 5.0, 5.0);
+    const s2 = ng2.selector.sample3D(5.0, 5.0, 5.0);
+    try testing.expectEqual(s1, s2);
+}
+
+test "NoiseGen: different seeds produce different noise" {
+    const ng1 = NoiseGen.init(0);
+    const ng2 = NoiseGen.init(1);
+
+    const v1 = ng1.density_a.sample3D(10.0, 20.0, 30.0);
+    const v2 = ng2.density_a.sample3D(10.0, 20.0, 30.0);
+    try testing.expect(v1 != v2);
+}
+
+test "fillGrid2D: output changes with position" {
+    var rng = Rng.init(42);
+    const oct = OctavePerlin.init(&rng, 4);
+
+    var grid1: [SC2]f32 = undefined;
+    var grid2: [SC2]f32 = undefined;
+    oct.fillGrid2D(&grid1, 0, 0, 0.05, 0.05);
+    oct.fillGrid2D(&grid2, 100, 100, 0.05, 0.05);
+
+    var differ = false;
+    for (0..SC2) |i| {
+        if (grid1[i] != grid2[i]) {
+            differ = true;
+            break;
+        }
+    }
+    try testing.expect(differ);
+}
+
+test "fillGrid3D: output is deterministic" {
+    var rng1 = Rng.init(42);
+    var rng2 = Rng.init(42);
+    const oct1 = OctavePerlin.init(&rng1, 4);
+    const oct2 = OctavePerlin.init(&rng2, 4);
+
+    var grid1: [SC3]f32 = undefined;
+    var grid2: [SC3]f32 = undefined;
+    oct1.fillGrid3D(&grid1, 0, 0, 0, 0.05, 0.05, 0.05);
+    oct2.fillGrid3D(&grid2, 0, 0, 0, 0.05, 0.05, 0.05);
+
+    for (0..SC3) |i| {
+        try testing.expectEqual(grid1[i], grid2[i]);
+    }
+}

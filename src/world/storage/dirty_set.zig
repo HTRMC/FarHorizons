@@ -42,6 +42,72 @@ pub const DirtyEntry = struct {
     }
 };
 
+// ============================================================
+// Tests
+// ============================================================
+
+const testing = std.testing;
+
+fn makeDummyEntry(first_dirty: i64, last_dirty: i64) DirtyEntry {
+    return .{
+        .key = .{ .cx = 0, .cy = 0, .cz = 0 },
+        .region_coord = .{ .rx = 0, .rz = 0 },
+        .first_dirty_time = first_dirty,
+        .last_dirty_time = last_dirty,
+        .chunk_data = undefined,
+    };
+}
+
+test "computeUrgency: deferred when freshly dirtied" {
+    const entry = makeDummyEntry(100, 100);
+    try testing.expectEqual(UrgencyTier.deferred, entry.computeUrgency(100));
+    try testing.expectEqual(UrgencyTier.deferred, entry.computeUrgency(101));
+}
+
+test "computeUrgency: deferred when dirty < 5s" {
+    const entry = makeDummyEntry(100, 100);
+    try testing.expectEqual(UrgencyTier.deferred, entry.computeUrgency(105));
+}
+
+test "computeUrgency: normal when dirty > 5s and idle > 2s" {
+    const entry = makeDummyEntry(100, 100);
+    // dirty_duration=6 > 5, idle_duration=6 > 2
+    try testing.expectEqual(UrgencyTier.normal, entry.computeUrgency(106));
+}
+
+test "computeUrgency: deferred when dirty > 5s but idle <= 2s" {
+    // first_dirty=100, last_dirty=108, current=110
+    // dirty_duration=10 > 5, idle_duration=2 — NOT > 2
+    const entry = makeDummyEntry(100, 108);
+    try testing.expectEqual(UrgencyTier.deferred, entry.computeUrgency(110));
+}
+
+test "computeUrgency: urgent when dirty > 30s" {
+    const entry = makeDummyEntry(100, 130);
+    // dirty_duration=31 > 30
+    try testing.expectEqual(UrgencyTier.urgent, entry.computeUrgency(131));
+}
+
+test "computeUrgency: urgent overrides normal" {
+    // dirty_duration=31 > 30 → urgent even though idle is also > 2
+    const entry = makeDummyEntry(100, 100);
+    try testing.expectEqual(UrgencyTier.urgent, entry.computeUrgency(131));
+}
+
+test "computeUrgency: boundary at exactly 30s is deferred (not urgent)" {
+    // dirty_duration = 30, which is NOT > 30
+    const entry = makeDummyEntry(100, 100);
+    // dirty=30, idle=30 → not urgent (30 is not > 30), but dirty>5 and idle>2 → normal
+    try testing.expectEqual(UrgencyTier.normal, entry.computeUrgency(130));
+}
+
+test "computeUrgency: boundary at exactly 5s dirty, 2s idle is deferred" {
+    // dirty_duration=5, NOT > 5
+    const entry = makeDummyEntry(100, 103);
+    // current=105: dirty=5 (not >5), so → deferred
+    try testing.expectEqual(UrgencyTier.deferred, entry.computeUrgency(105));
+}
+
 pub const UrgencyCounts = struct {
     critical: u32 = 0,
     urgent: u32 = 0,

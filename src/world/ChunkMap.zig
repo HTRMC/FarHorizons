@@ -87,3 +87,160 @@ pub const ChunkMap = struct {
         return neighbors;
     }
 };
+
+// ============================================================
+// Tests
+// ============================================================
+
+const testing = std.testing;
+
+fn makeTestChunk(allocator: std.mem.Allocator, fill: BlockType) !*Chunk {
+    const chunk = try allocator.create(Chunk);
+    chunk.blocks = .{fill} ** WorldState.BLOCKS_PER_CHUNK;
+    return chunk;
+}
+
+test "ChunkMap: put and get" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try makeTestChunk(testing.allocator, .stone);
+    // Don't defer destroy — map.deinit handles it
+
+    const key = ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
+    map.put(key, chunk);
+
+    try testing.expect(map.get(key) != null);
+    try testing.expectEqual(chunk, map.get(key).?);
+    try testing.expectEqual(@as(usize, 1), map.count());
+}
+
+test "ChunkMap: get missing chunk returns null" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    try testing.expect(map.get(ChunkKey{ .cx = 99, .cy = 99, .cz = 99 }) == null);
+}
+
+test "ChunkMap: remove returns chunk" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try makeTestChunk(testing.allocator, .air);
+    const key = ChunkKey{ .cx = 1, .cy = 2, .cz = 3 };
+    map.put(key, chunk);
+
+    const removed = map.remove(key);
+    try testing.expect(removed != null);
+    try testing.expectEqual(chunk, removed.?);
+    try testing.expect(map.get(key) == null);
+    try testing.expectEqual(@as(usize, 0), map.count());
+
+    // Clean up manually since we removed it from map
+    testing.allocator.destroy(removed.?);
+}
+
+test "ChunkMap: remove missing returns null" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    try testing.expect(map.remove(ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }) == null);
+}
+
+test "ChunkMap: getBlock returns air for missing chunk" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    try testing.expectEqual(BlockType.air, map.getBlock(100, 200, 300));
+}
+
+test "ChunkMap: getBlock returns correct block from loaded chunk" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try makeTestChunk(testing.allocator, .air);
+    chunk.blocks[WorldState.chunkIndex(5, 10, 15)] = .stone;
+    map.put(ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
+
+    try testing.expectEqual(BlockType.stone, map.getBlock(5, 10, 15));
+    try testing.expectEqual(BlockType.air, map.getBlock(0, 0, 0));
+}
+
+test "ChunkMap: getBlock with negative world coordinates" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try makeTestChunk(testing.allocator, .air);
+    // Chunk at (-1,-1,-1) covers world coords [-32, -1]
+    // Block at local (31,31,31) = world (-1,-1,-1)
+    chunk.blocks[WorldState.chunkIndex(31, 31, 31)] = .dirt;
+    map.put(ChunkKey{ .cx = -1, .cy = -1, .cz = -1 }, chunk);
+
+    try testing.expectEqual(BlockType.dirt, map.getBlock(-1, -1, -1));
+    try testing.expectEqual(BlockType.air, map.getBlock(-32, -32, -32));
+}
+
+test "ChunkMap: setBlock modifies loaded chunk" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const chunk = try makeTestChunk(testing.allocator, .air);
+    map.put(ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
+
+    map.setBlock(5, 5, 5, .gold_block);
+    try testing.expectEqual(BlockType.gold_block, map.getBlock(5, 5, 5));
+}
+
+test "ChunkMap: setBlock on missing chunk does nothing" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    // Should not crash
+    map.setBlock(100, 100, 100, .stone);
+    try testing.expectEqual(BlockType.air, map.getBlock(100, 100, 100));
+}
+
+test "ChunkMap: getNeighbors returns loaded neighbors" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const center_key = ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
+    const center = try makeTestChunk(testing.allocator, .air);
+    map.put(center_key, center);
+
+    // Add one neighbor: east (+x)
+    const east_key = ChunkKey{ .cx = 1, .cy = 0, .cz = 0 };
+    const east = try makeTestChunk(testing.allocator, .stone);
+    map.put(east_key, east);
+
+    const neighbors = map.getNeighbors(center_key);
+
+    // Count non-null neighbors
+    var loaded: u32 = 0;
+    for (neighbors) |n| {
+        if (n != null) loaded += 1;
+    }
+    try testing.expectEqual(@as(u32, 1), loaded);
+}
+
+test "ChunkMap: multiple chunks at different keys" {
+    var map = ChunkMap.init(testing.allocator);
+    defer map.deinit();
+
+    const keys = [_]ChunkKey{
+        .{ .cx = 0, .cy = 0, .cz = 0 },
+        .{ .cx = 1, .cy = 0, .cz = 0 },
+        .{ .cx = -1, .cy = -1, .cz = -1 },
+        .{ .cx = 100, .cy = -50, .cz = 200 },
+    };
+
+    for (keys) |key| {
+        const chunk = try makeTestChunk(testing.allocator, .air);
+        map.put(key, chunk);
+    }
+
+    try testing.expectEqual(@as(usize, 4), map.count());
+    for (keys) |key| {
+        try testing.expect(map.get(key) != null);
+    }
+}
