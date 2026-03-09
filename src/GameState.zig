@@ -224,13 +224,13 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         Storage.saveWorldType(allocator, world_name, world_type);
     }
 
-    // Compute spawn position
-    const spawn_x: i32 = if (world_type == .debug) 5 else 16;
-    const spawn_z: i32 = if (world_type == .debug) 4 else 16;
+    // Compute spawn position — scan downward to find surface
+    const spawn_x: i32 = if (world_type == .debug) 5 else 0;
+    const spawn_z: i32 = if (world_type == .debug) 4 else 0;
     const spawn_y: f32 = if (world_type == .debug)
         3.0
     else
-        @as(f32, @floatFromInt(TerrainGen.sampleHeight(spawn_x, spawn_z, world_seed))) + 2.0;
+        @floatFromInt(TerrainGen.sampleHeight(spawn_x, spawn_z, world_seed));
 
     cam.position = zlm.Vec3.init(@floatFromInt(spawn_x), spawn_y + EYE_OFFSET, @floatFromInt(spawn_z));
 
@@ -247,7 +247,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
-        .mode = .flying,
+        .mode = .walking,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .jump_requested = false,
         .jump_cooldown = 0,
