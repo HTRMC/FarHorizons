@@ -1,6 +1,6 @@
 "DepotBuildConfig"
 {
-	"DepotID" "764707"
+	"DepotID" "3268423"
 	"ContentRoot" "..\build\linux\bin"
 	"FileMapping"
 	{
@@ -8,4 +8,5 @@
 		"DepotPath" "."
 		"Recursive" "1"
 	}
+	"FileExclusion" "assets\*"
 }

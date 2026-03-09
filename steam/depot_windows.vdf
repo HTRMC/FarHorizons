@@ -1,6 +1,6 @@
 "DepotBuildConfig"
 {
-	"DepotID" "764706"
+	"DepotID" "3268422"
 	"ContentRoot" "..\build\windows\bin"
 	"FileMapping"
 	{
@@ -9,4 +9,5 @@
 		"Recursive" "1"
 	}
 	"FileExclusion" "*.pdb"
+	"FileExclusion" "assets\*"
 }

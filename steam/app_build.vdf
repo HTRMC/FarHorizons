@@ -1,6 +1,6 @@
 "AppBuild"
 {
-	"AppID" "764705"
+	"AppID" "3268420"
 	"Desc" "FarHorizons build"
 	"BuildOutput" "output"
 	"ContentRoot" ""
@@ -8,7 +8,8 @@
 
 	"Depots"
 	{
-		"764706" "depot_windows.vdf"
-		"764707" "depot_linux.vdf"
+		"3268421" "depot_content.vdf"
+		"3268422" "depot_windows.vdf"
+		"3268423" "depot_linux.vdf"
 	}
 }
