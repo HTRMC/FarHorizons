@@ -224,15 +224,19 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         Storage.saveWorldType(allocator, world_name, world_type);
     }
 
-    // Load saved player position or compute spawn from terrain
+    // Load saved player position or find a valid spawn on land
     const player_data = if (storage_inst) |s| s.loadPlayerData(Storage.LOCAL_PLAYER_UUID) else null;
 
-    const spawn_x: f32 = if (player_data) |pd| pd.x else if (world_type == .debug) 5.0 else 0.0;
-    const spawn_z: f32 = if (player_data) |pd| pd.z else if (world_type == .debug) 4.0 else 0.0;
-    const spawn_y: f32 = if (player_data) |pd| pd.y else if (world_type == .debug)
-        3.0
+    const spawn_pos = if (player_data) |pd|
+        [3]f32{ pd.x, pd.y, pd.z }
+    else if (world_type == .debug)
+        [3]f32{ 5.0, 3.0, 4.0 }
     else
-        @floatFromInt(TerrainGen.sampleHeight(@intFromFloat(spawn_x), @intFromFloat(spawn_z), world_seed));
+        findSpawn(world_seed);
+
+    const spawn_x = spawn_pos[0];
+    const spawn_y = spawn_pos[1];
+    const spawn_z = spawn_pos[2];
 
     cam.position = zlm.Vec3.init(spawn_x, spawn_y + EYE_OFFSET, spawn_z);
     if (player_data) |pd| {
@@ -815,6 +819,57 @@ pub fn applyUnloadsToGpu(
         }
     }
     self.pending_unload_count = 0;
+}
+
+/// Spiral search from (0,0) outward to find a valid spawn on dry land.
+/// Checks that the spawn and surrounding area are above sea level.
+fn findSpawn(seed: u64) [3]f32 {
+    const SEA_LEVEL = 0;
+    // Ulam spiral: search 51x51 area
+    var x: i32 = 0;
+    var z: i32 = 0;
+    var dx: i32 = 0;
+    var dz: i32 = -1;
+
+    const side = 51;
+    const max_iter = side * side;
+
+    var i: u32 = 0;
+    while (i < max_iter) : (i += 1) {
+        const half = @divFloor(side, 2);
+        if (x >= -half and x <= half and z >= -half and z <= half) {
+            if (isDryLand(x, z, seed, SEA_LEVEL)) {
+                const surface_y = TerrainGen.sampleGridHeight(x, z, seed);
+                return .{ @as(f32, @floatFromInt(x)) + 0.5, @floatFromInt(surface_y), @as(f32, @floatFromInt(z)) + 0.5 };
+            }
+        }
+
+        // Spiral step
+        if (x == z or (x < 0 and x == -z) or (x > 0 and x == 1 - z)) {
+            const old_dx = dx;
+            dx = -dz;
+            dz = old_dx;
+        }
+        x += dx;
+        z += dz;
+    }
+
+    // Fallback: just use (0, 0) surface
+    const fallback_y = TerrainGen.sampleGridHeight(0, 0, seed);
+    return .{ 0.5, @floatFromInt(@max(fallback_y, SEA_LEVEL + 1)), 0.5 };
+}
+
+/// Check that the spawn point and a 5x5 area around it are all above sea level.
+fn isDryLand(cx: i32, cz: i32, seed: u64, sea_level: i32) bool {
+    var dz: i32 = -2;
+    while (dz <= 2) : (dz += 1) {
+        var ddx: i32 = -2;
+        while (ddx <= 2) : (ddx += 1) {
+            const h = TerrainGen.sampleGridHeight(cx + ddx, cz + dz, seed);
+            if (h <= sea_level) return false;
+        }
+    }
+    return true;
 }
 
 fn lerpVec3(a: zlm.Vec3, b: zlm.Vec3, t: f32) zlm.Vec3 {

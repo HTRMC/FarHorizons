@@ -454,6 +454,12 @@ pub fn sampleHeight(wx: i32, wz: i32, seed: u64) i32 {
     return sampleHeightWithNoise(wx, wz, &ng);
 }
 
+/// Grid-interpolated surface height from seed (matches actual chunk generation).
+pub fn sampleGridHeight(wx: i32, wz: i32, seed: u64) i32 {
+    const ng = Noise.NoiseGen.init(seed);
+    return sampleGridSurfaceHeight(wx, wz, &ng);
+}
+
 pub fn sampleHeightWithNoise(wx: i32, wz: i32, ng: *const Noise.NoiseGen) i32 {
     // Grid-space coordinates (coarse grid index, not block coords)
     const gx: f64 = @as(f64, @floatFromInt(wx)) / Noise.STEP;
