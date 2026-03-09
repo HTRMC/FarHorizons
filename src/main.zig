@@ -404,6 +404,16 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // Ensure base app data directory exists before any subsystem tries to use it
+    {
+        const base_path = app_config.getAppDataPath(allocator) catch null;
+        if (base_path) |p| {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            std.Io.Dir.createDirAbsolute(io, p, .default_file) catch {};
+            allocator.free(p);
+        }
+    }
+
     const file_logger = Logger.FileLogger.init(allocator) catch null;
     if (file_logger) |fl| {
         file_logger_instance = fl;

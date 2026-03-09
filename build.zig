@@ -85,6 +85,11 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    // Hide the console window on Windows
+    if (exe.root_module.resolved_target.?.result.os.tag == .windows) {
+        exe.subsystem = .windows;
+    }
+
     b.installArtifact(exe);
 
     // Install assets next to the executable

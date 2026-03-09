@@ -7,6 +7,14 @@ const Dir = Io.Dir;
 
 const sep = std.fs.path.sep_str;
 
+const win32 = if (builtin.os.tag == .windows) struct {
+    extern "kernel32" fn GetEnvironmentVariableW(
+        lpName: [*:0]const u16,
+        lpBuffer: ?[*]u16,
+        nSize: u32,
+    ) callconv(.c) u32;
+} else struct {};
+
 pub fn getAssetsPath(allocator: std.mem.Allocator) ![]const u8 {
     const tz = tracy.zone(@src(), "getAssetsPath");
     defer tz.end();
@@ -22,8 +30,13 @@ pub fn getAppDataPath(allocator: std.mem.Allocator) ![]const u8 {
     defer tz.end();
 
     if (builtin.os.tag == .windows) {
-        const appdata = std.c.getenv("APPDATA") orelse return error.AppDataNotSet;
-        return std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "FarHorizons", .{std.mem.span(appdata)});
+        const env_name = std.unicode.utf8ToUtf16LeStringLiteral("APPDATA");
+        var buf: [512]u16 = undefined;
+        const len = win32.GetEnvironmentVariableW(env_name, &buf, buf.len);
+        if (len == 0 or len > buf.len) return error.AppDataNotSet;
+        const appdata = try std.unicode.wtf16LeToWtf8Alloc(allocator, buf[0..len]);
+        defer allocator.free(appdata);
+        return std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "FarHorizons", .{appdata});
     } else {
         const home = std.c.getenv("XDG_DATA_HOME") orelse blk: {
             const h = std.c.getenv("HOME") orelse return error.AppDataNotSet;
