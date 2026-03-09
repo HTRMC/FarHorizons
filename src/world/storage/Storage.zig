@@ -77,6 +77,10 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     ensureDirExists(io, world_dir);
     ensureDirExists(io, region_dir);
 
+    const playerdata_dir = try std.fmt.allocPrint(allocator, "{s}{s}playerdata", .{ world_dir, sep });
+    defer allocator.free(playerdata_dir);
+    ensureDirExists(io, playerdata_dir);
+
     const seed = loadOrCreateSeed(io, allocator, world_dir);
     const world_type = loadWorldType(io, allocator, world_dir);
 
@@ -425,6 +429,56 @@ fn loadWorldType(io: Io, allocator: std.mem.Allocator, world_dir: []const u8) Wo
         }
     } else |_| {}
     return .normal;
+}
+
+const BinaryTag = @import("../../BinaryTag.zig");
+
+pub const PlayerData = struct {
+    x: f32,
+    y: f32,
+    z: f32,
+    yaw: f32,
+    pitch: f32,
+};
+
+/// Singleplayer placeholder UUID. Replace with real UUID when auth is added.
+pub const LOCAL_PLAYER_UUID = "00000000-0000-0000-0000-000000000000";
+
+pub fn loadPlayerData(self: *const Storage, uuid: []const u8) ?PlayerData {
+    const sep = std.fs.path.sep_str;
+    const path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "playerdata" ++ sep ++ "{s}.dat", .{ self.world_dir, uuid }, 0) catch return null;
+    defer self.allocator.free(path);
+
+    const data = BinaryTag.readFile(self.allocator, path) catch return null;
+    defer self.allocator.free(data);
+
+    const r = BinaryTag.Reader.init(data);
+    return .{
+        .x = r.getF32("x") orelse return null,
+        .y = r.getF32("y") orelse return null,
+        .z = r.getF32("z") orelse return null,
+        .yaw = r.getF32("yaw") orelse return null,
+        .pitch = r.getF32("pitch") orelse return null,
+    };
+}
+
+pub fn savePlayerData(self: *const Storage, uuid: []const u8, data: PlayerData) void {
+    const sep = std.fs.path.sep_str;
+    const path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "playerdata" ++ sep ++ "{s}.dat", .{ self.world_dir, uuid }, 0) catch return;
+    defer self.allocator.free(path);
+
+    var w = BinaryTag.Writer.init(self.allocator);
+    defer w.deinit();
+    w.putF32("x", data.x);
+    w.putF32("y", data.y);
+    w.putF32("z", data.z);
+    w.putF32("yaw", data.yaw);
+    w.putF32("pitch", data.pitch);
+
+    const tag_data = w.toOwnedSlice() orelse return;
+    defer self.allocator.free(tag_data);
+
+    BinaryTag.writeFile(self.allocator, path, tag_data) catch {};
 }
 
 pub fn saveWorldType(allocator: std.mem.Allocator, world_name: []const u8, world_type: WorldState.WorldType) void {

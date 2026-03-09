@@ -224,17 +224,23 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         Storage.saveWorldType(allocator, world_name, world_type);
     }
 
-    // Compute spawn position — scan downward to find surface
-    const spawn_x: i32 = if (world_type == .debug) 5 else 0;
-    const spawn_z: i32 = if (world_type == .debug) 4 else 0;
-    const spawn_y: f32 = if (world_type == .debug)
+    // Load saved player position or compute spawn from terrain
+    const player_data = if (storage_inst) |s| s.loadPlayerData(Storage.LOCAL_PLAYER_UUID) else null;
+
+    const spawn_x: f32 = if (player_data) |pd| pd.x else if (world_type == .debug) 5.0 else 0.0;
+    const spawn_z: f32 = if (player_data) |pd| pd.z else if (world_type == .debug) 4.0 else 0.0;
+    const spawn_y: f32 = if (player_data) |pd| pd.y else if (world_type == .debug)
         3.0
     else
-        @floatFromInt(TerrainGen.sampleHeight(spawn_x, spawn_z, world_seed));
+        @floatFromInt(TerrainGen.sampleHeight(@intFromFloat(spawn_x), @intFromFloat(spawn_z), world_seed));
 
-    cam.position = zlm.Vec3.init(@floatFromInt(spawn_x), spawn_y + EYE_OFFSET, @floatFromInt(spawn_z));
+    cam.position = zlm.Vec3.init(spawn_x, spawn_y + EYE_OFFSET, spawn_z);
+    if (player_data) |pd| {
+        cam.yaw = pd.yaw;
+        cam.pitch = pd.pitch;
+    }
 
-    const spawn_key = WorldState.ChunkKey.fromWorldPos(spawn_x, @intFromFloat(spawn_y), spawn_z);
+    const spawn_key = WorldState.ChunkKey.fromWorldPos(@intFromFloat(spawn_x), @intFromFloat(spawn_y), @intFromFloat(spawn_z));
 
     return .{
         .allocator = allocator,
@@ -244,7 +250,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .light_maps = light_maps,
         .light_map_pool = light_map_pool,
         .surface_height_map = surface_height_map,
-        .entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
+        .entity_pos = .{ spawn_x, spawn_y, spawn_z },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
         .mode = .walking,
@@ -264,10 +270,10 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
-        .prev_entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
+        .prev_entity_pos = .{ spawn_x, spawn_y, spawn_z },
         .prev_camera_pos = cam.position,
         .tick_camera_pos = cam.position,
-        .render_entity_pos = .{ @floatFromInt(spawn_x), spawn_y, @floatFromInt(spawn_z) },
+        .render_entity_pos = .{ spawn_x, spawn_y, spawn_z },
     };
 }
 
@@ -275,6 +281,14 @@ pub fn save(self: *GameState) void {
     const s = self.storage orelse return;
     const io = std.Io.Threaded.global_single_threaded.io();
     const save_start = std.Io.Clock.now(.awake, io);
+
+    s.savePlayerData(Storage.LOCAL_PLAYER_UUID, .{
+        .x = self.entity_pos[0],
+        .y = self.entity_pos[1],
+        .z = self.entity_pos[2],
+        .yaw = self.camera.yaw,
+        .pitch = self.camera.pitch,
+    });
 
     const dirty_start = std.Io.Clock.now(.awake, io);
     s.saveAllDirty();

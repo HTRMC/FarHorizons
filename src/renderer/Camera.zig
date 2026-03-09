@@ -20,7 +20,7 @@ pub fn init(width: u32, height: u32) Camera {
     return Camera{
         .position = zlm.Vec3.init(0.0, 40.0, 80.0),
         .yaw = 0.0,
-        .pitch = -0.3,
+        .pitch = 0.0,
         .fov = 70.0 * std.math.pi / 180.0,
         .aspect = aspect_ratio,
         .near = 0.1,
