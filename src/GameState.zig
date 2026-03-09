@@ -512,6 +512,7 @@ pub fn placeBlock(self: *GameState) void {
     const py = hit.block_pos[1] + n[1];
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
+    if (WorldState.block_properties.isSolid(block_type) and blockOverlapsPlayer(px, py, pz, self.entity_pos)) return;
     self.chunk_map.setBlock(px, py, pz, block_type);
     // Update surface height if placing an opaque block
     if (WorldState.block_properties.isOpaque(block_type)) {
@@ -523,6 +524,15 @@ pub fn placeBlock(self: *GameState) void {
     self.markDirty(px, py, pz, true);
     self.queueChunkSave(px, py, pz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+}
+
+fn blockOverlapsPlayer(bx: i32, by: i32, bz: i32, pos: [3]f32) bool {
+    const fbx: f32 = @floatFromInt(bx);
+    const fby: f32 = @floatFromInt(by);
+    const fbz: f32 = @floatFromInt(bz);
+    return fbx + 1.0 > pos[0] - Physics.HALF_W and fbx < pos[0] + Physics.HALF_W and
+        fby + 1.0 > pos[1] and fby < pos[1] + Physics.HEIGHT and
+        fbz + 1.0 > pos[2] - Physics.HALF_W and fbz < pos[2] + Physics.HALF_W;
 }
 
 fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {

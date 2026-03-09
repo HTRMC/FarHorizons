@@ -5,8 +5,8 @@ const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 
 const GRAVITY: f32 = 32.0;
 const Y_DRAG: f32 = 0.9866;
-const HALF_W: f32 = 0.4;
-const HEIGHT: f32 = 1.8;
+pub const HALF_W: f32 = 0.4;
+pub const HEIGHT: f32 = 1.8;
 const WALK_SPEED: f32 = 4.3;
 const FRICTION: f32 = 20.0;
 const AIR_CONTROL: f32 = 0.3;
