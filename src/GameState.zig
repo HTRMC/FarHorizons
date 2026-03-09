@@ -546,6 +546,23 @@ pub fn placeBlock(self: *GameState) void {
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
+pub fn pickBlock(self: *GameState) void {
+    const hit = self.hit_result orelse return;
+    const block_type = self.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    if (block_type == .air) return;
+
+    // If already in hotbar, just select that slot
+    for (self.hotbar, 0..) |slot_block, i| {
+        if (slot_block == block_type) {
+            self.selected_slot = @intCast(i);
+            return;
+        }
+    }
+
+    // Otherwise replace the current slot
+    self.hotbar[self.selected_slot] = block_type;
+}
+
 fn blockOverlapsPlayer(bx: i32, by: i32, bz: i32, pos: [3]f32) bool {
     const fbx: f32 = @floatFromInt(bx);
     const fby: f32 = @floatFromInt(by);

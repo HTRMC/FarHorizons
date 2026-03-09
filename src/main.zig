@@ -383,6 +383,10 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
         if (!gs.debug_camera_active) {
             gs.breakBlock();
         }
+    } else if (button == glfw.GLFW_MOUSE_BUTTON_MIDDLE and input_state.mouse_captured) {
+        if (!gs.debug_camera_active) {
+            gs.pickBlock();
+        }
     } else if (button == glfw.GLFW_MOUSE_BUTTON_RIGHT) {
         if (!input_state.mouse_captured) {
             input_state.mouse_captured = true;
