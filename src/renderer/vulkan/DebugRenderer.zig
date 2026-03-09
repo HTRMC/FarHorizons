@@ -336,28 +336,30 @@ pub const DebugRenderer = struct {
         count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 64.0, 0.0, .{ 0.0, 1.0, 0.0, 1.0 });
         count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 });
 
-        const entity_pos = game_state.render_entity_pos;
-        const half_w: f32 = 0.4;
-        const height: f32 = 1.8;
-        const x0 = entity_pos[0] - half_w;
-        const y0 = entity_pos[1];
-        const z0 = entity_pos[2] - half_w;
-        const x1 = entity_pos[0] + half_w;
-        const y1 = entity_pos[1] + height;
-        const z1 = entity_pos[2] + half_w;
+        if (game_state.show_hitbox) {
+            const entity_pos = game_state.render_entity_pos;
+            const half_w: f32 = 0.4;
+            const height: f32 = 1.8;
+            const x0 = entity_pos[0] - half_w;
+            const y0 = entity_pos[1];
+            const z0 = entity_pos[2] - half_w;
+            const x1 = entity_pos[0] + half_w;
+            const y1 = entity_pos[1] + height;
+            const z1 = entity_pos[2] + half_w;
 
-        count = addLine(vertices, count, x0, y0, z0, x1, y0, z0, yellow);
-        count = addLine(vertices, count, x1, y0, z0, x1, y0, z1, yellow);
-        count = addLine(vertices, count, x1, y0, z1, x0, y0, z1, yellow);
-        count = addLine(vertices, count, x0, y0, z1, x0, y0, z0, yellow);
-        count = addLine(vertices, count, x0, y1, z0, x1, y1, z0, yellow);
-        count = addLine(vertices, count, x1, y1, z0, x1, y1, z1, yellow);
-        count = addLine(vertices, count, x1, y1, z1, x0, y1, z1, yellow);
-        count = addLine(vertices, count, x0, y1, z1, x0, y1, z0, yellow);
-        count = addLine(vertices, count, x0, y0, z0, x0, y1, z0, yellow);
-        count = addLine(vertices, count, x1, y0, z0, x1, y1, z0, yellow);
-        count = addLine(vertices, count, x1, y0, z1, x1, y1, z1, yellow);
-        count = addLine(vertices, count, x0, y0, z1, x0, y1, z1, yellow);
+            count = addLine(vertices, count, x0, y0, z0, x1, y0, z0, yellow);
+            count = addLine(vertices, count, x1, y0, z0, x1, y0, z1, yellow);
+            count = addLine(vertices, count, x1, y0, z1, x0, y0, z1, yellow);
+            count = addLine(vertices, count, x0, y0, z1, x0, y0, z0, yellow);
+            count = addLine(vertices, count, x0, y1, z0, x1, y1, z0, yellow);
+            count = addLine(vertices, count, x1, y1, z0, x1, y1, z1, yellow);
+            count = addLine(vertices, count, x1, y1, z1, x0, y1, z1, yellow);
+            count = addLine(vertices, count, x0, y1, z1, x0, y1, z0, yellow);
+            count = addLine(vertices, count, x0, y0, z0, x0, y1, z0, yellow);
+            count = addLine(vertices, count, x1, y0, z0, x1, y1, z0, yellow);
+            count = addLine(vertices, count, x1, y0, z1, x1, y1, z1, yellow);
+            count = addLine(vertices, count, x0, y0, z1, x0, y1, z1, yellow);
+        }
 
         // Chunk border wireframes (F3+G)
         if (game_state.show_chunk_borders) {

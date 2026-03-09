@@ -149,6 +149,8 @@ stats_last_time: ?Io.Timestamp = null,
 
 debug_screens: u8 = 0,
 show_chunk_borders: bool = false,
+show_hitbox: bool = false,
+show_ui: bool = true,
 delta_time: f32 = 0,
 frame_timing: FrameTiming = .{},
 

@@ -200,6 +200,8 @@ const InputState = struct {
     debug_toggle_requested: bool = false,
     overdraw_toggle_requested: bool = false,
     chunk_borders_toggle_requested: bool = false,
+    hitbox_toggle_requested: bool = false,
+    ui_toggle_requested: bool = false,
     f3_held: bool = false,
     f3_consumed: bool = false,
     debug_screen_toggle: ?u3 = null,
@@ -293,9 +295,19 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             if (action == glfw.GLFW_PRESS) {
                 const shift = (mods & glfw.GLFW_MOD_SHIFT) != 0;
 
+                if (key == glfw.GLFW_KEY_F1) {
+                    input_state.ui_toggle_requested = true;
+                }
+
                 // F3+G: toggle chunk borders
                 if (key == glfw.GLFW_KEY_G and input_state.f3_held) {
                     input_state.chunk_borders_toggle_requested = true;
+                    input_state.f3_consumed = true;
+                }
+
+                // F3+B: toggle player hitbox
+                if (key == glfw.GLFW_KEY_B and input_state.f3_held) {
+                    input_state.hitbox_toggle_requested = true;
                     input_state.f3_consumed = true;
                 }
 
@@ -639,6 +651,16 @@ pub fn main() !void {
                 if (input_state.chunk_borders_toggle_requested) {
                     input_state.chunk_borders_toggle_requested = false;
                     gs.show_chunk_borders = !gs.show_chunk_borders;
+                }
+
+                if (input_state.hitbox_toggle_requested) {
+                    input_state.hitbox_toggle_requested = false;
+                    gs.show_hitbox = !gs.show_hitbox;
+                }
+
+                if (input_state.ui_toggle_requested) {
+                    input_state.ui_toggle_requested = false;
+                    gs.show_ui = !gs.show_ui;
                 }
 
                 if (input_state.debug_screen_toggle) |bit| {

@@ -359,6 +359,9 @@ pub const MenuController = struct {
     pub fn updateHud(self: *MenuController, gs: *const GameState) void {
         const binder = self.hud_binder orelse return;
         const tree = self.hudTree() orelse return;
+        if (tree.getWidget(tree.root)) |root| {
+            root.visible = gs.show_ui;
+        }
         binder.update(tree, gs);
     }
 
