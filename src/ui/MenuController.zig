@@ -25,11 +25,12 @@ pub const AppState = enum {
     loading,
     playing,
     pause_menu,
+    inventory,
     saving,
 
     pub fn isMenu(self: AppState) bool {
         return switch (self) {
-            .title_menu, .singleplayer_menu, .create_world, .controls_title, .controls_pause, .pause_menu => true,
+            .title_menu, .singleplayer_menu, .create_world, .controls_title, .controls_pause, .pause_menu, .inventory => true,
             .loading, .playing, .saving => false,
         };
     }
@@ -43,6 +44,7 @@ const ScreenType = enum {
     create_world,
     controls,
     pause,
+    inventory,
 };
 
 pub const MenuController = struct {
@@ -64,6 +66,12 @@ pub const MenuController = struct {
     keybind_list_id: WidgetId = NULL_WIDGET,
     rebind_hint_id: WidgetId = NULL_WIDGET,
     keybind_button_ids: [Options.Action.count]WidgetId = .{NULL_WIDGET} ** Options.Action.count,
+
+    // Inventory screen state
+    inv_slot_ids: [GameState.HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.HOTBAR_SIZE, // hotbar row
+    inv_main_ids: [GameState.INV_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.INV_SIZE, // 3x9 main
+    inv_armor_ids: [GameState.ARMOR_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS,
+    inv_offhand_id: WidgetId = NULL_WIDGET,
 
     coming_soon_modal_id: WidgetId = NULL_WIDGET,
 
@@ -113,6 +121,7 @@ pub const MenuController = struct {
             .create_world => .create_world,
             .controls_title, .controls_pause => .controls,
             .pause_menu => .pause,
+            .inventory => .inventory,
             .loading, .playing, .saving => null,
         };
     }
@@ -124,6 +133,7 @@ pub const MenuController = struct {
             .create_world => "create_world_menu.xml",
             .controls => "controls_menu.xml",
             .pause => "pause_menu.xml",
+            .inventory => "inventory.xml",
         };
         if (self.ui_manager.loadScreenFromFile(file, self.allocator)) {
             switch (screen) {
@@ -141,6 +151,7 @@ pub const MenuController = struct {
                     self.populateKeybindList();
                 },
                 .pause => {},
+                .inventory => self.cacheInventoryWidgetIds(),
             }
         } else {
             log.err("Failed to load {s}", .{file});
@@ -161,6 +172,7 @@ pub const MenuController = struct {
             },
             .controls => self.resetControlsWidgetIds(),
             .pause => {},
+            .inventory => self.resetInventoryWidgetIds(),
         }
     }
 
@@ -215,6 +227,30 @@ pub const MenuController = struct {
         self.rebind_hint_id = NULL_WIDGET;
         self.keybind_button_ids = .{NULL_WIDGET} ** Options.Action.count;
         self.rebinding_action = null;
+    }
+
+    fn cacheInventoryWidgetIds(self: *MenuController) void {
+        const tree = self.menuTree() orelse return;
+        inline for (0..GameState.HOTBAR_SIZE) |i| {
+            const name = comptime std.fmt.comptimePrint("hotbar_{d}", .{i});
+            self.inv_slot_ids[i] = tree.findById(name) orelse NULL_WIDGET;
+        }
+        inline for (0..GameState.INV_SIZE) |i| {
+            const name = comptime std.fmt.comptimePrint("inv_{d}", .{i});
+            self.inv_main_ids[i] = tree.findById(name) orelse NULL_WIDGET;
+        }
+        inline for (0..GameState.ARMOR_SLOTS) |i| {
+            const name = comptime std.fmt.comptimePrint("armor_{d}", .{i});
+            self.inv_armor_ids[i] = tree.findById(name) orelse NULL_WIDGET;
+        }
+        self.inv_offhand_id = tree.findById("inv_offhand") orelse NULL_WIDGET;
+    }
+
+    fn resetInventoryWidgetIds(self: *MenuController) void {
+        self.inv_slot_ids = .{NULL_WIDGET} ** GameState.HOTBAR_SIZE;
+        self.inv_main_ids = .{NULL_WIDGET} ** GameState.INV_SIZE;
+        self.inv_armor_ids = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS;
+        self.inv_offhand_id = NULL_WIDGET;
     }
 
     // ============================================================
@@ -398,10 +434,86 @@ pub const MenuController = struct {
         self.app_state = .playing;
     }
 
+    pub fn showInventory(self: *MenuController) void {
+        self.loadScreen(.inventory);
+        self.app_state = .inventory;
+    }
+
+    pub fn hideInventory(self: *MenuController) void {
+        self.unloadScreen(.inventory);
+        self.app_state = .playing;
+    }
+
+    pub fn updateInventory(self: *MenuController, gs: *const GameState) void {
+        if (self.app_state != .inventory) return;
+        const tree = self.menuTree() orelse return;
+
+        // Update hotbar row
+        for (0..GameState.HOTBAR_SIZE) |i| {
+            if (self.inv_slot_ids[i] != NULL_WIDGET) {
+                if (tree.getWidget(self.inv_slot_ids[i])) |w| {
+                    const block = gs.hotbar[i];
+                    if (block != .air) {
+                        const c = GameState.blockColor(block);
+                        w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+                    } else {
+                        w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
+                    }
+                }
+            }
+        }
+
+        // Update main inventory
+        for (0..GameState.INV_SIZE) |i| {
+            if (self.inv_main_ids[i] != NULL_WIDGET) {
+                if (tree.getWidget(self.inv_main_ids[i])) |w| {
+                    const block = gs.inventory[i];
+                    if (block != .air) {
+                        const c = GameState.blockColor(block);
+                        w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+                    } else {
+                        w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
+                    }
+                }
+            }
+        }
+
+        // Update armor slots
+        for (0..GameState.ARMOR_SLOTS) |i| {
+            if (self.inv_armor_ids[i] != NULL_WIDGET) {
+                if (tree.getWidget(self.inv_armor_ids[i])) |w| {
+                    const block = gs.armor[i];
+                    if (block != .air) {
+                        const c = GameState.blockColor(block);
+                        w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+                    } else {
+                        w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
+                    }
+                }
+            }
+        }
+
+        // Update offhand
+        if (self.inv_offhand_id != NULL_WIDGET) {
+            if (tree.getWidget(self.inv_offhand_id)) |w| {
+                const block = gs.offhand;
+                if (block != .air) {
+                    const c = GameState.blockColor(block);
+                    w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+                } else {
+                    w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
+                }
+            }
+        }
+    }
+
     pub fn showTitleMenu(self: *MenuController) void {
-        // Unload any gameplay screens (pause, hud)
+        // Unload any gameplay screens (pause, inventory, hud)
         if (self.app_state == .pause_menu) {
             self.unloadScreen(.pause);
+        }
+        if (self.app_state == .inventory) {
+            self.unloadScreen(.inventory);
         }
         if (self.hud_binder != null) {
             self.unloadHud();

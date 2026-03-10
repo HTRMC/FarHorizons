@@ -1,0 +1,127 @@
+<screen>
+  <panel width="fill" height="fill" layout="anchor" background="#00000088">
+
+    <!-- ======== Player panel: offset left of center inventory ======== -->
+    <panel width="auto" height="auto" anchor_x="center" anchor_y="center"
+           offset_x="-300" direction="column" gap="0"
+           background="#141428EE" border_width="1" border_color="#444466FF">
+
+      <!-- Header -->
+      <panel width="fill" height="28" background="#222244FF" padding="4"
+             cross_align="center" justify="center">
+        <label text="PLAYER" color="#CCCCDDFF" shadow="true" shadow_color="#000000AA"/>
+      </panel>
+
+      <!-- Body: armor left | player | armor right -->
+      <panel width="auto" height="auto" direction="row" gap="0" padding="8"
+             cross_align="center">
+
+        <!-- Left armor column: Helmet + Leggings -->
+        <panel width="auto" height="auto" direction="column" gap="4" cross_align="center">
+          <panel id="armor_0" width="36" height="36" background="#1A1A3099"
+                 border_width="1" border_color="#555577FF" tooltip="Helmet"/>
+          <panel id="armor_2" width="36" height="36" background="#1A1A3099"
+                 border_width="1" border_color="#555577FF" tooltip="Leggings"/>
+        </panel>
+
+        <!-- Player silhouette -->
+        <panel width="80" height="120" background="#1A1A30CC" margin="0,12,0,12"
+               cross_align="center" justify="center">
+          <label text="[ Player ]" color="#444460FF"/>
+        </panel>
+
+        <!-- Right armor column: Chestplate + Boots -->
+        <panel width="auto" height="auto" direction="column" gap="4" cross_align="center">
+          <panel id="armor_1" width="36" height="36" background="#1A1A3099"
+                 border_width="1" border_color="#555577FF" tooltip="Chestplate"/>
+          <panel id="armor_3" width="36" height="36" background="#1A1A3099"
+                 border_width="1" border_color="#555577FF" tooltip="Boots"/>
+        </panel>
+      </panel>
+
+      <!-- Separator -->
+      <panel width="fill" height="1" background="#333355FF"/>
+
+      <!-- Offhand -->
+      <panel width="fill" height="auto" direction="column" gap="0" padding="8"
+             cross_align="center">
+        <panel id="inv_offhand" width="36" height="36" background="#1A1A3099"
+               border_width="1" border_color="#555577FF" tooltip="Offhand"/>
+      </panel>
+    </panel>
+
+    <!-- ======== Inventory: centered on screen ======== -->
+    <panel width="auto" height="auto" anchor_x="center" anchor_y="center"
+           direction="column" gap="0"
+           background="#141428EE" border_width="1" border_color="#444466FF">
+
+      <!-- Header -->
+      <panel width="fill" height="28" background="#222244FF" padding="4"
+             cross_align="center" justify="center">
+        <label text="INVENTORY" color="#CCCCDDFF" shadow="true" shadow_color="#000000AA"/>
+      </panel>
+
+      <!-- Inventory grid area -->
+      <panel width="auto" height="auto" direction="column" gap="2" padding="8">
+
+        <!-- Row 0 -->
+        <panel width="auto" height="auto" direction="row" gap="2">
+          <panel id="inv_0"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_1"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_2"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_3"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_4"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_5"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_6"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_7"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_8"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+        </panel>
+
+        <!-- Row 1 -->
+        <panel width="auto" height="auto" direction="row" gap="2">
+          <panel id="inv_9"  width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_10" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_11" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_12" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_13" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_14" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_15" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_16" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_17" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+        </panel>
+
+        <!-- Row 2 -->
+        <panel width="auto" height="auto" direction="row" gap="2">
+          <panel id="inv_18" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_19" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_20" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_21" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_22" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_23" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_24" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_25" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_26" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+        </panel>
+
+        <!-- Separator between inventory and hotbar -->
+        <panel width="fill" height="4"/>
+        <panel width="fill" height="1" background="#444466FF"/>
+        <panel width="fill" height="4"/>
+
+        <!-- Hotbar row -->
+        <panel width="auto" height="auto" direction="row" gap="2">
+          <panel id="hotbar_0" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+          <panel id="hotbar_1" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+          <panel id="hotbar_2" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+          <panel id="hotbar_3" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+          <panel id="hotbar_4" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+          <panel id="hotbar_5" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+          <panel id="hotbar_6" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+          <panel id="hotbar_7" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+          <panel id="hotbar_8" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#666688FF"/>
+        </panel>
+      </panel>
+    </panel>
+
+  </panel>
+</screen>

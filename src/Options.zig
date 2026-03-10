@@ -76,6 +76,9 @@ pub const Action = enum(u8) {
     hotbar_8,
     hotbar_9,
 
+    // Inventory
+    open_inventory,
+
     // UI / Debug
     toggle_debug_camera,
     toggle_hud,
@@ -146,6 +149,7 @@ pub const Action = enum(u8) {
             .hotbar_7 => "Hotbar 7",
             .hotbar_8 => "Hotbar 8",
             .hotbar_9 => "Hotbar 9",
+            .open_inventory => "Inventory",
             .toggle_debug_camera => "Debug Camera",
             .toggle_hud => "Toggle HUD",
             .toggle_fullscreen => "Fullscreen",
@@ -262,6 +266,7 @@ pub const defaults: [Action.count]InputCode = blk: {
     b[@intFromEnum(Action.hotbar_7)] = .{ .code = glfw.GLFW_KEY_7 };
     b[@intFromEnum(Action.hotbar_8)] = .{ .code = glfw.GLFW_KEY_8 };
     b[@intFromEnum(Action.hotbar_9)] = .{ .code = glfw.GLFW_KEY_9 };
+    b[@intFromEnum(Action.open_inventory)] = .{ .code = 69 }; // E
     b[@intFromEnum(Action.toggle_debug_camera)] = .{ .code = glfw.GLFW_KEY_P };
     b[@intFromEnum(Action.toggle_hud)] = .{ .code = glfw.GLFW_KEY_F1 };
     b[@intFromEnum(Action.toggle_fullscreen)] = .{ .code = glfw.GLFW_KEY_F11 };

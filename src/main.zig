@@ -300,9 +300,30 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             }
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },
+        .inventory => {
+            if ((opts.keyMatches(.open_inventory, key) or opts.keyMatches(.pause, key)) and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.hideInventory();
+                input_state.mouse_captured = true;
+                input_state.first_mouse = true;
+                glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+                return;
+            }
+        },
         .playing => {
             if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.showPauseMenu();
+                input_state.mouse_captured = false;
+                input_state.first_mouse = true;
+                glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+                var win_w: c_int = 0;
+                var win_h: c_int = 0;
+                glfw.getWindowSize(window.?, &win_w, &win_h);
+                glfw.setCursorPos(window.?, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
+                return;
+            }
+
+            if (opts.keyMatches(.open_inventory, key) and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.showInventory();
                 input_state.mouse_captured = false;
                 input_state.first_mouse = true;
                 glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
@@ -605,6 +626,9 @@ pub fn main() !void {
                             input_state.game_state = null;
                             input_state.mouse_captured = false;
                             glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+                            if (menu_ctrl.app_state == .pause_menu) {
+                                menu_ctrl.ui_manager.removeTopScreen();
+                            }
                             menu_ctrl.app_state = .saving;
                         } else {
                             // Fallback: synchronous save
@@ -762,6 +786,7 @@ pub fn main() !void {
                 }
 
                 menu_ctrl.updateHud(gs);
+                menu_ctrl.updateInventory(gs);
             }
         }
 

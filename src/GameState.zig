@@ -26,6 +26,10 @@ pub const EYE_OFFSET: f32 = 1.62;
 pub const TICK_RATE: f32 = 30.0;
 pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
 pub const HOTBAR_SIZE: u8 = 9;
+pub const INV_ROWS: u8 = 3;
+pub const INV_COLS: u8 = 9;
+pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 27
+pub const ARMOR_SLOTS: u8 = 4; // head, chest, legs, feet
 
 // Initial load radius in chunks (per axis from center)
 const LOAD_RADIUS_XZ: i32 = 2;
@@ -120,7 +124,10 @@ saved_camera: Camera,
 
 selected_slot: u8 = 0,
 hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .sand, .snow, .gravel, .glass, .glowstone, .water },
+inventory: [INV_SIZE]WorldState.BlockType = .{.air} ** INV_SIZE,
+armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
 offhand: WorldState.BlockType = .air,
+inventory_open: bool = false,
 
 world_seed: u64,
 world_type: WorldState.WorldType,
