@@ -208,10 +208,39 @@ pub const EntityRenderer = struct {
         const vertices: [*]EntityVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
         var count: u32 = 0;
 
-        const color = [4]f32{ 0.45, 0.55, 0.7, 1.0 };
-
-        // Single box: 0.6 wide, 1.8 tall, 0.6 deep — centered on X/Z, base at Y=0
-        count = addBox(vertices, count, -0.3, 0.0, -0.3, 0.6, 1.8, 0.6, color);
+        // Generated from Player.fh.blockymodel (16 boxes, 1.8m tall)
+        // Pelvis
+        count = addBox(vertices, count, -0.3018, 0.6251, -0.1940, 0.6036, 0.2587, 0.3880, .{ 0.30, 0.30, 0.50, 1.0 });
+        // Belly
+        count = addBox(vertices, count, -0.3018, 0.8838, -0.1940, 0.6036, 0.2371, 0.3880, .{ 0.30, 0.30, 0.50, 1.0 });
+        // Chest
+        count = addBox(vertices, count, -0.3018, 0.9593, -0.1940, 0.6036, 0.4743, 0.3880, .{ 0.35, 0.35, 0.55, 1.0 });
+        // Head
+        count = addBox(vertices, count, -0.3449, 1.1964, -0.3880, 0.6898, 0.6036, 0.6467, .{ 0.65, 0.55, 0.45, 1.0 });
+        // R-Arm
+        count = addBox(vertices, count, -0.5605, 0.7312, -0.1940, 0.2587, 0.4311, 0.2587, .{ 0.35, 0.35, 0.55, 1.0 });
+        // R-Forearm
+        count = addBox(vertices, count, -0.5497, 0.5625, -0.1927, 0.2587, 0.3449, 0.2587, .{ 0.60, 0.50, 0.40, 1.0 });
+        // R-Hand
+        count = addBox(vertices, count, -0.5821, 0.5016, -0.2129, 0.3018, 0.2587, 0.3018, .{ 0.65, 0.55, 0.45, 1.0 });
+        // L-Arm
+        count = addBox(vertices, count, 0.3018, 0.7350, -0.1940, 0.2587, 0.4311, 0.2587, .{ 0.35, 0.35, 0.55, 1.0 });
+        // L-Forearm
+        count = addBox(vertices, count, 0.2479, 0.5625, -0.1927, 0.2587, 0.3449, 0.2587, .{ 0.60, 0.50, 0.40, 1.0 });
+        // L-Hand
+        count = addBox(vertices, count, 0.1941, 0.4978, -0.2129, 0.3018, 0.2587, 0.3018, .{ 0.65, 0.55, 0.45, 1.0 });
+        // R-Thigh
+        count = addBox(vertices, count, -0.3126, 0.2802, -0.1070, 0.3018, 0.4311, 0.2587, .{ 0.25, 0.25, 0.45, 1.0 });
+        // R-Calf
+        count = addBox(vertices, count, -0.3341, 0.0000, -0.1078, 0.3018, 0.5174, 0.2587, .{ 0.25, 0.25, 0.45, 1.0 });
+        // R-Foot
+        count = addBox(vertices, count, -0.3773, 0.1509, -0.1094, 0.3449, 0.1725, 0.4311, .{ 0.30, 0.30, 0.50, 1.0 });
+        // L-Thigh
+        count = addBox(vertices, count, 0.0324, 0.2802, -0.1086, 0.3018, 0.4311, 0.2587, .{ 0.25, 0.25, 0.45, 1.0 });
+        // L-Calf
+        count = addBox(vertices, count, 0.0108, 0.0000, -0.1078, 0.3018, 0.5174, 0.2587, .{ 0.25, 0.25, 0.45, 1.0 });
+        // L-Foot
+        count = addBox(vertices, count, -0.0324, 0.1509, -0.1061, 0.3449, 0.1725, 0.4311, .{ 0.30, 0.30, 0.50, 1.0 });
 
         self.vertex_count = count;
         std.log.info("Entity renderer: player model generated ({} vertices)", .{count});

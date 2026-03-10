@@ -63,6 +63,10 @@ pub const UiRenderer = struct {
     hotbar_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     selection_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     offhand_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    inv_bg_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    inv_player_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    inv_slot_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    inv_slot_hover_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     crosshair_size: [2]f32 = .{ 0, 0 },
     hotbar_size: [2]f32 = .{ 0, 0 },
     selection_size: [2]f32 = .{ 0, 0 },
@@ -365,8 +369,10 @@ pub const UiRenderer = struct {
 
         const sep = std.fs.path.sep_str;
         const hud_dir = sep ++ "textures" ++ sep ++ "gui" ++ sep ++ "sprites" ++ sep ++ "hud" ++ sep;
+        const inv_dir = sep ++ "textures" ++ sep ++ "gui" ++ sep ++ "sprites" ++ sep ++ "inventory" ++ sep;
 
-        const sprite_names = [_][]const u8{ "crosshair.png", "hotbar.png", "hotbar_selection.png", "hotbar_offhand_left.png" };
+        const sprite_dirs = [_][]const u8{ hud_dir, hud_dir, hud_dir, hud_dir, inv_dir, inv_dir, inv_dir, inv_dir };
+        const sprite_names = [_][]const u8{ "crosshair.png", "hotbar.png", "hotbar_selection.png", "hotbar_offhand_left.png", "inventory_bg.png", "player_panel_bg.png", "slot.png", "slot_hover.png" };
         const sprite_count = sprite_names.len;
 
         var widths: [sprite_count]c_int = undefined;
@@ -382,7 +388,7 @@ pub const UiRenderer = struct {
         var atlas_height: c_int = 0;
 
         for (sprite_names, 0..) |name, i| {
-            const path = try std.fmt.allocPrintSentinel(allocator, "{s}{s}{s}", .{ assets_path, hud_dir, name }, 0);
+            const path = try std.fmt.allocPrintSentinel(allocator, "{s}{s}{s}", .{ assets_path, sprite_dirs[i], name }, 0);
             defer allocator.free(path);
 
             var tw: c_int = 0;
@@ -606,6 +612,18 @@ pub const UiRenderer = struct {
 
         self.offhand_size = .{ @floatFromInt(widths[3]), @floatFromInt(heights[3]) };
         self.offhand_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[3])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[3]))) / fah };
+        y_off += @floatFromInt(heights[3]);
+
+        self.inv_bg_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[4])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[4]))) / fah };
+        y_off += @floatFromInt(heights[4]);
+
+        self.inv_player_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[5])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[5]))) / fah };
+        y_off += @floatFromInt(heights[5]);
+
+        self.inv_slot_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[6])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[6]))) / fah };
+        y_off += @floatFromInt(heights[6]);
+
+        self.inv_slot_hover_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[7])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[7]))) / fah };
 
         self.hud_atlas_loaded = true;
         std.log.info("HUD atlas loaded: {}x{} ({} sprites)", .{ aw, ah, sprite_count });

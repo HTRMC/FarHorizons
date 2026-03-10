@@ -819,6 +819,7 @@ pub fn main() !void {
             er.viewport_y = menu_ctrl.entity_viewport[1];
             er.viewport_w = menu_ctrl.entity_viewport[2];
             er.viewport_h = menu_ctrl.entity_viewport[3];
+            er.rotation_y = menu_ctrl.player_rotation;
             if (game_state) |*gs| {
                 er.world_visible = gs.third_person;
                 er.world_pos = gs.render_entity_pos;

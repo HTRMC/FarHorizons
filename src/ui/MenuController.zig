@@ -61,6 +61,7 @@ pub const MenuController = struct {
 
     hud_binder: ?HudBinder = null,
     options: ?*Options = null,
+    ui_renderer: ?*const UiRenderer = null,
 
     // Controls screen state
     rebinding_action: ?Options.Action = null,
@@ -82,6 +83,9 @@ pub const MenuController = struct {
     // Entity renderer viewport (in UI coords), read by VulkanRenderer
     entity_viewport: [4]f32 = .{ 0, 0, 0, 0 },
     entity_visible: bool = false,
+    player_rotation: f32 = 0.4,
+    dragging_player: bool = false,
+    drag_start_x: f32 = 0,
 
     coming_soon_modal_id: WidgetId = NULL_WIDGET,
 
@@ -274,6 +278,11 @@ pub const MenuController = struct {
         self.inv_offhand_id = tree.findById("inv_offhand") orelse NULL_WIDGET;
         self.makeSlotClickable(tree, self.inv_offhand_id, hover_col);
         self.inv_player_viewport_id = tree.findById("player_viewport") orelse NULL_WIDGET;
+        if (self.inv_player_viewport_id != NULL_WIDGET) {
+            if (tree.getData(self.inv_player_viewport_id)) |data| {
+                data.panel.setAction("player_viewport_drag");
+            }
+        }
         self.cursor_item_id = tree.findById("cursor_item") orelse NULL_WIDGET;
         if (self.cursor_item_id != NULL_WIDGET) {
             if (tree.getWidget(self.cursor_item_id)) |w| {
@@ -281,6 +290,23 @@ pub const MenuController = struct {
             }
             self.ui_manager.cursor_follow_widget = self.cursor_item_id;
         }
+
+        // Resolve inventory sprite UVs to image widgets
+        if (self.ui_renderer) |ur| {
+            if (ur.hud_atlas_loaded) {
+                setImageAtlas(tree, tree.findById("inv_bg") orelse NULL_WIDGET, ur.inv_bg_rect);
+                setImageAtlas(tree, tree.findById("inv_player_bg") orelse NULL_WIDGET, ur.inv_player_rect);
+            }
+        }
+    }
+
+    fn setImageAtlas(tree: *WidgetTree, id: WidgetId, rect: @import("../renderer/vulkan/UiRenderer.zig").SpriteRect) void {
+        if (id == NULL_WIDGET) return;
+        const data = tree.getData(id) orelse return;
+        data.image.atlas_u = rect.u0;
+        data.image.atlas_v = rect.v0;
+        data.image.atlas_w = rect.u1 - rect.u0;
+        data.image.atlas_h = rect.v1 - rect.v0;
     }
 
     fn makeSlotClickable(_: *MenuController, tree: *WidgetTree, id: WidgetId, hover_col: Widget.Color) void {
@@ -609,6 +635,24 @@ pub const MenuController = struct {
                 }
             }
         }
+
+        // Player model drag-to-rotate
+        const mouse_x = self.ui_manager.last_mouse_x;
+        if (self.ui_manager.pressed_widget != NULL_WIDGET and
+            self.inv_player_viewport_id != NULL_WIDGET and
+            self.ui_manager.pressed_widget == self.inv_player_viewport_id)
+        {
+            if (!self.dragging_player) {
+                self.dragging_player = true;
+                self.drag_start_x = mouse_x;
+            } else {
+                const dx = mouse_x - self.drag_start_x;
+                self.player_rotation -= dx * 0.01;
+                self.drag_start_x = mouse_x;
+            }
+        } else {
+            self.dragging_player = false;
+        }
     }
 
     pub fn showTitleMenu(self: *MenuController) void {
@@ -646,6 +690,7 @@ pub const MenuController = struct {
     }
 
     pub fn loadHud(self: *MenuController, ui_renderer: *const UiRenderer) void {
+        self.ui_renderer = ui_renderer;
         if (self.hud_binder != null) return;
         if (self.ui_manager.loadScreenFromFile("hud.xml", self.allocator)) {
             // Access screens[0] directly — hudTree() can't be used yet because hud_binder is still null
