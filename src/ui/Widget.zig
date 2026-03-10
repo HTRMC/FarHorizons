@@ -162,6 +162,7 @@ pub const Widget = struct {
     border_width: f32 = 0,
 
     visible: bool = true,
+    hit_transparent: bool = false,
     focusable: bool = false,
     hovered: bool = false,
     pressed: bool = false,

@@ -38,6 +38,7 @@ pub const UiManager = struct {
     last_mouse_x: f32 = 0,
     last_mouse_y: f32 = 0,
     pressed_widget: WidgetId = NULL_WIDGET,
+    last_mods: c_int = 0,
     text_renderer: ?*const TextRenderer = null,
 
     hover_widget: WidgetId = NULL_WIDGET,
@@ -168,9 +169,10 @@ pub const UiManager = struct {
         return target != NULL_WIDGET;
     }
 
-    pub fn handleMouseButton(self: *UiManager, button: c_int, action: c_int, x: f32, y: f32) bool {
+    pub fn handleMouseButton(self: *UiManager, button: c_int, action: c_int, mods: c_int, x: f32, y: f32) bool {
         _ = button;
 
+        self.last_mods = mods;
         const tree = self.topTree() orelse return false;
 
         if (action == glfw.GLFW_PRESS) {

@@ -25,7 +25,7 @@ pub fn hitTest(tree: *const WidgetTree, x: f32, y: f32) WidgetId {
         sp -= 1;
         const id = stack[sp];
         const w = tree.getWidgetConst(id) orelse continue;
-        if (!w.visible) continue;
+        if (!w.visible or w.hit_transparent) continue;
 
         if (w.computed_rect.contains(x, y)) {
             deepest = id;

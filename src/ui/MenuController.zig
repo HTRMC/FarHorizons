@@ -10,6 +10,7 @@ const UiRenderer = @import("../renderer/vulkan/UiRenderer.zig").UiRenderer;
 const GameState = @import("../GameState.zig");
 const app_config = @import("../app_config.zig");
 const Options = @import("../Options.zig");
+const glfw = @import("../platform/glfw.zig");
 
 const log = std.log.scoped(.UI);
 
@@ -68,12 +69,16 @@ pub const MenuController = struct {
     keybind_button_ids: [Options.Action.count]WidgetId = .{NULL_WIDGET} ** Options.Action.count,
     tp_crosshair_cb_id: WidgetId = NULL_WIDGET,
 
+    // Game state reference (set during updateInventory for action handlers)
+    game_state: ?*GameState = null,
+
     // Inventory screen state
     inv_slot_ids: [GameState.HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.HOTBAR_SIZE, // hotbar row
     inv_main_ids: [GameState.INV_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.INV_SIZE, // 3x9 main
     inv_armor_ids: [GameState.ARMOR_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS,
     inv_offhand_id: WidgetId = NULL_WIDGET,
     inv_player_viewport_id: WidgetId = NULL_WIDGET,
+    cursor_item_id: WidgetId = NULL_WIDGET,
     // Entity renderer viewport (in UI coords), read by VulkanRenderer
     entity_viewport: [4]f32 = .{ 0, 0, 0, 0 },
     entity_visible: bool = false,
@@ -247,20 +252,42 @@ pub const MenuController = struct {
 
     fn cacheInventoryWidgetIds(self: *MenuController) void {
         const tree = self.menuTree() orelse return;
+        const hover_col = Widget.Color.fromHex(0xFFFFFF22);
         inline for (0..GameState.HOTBAR_SIZE) |i| {
             const name = comptime std.fmt.comptimePrint("hotbar_{d}", .{i});
-            self.inv_slot_ids[i] = tree.findById(name) orelse NULL_WIDGET;
+            const id = tree.findById(name) orelse NULL_WIDGET;
+            self.inv_slot_ids[i] = id;
+            self.makeSlotClickable(tree, id, hover_col);
         }
         inline for (0..GameState.INV_SIZE) |i| {
             const name = comptime std.fmt.comptimePrint("inv_{d}", .{i});
-            self.inv_main_ids[i] = tree.findById(name) orelse NULL_WIDGET;
+            const id = tree.findById(name) orelse NULL_WIDGET;
+            self.inv_main_ids[i] = id;
+            self.makeSlotClickable(tree, id, hover_col);
         }
         inline for (0..GameState.ARMOR_SLOTS) |i| {
             const name = comptime std.fmt.comptimePrint("armor_{d}", .{i});
-            self.inv_armor_ids[i] = tree.findById(name) orelse NULL_WIDGET;
+            const id = tree.findById(name) orelse NULL_WIDGET;
+            self.inv_armor_ids[i] = id;
+            self.makeSlotClickable(tree, id, hover_col);
         }
         self.inv_offhand_id = tree.findById("inv_offhand") orelse NULL_WIDGET;
+        self.makeSlotClickable(tree, self.inv_offhand_id, hover_col);
         self.inv_player_viewport_id = tree.findById("player_viewport") orelse NULL_WIDGET;
+        self.cursor_item_id = tree.findById("cursor_item") orelse NULL_WIDGET;
+        if (self.cursor_item_id != NULL_WIDGET) {
+            if (tree.getWidget(self.cursor_item_id)) |w| {
+                w.hit_transparent = true;
+            }
+        }
+    }
+
+    fn makeSlotClickable(_: *MenuController, tree: *WidgetTree, id: WidgetId, hover_col: Widget.Color) void {
+        if (id == NULL_WIDGET) return;
+        if (tree.getData(id)) |data| {
+            data.panel.setAction("inv_slot_click");
+            data.panel.hover_color = hover_col;
+        }
     }
 
     fn resetInventoryWidgetIds(self: *MenuController) void {
@@ -269,6 +296,7 @@ pub const MenuController = struct {
         self.inv_armor_ids = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS;
         self.inv_offhand_id = NULL_WIDGET;
         self.inv_player_viewport_id = NULL_WIDGET;
+        self.cursor_item_id = NULL_WIDGET;
         self.entity_visible = false;
         self.entity_viewport = .{ 0, 0, 0, 0 };
     }
@@ -304,6 +332,7 @@ pub const MenuController = struct {
         reg.register("rebind_key", actionRebindKey, ctx);
         reg.register("toggle_tp_crosshair", actionToggleTpCrosshair, ctx);
         reg.register("toggle_tp_crosshair_cb", actionToggleTpCrosshairCb, ctx);
+        reg.register("inv_slot_click", actionInvSlotClick, ctx);
     }
 
     // ============================================================
@@ -461,16 +490,43 @@ pub const MenuController = struct {
         self.app_state = .inventory;
     }
 
-    pub fn hideInventory(self: *MenuController) void {
+    pub fn hideInventory(self: *MenuController, gs: ?*GameState) void {
+        // Return carried item to inventory when closing
+        if (gs) |g| {
+            if (g.carried_item != .air) {
+                // Find first empty slot to place carried item
+                for (&g.hotbar) |*slot| {
+                    if (slot.* == .air) {
+                        slot.* = g.carried_item;
+                        g.carried_item = .air;
+                        break;
+                    }
+                }
+                if (g.carried_item != .air) {
+                    for (&g.inventory) |*slot| {
+                        if (slot.* == .air) {
+                            slot.* = g.carried_item;
+                            g.carried_item = .air;
+                            break;
+                        }
+                    }
+                }
+                // If still not placed, just drop it (clear it)
+                g.carried_item = .air;
+            }
+        }
+        self.game_state = null;
         self.unloadScreen(.inventory);
         self.app_state = .playing;
     }
 
-    pub fn updateInventory(self: *MenuController, gs: *const GameState) void {
+    pub fn updateInventory(self: *MenuController, gs: *GameState) void {
         if (self.app_state != .inventory) {
             self.entity_visible = false;
+            self.game_state = null;
             return;
         }
+        self.game_state = gs;
         const tree = self.menuTree() orelse return;
 
         // Update entity renderer viewport from player_viewport widget rect
@@ -538,6 +594,21 @@ pub const MenuController = struct {
                 }
             }
         }
+
+        // Update cursor item (follows mouse when carrying)
+        if (self.cursor_item_id != NULL_WIDGET) {
+            if (tree.getWidget(self.cursor_item_id)) |w| {
+                if (gs.carried_item != .air) {
+                    const c = GameState.blockColor(gs.carried_item);
+                    w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+                    w.offset_x = self.ui_manager.last_mouse_x - 16;
+                    w.offset_y = self.ui_manager.last_mouse_y - 16;
+                    w.visible = true;
+                } else {
+                    w.visible = false;
+                }
+            }
+        }
     }
 
     pub fn showTitleMenu(self: *MenuController) void {
@@ -546,6 +617,11 @@ pub const MenuController = struct {
             self.unloadScreen(.pause);
         }
         if (self.app_state == .inventory) {
+            // Return carried item before closing
+            if (self.game_state) |gs| {
+                gs.carried_item = .air;
+            }
+            self.game_state = null;
             self.unloadScreen(.inventory);
         }
         if (self.hud_binder != null) {
@@ -933,6 +1009,38 @@ pub const MenuController = struct {
             }
         }
         opts.save(self.allocator);
+    }
+
+    fn actionInvSlotClick(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const pressed = self.ui_manager.pressed_widget;
+        if (pressed == NULL_WIDGET) return;
+
+        // Resolve which unified slot index was clicked
+        const slot: ?u8 = blk: {
+            for (self.inv_slot_ids, 0..) |id, i| {
+                if (id == pressed) break :blk @intCast(i); // hotbar: 0-8
+            }
+            for (self.inv_main_ids, 0..) |id, i| {
+                if (id == pressed) break :blk @as(u8, GameState.HOTBAR_SIZE) + @as(u8, @intCast(i)); // main: 9-35
+            }
+            for (self.inv_armor_ids, 0..) |id, i| {
+                if (id == pressed) break :blk @as(u8, GameState.HOTBAR_SIZE + GameState.INV_SIZE) + @as(u8, @intCast(i)); // armor: 36-39
+            }
+            if (self.inv_offhand_id == pressed) break :blk GameState.HOTBAR_SIZE + GameState.INV_SIZE + GameState.ARMOR_SLOTS; // offhand: 40
+            break :blk null;
+        };
+
+        if (slot) |s| {
+            if (self.game_state) |gs| {
+                const shift = (self.ui_manager.last_mods & glfw.GLFW_MOD_SHIFT) != 0;
+                if (shift) {
+                    gs.quickMove(s);
+                } else {
+                    gs.clickSlot(s);
+                }
+            }
+        }
     }
 
     fn actionResetKeybinds(ctx: ?*anyopaque) void {

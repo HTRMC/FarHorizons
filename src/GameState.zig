@@ -129,6 +129,7 @@ hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .san
 inventory: [INV_SIZE]WorldState.BlockType = .{.air} ** INV_SIZE,
 armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
 offhand: WorldState.BlockType = .air,
+carried_item: WorldState.BlockType = .air,
 inventory_open: bool = false,
 
 world_seed: u64,
@@ -211,6 +212,51 @@ pub const DirtyChunkSet = struct {
         self.count = 0;
     }
 };
+
+/// Get a pointer to the block in a unified slot index.
+/// Slots 0-8: hotbar, 9-35: main inventory, 36-39: armor, 40: offhand.
+pub fn slotPtr(self: *GameState, slot: u8) *WorldState.BlockType {
+    if (slot < HOTBAR_SIZE) return &self.hotbar[slot];
+    if (slot < HOTBAR_SIZE + INV_SIZE) return &self.inventory[slot - HOTBAR_SIZE];
+    if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS) return &self.armor[slot - HOTBAR_SIZE - INV_SIZE];
+    return &self.offhand;
+}
+
+/// Click a slot: pick up, place, or swap with carried item.
+pub fn clickSlot(self: *GameState, slot: u8) void {
+    const ptr = self.slotPtr(slot);
+    if (self.carried_item == .air and ptr.* == .air) return;
+    const tmp = ptr.*;
+    ptr.* = self.carried_item;
+    self.carried_item = tmp;
+}
+
+/// Shift+click: move item between hotbar and main inventory.
+/// Hotbar items go to first empty main slot, main/armor/offhand items go to first empty hotbar slot.
+pub fn quickMove(self: *GameState, slot: u8) void {
+    const ptr = self.slotPtr(slot);
+    if (ptr.* == .air) return;
+
+    if (slot < HOTBAR_SIZE) {
+        // Hotbar → main inventory
+        for (&self.inventory) |*s| {
+            if (s.* == .air) {
+                s.* = ptr.*;
+                ptr.* = .air;
+                return;
+            }
+        }
+    } else {
+        // Main/armor/offhand → hotbar
+        for (&self.hotbar) |*s| {
+            if (s.* == .air) {
+                s.* = ptr.*;
+                ptr.* = .air;
+                return;
+            }
+        }
+    }
+}
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8, world_type_override: ?WorldState.WorldType) !GameState {
     var cam = Camera.init(width, height);

@@ -302,7 +302,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
         },
         .inventory => {
             if ((opts.keyMatches(.open_inventory, key) or opts.keyMatches(.pause, key)) and action == glfw.GLFW_PRESS) {
-                input_state.menu_ctrl.hideInventory();
+                input_state.menu_ctrl.hideInventory(input_state.game_state);
                 input_state.mouse_captured = true;
                 input_state.first_mouse = true;
                 glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
@@ -426,7 +426,6 @@ fn charCallback(window: ?*glfw.Window, codepoint: c_uint) callconv(.c) void {
 }
 
 fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods: c_int) callconv(.c) void {
-    _ = mods;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
 
     // Rebinding: capture mouse button
@@ -440,7 +439,7 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
         var my: f64 = 0;
         glfw.getCursorPos(window.?, &mx, &my);
         const scale: f64 = input_state.ui_manager.ui_scale;
-        if (input_state.ui_manager.handleMouseButton(button, action, @floatCast(mx / scale), @floatCast(my / scale))) return;
+        if (input_state.ui_manager.handleMouseButton(button, action, mods, @floatCast(mx / scale), @floatCast(my / scale))) return;
     }
 
     if (input_state.menu_ctrl.app_state != .playing) return;
@@ -802,6 +801,7 @@ pub fn main() !void {
         if (menu_ctrl.app_state == .inventory) {
             if (game_state) |*gs| {
                 menu_ctrl.updateInventory(gs);
+                menu_ctrl.updateHud(gs);
             }
         }
 
