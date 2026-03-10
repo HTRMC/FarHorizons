@@ -395,6 +395,14 @@ pub const VulkanRenderer = struct {
             }
         }
 
+        // UI/text vertex buffers are shared (not per-frame), so we must ensure
+        // the previous frame's GPU reads are complete before overwriting them.
+        {
+            const other_cf: usize = 1 - cf;
+            const other_fence = [_]vk.VkFence{self.render_state.in_flight_fences[other_cf]};
+            try vk.waitForFences(self.ctx.device, 1, &other_fence, vk.VK_TRUE, std.math.maxInt(u64));
+        }
+
         self.render_state.ui_renderer.beginFrame(self.ctx.device);
 
         self.render_state.text_renderer.beginFrame(self.ctx.device);

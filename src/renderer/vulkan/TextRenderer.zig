@@ -98,6 +98,8 @@ pub const TextRenderer = struct {
         _ = device;
         self.mapped_vertices = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr));
         self.vertex_count = 0;
+        self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
+        self.clip_depth = 0;
     }
 
     pub fn setClipRect(self: *TextRenderer, x: f32, y: f32, w: f32, h: f32) void {

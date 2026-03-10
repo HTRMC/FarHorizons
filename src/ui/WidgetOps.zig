@@ -247,7 +247,12 @@ pub fn drawWidget(
 
             var iter2 = tree.children(id);
             while (iter2.next()) |child_id| {
-                drawWidget(tree, child_id, ui, tr);
+                const child_w = tree.getWidgetConst(child_id) orelse continue;
+                const child_bottom = child_w.computed_rect.y + child_w.computed_rect.h;
+                const child_top = child_w.computed_rect.y;
+                if (child_bottom > vp_y and child_top < vp_y + vp_h) {
+                    drawWidget(tree, child_id, ui, tr);
+                }
             }
 
             ui.popClipRect();

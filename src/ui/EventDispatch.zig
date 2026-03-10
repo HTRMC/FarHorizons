@@ -9,7 +9,7 @@ const glfw = @import("../platform/glfw.zig");
 
 const log = std.log.scoped(.UI);
 
-const HIT_TEST_STACK_DEPTH = 32;
+const HIT_TEST_STACK_DEPTH = 64;
 
 pub fn hitTest(tree: *const WidgetTree, x: f32, y: f32) WidgetId {
     if (tree.root == NULL_WIDGET) return NULL_WIDGET;

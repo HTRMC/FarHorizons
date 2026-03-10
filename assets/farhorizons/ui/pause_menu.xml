@@ -6,6 +6,8 @@
       <label text="--- Paused ---" color="#999999FF" width="fill"/>
       <button id="resume_btn" text="Resume" width="200" height="32"
               background="#335588FF" on_click="resume_game"/>
+      <button text="Options" width="200" height="32"
+              background="#335588FF" on_click="show_controls_pause"/>
       <button id="title_btn" text="Return to Title" width="200" height="32"
               background="#553333FF" on_click="return_to_title"/>
     </panel>

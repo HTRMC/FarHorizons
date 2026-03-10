@@ -10,6 +10,7 @@ const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
 const Logger = @import("Logger.zig");
 const app_config = @import("app_config.zig");
+const Options = @import("Options.zig");
 
 var file_logger_instance: ?*Logger.FileLogger = null;
 
@@ -189,6 +190,7 @@ const InputState = struct {
     game_state: ?*GameState = null,
     menu_ctrl: *MenuController,
     ui_manager: *UiManager,
+    options: *Options,
     mouse_captured: bool = false,
     last_cursor_x: f64 = 0.0,
     last_cursor_y: f64 = 0.0,
@@ -238,15 +240,26 @@ fn scrollCallback(window: ?*glfw.Window, xoffset: f64, yoffset: f64) callconv(.c
 fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int, mods: c_int) callconv(.c) void {
     _ = scancode;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+    const opts = input_state.options;
     input_log.debug("Key {s} {s}", .{ keyName(key), actionName(action) });
 
-    if (key == glfw.GLFW_KEY_F11 and action == glfw.GLFW_RELEASE) {
+    // Rebinding: capture next key press
+    if (input_state.menu_ctrl.rebinding_action != null and action == glfw.GLFW_PRESS) {
+        if (key == glfw.GLFW_KEY_ESCAPE) {
+            input_state.menu_ctrl.cancelRebind();
+        } else {
+            input_state.menu_ctrl.handleRebindKey(.{ .code = key, .is_mouse = false });
+        }
+        return;
+    }
+
+    if (opts.keyMatches(.toggle_fullscreen, key) and action == glfw.GLFW_RELEASE) {
         input_state.window.toggleFullscreen();
     }
 
     switch (input_state.menu_ctrl.app_state) {
         .pause_menu => {
-            if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
+            if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.hidePauseMenu();
                 input_state.menu_ctrl.action = .resume_game;
                 return;
@@ -263,7 +276,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             }
         },
         .playing => {
-            if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
+            if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.showPauseMenu();
                 input_state.mouse_captured = false;
                 input_state.first_mouse = true;
@@ -275,12 +288,12 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 return;
             }
 
-            if (key == glfw.GLFW_KEY_P and action == glfw.GLFW_PRESS) {
+            if (opts.keyMatches(.toggle_debug_camera, key) and action == glfw.GLFW_PRESS) {
                 input_state.debug_toggle_requested = true;
             }
 
             // F3 held state tracking
-            if (key == glfw.GLFW_KEY_F3) {
+            if (opts.keyMatches(.debug_f3, key)) {
                 if (action == glfw.GLFW_PRESS) {
                     input_state.f3_held = true;
                     input_state.f3_consumed = false;
@@ -295,52 +308,50 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             if (action == glfw.GLFW_PRESS) {
                 const shift = (mods & glfw.GLFW_MOD_SHIFT) != 0;
 
-                if (key == glfw.GLFW_KEY_F1) {
+                if (opts.keyMatches(.toggle_hud, key)) {
                     input_state.ui_toggle_requested = true;
                 }
 
-                // F3+G: toggle chunk borders
-                if (key == glfw.GLFW_KEY_G and input_state.f3_held) {
+                // F3+combo: chunk borders / hitbox
+                if (opts.keyMatches(.debug_chunk_borders, key) and input_state.f3_held) {
                     input_state.chunk_borders_toggle_requested = true;
                     input_state.f3_consumed = true;
                 }
-
-                // F3+B: toggle player hitbox
-                if (key == glfw.GLFW_KEY_B and input_state.f3_held) {
+                if (opts.keyMatches(.debug_hitbox, key) and input_state.f3_held) {
                     input_state.hitbox_toggle_requested = true;
                     input_state.f3_consumed = true;
                 }
 
-                if (key == glfw.GLFW_KEY_F4 and shift) {
+                if (opts.keyMatches(.debug_screen_f4, key) and shift) {
                     input_state.overdraw_toggle_requested = true;
-                } else if (key == glfw.GLFW_KEY_F4 and !shift) {
+                } else if (opts.keyMatches(.debug_screen_f4, key) and !shift) {
                     input_state.debug_screen_toggle = 1;
                 }
-                if (key == glfw.GLFW_KEY_F5) input_state.debug_screen_toggle = 2;
+                if (opts.keyMatches(.debug_screen_f5, key)) input_state.debug_screen_toggle = 2;
             }
 
+            // Hotbar slot selection
             if (action == glfw.GLFW_PRESS) {
-                if (key == glfw.GLFW_KEY_1) input_state.hotbar_slot_requested = 0;
-                if (key == glfw.GLFW_KEY_2) input_state.hotbar_slot_requested = 1;
-                if (key == glfw.GLFW_KEY_3) input_state.hotbar_slot_requested = 2;
-                if (key == glfw.GLFW_KEY_4) input_state.hotbar_slot_requested = 3;
-                if (key == glfw.GLFW_KEY_5) input_state.hotbar_slot_requested = 4;
-                if (key == glfw.GLFW_KEY_6) input_state.hotbar_slot_requested = 5;
-                if (key == glfw.GLFW_KEY_7) input_state.hotbar_slot_requested = 6;
-                if (key == glfw.GLFW_KEY_8) input_state.hotbar_slot_requested = 7;
-                if (key == glfw.GLFW_KEY_9) input_state.hotbar_slot_requested = 8;
+                inline for (@typeInfo(Options.Action).@"enum".fields) |field| {
+                    const act: Options.Action = @enumFromInt(field.value);
+                    if (act.hotbarSlot()) |slot| {
+                        if (opts.keyMatches(act, key)) {
+                            input_state.hotbar_slot_requested = slot;
+                        }
+                    }
+                }
             }
 
-            if ((key == glfw.GLFW_KEY_EQUAL or key == glfw.GLFW_KEY_KP_ADD) and (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT)) {
+            if (opts.keyMatches(.speed_up, key) and (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT)) {
                 input_state.move_speed = @min(input_state.move_speed * 1.25, 500.0);
                 input_log.info("Fly speed: {d:.1}", .{input_state.move_speed});
             }
-            if ((key == glfw.GLFW_KEY_MINUS or key == glfw.GLFW_KEY_KP_SUBTRACT) and (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT)) {
+            if (opts.keyMatches(.speed_down, key) and (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT)) {
                 input_state.move_speed = @max(input_state.move_speed / 1.25, 1.0);
                 input_log.info("Fly speed: {d:.1}", .{input_state.move_speed});
             }
 
-            if (key == glfw.GLFW_KEY_SPACE and action == glfw.GLFW_PRESS) {
+            if (opts.keyMatches(.jump, key) and action == glfw.GLFW_PRESS) {
                 const now = glfw.getTime();
                 if (now - input_state.last_space_press_time < DOUBLE_TAP_THRESHOLD) {
                     input_state.mode_toggle_requested = true;
@@ -350,8 +361,8 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 }
             }
         },
-        .loading => {}, // Ignore input while loading
-        .saving => {}, // Ignore input while saving
+        .loading => {},
+        .saving => {},
     }
 }
 
@@ -363,6 +374,12 @@ fn charCallback(window: ?*glfw.Window, codepoint: c_uint) callconv(.c) void {
 fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods: c_int) callconv(.c) void {
     _ = mods;
     const input_state = glfw.getWindowUserPointer(window.?, InputState) orelse return;
+
+    // Rebinding: capture mouse button
+    if (input_state.menu_ctrl.rebinding_action != null and action == glfw.GLFW_PRESS) {
+        input_state.menu_ctrl.handleRebindKey(.{ .code = button, .is_mouse = true });
+        return;
+    }
 
     if (!input_state.mouse_captured) {
         var mx: f64 = 0;
@@ -378,16 +395,17 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     if (action != glfw.GLFW_PRESS) return;
 
     const gs = input_state.game_state orelse return;
+    const opts = input_state.options;
 
-    if (button == glfw.GLFW_MOUSE_BUTTON_LEFT and input_state.mouse_captured) {
+    if (opts.mouseMatches(.attack, button) and input_state.mouse_captured) {
         if (!gs.debug_camera_active) {
             gs.breakBlock();
         }
-    } else if (button == glfw.GLFW_MOUSE_BUTTON_MIDDLE and input_state.mouse_captured) {
+    } else if (opts.mouseMatches(.pick_item, button) and input_state.mouse_captured) {
         if (!gs.debug_camera_active) {
             gs.pickBlock();
         }
-    } else if (button == glfw.GLFW_MOUSE_BUTTON_RIGHT) {
+    } else if (opts.mouseMatches(.use_item, button)) {
         if (!input_state.mouse_captured) {
             input_state.mouse_captured = true;
             input_state.first_mouse = true;
@@ -458,8 +476,11 @@ pub fn main() !void {
     ui_manager.* = .{};
     renderer.setUiManager(@ptrCast(ui_manager));
 
+    var options = Options.load(allocator);
+
     var menu_ctrl = MenuController.init(ui_manager, allocator);
     menu_ctrl.registerActions();
+    menu_ctrl.options = &options;
 
     var game_state: ?GameState = null;
     var save_thread: ?std.Thread = null;
@@ -486,6 +507,7 @@ pub fn main() !void {
         .game_state = null,
         .menu_ctrl = &menu_ctrl,
         .ui_manager = ui_manager,
+        .options = &options,
     };
     glfw.setWindowUserPointer(window.handle, &input_state);
     glfw.setCursorPosCallback(window.handle, cursorPosCallback);
@@ -497,7 +519,7 @@ pub fn main() !void {
 
     std.log.info("Entering main loop...", .{});
 
-    const mouse_sensitivity: f32 = 0.003;
+    const mouse_sensitivity: f32 = options.mouse_sensitivity;
     var last_time = glfw.getTime();
     var tick_accumulator: f32 = 0.0;
 
@@ -678,12 +700,12 @@ pub fn main() !void {
                 var right_input: f32 = 0.0;
                 var up_input: f32 = 0.0;
 
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_W) == glfw.GLFW_PRESS) forward_input += 1.0;
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_S) == glfw.GLFW_PRESS) forward_input -= 1.0;
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_D) == glfw.GLFW_PRESS) right_input += 1.0;
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_A) == glfw.GLFW_PRESS) right_input -= 1.0;
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS) up_input += 1.0;
-                if (glfw.getKey(window.handle, glfw.GLFW_KEY_LEFT_SHIFT) == glfw.GLFW_PRESS) up_input -= 1.0;
+                if (options.isKeyHeld(window.handle, .forward)) forward_input += 1.0;
+                if (options.isKeyHeld(window.handle, .back)) forward_input -= 1.0;
+                if (options.isKeyHeld(window.handle, .right)) right_input += 1.0;
+                if (options.isKeyHeld(window.handle, .left)) right_input -= 1.0;
+                if (options.isKeyHeld(window.handle, .jump)) up_input += 1.0;
+                if (options.isKeyHeld(window.handle, .sneak)) up_input -= 1.0;
 
                 if (gs.debug_camera_active) {
                     const speed = input_state.move_speed * delta_time;
@@ -696,7 +718,7 @@ pub fn main() !void {
 
                     gs.input_move = .{ forward_input, up_input, right_input };
 
-                    const space_held = glfw.getKey(window.handle, glfw.GLFW_KEY_SPACE) == glfw.GLFW_PRESS;
+                    const space_held = options.isKeyHeld(window.handle, .jump);
                     if (space_held and !input_state.space_was_held) {
                         gs.jump_requested = true;
                     }
@@ -745,6 +767,7 @@ pub fn main() !void {
         tracy.frameMark();
     }
 
+    options.save(allocator);
     std.log.info("Shutting down...", .{});
 }
 

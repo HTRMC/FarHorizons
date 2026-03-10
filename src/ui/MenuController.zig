@@ -9,6 +9,7 @@ const HudBinder = @import("HudBinder.zig").HudBinder;
 const UiRenderer = @import("../renderer/vulkan/UiRenderer.zig").UiRenderer;
 const GameState = @import("../GameState.zig");
 const app_config = @import("../app_config.zig");
+const Options = @import("../Options.zig");
 
 const log = std.log.scoped(.UI);
 
@@ -34,8 +35,17 @@ pub const MenuController = struct {
     create_world_screen_loaded: bool = false,
     pause_screen_loaded: bool = false,
     hud_screen_loaded: bool = false,
+    controls_screen_loaded: bool = false,
 
     hud_binder: ?HudBinder = null,
+    options: ?*Options = null,
+
+    // Controls screen state
+    controls_from_pause: bool = false,
+    rebinding_action: ?Options.Action = null,
+    keybind_list_id: WidgetId = NULL_WIDGET,
+    rebind_hint_id: WidgetId = NULL_WIDGET,
+    keybind_button_ids: [Options.Action.count]WidgetId = .{NULL_WIDGET} ** Options.Action.count,
 
     coming_soon_modal_id: WidgetId = NULL_WIDGET,
 
@@ -125,6 +135,11 @@ pub const MenuController = struct {
         reg.register("back_to_title", actionBackToTitle, ctx);
         reg.register("show_coming_soon", actionShowComingSoon, ctx);
         reg.register("dismiss_modal", actionDismissModal, ctx);
+        reg.register("show_controls", actionShowControls, ctx);
+        reg.register("show_controls_pause", actionShowControlsPause, ctx);
+        reg.register("close_controls", actionCloseControls, ctx);
+        reg.register("reset_keybinds", actionResetKeybinds, ctx);
+        reg.register("rebind_key", actionRebindKey, ctx);
     }
 
     pub fn refreshWorldList(self: *MenuController) void {
@@ -284,6 +299,11 @@ pub const MenuController = struct {
         if (self.hud_screen_loaded) {
             self.unloadHud();
         }
+        if (self.controls_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.controls_screen_loaded = false;
+            self.resetControlsWidgetIds();
+        }
         if (self.create_world_screen_loaded) {
             self.ui_manager.removeTopScreen();
             self.create_world_screen_loaded = false;
@@ -305,6 +325,11 @@ pub const MenuController = struct {
     }
 
     pub fn hideTitleMenu(self: *MenuController) void {
+        if (self.controls_screen_loaded and self.ui_manager.screen_count > 0) {
+            self.ui_manager.removeTopScreen();
+            self.controls_screen_loaded = false;
+            self.resetControlsWidgetIds();
+        }
         if (self.create_world_screen_loaded and self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
             self.create_world_screen_loaded = false;
@@ -590,6 +615,236 @@ pub const MenuController = struct {
         if (self.coming_soon_modal_id != NULL_WIDGET) {
             if (tree.getWidget(self.coming_soon_modal_id)) |w| {
                 w.visible = false;
+            }
+        }
+    }
+
+    // ============================================================
+    // Controls screen
+    // ============================================================
+
+    fn controlsTree(self: *MenuController) ?*WidgetTree {
+        if (!self.controls_screen_loaded) return null;
+        if (self.ui_manager.screen_count == 0) return null;
+        const screen = &self.ui_manager.screens[self.ui_manager.screen_count - 1];
+        if (!screen.active) return null;
+        return &screen.tree;
+    }
+
+    fn cacheControlsWidgetIds(self: *MenuController) void {
+        const tree = self.controlsTree() orelse return;
+        self.keybind_list_id = tree.findById("keybind_list") orelse NULL_WIDGET;
+        self.rebind_hint_id = tree.findById("rebind_hint") orelse NULL_WIDGET;
+    }
+
+    fn resetControlsWidgetIds(self: *MenuController) void {
+        self.keybind_list_id = NULL_WIDGET;
+        self.rebind_hint_id = NULL_WIDGET;
+        self.keybind_button_ids = .{NULL_WIDGET} ** Options.Action.count;
+        self.rebinding_action = null;
+    }
+
+    fn populateKeybindList(self: *MenuController) void {
+        const tree = self.controlsTree() orelse return;
+        const opts = self.options orelse return;
+        if (self.keybind_list_id == NULL_WIDGET) return;
+
+        tree.clearChildren(self.keybind_list_id);
+
+        inline for (@typeInfo(Options.Action).@"enum".fields) |field| {
+            const action: Options.Action = @enumFromInt(field.value);
+            const display = action.displayName();
+            const binding = opts.bindings[field.value];
+            const key_display = Options.inputDisplayName(binding);
+
+            // Row panel
+            const row_id = tree.addWidget(.panel, self.keybind_list_id) orelse return;
+            if (tree.getWidget(row_id)) |w| {
+                w.width = .fill;
+                w.height = .{ .px = 28 };
+                w.flex_direction = .row;
+                w.cross_align = .center;
+                w.padding = .{ .top = 2, .right = 8, .bottom = 2, .left = 8 };
+                w.background = .{ .r = 0.1, .g = 0.1, .b = 0.15, .a = 0.5 };
+            }
+
+            // Action name label (left)
+            const label_id = tree.addWidget(.label, row_id) orelse return;
+            if (tree.getWidget(label_id)) |w| {
+                w.width = .fill;
+                w.height = .auto;
+                w.flex_grow = 1.0;
+            }
+            if (tree.getData(label_id)) |data| {
+                data.label.setText(display);
+                data.label.color = .{ .r = 0.85, .g = 0.85, .b = 0.85, .a = 1.0 };
+            }
+
+            // Keybind button (right)
+            const btn_id = tree.addWidget(.button, row_id) orelse return;
+            if (tree.getWidget(btn_id)) |w| {
+                w.width = .{ .px = 140 };
+                w.height = .{ .px = 24 };
+                w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 1.0 };
+            }
+            if (tree.getData(btn_id)) |data| {
+                data.button.setText(key_display);
+                data.button.setAction("rebind_key");
+                data.button.text_color = .{ .r = 1.0, .g = 1.0, .b = 0.6, .a = 1.0 };
+                data.button.hover_color = .{ .r = 0.3, .g = 0.3, .b = 0.45, .a = 1.0 };
+                data.button.press_color = .{ .r = 0.15, .g = 0.15, .b = 0.25, .a = 1.0 };
+            }
+
+            self.keybind_button_ids[field.value] = btn_id;
+        }
+    }
+
+    fn updateKeybindButton(self: *MenuController, action: Options.Action) void {
+        const tree = self.controlsTree() orelse return;
+        const opts = self.options orelse return;
+        const idx = @intFromEnum(action);
+        const btn_id = self.keybind_button_ids[idx];
+        if (btn_id == NULL_WIDGET) return;
+        if (tree.getData(btn_id)) |data| {
+            data.button.setText(Options.inputDisplayName(opts.bindings[idx]));
+            data.button.text_color = .{ .r = 1.0, .g = 1.0, .b = 0.6, .a = 1.0 };
+        }
+        if (tree.getWidget(btn_id)) |w| {
+            w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 1.0 };
+        }
+    }
+
+    fn setRebindingVisual(self: *MenuController, action: Options.Action) void {
+        const tree = self.controlsTree() orelse return;
+        const idx = @intFromEnum(action);
+        const btn_id = self.keybind_button_ids[idx];
+        if (btn_id == NULL_WIDGET) return;
+        if (tree.getData(btn_id)) |data| {
+            data.button.setText("> ... <");
+            data.button.text_color = .{ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
+        }
+        if (tree.getWidget(btn_id)) |w| {
+            w.background = .{ .r = 0.4, .g = 0.2, .b = 0.2, .a = 1.0 };
+        }
+        if (self.rebind_hint_id != NULL_WIDGET) {
+            if (tree.getData(self.rebind_hint_id)) |data| {
+                data.label.setText("Press a key or mouse button...");
+                data.label.color = .{ .r = 1.0, .g = 1.0, .b = 0.4, .a = 1.0 };
+            }
+        }
+    }
+
+    fn clearRebindHint(self: *MenuController) void {
+        const tree = self.controlsTree() orelse return;
+        if (self.rebind_hint_id != NULL_WIDGET) {
+            if (tree.getData(self.rebind_hint_id)) |data| {
+                data.label.setText("Click a key to rebind");
+                data.label.color = .{ .r = 0.53, .g = 0.53, .b = 0.53, .a = 1.0 };
+            }
+        }
+    }
+
+    /// Called from main.zig when a key is pressed during rebinding.
+    pub fn handleRebindKey(self: *MenuController, code: Options.InputCode) void {
+        const action = self.rebinding_action orelse return;
+        const opts = self.options orelse return;
+
+        opts.bindings[@intFromEnum(action)] = code;
+        self.updateKeybindButton(action);
+        self.rebinding_action = null;
+        self.clearRebindHint();
+        opts.save(self.allocator);
+    }
+
+    /// Cancel active rebinding without changing anything.
+    pub fn cancelRebind(self: *MenuController) void {
+        if (self.rebinding_action) |action| {
+            self.updateKeybindButton(action);
+            self.rebinding_action = null;
+            self.clearRebindHint();
+        }
+    }
+
+    fn actionShowControls(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        if (self.controls_screen_loaded) return;
+        self.controls_from_pause = false;
+        if (self.title_screen_loaded and self.ui_manager.screen_count > 0) {
+            self.ui_manager.removeTopScreen();
+            self.title_screen_loaded = false;
+        }
+        self.openControlsScreen();
+    }
+
+    fn actionShowControlsPause(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        if (self.controls_screen_loaded) return;
+        self.controls_from_pause = true;
+        if (self.pause_screen_loaded and self.ui_manager.screen_count > 0) {
+            self.ui_manager.removeTopScreen();
+            self.pause_screen_loaded = false;
+        }
+        self.openControlsScreen();
+    }
+
+    fn openControlsScreen(self: *MenuController) void {
+        if (self.ui_manager.loadScreenFromFile("controls_menu.xml", self.allocator)) {
+            self.controls_screen_loaded = true;
+            self.cacheControlsWidgetIds();
+            self.populateKeybindList();
+        } else {
+            log.err("Failed to load controls_menu.xml", .{});
+        }
+    }
+
+    fn actionCloseControls(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.rebinding_action = null;
+        if (self.controls_screen_loaded) {
+            self.ui_manager.removeTopScreen();
+            self.controls_screen_loaded = false;
+            self.resetControlsWidgetIds();
+        }
+        if (self.controls_from_pause) {
+            self.controls_from_pause = false;
+            self.showPauseMenu();
+        } else {
+            if (self.ui_manager.loadScreenFromFile("title_menu.xml", self.allocator)) {
+                self.title_screen_loaded = true;
+                self.cacheTitleWidgetIds();
+            }
+            self.app_state = .title_menu;
+        }
+    }
+
+    fn actionResetKeybinds(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const opts = self.options orelse return;
+        opts.bindings = Options.defaults;
+        self.rebinding_action = null;
+        self.populateKeybindList();
+        self.clearRebindHint();
+        opts.save(self.allocator);
+    }
+
+    fn actionRebindKey(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        // Find which button was pressed by checking ui_manager.pressed_widget
+        const pressed = self.ui_manager.pressed_widget;
+        if (pressed == NULL_WIDGET) return;
+
+        // Cancel any active rebind
+        if (self.rebinding_action) |prev| {
+            self.updateKeybindButton(prev);
+        }
+
+        // Find which action this button belongs to
+        for (&self.keybind_button_ids, 0..) |btn_id, i| {
+            if (btn_id == pressed) {
+                const action: Options.Action = @enumFromInt(i);
+                self.rebinding_action = action;
+                self.setRebindingVisual(action);
+                return;
             }
         }
     }

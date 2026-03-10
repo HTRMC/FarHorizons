@@ -125,6 +125,8 @@ pub const UiRenderer = struct {
         self.vertex_count = 0;
         self.inverted_vertex_count = 0;
         self.draw_layer_count = 0;
+        self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
+        self.clip_depth = 0;
     }
 
     pub fn endFrame(self: *UiRenderer, device: vk.VkDevice) void {
