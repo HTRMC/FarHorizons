@@ -39,6 +39,7 @@ pub const UiManager = struct {
     last_mouse_y: f32 = 0,
     pressed_widget: WidgetId = NULL_WIDGET,
     last_mods: c_int = 0,
+    cursor_follow_widget: WidgetId = NULL_WIDGET,
     text_renderer: ?*const TextRenderer = null,
 
     hover_widget: WidgetId = NULL_WIDGET,
@@ -87,6 +88,17 @@ pub const UiManager = struct {
         for (0..self.screen_count) |i| {
             if (self.screens[i].active) {
                 Layout.layoutTree(&self.screens[i].tree, self.screen_width, self.screen_height, text_renderer);
+            }
+        }
+        // Snap cursor-following widget to latest mouse position after layout
+        if (self.cursor_follow_widget != NULL_WIDGET) {
+            if (self.topTree()) |t| {
+                if (t.getWidget(self.cursor_follow_widget)) |w| {
+                    const half_w = if (w.width == .px) w.width.px * 0.5 else 16;
+                    const half_h = if (w.height == .px) w.height.px * 0.5 else 16;
+                    w.computed_rect.x = self.last_mouse_x - half_w;
+                    w.computed_rect.y = self.last_mouse_y - half_h;
+                }
             }
         }
     }

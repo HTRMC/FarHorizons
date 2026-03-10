@@ -279,6 +279,7 @@ pub const MenuController = struct {
             if (tree.getWidget(self.cursor_item_id)) |w| {
                 w.hit_transparent = true;
             }
+            self.ui_manager.cursor_follow_widget = self.cursor_item_id;
         }
     }
 
@@ -297,6 +298,7 @@ pub const MenuController = struct {
         self.inv_offhand_id = NULL_WIDGET;
         self.inv_player_viewport_id = NULL_WIDGET;
         self.cursor_item_id = NULL_WIDGET;
+        self.ui_manager.cursor_follow_widget = NULL_WIDGET;
         self.entity_visible = false;
         self.entity_viewport = .{ 0, 0, 0, 0 };
     }
@@ -601,8 +603,6 @@ pub const MenuController = struct {
                 if (gs.carried_item != .air) {
                     const c = GameState.blockColor(gs.carried_item);
                     w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
-                    w.offset_x = self.ui_manager.last_mouse_x - 16;
-                    w.offset_y = self.ui_manager.last_mouse_y - 16;
                     w.visible = true;
                 } else {
                     w.visible = false;
