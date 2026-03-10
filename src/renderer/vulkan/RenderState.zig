@@ -42,7 +42,7 @@ pub const RenderState = struct {
         self.ui_renderer = try UiRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer self.ui_renderer.deinit(ctx.device);
 
-        self.entity_renderer = try EntityRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
+        self.entity_renderer = try EntityRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer self.entity_renderer.deinit(ctx.device);
 
         self.command_buffers = [_]vk.VkCommandBuffer{null} ** MAX_FRAMES_IN_FLIGHT;
