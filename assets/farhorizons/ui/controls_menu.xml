@@ -8,6 +8,15 @@
       <scroll_view id="keybind_scroll" width="fill" height="380" scroll_bar_visible="true">
         <panel id="keybind_list" width="fill" height="auto" direction="column" gap="2"/>
       </scroll_view>
+      <!-- Options -->
+      <panel direction="row" gap="8" cross_align="center" padding="4,8,4,8"
+             on_click="toggle_tp_crosshair" hover_color="#FFFFFF11">
+        <checkbox id="tp_crosshair_cb" width="16" height="16"
+                  check_color="#FFCC00FF" box_color="#333355FF"
+                  on_change="toggle_tp_crosshair_cb"/>
+        <label text="Show crosshair in third person" color="#BBBBCCFF"/>
+      </panel>
+
       <panel direction="row" gap="8">
         <button text="Reset Defaults" width="150" height="32"
                 background="#553333FF" on_click="reset_keybinds" shadow="true"/>

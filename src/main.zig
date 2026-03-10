@@ -338,6 +338,14 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 input_state.debug_toggle_requested = true;
             }
 
+            if (opts.keyMatches(.toggle_third_person, key) and action == glfw.GLFW_PRESS) {
+                if (input_state.game_state) |gs| {
+                    gs.third_person = !gs.third_person;
+                }
+            }
+
+
+
             // F3 held state tracking
             if (opts.keyMatches(.debug_f3, key)) {
                 if (action == glfw.GLFW_PRESS) {
@@ -593,6 +601,7 @@ pub fn main() !void {
                             break :blk null;
                         };
                         if (game_state) |*gs| {
+                            gs.third_person_crosshair = options.third_person_crosshair;
                             renderer.setGameState(@ptrCast(gs));
                             input_state.game_state = gs;
                             menu_ctrl.hideTitleMenu();
@@ -786,7 +795,35 @@ pub fn main() !void {
                 }
 
                 menu_ctrl.updateHud(gs);
+            }
+        }
+
+        // Update inventory (must run when app_state is .inventory, not .playing)
+        if (menu_ctrl.app_state == .inventory) {
+            if (game_state) |*gs| {
                 menu_ctrl.updateInventory(gs);
+            }
+        }
+
+        // Sync options → game state
+        if (game_state) |*gs| {
+            gs.third_person_crosshair = options.third_person_crosshair;
+        }
+
+        // Sync entity renderer with inventory viewport + third person
+        {
+            const vk_impl: *VulkanRenderer = @ptrCast(@alignCast(renderer.impl));
+            const er = &vk_impl.render_state.entity_renderer;
+            er.visible = menu_ctrl.entity_visible;
+            er.viewport_x = menu_ctrl.entity_viewport[0];
+            er.viewport_y = menu_ctrl.entity_viewport[1];
+            er.viewport_w = menu_ctrl.entity_viewport[2];
+            er.viewport_h = menu_ctrl.entity_viewport[3];
+            if (game_state) |*gs| {
+                er.world_visible = gs.third_person;
+                er.world_pos = gs.render_entity_pos;
+            } else {
+                er.world_visible = false;
             }
         }
 

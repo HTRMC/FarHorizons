@@ -882,9 +882,27 @@ pub const VulkanRenderer = struct {
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
 
         if (self.game_state) |gs| {
-            const mvp = gs.camera.getViewProjectionMatrix();
+            // Compute view matrix with third-person offset applied at render time
+            const tp_dist: f32 = 4.0;
+            const view = blk: {
+                if (gs.third_person) {
+                    const forward = gs.camera.getForward();
+                    const eye = zlm.Vec3.sub(gs.camera.position, zlm.Vec3.scale(forward, tp_dist));
+                    const target = zlm.Vec3.add(eye, forward);
+                    break :blk zlm.Mat4.lookAt(eye, target, zlm.Vec3.init(0.0, 1.0, 0.0));
+                } else {
+                    break :blk gs.camera.getViewMatrix();
+                }
+            };
+            const proj = gs.camera.getProjectionMatrix();
+            const mvp = zlm.Mat4.mul(proj, view);
 
             self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw);
+
+            // Third-person player model (rendered with world depth)
+            if (gs.third_person and !overdraw) {
+                self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp);
+            }
 
             if (!overdraw) {
                 const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
@@ -896,14 +914,19 @@ pub const VulkanRenderer = struct {
                         0, 0, 0, 1,
                     },
                 };
-                const view = gs.camera.getViewMatrix();
-                const proj = gs.camera.getProjectionMatrix();
                 const debug_mvp = zlm.Mat4.mul(proj, zlm.Mat4.mul(view_scale, view));
                 self.render_state.debug_renderer.recordDraw(command_buffer, &debug_mvp.m);
             }
         }
 
         self.render_state.ui_renderer.recordDraw(command_buffer);
+
+        {
+            const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
+            const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
+            const ui_scale = self.render_state.ui_renderer.clip_scale;
+            self.render_state.entity_renderer.recordDraw(command_buffer, sw, sh, ui_scale);
+        }
 
         self.render_state.text_renderer.recordDraw(command_buffer);
 

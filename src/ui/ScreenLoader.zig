@@ -218,6 +218,8 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                     data.button.shadow = parseBool(attr.value);
                 } else if (eql(attr.name, "shadow_color")) {
                     data.button.shadow_color = parseColor(attr.value);
+                } else if (eql(attr.name, "text_align")) {
+                    if (eql(attr.value, "left")) data.button.text_align = .left;
                 }
             }
         },
@@ -381,7 +383,15 @@ fn applyDataAttrs(tree: *WidgetTree, id: WidgetId, kind: WidgetKind, event: *con
                 }
             }
         },
-        .panel => {},
+        .panel => {
+            for (event.attrs[0..event.attr_count]) |attr| {
+                if (eql(attr.name, "on_click")) {
+                    data.panel.setAction(attr.value);
+                } else if (eql(attr.name, "hover_color")) {
+                    data.panel.hover_color = parseColor(attr.value);
+                }
+            }
+        },
     }
 }
 

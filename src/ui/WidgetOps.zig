@@ -29,7 +29,11 @@ pub fn drawWidget(
     }
 
     switch (w.kind) {
-        .panel => {},
+        .panel => {
+            if (data.panel.isClickable() and w.hovered) {
+                ui.drawRect(r.x, r.y, r.w, r.h, data.panel.hover_color.toArray());
+            }
+        },
 
         .label => {
             const label = &data.label;
@@ -78,7 +82,10 @@ pub fn drawWidget(
             const text = btn.getText();
             if (text.len > 0) {
                 const text_w = tr.measureText(text);
-                const tx = r.x + (r.w - text_w) / 2.0;
+                const tx = switch (btn.text_align) {
+                    .center => r.x + (r.w - text_w) / 2.0,
+                    .left => r.x + 4.0,
+                };
                 const ty = r.y + (r.h - 16.0) / 2.0;
                 if (btn.shadow) {
                     tr.drawText(tx + 2, ty + 2, text, btn.shadow_color.toArray());

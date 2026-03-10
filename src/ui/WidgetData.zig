@@ -20,6 +20,23 @@ pub const WidgetData = union(Widget.WidgetKind) {
 };
 
 pub const PanelData = struct {
+    on_click_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
+    on_click_action_len: u8 = 0,
+    hover_color: Color = Color.fromHex(0x00000000),
+
+    pub fn setAction(self: *PanelData, str: []const u8) void {
+        const len: u8 = @intCast(@min(str.len, MAX_ACTION_LEN));
+        @memcpy(self.on_click_action[0..len], str[0..len]);
+        self.on_click_action_len = len;
+    }
+
+    pub fn getAction(self: *const PanelData) []const u8 {
+        return self.on_click_action[0..self.on_click_action_len];
+    }
+
+    pub fn isClickable(self: *const PanelData) bool {
+        return self.on_click_action_len > 0;
+    }
 };
 
 pub const LabelData = struct {
@@ -42,6 +59,8 @@ pub const LabelData = struct {
     }
 };
 
+pub const TextAlign = enum { center, left };
+
 pub const ButtonData = struct {
     text: [MAX_TEXT_LEN]u8 = .{0} ** MAX_TEXT_LEN,
     text_len: u8 = 0,
@@ -50,6 +69,7 @@ pub const ButtonData = struct {
     press_color: Color = Color.fromHex(0x222222FF),
     shadow: bool = false,
     shadow_color: Color = Color.fromHex(0x000000AA),
+    text_align: TextAlign = .center,
     on_click_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
     on_click_action_len: u8 = 0,
 

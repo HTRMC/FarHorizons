@@ -119,6 +119,8 @@ jump_cooldown: u8,
 hit_result: ?Raycast.BlockHitResult,
 dirty_chunks: DirtyChunkSet,
 debug_camera_active: bool,
+third_person: bool = false,
+third_person_crosshair: bool = false,
 overdraw_mode: bool,
 saved_camera: Camera,
 
@@ -471,6 +473,7 @@ pub fn interpolateForRender(self: *GameState, alpha: f32) void {
             );
         },
     }
+
 }
 
 pub fn restoreAfterRender(self: *GameState) void {

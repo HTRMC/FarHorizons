@@ -8,6 +8,7 @@ pub const WorldRenderer = @import("WorldRenderer.zig").WorldRenderer;
 pub const DebugRenderer = @import("DebugRenderer.zig").DebugRenderer;
 pub const TextRenderer = @import("TextRenderer.zig").TextRenderer;
 pub const UiRenderer = @import("UiRenderer.zig").UiRenderer;
+pub const EntityRenderer = @import("EntityRenderer.zig").EntityRenderer;
 
 pub const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -16,6 +17,7 @@ pub const RenderState = struct {
     debug_renderer: DebugRenderer,
     text_renderer: TextRenderer,
     ui_renderer: UiRenderer,
+    entity_renderer: EntityRenderer,
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence,
@@ -40,6 +42,9 @@ pub const RenderState = struct {
         self.ui_renderer = try UiRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer self.ui_renderer.deinit(ctx.device);
 
+        self.entity_renderer = try EntityRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
+        errdefer self.entity_renderer.deinit(ctx.device);
+
         self.command_buffers = [_]vk.VkCommandBuffer{null} ** MAX_FRAMES_IN_FLIGHT;
         self.image_available_semaphores = [_]vk.VkSemaphore{null} ** MAX_FRAMES_IN_FLIGHT;
         self.in_flight_fences = [_]vk.VkFence{null} ** MAX_FRAMES_IN_FLIGHT;
@@ -61,6 +66,7 @@ pub const RenderState = struct {
         self.world_renderer.deinit(device);
         self.debug_renderer.deinit(device);
         self.text_renderer.deinit(device);
+        self.entity_renderer.deinit(device);
         self.ui_renderer.deinit(device);
     }
 

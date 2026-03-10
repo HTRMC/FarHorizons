@@ -66,12 +66,17 @@ pub const MenuController = struct {
     keybind_list_id: WidgetId = NULL_WIDGET,
     rebind_hint_id: WidgetId = NULL_WIDGET,
     keybind_button_ids: [Options.Action.count]WidgetId = .{NULL_WIDGET} ** Options.Action.count,
+    tp_crosshair_cb_id: WidgetId = NULL_WIDGET,
 
     // Inventory screen state
     inv_slot_ids: [GameState.HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.HOTBAR_SIZE, // hotbar row
     inv_main_ids: [GameState.INV_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.INV_SIZE, // 3x9 main
     inv_armor_ids: [GameState.ARMOR_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS,
     inv_offhand_id: WidgetId = NULL_WIDGET,
+    inv_player_viewport_id: WidgetId = NULL_WIDGET,
+    // Entity renderer viewport (in UI coords), read by VulkanRenderer
+    entity_viewport: [4]f32 = .{ 0, 0, 0, 0 },
+    entity_visible: bool = false,
 
     coming_soon_modal_id: WidgetId = NULL_WIDGET,
 
@@ -212,6 +217,16 @@ pub const MenuController = struct {
         const tree = self.menuTree() orelse return;
         self.keybind_list_id = tree.findById("keybind_list") orelse NULL_WIDGET;
         self.rebind_hint_id = tree.findById("rebind_hint") orelse NULL_WIDGET;
+        self.tp_crosshair_cb_id = tree.findById("tp_crosshair_cb") orelse NULL_WIDGET;
+
+        // Sync checkbox state from options
+        if (self.options) |opts| {
+            if (self.tp_crosshair_cb_id != NULL_WIDGET) {
+                if (tree.getData(self.tp_crosshair_cb_id)) |data| {
+                    data.checkbox.checked = opts.third_person_crosshair;
+                }
+            }
+        }
     }
 
     fn resetSingleplayerWidgetIds(self: *MenuController) void {
@@ -225,6 +240,7 @@ pub const MenuController = struct {
     fn resetControlsWidgetIds(self: *MenuController) void {
         self.keybind_list_id = NULL_WIDGET;
         self.rebind_hint_id = NULL_WIDGET;
+        self.tp_crosshair_cb_id = NULL_WIDGET;
         self.keybind_button_ids = .{NULL_WIDGET} ** Options.Action.count;
         self.rebinding_action = null;
     }
@@ -244,6 +260,7 @@ pub const MenuController = struct {
             self.inv_armor_ids[i] = tree.findById(name) orelse NULL_WIDGET;
         }
         self.inv_offhand_id = tree.findById("inv_offhand") orelse NULL_WIDGET;
+        self.inv_player_viewport_id = tree.findById("player_viewport") orelse NULL_WIDGET;
     }
 
     fn resetInventoryWidgetIds(self: *MenuController) void {
@@ -251,6 +268,9 @@ pub const MenuController = struct {
         self.inv_main_ids = .{NULL_WIDGET} ** GameState.INV_SIZE;
         self.inv_armor_ids = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS;
         self.inv_offhand_id = NULL_WIDGET;
+        self.inv_player_viewport_id = NULL_WIDGET;
+        self.entity_visible = false;
+        self.entity_viewport = .{ 0, 0, 0, 0 };
     }
 
     // ============================================================
@@ -282,6 +302,8 @@ pub const MenuController = struct {
         reg.register("close_controls", actionCloseControls, ctx);
         reg.register("reset_keybinds", actionResetKeybinds, ctx);
         reg.register("rebind_key", actionRebindKey, ctx);
+        reg.register("toggle_tp_crosshair", actionToggleTpCrosshair, ctx);
+        reg.register("toggle_tp_crosshair_cb", actionToggleTpCrosshairCb, ctx);
     }
 
     // ============================================================
@@ -445,8 +467,19 @@ pub const MenuController = struct {
     }
 
     pub fn updateInventory(self: *MenuController, gs: *const GameState) void {
-        if (self.app_state != .inventory) return;
+        if (self.app_state != .inventory) {
+            self.entity_visible = false;
+            return;
+        }
         const tree = self.menuTree() orelse return;
+
+        // Update entity renderer viewport from player_viewport widget rect
+        if (self.inv_player_viewport_id != NULL_WIDGET) {
+            if (tree.getWidget(self.inv_player_viewport_id)) |w| {
+                self.entity_viewport = .{ w.computed_rect.x, w.computed_rect.y, w.computed_rect.w, w.computed_rect.h };
+                self.entity_visible = true;
+            }
+        }
 
         // Update hotbar row
         for (0..GameState.HOTBAR_SIZE) |i| {
@@ -873,6 +906,33 @@ pub const MenuController = struct {
         self.cancelRebind();
         const target: AppState = if (self.app_state == .controls_pause) .pause_menu else .title_menu;
         self.transitionTo(target);
+    }
+
+    /// Called when the panel group is clicked (label or gap) — manually toggle the checkbox
+    fn actionToggleTpCrosshair(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const opts = self.options orelse return;
+        const tree = self.menuTree() orelse return;
+        if (self.tp_crosshair_cb_id != NULL_WIDGET) {
+            if (tree.getData(self.tp_crosshair_cb_id)) |data| {
+                data.checkbox.checked = !data.checkbox.checked;
+                opts.third_person_crosshair = data.checkbox.checked;
+            }
+        }
+        opts.save(self.allocator);
+    }
+
+    /// Called when the checkbox itself is clicked (EventDispatch already toggled .checked)
+    fn actionToggleTpCrosshairCb(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const opts = self.options orelse return;
+        const tree = self.menuTree() orelse return;
+        if (self.tp_crosshair_cb_id != NULL_WIDGET) {
+            if (tree.getData(self.tp_crosshair_cb_id)) |data| {
+                opts.third_person_crosshair = data.checkbox.checked;
+            }
+        }
+        opts.save(self.allocator);
     }
 
     fn actionResetKeybinds(ctx: ?*anyopaque) void {

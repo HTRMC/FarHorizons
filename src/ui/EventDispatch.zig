@@ -71,18 +71,53 @@ pub fn dispatchMousePress(tree: *WidgetTree, target: WidgetId, registry: *const 
 
     if (target == NULL_WIDGET) return false;
 
-    const w = tree.getWidget(target) orelse return false;
+    // Resolve the effective target: if non-interactive, bubble up to find a clickable panel
+    const effective = resolveClickTarget(tree, target);
+
+    const w = tree.getWidget(effective) orelse return false;
 
     w.pressed = true;
 
     if (w.focusable) {
-        setFocusTo(tree, target);
+        setFocusTo(tree, effective);
     }
 
     return switch (w.kind) {
         .button, .text_input, .checkbox, .slider, .dropdown => true,
+        .panel => blk: {
+            const data = tree.getData(effective) orelse break :blk false;
+            break :blk data.panel.isClickable();
+        },
         else => false,
     };
+}
+
+/// Walk up parent chain from a non-interactive widget to find a clickable panel ancestor.
+/// Returns the original target if it's already interactive, or the first clickable panel parent.
+pub fn resolveClickTarget(tree: *const WidgetTree, target: WidgetId) WidgetId {
+    const w = tree.getWidgetConst(target) orelse return target;
+    switch (w.kind) {
+        .button, .text_input, .checkbox, .slider, .dropdown => return target,
+        .panel => {
+            const data = tree.getDataConst(target) orelse return target;
+            if (data.panel.isClickable()) return target;
+        },
+        else => {},
+    }
+    // Bubble up
+    var id = w.parent;
+    while (id != NULL_WIDGET) {
+        const pw = tree.getWidgetConst(id) orelse break;
+        if (pw.kind == .panel) {
+            const pd = tree.getDataConst(id) orelse {
+                id = pw.parent;
+                continue;
+            };
+            if (pd.panel.isClickable()) return id;
+        }
+        id = pw.parent;
+    }
+    return target;
 }
 
 pub fn dispatchMouseRelease(tree: *WidgetTree, target: WidgetId, pressed_widget: WidgetId, registry: *const ActionRegistry) bool {
@@ -92,8 +127,10 @@ pub fn dispatchMouseRelease(tree: *WidgetTree, target: WidgetId, pressed_widget:
 
     if (pressed_widget == NULL_WIDGET) return false;
 
-    if (target == pressed_widget) {
-        fireWidgetAction(tree, target, registry);
+    const effective = resolveClickTarget(tree, target);
+
+    if (effective == pressed_widget) {
+        fireWidgetAction(tree, effective, registry);
         return true;
     }
 
@@ -122,6 +159,13 @@ pub fn fireWidgetAction(tree: *WidgetTree, id: WidgetId, registry: *const Action
         },
         .dropdown => {
             data.dropdown.open = !data.dropdown.open;
+        },
+        .panel => {
+            const action_name = data.panel.getAction();
+            if (action_name.len > 0) {
+                log.info("Panel action: '{s}'", .{action_name});
+                _ = registry.dispatch(action_name);
+            }
         },
         else => {},
     }

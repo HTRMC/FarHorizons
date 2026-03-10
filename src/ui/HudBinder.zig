@@ -47,6 +47,13 @@ pub const HudBinder = struct {
     }
 
     pub fn update(self: *const HudBinder, tree: *WidgetTree, gs: *const GameState) void {
+        // Hide crosshair in third person unless explicitly enabled
+        if (self.crosshair_id != NULL_WIDGET) {
+            if (tree.getWidget(self.crosshair_id)) |w| {
+                w.visible = !gs.third_person or gs.third_person_crosshair;
+            }
+        }
+
         if (self.selection_id != NULL_WIDGET) {
             if (tree.getWidget(self.selection_id)) |w| {
                 const slot_pitch: f32 = 40.0;

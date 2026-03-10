@@ -14,6 +14,7 @@ fov: f32 = 70.0,
 render_distance: i32 = 16,
 mouse_sensitivity: f32 = 0.003,
 invert_y_mouse: bool = false,
+third_person_crosshair: bool = false,
 
 // -- Keybinds (resolved GLFW codes) --
 bindings: [Action.count]InputCode = defaults,
@@ -80,6 +81,7 @@ pub const Action = enum(u8) {
     open_inventory,
 
     // UI / Debug
+    toggle_third_person,
     toggle_debug_camera,
     toggle_hud,
     toggle_fullscreen,
@@ -150,6 +152,7 @@ pub const Action = enum(u8) {
             .hotbar_8 => "Hotbar 8",
             .hotbar_9 => "Hotbar 9",
             .open_inventory => "Inventory",
+            .toggle_third_person => "Third Person",
             .toggle_debug_camera => "Debug Camera",
             .toggle_hud => "Toggle HUD",
             .toggle_fullscreen => "Fullscreen",
@@ -267,6 +270,7 @@ pub const defaults: [Action.count]InputCode = blk: {
     b[@intFromEnum(Action.hotbar_8)] = .{ .code = glfw.GLFW_KEY_8 };
     b[@intFromEnum(Action.hotbar_9)] = .{ .code = glfw.GLFW_KEY_9 };
     b[@intFromEnum(Action.open_inventory)] = .{ .code = 69 }; // E
+    b[@intFromEnum(Action.toggle_third_person)] = .{ .code = glfw.GLFW_KEY_F5 };
     b[@intFromEnum(Action.toggle_debug_camera)] = .{ .code = glfw.GLFW_KEY_P };
     b[@intFromEnum(Action.toggle_hud)] = .{ .code = glfw.GLFW_KEY_F1 };
     b[@intFromEnum(Action.toggle_fullscreen)] = .{ .code = glfw.GLFW_KEY_F11 };
@@ -275,7 +279,7 @@ pub const defaults: [Action.count]InputCode = blk: {
     b[@intFromEnum(Action.debug_chunk_borders)] = .{ .code = glfw.GLFW_KEY_G };
     b[@intFromEnum(Action.debug_hitbox)] = .{ .code = glfw.GLFW_KEY_B };
     b[@intFromEnum(Action.debug_screen_f4)] = .{ .code = glfw.GLFW_KEY_F4 };
-    b[@intFromEnum(Action.debug_screen_f5)] = .{ .code = glfw.GLFW_KEY_F5 };
+    b[@intFromEnum(Action.debug_screen_f5)] = .{ .code = glfw.GLFW_KEY_F6 };
     b[@intFromEnum(Action.overdraw_mode)] = .{ .code = glfw.GLFW_KEY_F4 };
     break :blk b;
 };
@@ -321,6 +325,9 @@ pub fn load(allocator: std.mem.Allocator) Options {
     if (root.get("invertYMouse")) |v| {
         if (v == .bool) opts.invert_y_mouse = v.bool;
     }
+    if (root.get("thirdPersonCrosshair")) |v| {
+        if (v == .bool) opts.third_person_crosshair = v.bool;
+    }
 
     // Keybinds
     if (root.get("keybinds")) |kb_val| {
@@ -365,6 +372,7 @@ pub fn save(self: *const Options, allocator: std.mem.Allocator) void {
     pos += fmtLine(&buf, pos, "  \"renderDistance\": {d},\n", .{self.render_distance});
     pos += fmtLine(&buf, pos, "  \"mouseSensitivity\": {d:.6},\n", .{self.mouse_sensitivity});
     pos += fmtLine(&buf, pos, "  \"invertYMouse\": {s},\n", .{if (self.invert_y_mouse) "true" else "false"});
+    pos += fmtLine(&buf, pos, "  \"thirdPersonCrosshair\": {s},\n", .{if (self.third_person_crosshair) "true" else "false"});
 
     // Keybinds
     pos += copy(buf[pos..], "\n  \"keybinds\": {\n");

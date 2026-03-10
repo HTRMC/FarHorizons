@@ -24,10 +24,9 @@
                  border_width="1" border_color="#555577FF" tooltip="Leggings"/>
         </panel>
 
-        <!-- Player silhouette -->
-        <panel width="80" height="120" background="#1A1A30CC" margin="0,12,0,12"
+        <!-- Player silhouette (entity renderer viewport) -->
+        <panel id="player_viewport" width="80" height="120" background="#1A1A30CC" margin="0,12,0,12"
                cross_align="center" justify="center">
-          <label text="[ Player ]" color="#444460FF"/>
         </panel>
 
         <!-- Right armor column: Chestplate + Boots -->

@@ -180,8 +180,9 @@ pub const UiManager = struct {
         const target = EventDispatch.hitTest(tree, x, y);
 
         if (action == glfw.GLFW_PRESS) {
+            const effective = if (target != NULL_WIDGET) EventDispatch.resolveClickTarget(tree, target) else target;
             self.closeOpenDropdowns(tree, target);
-            self.pressed_widget = target;
+            self.pressed_widget = effective;
 
             if (target == NULL_WIDGET) {
                 EventDispatch.clearFocus(tree);
