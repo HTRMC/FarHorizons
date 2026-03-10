@@ -102,6 +102,19 @@
           <panel id="inv_26" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
         </panel>
 
+        <!-- Row 3 -->
+        <panel width="auto" height="auto" direction="row" gap="2">
+          <panel id="inv_27" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_28" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_29" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_30" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_31" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_32" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_33" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_34" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+          <panel id="inv_35" width="36" height="36" background="#1A1A3099" border_width="1" border_color="#444466FF"/>
+        </panel>
+
         <!-- Separator between inventory and hotbar -->
         <panel width="fill" height="4"/>
         <panel width="fill" height="1" background="#444466FF"/>
