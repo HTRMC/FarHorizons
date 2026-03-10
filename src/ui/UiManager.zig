@@ -241,7 +241,7 @@ pub const UiManager = struct {
                 const sv = &data.scroll_view;
                 const vp_h = w.computed_rect.h - w.padding.vertical();
                 const max_scroll = @max(sv.content_height - vp_h, 0);
-                sv.scroll_y = std.math.clamp(sv.scroll_y - y_delta * 24.0, 0, max_scroll);
+                sv.scroll_target_y = std.math.clamp(sv.scroll_target_y - y_delta * 48.0, 0, max_scroll);
                 return true;
             } else if (w.kind == .list_view) {
                 const data = tree.getData(id) orelse break;
@@ -249,7 +249,7 @@ pub const UiManager = struct {
                 const vp_h = w.computed_rect.h - w.padding.vertical();
                 const total_h = @as(f32, @floatFromInt(lv.item_count)) * lv.item_height;
                 const max_scroll = @max(total_h - vp_h, 0);
-                lv.scroll_offset = std.math.clamp(lv.scroll_offset - y_delta * lv.item_height, 0, max_scroll);
+                lv.scroll_target = std.math.clamp(lv.scroll_target - y_delta * lv.item_height, 0, max_scroll);
                 return true;
             }
             id = w.parent;
@@ -258,7 +258,7 @@ pub const UiManager = struct {
         return false;
     }
 
-    pub fn tick(self: *UiManager) void {
+    pub fn tick(self: *UiManager, dt: f32) void {
         if (self.topTree()) |tree| {
             const focused_id = EventDispatch.findFocused(tree);
             if (focused_id != NULL_WIDGET) {
@@ -274,12 +274,12 @@ pub const UiManager = struct {
             self.hover_timer +|= 1;
         }
 
-
+        self.tickScrollSmoothing(dt);
         self.tickFade();
     }
 
-    pub fn tickCursorBlink(self: *UiManager) void {
-        self.tick();
+    pub fn tickCursorBlink(self: *UiManager, dt: f32) void {
+        self.tick(dt);
     }
 
 
@@ -335,6 +335,37 @@ pub const UiManager = struct {
         const pos = self.textCursorFromX(tree, widget_id, mouse_x);
         data.text_input.cursor_pos = pos;
         data.text_input.cursor_blink_counter = 0;
+    }
+
+    fn tickScrollSmoothing(self: *UiManager, dt: f32) void {
+        const WidgetData = @import("WidgetData.zig");
+        const speed = 1.0 - @exp(-20.0 * dt);
+        for (0..self.screen_count) |si| {
+            const tree = &self.screens[si].tree;
+            for (0..tree.count) |i| {
+                const id: WidgetId = @intCast(i);
+                const w = tree.getWidgetConst(id) orelse continue;
+                if (w.kind == .scroll_view) {
+                    const data = tree.getData(id) orelse continue;
+                    const sv = &data.scroll_view;
+                    const diff = sv.scroll_target_y - sv.scroll_y;
+                    if (@abs(diff) < 0.5) {
+                        sv.scroll_y = sv.scroll_target_y;
+                    } else {
+                        sv.scroll_y += diff * speed;
+                    }
+                } else if (w.kind == .list_view) {
+                    const data = tree.getData(id) orelse continue;
+                    const lv: *WidgetData.ListViewData = &data.list_view;
+                    const diff = lv.scroll_target - lv.scroll_offset;
+                    if (@abs(diff) < 0.5) {
+                        lv.scroll_offset = lv.scroll_target;
+                    } else {
+                        lv.scroll_offset += diff * speed;
+                    }
+                }
+            }
+        }
     }
 
     fn tickFade(self: *UiManager) void {

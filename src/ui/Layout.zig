@@ -171,6 +171,7 @@ fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, t
 
         const max_scroll = @max(sv.content_height - content_h, 0);
         sv.scroll_y = std.math.clamp(sv.scroll_y, 0, max_scroll);
+        sv.scroll_target_y = std.math.clamp(sv.scroll_target_y, 0, max_scroll);
         return;
     }
 
@@ -201,6 +202,7 @@ fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, t
         const total_content = @as(f32, @floatFromInt(child_idx)) * lv.item_height;
         const max_scroll = @max(total_content - content_h, 0);
         lv.scroll_offset = std.math.clamp(lv.scroll_offset, 0, max_scroll);
+        lv.scroll_target = std.math.clamp(lv.scroll_target, 0, max_scroll);
         return;
     }
 

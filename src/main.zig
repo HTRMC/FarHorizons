@@ -765,7 +765,7 @@ pub fn main() !void {
             }
         }
 
-        ui_manager.tickCursorBlink();
+        ui_manager.tickCursorBlink(delta_time);
 
         if (menu_ctrl.app_state == .playing) {
             if (game_state) |*gs| {

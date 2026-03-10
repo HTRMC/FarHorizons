@@ -367,6 +367,7 @@ pub const MenuController = struct {
                 data.list_view.item_count = visible_count;
                 data.list_view.selected_index = 0;
                 data.list_view.scroll_offset = 0;
+                data.list_view.scroll_target = 0;
             }
         }
 
