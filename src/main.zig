@@ -260,10 +260,6 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
     switch (input_state.menu_ctrl.app_state) {
         .pause_menu => {
             if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
-                if (input_state.menu_ctrl.controls_screen_loaded) {
-                    input_state.menu_ctrl.closeControls();
-                    return;
-                }
                 input_state.menu_ctrl.hidePauseMenu();
                 input_state.menu_ctrl.action = .resume_game;
                 return;
@@ -271,17 +267,38 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },
         .title_menu => {
-            if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS and input_state.menu_ctrl.controls_screen_loaded) {
-                input_state.menu_ctrl.closeControls();
-                return;
-            }
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },
         .singleplayer_menu => {
             const consumed = input_state.ui_manager.handleKey(key, action, mods);
+            if (!consumed and key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.transitionTo(.title_menu);
+            }
             if (!consumed and key == glfw.GLFW_KEY_DELETE and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.showDeleteConfirm();
             }
+        },
+        .create_world => {
+            const consumed = input_state.ui_manager.handleKey(key, action, mods);
+            if (!consumed and key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.transitionTo(.singleplayer_menu);
+            }
+        },
+        .controls_title => {
+            if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.cancelRebind();
+                input_state.menu_ctrl.transitionTo(.title_menu);
+                return;
+            }
+            _ = input_state.ui_manager.handleKey(key, action, mods);
+        },
+        .controls_pause => {
+            if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.cancelRebind();
+                input_state.menu_ctrl.transitionTo(.pause_menu);
+                return;
+            }
+            _ = input_state.ui_manager.handleKey(key, action, mods);
         },
         .playing => {
             if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {

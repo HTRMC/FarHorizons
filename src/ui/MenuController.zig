@@ -16,8 +16,34 @@ const log = std.log.scoped(.UI);
 pub const MAX_WORLDS: u8 = 32;
 pub const MAX_NAME_LEN: u8 = 32;
 
-pub const AppState = enum { title_menu, singleplayer_menu, loading, playing, pause_menu, saving };
+pub const AppState = enum {
+    title_menu,
+    singleplayer_menu,
+    create_world,
+    controls_title,
+    controls_pause,
+    loading,
+    playing,
+    pause_menu,
+    saving,
+
+    pub fn isMenu(self: AppState) bool {
+        return switch (self) {
+            .title_menu, .singleplayer_menu, .create_world, .controls_title, .controls_pause, .pause_menu => true,
+            .loading, .playing, .saving => false,
+        };
+    }
+};
+
 pub const Action = enum { load_world, create_world, delete_world, resume_game, return_to_title, quit };
+
+const ScreenType = enum {
+    title,
+    singleplayer,
+    create_world,
+    controls,
+    pause,
+};
 
 pub const MenuController = struct {
     ui_manager: *UiManager,
@@ -30,18 +56,10 @@ pub const MenuController = struct {
     world_count: u8 = 0,
     selection: u8 = 0,
 
-    title_screen_loaded: bool = false,
-    singleplayer_screen_loaded: bool = false,
-    create_world_screen_loaded: bool = false,
-    pause_screen_loaded: bool = false,
-    hud_screen_loaded: bool = false,
-    controls_screen_loaded: bool = false,
-
     hud_binder: ?HudBinder = null,
     options: ?*Options = null,
 
     // Controls screen state
-    controls_from_pause: bool = false,
     rebinding_action: ?Options.Action = null,
     keybind_list_id: WidgetId = NULL_WIDGET,
     rebind_hint_id: WidgetId = NULL_WIDGET,
@@ -63,24 +81,108 @@ pub const MenuController = struct {
             .ui_manager = ui_manager,
             .allocator = allocator,
         };
-
-        if (ui_manager.loadScreenFromFile("title_menu.xml", allocator)) {
-            self.title_screen_loaded = true;
-            self.cacheTitleWidgetIds();
-        } else {
-            log.err("Failed to load title_menu.xml", .{});
-        }
-
+        self.loadScreen(.title);
         return self;
     }
 
+    // ============================================================
+    // State machine
+    // ============================================================
+
+    pub fn transitionTo(self: *MenuController, new_state: AppState) void {
+        const old = self.app_state;
+        if (old == new_state) return;
+
+        // Unload old screen
+        if (screenTypeFor(old)) |st| {
+            self.unloadScreen(st);
+        }
+
+        // Load new screen
+        if (screenTypeFor(new_state)) |st| {
+            self.loadScreen(st);
+        }
+
+        self.app_state = new_state;
+    }
+
+    fn screenTypeFor(state: AppState) ?ScreenType {
+        return switch (state) {
+            .title_menu => .title,
+            .singleplayer_menu => .singleplayer,
+            .create_world => .create_world,
+            .controls_title, .controls_pause => .controls,
+            .pause_menu => .pause,
+            .loading, .playing, .saving => null,
+        };
+    }
+
+    fn loadScreen(self: *MenuController, screen: ScreenType) void {
+        const file = switch (screen) {
+            .title => "title_menu.xml",
+            .singleplayer => "singleplayer_menu.xml",
+            .create_world => "create_world_menu.xml",
+            .controls => "controls_menu.xml",
+            .pause => "pause_menu.xml",
+        };
+        if (self.ui_manager.loadScreenFromFile(file, self.allocator)) {
+            switch (screen) {
+                .title => self.cacheTitleWidgetIds(),
+                .singleplayer => {
+                    self.cacheSingleplayerWidgetIds();
+                    self.refreshWorldList();
+                },
+                .create_world => {
+                    self.cacheCreateWorldWidgetIds();
+                    self.selected_world_type = .normal;
+                },
+                .controls => {
+                    self.cacheControlsWidgetIds();
+                    self.populateKeybindList();
+                },
+                .pause => {},
+            }
+        } else {
+            log.err("Failed to load {s}", .{file});
+        }
+    }
+
+    fn unloadScreen(self: *MenuController, screen: ScreenType) void {
+        if (self.ui_manager.screen_count == 0) return;
+        self.ui_manager.removeTopScreen();
+        switch (screen) {
+            .title => {
+                self.coming_soon_modal_id = NULL_WIDGET;
+            },
+            .singleplayer => self.resetSingleplayerWidgetIds(),
+            .create_world => {
+                self.create_world_input_id = NULL_WIDGET;
+                self.world_type_label_id = NULL_WIDGET;
+            },
+            .controls => self.resetControlsWidgetIds(),
+            .pause => {},
+        }
+    }
+
+    /// Get the active menu screen tree (top of screen stack).
+    fn menuTree(self: *MenuController) ?*WidgetTree {
+        if (self.ui_manager.screen_count == 0) return null;
+        const idx = self.ui_manager.screen_count - 1;
+        if (!self.ui_manager.screens[idx].active) return null;
+        return &self.ui_manager.screens[idx].tree;
+    }
+
+    // ============================================================
+    // Widget ID caching
+    // ============================================================
+
     fn cacheTitleWidgetIds(self: *MenuController) void {
-        const tree = self.titleTree() orelse return;
+        const tree = self.menuTree() orelse return;
         self.coming_soon_modal_id = tree.findById("coming_soon_modal") orelse NULL_WIDGET;
     }
 
     fn cacheSingleplayerWidgetIds(self: *MenuController) void {
-        const tree = self.singleplayerTree() orelse return;
+        const tree = self.menuTree() orelse return;
         self.world_list_id = tree.findById("world_list") orelse NULL_WIDGET;
         self.no_worlds_label_id = tree.findById("no_worlds_label") orelse NULL_WIDGET;
         self.delete_confirm_id = tree.findById("delete_confirm") orelse NULL_WIDGET;
@@ -89,31 +191,35 @@ pub const MenuController = struct {
     }
 
     fn cacheCreateWorldWidgetIds(self: *MenuController) void {
-        const tree = self.createWorldTree() orelse return;
+        const tree = self.menuTree() orelse return;
         self.create_world_input_id = tree.findById("create_world_input") orelse NULL_WIDGET;
         self.world_type_label_id = tree.findById("world_type_label") orelse NULL_WIDGET;
     }
 
-    fn titleTree(self: *MenuController) ?*WidgetTree {
-        if (!self.title_screen_loaded) return null;
-        if (self.ui_manager.screen_count == 0) return null;
-        if (!self.ui_manager.screens[0].active) return null;
-        return &self.ui_manager.screens[0].tree;
+    fn cacheControlsWidgetIds(self: *MenuController) void {
+        const tree = self.menuTree() orelse return;
+        self.keybind_list_id = tree.findById("keybind_list") orelse NULL_WIDGET;
+        self.rebind_hint_id = tree.findById("rebind_hint") orelse NULL_WIDGET;
     }
 
-    fn singleplayerTree(self: *MenuController) ?*WidgetTree {
-        if (!self.singleplayer_screen_loaded) return null;
-        if (self.ui_manager.screen_count == 0) return null;
-        if (!self.ui_manager.screens[0].active) return null;
-        return &self.ui_manager.screens[0].tree;
+    fn resetSingleplayerWidgetIds(self: *MenuController) void {
+        self.world_list_id = NULL_WIDGET;
+        self.no_worlds_label_id = NULL_WIDGET;
+        self.delete_confirm_id = NULL_WIDGET;
+        self.delete_label_id = NULL_WIDGET;
+        self.world_search_input_id = NULL_WIDGET;
     }
 
-    fn createWorldTree(self: *MenuController) ?*WidgetTree {
-        if (!self.create_world_screen_loaded) return null;
-        if (self.ui_manager.screen_count == 0) return null;
-        if (!self.ui_manager.screens[0].active) return null;
-        return &self.ui_manager.screens[0].tree;
+    fn resetControlsWidgetIds(self: *MenuController) void {
+        self.keybind_list_id = NULL_WIDGET;
+        self.rebind_hint_id = NULL_WIDGET;
+        self.keybind_button_ids = .{NULL_WIDGET} ** Options.Action.count;
+        self.rebinding_action = null;
     }
+
+    // ============================================================
+    // Actions registration
+    // ============================================================
 
     pub fn registerActions(self: *MenuController) void {
         const reg = &self.ui_manager.registry;
@@ -142,6 +248,10 @@ pub const MenuController = struct {
         reg.register("rebind_key", actionRebindKey, ctx);
     }
 
+    // ============================================================
+    // World list
+    // ============================================================
+
     pub fn refreshWorldList(self: *MenuController) void {
         self.world_count = 0;
         self.selection = 0;
@@ -163,7 +273,7 @@ pub const MenuController = struct {
 
     fn getSearchFilter(self: *MenuController) []const u8 {
         if (self.world_search_input_id == NULL_WIDGET) return "";
-        const tree = self.singleplayerTree() orelse return "";
+        const tree = self.menuTree() orelse return "";
         const data = tree.getDataConst(self.world_search_input_id) orelse return "";
         return data.text_input.getText();
     }
@@ -171,7 +281,6 @@ pub const MenuController = struct {
     fn matchesSearch(name: []const u8, filter: []const u8) bool {
         if (filter.len == 0) return true;
         if (filter.len > name.len) return false;
-        // Case-insensitive substring match
         for (0..name.len - filter.len + 1) |start| {
             var match = true;
             for (0..filter.len) |j| {
@@ -186,7 +295,7 @@ pub const MenuController = struct {
     }
 
     fn populateWorldListWidget(self: *MenuController) void {
-        const tree = self.singleplayerTree() orelse return;
+        const tree = self.menuTree() orelse return;
         const filter = self.getSearchFilter();
 
         var visible_count: u8 = 0;
@@ -274,92 +383,52 @@ pub const MenuController = struct {
         }
     }
 
+    // ============================================================
+    // Public API for main.zig
+    // ============================================================
+
     pub fn showPauseMenu(self: *MenuController) void {
-        if (self.ui_manager.loadScreenFromFile("pause_menu.xml", self.allocator)) {
-            self.pause_screen_loaded = true;
-        } else {
-            log.err("Failed to load pause_menu.xml", .{});
-        }
+        self.loadScreen(.pause);
         self.app_state = .pause_menu;
     }
 
     pub fn hidePauseMenu(self: *MenuController) void {
-        if (self.pause_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.pause_screen_loaded = false;
-        }
+        self.unloadScreen(.pause);
         self.app_state = .playing;
     }
 
     pub fn showTitleMenu(self: *MenuController) void {
-        if (self.pause_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.pause_screen_loaded = false;
+        // Unload any gameplay screens (pause, hud)
+        if (self.app_state == .pause_menu) {
+            self.unloadScreen(.pause);
         }
-        if (self.hud_screen_loaded) {
+        if (self.hud_binder != null) {
             self.unloadHud();
         }
-        if (self.controls_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.controls_screen_loaded = false;
-            self.resetControlsWidgetIds();
-        }
-        if (self.create_world_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.create_world_screen_loaded = false;
-            self.create_world_input_id = NULL_WIDGET;
-            self.world_type_label_id = NULL_WIDGET;
-        }
-        if (self.singleplayer_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.singleplayer_screen_loaded = false;
-            self.resetSingleplayerWidgetIds();
-        }
-        if (!self.title_screen_loaded or self.ui_manager.screen_count == 0) {
-            if (self.ui_manager.loadScreenFromFile("title_menu.xml", self.allocator)) {
-                self.title_screen_loaded = true;
-                self.cacheTitleWidgetIds();
-            }
-        }
+        self.loadScreen(.title);
         self.app_state = .title_menu;
     }
 
     pub fn hideTitleMenu(self: *MenuController) void {
-        if (self.controls_screen_loaded and self.ui_manager.screen_count > 0) {
-            self.ui_manager.removeTopScreen();
-            self.controls_screen_loaded = false;
-            self.resetControlsWidgetIds();
-        }
-        if (self.create_world_screen_loaded and self.ui_manager.screen_count > 0) {
-            self.ui_manager.removeTopScreen();
-            self.create_world_screen_loaded = false;
-            self.create_world_input_id = NULL_WIDGET;
-            self.world_type_label_id = NULL_WIDGET;
-        }
-        if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0) {
-            self.ui_manager.removeTopScreen();
-            self.singleplayer_screen_loaded = false;
-            self.resetSingleplayerWidgetIds();
-        }
-        if (self.title_screen_loaded and self.ui_manager.screen_count > 0) {
-            self.ui_manager.removeTopScreen();
-            self.title_screen_loaded = false;
+        // Unload whatever menu screen is on top
+        if (screenTypeFor(self.app_state)) |st| {
+            self.unloadScreen(st);
         }
     }
 
-
     fn hudTree(self: *MenuController) ?*WidgetTree {
-        if (!self.hud_screen_loaded) return null;
+        if (self.hud_binder == null) return null;
         if (self.ui_manager.screen_count == 0) return null;
         if (!self.ui_manager.screens[0].active) return null;
         return &self.ui_manager.screens[0].tree;
     }
 
     pub fn loadHud(self: *MenuController, ui_renderer: *const UiRenderer) void {
-        if (self.hud_screen_loaded) return;
+        if (self.hud_binder != null) return;
         if (self.ui_manager.loadScreenFromFile("hud.xml", self.allocator)) {
-            self.hud_screen_loaded = true;
-            const tree = self.hudTree() orelse return;
+            // Access screens[0] directly — hudTree() can't be used yet because hud_binder is still null
+            if (self.ui_manager.screen_count == 0 or !self.ui_manager.screens[0].active) return;
+            const tree = &self.ui_manager.screens[0].tree;
             var binder = HudBinder.init(tree);
             binder.resolveSprites(tree, ui_renderer);
             self.hud_binder = binder;
@@ -369,15 +438,14 @@ pub const MenuController = struct {
     }
 
     pub fn unloadHud(self: *MenuController) void {
-        if (!self.hud_screen_loaded) return;
-        if (self.pause_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.pause_screen_loaded = false;
+        if (self.hud_binder == null) return;
+        // If pause screen is on top of hud, remove it first
+        if (self.app_state == .pause_menu) {
+            self.unloadScreen(.pause);
         }
         if (self.ui_manager.screen_count > 0) {
             self.ui_manager.removeTopScreen();
         }
-        self.hud_screen_loaded = false;
         self.hud_binder = null;
     }
 
@@ -398,266 +466,31 @@ pub const MenuController = struct {
     }
 
     pub fn getInputName(self: *const MenuController) []const u8 {
-        const tree: *const WidgetTree = if (self.create_world_screen_loaded and self.ui_manager.screen_count > 0)
-            &self.ui_manager.screens[0].tree
-        else
-            return "";
+        if (self.app_state != .create_world) return "";
+        if (self.ui_manager.screen_count == 0) return "";
+        const tree = &self.ui_manager.screens[self.ui_manager.screen_count - 1].tree;
         if (self.create_world_input_id == NULL_WIDGET) return "";
         const data = tree.getDataConst(self.create_world_input_id) orelse return "";
         return data.text_input.getText();
-    }
-
-    fn resetSingleplayerWidgetIds(self: *MenuController) void {
-        self.world_list_id = NULL_WIDGET;
-        self.no_worlds_label_id = NULL_WIDGET;
-        self.delete_confirm_id = NULL_WIDGET;
-        self.delete_label_id = NULL_WIDGET;
-        self.world_search_input_id = NULL_WIDGET;
-    }
-
-
-    fn actionPlayWorld(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        if (self.world_count > 0) {
-            self.action = .load_world;
-        }
-    }
-
-    fn actionShowCreateWorld(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        if (self.create_world_screen_loaded) return;
-        if (self.singleplayer_screen_loaded and self.ui_manager.screen_count > 0) {
-            self.ui_manager.removeTopScreen();
-            self.singleplayer_screen_loaded = false;
-            self.resetSingleplayerWidgetIds();
-        }
-        self.selected_world_type = .normal;
-        if (self.ui_manager.loadScreenFromFile("create_world_menu.xml", self.allocator)) {
-            self.create_world_screen_loaded = true;
-            self.cacheCreateWorldWidgetIds();
-        } else {
-            log.err("Failed to load create_world_menu.xml", .{});
-        }
-    }
-
-    fn actionConfirmCreateWorld(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        const name = self.getInputName();
-        if (name.len > 0) {
-            self.action = .create_world;
-        }
-    }
-
-    fn actionToggleWorldType(ctx: ?*anyopaque) void {
-        const WorldType = @import("../world/WorldState.zig").WorldType;
-        const self = getSelf(ctx);
-        self.selected_world_type = switch (self.selected_world_type) {
-            .normal => .debug,
-            .debug => .normal,
-        };
-        self.updateWorldTypeLabel();
-        _ = WorldType;
-    }
-
-    fn updateWorldTypeLabel(self: *MenuController) void {
-        if (self.world_type_label_id == NULL_WIDGET) return;
-        const tree = self.createWorldTree() orelse return;
-        if (tree.getData(self.world_type_label_id)) |data| {
-            data.label.setText(switch (self.selected_world_type) {
-                .normal => "World Type: Normal",
-                .debug => "World Type: Debug",
-            });
-        }
-    }
-
-    fn actionCancelCreateWorld(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        if (self.create_world_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.create_world_screen_loaded = false;
-            self.create_world_input_id = NULL_WIDGET;
-            self.world_type_label_id = NULL_WIDGET;
-        }
-        if (self.ui_manager.loadScreenFromFile("singleplayer_menu.xml", self.allocator)) {
-            self.singleplayer_screen_loaded = true;
-            self.cacheSingleplayerWidgetIds();
-            self.refreshWorldList();
-            self.app_state = .singleplayer_menu;
-        } else {
-            log.err("Failed to load singleplayer_menu.xml", .{});
-        }
-    }
-
-    pub fn showDeleteConfirm(self: *MenuController) void {
-        if (self.world_count == 0) return;
-
-        const tree = self.singleplayerTree() orelse return;
-        if (self.delete_confirm_id != NULL_WIDGET) {
-            if (tree.getWidget(self.delete_confirm_id)) |w| {
-                w.visible = true;
-            }
-        }
-        if (self.delete_label_id != NULL_WIDGET) {
-            if (tree.getData(self.delete_label_id)) |data| {
-                const world_name = self.getSelectedWorldName();
-                var buf: [64]u8 = undefined;
-                const text = std.fmt.bufPrint(&buf, "Delete \"{s}\"?", .{world_name}) catch "Delete?";
-                data.label.setText(text);
-            }
-        }
-    }
-
-    fn actionDeleteWorld(ctx: ?*anyopaque) void {
-        getSelf(ctx).showDeleteConfirm();
-    }
-
-    fn actionConfirmDelete(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        self.action = .delete_world;
-        const tree = self.singleplayerTree() orelse return;
-        if (self.delete_confirm_id != NULL_WIDGET) {
-            if (tree.getWidget(self.delete_confirm_id)) |w| {
-                w.visible = false;
-            }
-        }
-    }
-
-    fn actionCancelDelete(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        const tree = self.singleplayerTree() orelse return;
-        if (self.delete_confirm_id != NULL_WIDGET) {
-            if (tree.getWidget(self.delete_confirm_id)) |w| {
-                w.visible = false;
-            }
-        }
-    }
-
-    fn actionResumeGame(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        self.hidePauseMenu();
-        self.action = .resume_game;
-    }
-
-    fn actionReturnToTitle(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        self.action = .return_to_title;
-    }
-
-    fn actionQuitGame(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        self.action = .quit;
-    }
-
-    fn actionWorldSelect(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        const tree = self.singleplayerTree() orelse return;
-        if (self.world_list_id != NULL_WIDGET) {
-            if (tree.getDataConst(self.world_list_id)) |data| {
-                const idx = data.list_view.selected_index;
-                if (idx < self.world_count) {
-                    self.selection = @intCast(idx);
-                }
-            }
-        }
-    }
-
-    fn actionSearchWorlds(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        self.populateWorldListWidget();
-    }
-
-    fn actionShowSingleplayer(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        if (self.singleplayer_screen_loaded) return;
-        if (self.title_screen_loaded and self.ui_manager.screen_count > 0) {
-            self.ui_manager.removeTopScreen();
-            self.title_screen_loaded = false;
-        }
-        if (self.ui_manager.loadScreenFromFile("singleplayer_menu.xml", self.allocator)) {
-            self.singleplayer_screen_loaded = true;
-            self.cacheSingleplayerWidgetIds();
-            self.refreshWorldList();
-            self.app_state = .singleplayer_menu;
-        } else {
-            log.err("Failed to load singleplayer_menu.xml", .{});
-        }
-    }
-
-    fn actionBackToTitle(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        if (self.singleplayer_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.singleplayer_screen_loaded = false;
-            self.resetSingleplayerWidgetIds();
-        }
-        if (self.ui_manager.loadScreenFromFile("title_menu.xml", self.allocator)) {
-            self.title_screen_loaded = true;
-            self.cacheTitleWidgetIds();
-        } else {
-            log.err("Failed to load title_menu.xml", .{});
-        }
-        self.app_state = .title_menu;
-    }
-
-    fn actionShowComingSoon(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        const tree = self.titleTree() orelse return;
-        if (self.coming_soon_modal_id != NULL_WIDGET) {
-            if (tree.getWidget(self.coming_soon_modal_id)) |w| {
-                w.visible = true;
-            }
-        }
-    }
-
-    fn actionDismissModal(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        const tree = self.titleTree() orelse return;
-        if (self.coming_soon_modal_id != NULL_WIDGET) {
-            if (tree.getWidget(self.coming_soon_modal_id)) |w| {
-                w.visible = false;
-            }
-        }
     }
 
     // ============================================================
     // Controls screen
     // ============================================================
 
-    fn controlsTree(self: *MenuController) ?*WidgetTree {
-        if (!self.controls_screen_loaded) return null;
-        if (self.ui_manager.screen_count == 0) return null;
-        const screen = &self.ui_manager.screens[self.ui_manager.screen_count - 1];
-        if (!screen.active) return null;
-        return &screen.tree;
-    }
-
-    fn cacheControlsWidgetIds(self: *MenuController) void {
-        const tree = self.controlsTree() orelse return;
-        self.keybind_list_id = tree.findById("keybind_list") orelse NULL_WIDGET;
-        self.rebind_hint_id = tree.findById("rebind_hint") orelse NULL_WIDGET;
-    }
-
-    fn resetControlsWidgetIds(self: *MenuController) void {
-        self.keybind_list_id = NULL_WIDGET;
-        self.rebind_hint_id = NULL_WIDGET;
-        self.keybind_button_ids = .{NULL_WIDGET} ** Options.Action.count;
-        self.rebinding_action = null;
-    }
-
     fn populateKeybindList(self: *MenuController) void {
-        const tree = self.controlsTree() orelse return;
+        const tree = self.menuTree() orelse return;
         const opts = self.options orelse return;
         if (self.keybind_list_id == NULL_WIDGET) return;
 
         tree.clearChildren(self.keybind_list_id);
 
         inline for (@typeInfo(Options.Action).@"enum".fields) |field| {
-            const action: Options.Action = @enumFromInt(field.value);
-            const display = action.displayName();
+            const act: Options.Action = @enumFromInt(field.value);
+            const display = act.displayName();
             const binding = opts.bindings[field.value];
             const key_display = Options.inputDisplayName(binding);
 
-            // Row panel
             const row_id = tree.addWidget(.panel, self.keybind_list_id) orelse return;
             if (tree.getWidget(row_id)) |w| {
                 w.width = .fill;
@@ -668,7 +501,6 @@ pub const MenuController = struct {
                 w.background = .{ .r = 0.1, .g = 0.1, .b = 0.15, .a = 0.5 };
             }
 
-            // Action name label (left)
             const label_id = tree.addWidget(.label, row_id) orelse return;
             if (tree.getWidget(label_id)) |w| {
                 w.width = .fill;
@@ -680,7 +512,6 @@ pub const MenuController = struct {
                 data.label.color = .{ .r = 0.85, .g = 0.85, .b = 0.85, .a = 1.0 };
             }
 
-            // Keybind button (right)
             const btn_id = tree.addWidget(.button, row_id) orelse return;
             if (tree.getWidget(btn_id)) |w| {
                 w.width = .{ .px = 140 };
@@ -699,10 +530,10 @@ pub const MenuController = struct {
         }
     }
 
-    fn updateKeybindButton(self: *MenuController, action: Options.Action) void {
-        const tree = self.controlsTree() orelse return;
+    fn updateKeybindButton(self: *MenuController, act: Options.Action) void {
+        const tree = self.menuTree() orelse return;
         const opts = self.options orelse return;
-        const idx = @intFromEnum(action);
+        const idx = @intFromEnum(act);
         const btn_id = self.keybind_button_ids[idx];
         if (btn_id == NULL_WIDGET) return;
         if (tree.getData(btn_id)) |data| {
@@ -714,9 +545,9 @@ pub const MenuController = struct {
         }
     }
 
-    fn setRebindingVisual(self: *MenuController, action: Options.Action) void {
-        const tree = self.controlsTree() orelse return;
-        const idx = @intFromEnum(action);
+    fn setRebindingVisual(self: *MenuController, act: Options.Action) void {
+        const tree = self.menuTree() orelse return;
+        const idx = @intFromEnum(act);
         const btn_id = self.keybind_button_ids[idx];
         if (btn_id == NULL_WIDGET) return;
         if (tree.getData(btn_id)) |data| {
@@ -735,7 +566,7 @@ pub const MenuController = struct {
     }
 
     fn clearRebindHint(self: *MenuController) void {
-        const tree = self.controlsTree() orelse return;
+        const tree = self.menuTree() orelse return;
         if (self.rebind_hint_id != NULL_WIDGET) {
             if (tree.getData(self.rebind_hint_id)) |data| {
                 data.label.setText("Click a key to rebind");
@@ -744,80 +575,191 @@ pub const MenuController = struct {
         }
     }
 
-    /// Called from main.zig when a key is pressed during rebinding.
     pub fn handleRebindKey(self: *MenuController, code: Options.InputCode) void {
-        const action = self.rebinding_action orelse return;
+        const act = self.rebinding_action orelse return;
         const opts = self.options orelse return;
 
-        opts.bindings[@intFromEnum(action)] = code;
-        self.updateKeybindButton(action);
+        opts.bindings[@intFromEnum(act)] = code;
+        self.updateKeybindButton(act);
         self.rebinding_action = null;
         self.clearRebindHint();
         opts.save(self.allocator);
     }
 
-    /// Cancel active rebinding without changing anything.
     pub fn cancelRebind(self: *MenuController) void {
-        if (self.rebinding_action) |action| {
-            self.updateKeybindButton(action);
+        if (self.rebinding_action) |act| {
+            self.updateKeybindButton(act);
             self.rebinding_action = null;
             self.clearRebindHint();
         }
     }
 
-    fn actionShowControls(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        if (self.controls_screen_loaded) return;
-        self.controls_from_pause = false;
-        if (self.title_screen_loaded and self.ui_manager.screen_count > 0) {
-            self.ui_manager.removeTopScreen();
-            self.title_screen_loaded = false;
+    // ============================================================
+    // Delete confirm (modal within singleplayer screen)
+    // ============================================================
+
+    pub fn showDeleteConfirm(self: *MenuController) void {
+        if (self.world_count == 0) return;
+        const tree = self.menuTree() orelse return;
+        if (self.delete_confirm_id != NULL_WIDGET) {
+            if (tree.getWidget(self.delete_confirm_id)) |w| {
+                w.visible = true;
+            }
         }
-        self.openControlsScreen();
+        if (self.delete_label_id != NULL_WIDGET) {
+            if (tree.getData(self.delete_label_id)) |data| {
+                const world_name = self.getSelectedWorldName();
+                var buf: [64]u8 = undefined;
+                const text = std.fmt.bufPrint(&buf, "Delete \"{s}\"?", .{world_name}) catch "Delete?";
+                data.label.setText(text);
+            }
+        }
+    }
+
+    // ============================================================
+    // Action handlers (called from UI button clicks)
+    // ============================================================
+
+    fn actionPlayWorld(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        if (self.world_count > 0) {
+            self.action = .load_world;
+        }
+    }
+
+    fn actionShowCreateWorld(ctx: ?*anyopaque) void {
+        getSelf(ctx).transitionTo(.create_world);
+    }
+
+    fn actionConfirmCreateWorld(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const name = self.getInputName();
+        if (name.len > 0) {
+            self.action = .create_world;
+        }
+    }
+
+    fn actionToggleWorldType(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.selected_world_type = switch (self.selected_world_type) {
+            .normal => .debug,
+            .debug => .normal,
+        };
+        self.updateWorldTypeLabel();
+    }
+
+    fn updateWorldTypeLabel(self: *MenuController) void {
+        if (self.world_type_label_id == NULL_WIDGET) return;
+        const tree = self.menuTree() orelse return;
+        if (tree.getData(self.world_type_label_id)) |data| {
+            data.label.setText(switch (self.selected_world_type) {
+                .normal => "World Type: Normal",
+                .debug => "World Type: Debug",
+            });
+        }
+    }
+
+    fn actionCancelCreateWorld(ctx: ?*anyopaque) void {
+        getSelf(ctx).transitionTo(.singleplayer_menu);
+    }
+
+    fn actionDeleteWorld(ctx: ?*anyopaque) void {
+        getSelf(ctx).showDeleteConfirm();
+    }
+
+    fn actionConfirmDelete(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.action = .delete_world;
+        const tree = self.menuTree() orelse return;
+        if (self.delete_confirm_id != NULL_WIDGET) {
+            if (tree.getWidget(self.delete_confirm_id)) |w| {
+                w.visible = false;
+            }
+        }
+    }
+
+    fn actionCancelDelete(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const tree = self.menuTree() orelse return;
+        if (self.delete_confirm_id != NULL_WIDGET) {
+            if (tree.getWidget(self.delete_confirm_id)) |w| {
+                w.visible = false;
+            }
+        }
+    }
+
+    fn actionResumeGame(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.hidePauseMenu();
+        self.action = .resume_game;
+    }
+
+    fn actionReturnToTitle(ctx: ?*anyopaque) void {
+        getSelf(ctx).action = .return_to_title;
+    }
+
+    fn actionQuitGame(ctx: ?*anyopaque) void {
+        getSelf(ctx).action = .quit;
+    }
+
+    fn actionWorldSelect(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const tree = self.menuTree() orelse return;
+        if (self.world_list_id != NULL_WIDGET) {
+            if (tree.getDataConst(self.world_list_id)) |data| {
+                const idx = data.list_view.selected_index;
+                if (idx < self.world_count) {
+                    self.selection = @intCast(idx);
+                }
+            }
+        }
+    }
+
+    fn actionSearchWorlds(ctx: ?*anyopaque) void {
+        getSelf(ctx).populateWorldListWidget();
+    }
+
+    fn actionShowSingleplayer(ctx: ?*anyopaque) void {
+        getSelf(ctx).transitionTo(.singleplayer_menu);
+    }
+
+    fn actionBackToTitle(ctx: ?*anyopaque) void {
+        getSelf(ctx).transitionTo(.title_menu);
+    }
+
+    fn actionShowComingSoon(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const tree = self.menuTree() orelse return;
+        if (self.coming_soon_modal_id != NULL_WIDGET) {
+            if (tree.getWidget(self.coming_soon_modal_id)) |w| {
+                w.visible = true;
+            }
+        }
+    }
+
+    fn actionDismissModal(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const tree = self.menuTree() orelse return;
+        if (self.coming_soon_modal_id != NULL_WIDGET) {
+            if (tree.getWidget(self.coming_soon_modal_id)) |w| {
+                w.visible = false;
+            }
+        }
+    }
+
+    fn actionShowControls(ctx: ?*anyopaque) void {
+        getSelf(ctx).transitionTo(.controls_title);
     }
 
     fn actionShowControlsPause(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
-        if (self.controls_screen_loaded) return;
-        self.controls_from_pause = true;
-        if (self.pause_screen_loaded and self.ui_manager.screen_count > 0) {
-            self.ui_manager.removeTopScreen();
-            self.pause_screen_loaded = false;
-        }
-        self.openControlsScreen();
-    }
-
-    fn openControlsScreen(self: *MenuController) void {
-        if (self.ui_manager.loadScreenFromFile("controls_menu.xml", self.allocator)) {
-            self.controls_screen_loaded = true;
-            self.cacheControlsWidgetIds();
-            self.populateKeybindList();
-        } else {
-            log.err("Failed to load controls_menu.xml", .{});
-        }
-    }
-
-    pub fn closeControls(self: *MenuController) void {
-        self.rebinding_action = null;
-        if (self.controls_screen_loaded) {
-            self.ui_manager.removeTopScreen();
-            self.controls_screen_loaded = false;
-            self.resetControlsWidgetIds();
-        }
-        if (self.controls_from_pause) {
-            self.controls_from_pause = false;
-            self.showPauseMenu();
-        } else {
-            if (self.ui_manager.loadScreenFromFile("title_menu.xml", self.allocator)) {
-                self.title_screen_loaded = true;
-                self.cacheTitleWidgetIds();
-            }
-            self.app_state = .title_menu;
-        }
+        getSelf(ctx).transitionTo(.controls_pause);
     }
 
     fn actionCloseControls(ctx: ?*anyopaque) void {
-        getSelf(ctx).closeControls();
+        const self = getSelf(ctx);
+        self.cancelRebind();
+        const target: AppState = if (self.app_state == .controls_pause) .pause_menu else .title_menu;
+        self.transitionTo(target);
     }
 
     fn actionResetKeybinds(ctx: ?*anyopaque) void {
@@ -832,21 +774,18 @@ pub const MenuController = struct {
 
     fn actionRebindKey(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
-        // Find which button was pressed by checking ui_manager.pressed_widget
         const pressed = self.ui_manager.pressed_widget;
         if (pressed == NULL_WIDGET) return;
 
-        // Cancel any active rebind
         if (self.rebinding_action) |prev| {
             self.updateKeybindButton(prev);
         }
 
-        // Find which action this button belongs to
         for (&self.keybind_button_ids, 0..) |btn_id, i| {
             if (btn_id == pressed) {
-                const action: Options.Action = @enumFromInt(i);
-                self.rebinding_action = action;
-                self.setRebindingVisual(action);
+                const act: Options.Action = @enumFromInt(i);
+                self.rebinding_action = act;
+                self.setRebindingVisual(act);
                 return;
             }
         }
