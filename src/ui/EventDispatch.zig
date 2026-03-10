@@ -67,8 +67,6 @@ pub fn updateHoverState(tree: *WidgetTree, target: WidgetId) void {
 }
 
 pub fn dispatchMousePress(tree: *WidgetTree, target: WidgetId, registry: *const ActionRegistry) bool {
-    _ = registry;
-
     if (target == NULL_WIDGET) return false;
 
     // Resolve the effective target: if non-interactive, bubble up to find a clickable panel
@@ -86,7 +84,11 @@ pub fn dispatchMousePress(tree: *WidgetTree, target: WidgetId, registry: *const 
         .button, .text_input, .checkbox, .slider, .dropdown => true,
         .panel => blk: {
             const data = tree.getData(effective) orelse break :blk false;
-            break :blk data.panel.isClickable();
+            if (data.panel.isClickable()) {
+                fireWidgetAction(tree, effective, registry);
+                break :blk true;
+            }
+            break :blk false;
         },
         else => false,
     };
@@ -130,6 +132,9 @@ pub fn dispatchMouseRelease(tree: *WidgetTree, target: WidgetId, pressed_widget:
     const effective = resolveClickTarget(tree, target);
 
     if (effective == pressed_widget) {
+        // Panel actions fire on press, skip on release to avoid double-fire
+        const w = tree.getWidgetConst(effective) orelse return false;
+        if (w.kind == .panel) return true;
         fireWidgetAction(tree, effective, registry);
         return true;
     }
