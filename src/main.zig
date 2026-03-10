@@ -260,6 +260,10 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
     switch (input_state.menu_ctrl.app_state) {
         .pause_menu => {
             if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
+                if (input_state.menu_ctrl.controls_screen_loaded) {
+                    input_state.menu_ctrl.closeControls();
+                    return;
+                }
                 input_state.menu_ctrl.hidePauseMenu();
                 input_state.menu_ctrl.action = .resume_game;
                 return;
@@ -267,6 +271,10 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },
         .title_menu => {
+            if (key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS and input_state.menu_ctrl.controls_screen_loaded) {
+                input_state.menu_ctrl.closeControls();
+                return;
+            }
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },
         .singleplayer_menu => {

@@ -797,8 +797,7 @@ pub const MenuController = struct {
         }
     }
 
-    fn actionCloseControls(ctx: ?*anyopaque) void {
-        const self = getSelf(ctx);
+    pub fn closeControls(self: *MenuController) void {
         self.rebinding_action = null;
         if (self.controls_screen_loaded) {
             self.ui_manager.removeTopScreen();
@@ -815,6 +814,10 @@ pub const MenuController = struct {
             }
             self.app_state = .title_menu;
         }
+    }
+
+    fn actionCloseControls(ctx: ?*anyopaque) void {
+        getSelf(ctx).closeControls();
     }
 
     fn actionResetKeybinds(ctx: ?*anyopaque) void {
