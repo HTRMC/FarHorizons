@@ -34,6 +34,126 @@ pub const LightMap = struct {
     }
 };
 
+const CHUNK_SIZE = WorldState.CHUNK_SIZE;
+const BORDER_SIZE = CHUNK_SIZE * CHUNK_SIZE;
+
+/// Snapshot of one neighbor face's boundary light values.
+/// Copied under brief lock so mesh/light workers can read without holding
+/// the neighbor's mutex for the entire operation.
+pub const LightBorderSnapshot = struct {
+    sky: [BORDER_SIZE]u8,
+    block: [BORDER_SIZE][3]u8,
+    valid: bool,
+
+    pub const empty: LightBorderSnapshot = .{
+        .sky = .{0} ** BORDER_SIZE,
+        .block = .{.{ 0, 0, 0 }} ** BORDER_SIZE,
+        .valid = false,
+    };
+
+    /// Get sky light at the given 2D border index.
+    pub fn getSky(self: *const LightBorderSnapshot, idx: usize) u8 {
+        return self.sky[idx];
+    }
+
+    /// Get block light at the given 2D border index.
+    pub fn getBlock(self: *const LightBorderSnapshot, idx: usize) [3]u8 {
+        return self.block[idx];
+    }
+};
+
+/// Snapshot the 6 neighbor faces from their LightMaps, locking each briefly.
+/// Each face reads the boundary slice that faces the center chunk.
+/// Face mapping:
+///   0 (+Z): neighbor's z=0      1 (-Z): neighbor's z=31
+///   2 (-X): neighbor's x=31     3 (+X): neighbor's x=0
+///   4 (+Y): neighbor's y=0      5 (-Y): neighbor's y=31
+pub fn snapshotNeighborBorders(
+    neighbor_lights: [6]?*const LightMap,
+) [6]LightBorderSnapshot {
+    const io = Io.Threaded.global_single_threaded.io();
+    var borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
+
+    for (0..6) |face| {
+        const lm_const = neighbor_lights[face] orelse continue;
+        // Cast away const to access the mutex (mutex is logically separate from data)
+        const lm: *LightMap = @constCast(lm_const);
+
+        lm.mutex.lockUncancelable(io);
+        defer lm.mutex.unlock(io);
+
+        if (lm.dirty) continue; // Skip dirty — data is stale
+
+        var idx: usize = 0;
+        switch (face) {
+            0 => { // +Z: neighbor's z=0
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |x| {
+                        const ci = WorldState.chunkIndex(x, y, 0);
+                        borders[face].sky[idx] = lm.sky_light.get(ci);
+                        borders[face].block[idx] = lm.block_light.get(ci);
+                        idx += 1;
+                    }
+                }
+            },
+            1 => { // -Z: neighbor's z=31
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |x| {
+                        const ci = WorldState.chunkIndex(x, y, CHUNK_SIZE - 1);
+                        borders[face].sky[idx] = lm.sky_light.get(ci);
+                        borders[face].block[idx] = lm.block_light.get(ci);
+                        idx += 1;
+                    }
+                }
+            },
+            2 => { // -X: neighbor's x=31
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |z| {
+                        const ci = WorldState.chunkIndex(CHUNK_SIZE - 1, y, z);
+                        borders[face].sky[idx] = lm.sky_light.get(ci);
+                        borders[face].block[idx] = lm.block_light.get(ci);
+                        idx += 1;
+                    }
+                }
+            },
+            3 => { // +X: neighbor's x=0
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |z| {
+                        const ci = WorldState.chunkIndex(0, y, z);
+                        borders[face].sky[idx] = lm.sky_light.get(ci);
+                        borders[face].block[idx] = lm.block_light.get(ci);
+                        idx += 1;
+                    }
+                }
+            },
+            4 => { // +Y: neighbor's y=0
+                for (0..CHUNK_SIZE) |z| {
+                    for (0..CHUNK_SIZE) |x| {
+                        const ci = WorldState.chunkIndex(x, 0, z);
+                        borders[face].sky[idx] = lm.sky_light.get(ci);
+                        borders[face].block[idx] = lm.block_light.get(ci);
+                        idx += 1;
+                    }
+                }
+            },
+            5 => { // -Y: neighbor's y=31
+                for (0..CHUNK_SIZE) |z| {
+                    for (0..CHUNK_SIZE) |x| {
+                        const ci = WorldState.chunkIndex(x, CHUNK_SIZE - 1, z);
+                        borders[face].sky[idx] = lm.sky_light.get(ci);
+                        borders[face].block[idx] = lm.block_light.get(ci);
+                        idx += 1;
+                    }
+                }
+            },
+            else => unreachable,
+        }
+        borders[face].valid = true;
+    }
+
+    return borders;
+}
+
 pub const LightMapPool = struct {
     free_list: std.ArrayList(*LightMap),
     allocator: std.mem.Allocator,

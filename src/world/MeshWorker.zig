@@ -325,51 +325,21 @@ pub const MeshWorker = struct {
                     neighbor_lights[i] = local_light_maps.get(nk);
                 }
 
-                // Lock center + neighbor light_maps to prevent concurrent compute+read race.
-                // Cascade re-enqueue can cause another worker to computeChunkLight
-                // (which frees PaletteStorage.data) while we're still reading it.
-                // Lock in pointer-address order to avoid deadlocks between workers.
-                var lock_set: [7]?*LightMap = .{null} ** 7;
-                if (light_map) |lm| lock_set[0] = lm;
-                for (0..6) |i| {
-                    if (neighbor_lights[i]) |nl| lock_set[i + 1] = @constCast(nl);
-                }
-                // Sort non-null entries by address for consistent lock ordering
-                var lock_ptrs: [7]*LightMap = undefined;
-                var lock_count: usize = 0;
-                for (&lock_set) |maybe| {
-                    if (maybe) |ptr| {
-                        // Insert sorted by address (small array, insertion sort)
-                        var j = lock_count;
-                        while (j > 0 and @intFromPtr(lock_ptrs[j - 1]) > @intFromPtr(ptr)) : (j -= 1) {
-                            lock_ptrs[j] = lock_ptrs[j - 1];
-                        }
-                        lock_ptrs[j] = ptr;
-                        lock_count += 1;
-                    }
-                }
-                // Deduplicate (same light map can appear as both center and neighbor)
-                var dedup_count: usize = 0;
-                for (0..lock_count) |i| {
-                    if (dedup_count == 0 or lock_ptrs[dedup_count - 1] != lock_ptrs[i]) {
-                        lock_ptrs[dedup_count] = lock_ptrs[i];
-                        dedup_count += 1;
-                    }
-                }
-                for (lock_ptrs[0..dedup_count]) |lm| lm.mutex.lockUncancelable(io);
+                // Snapshot neighbor boundary light data under brief per-neighbor locks.
+                // This avoids holding all 7 locks for the entire mesh generation,
+                // preventing deadlocks and reducing contention.
+                const neighbor_borders = LightMapMod.snapshotNeighborBorders(neighbor_lights);
+
+                // Lock center light_map to prevent concurrent compute+read race.
+                if (light_map) |lm| lm.mutex.lockUncancelable(io);
                 defer {
-                    // Unlock in reverse order
-                    var ri = dedup_count;
-                    while (ri > 0) {
-                        ri -= 1;
-                        lock_ptrs[ri].mutex.unlock(io);
-                    }
+                    if (light_map) |lm| lm.mutex.unlock(io);
                 }
 
                 if (light_map) |lm| {
                     if (lm.dirty) {
                         const surface_heights = local_shm.getHeights(key.cx, key.cz);
-                        const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm, key.cy, surface_heights);
+                        const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
                         // Enqueue face neighbors whose boundary light changed
                         // so they re-mesh with updated padded border values
                         if (boundary_mask != 0) {
@@ -394,7 +364,7 @@ pub const MeshWorker = struct {
 
                 if (light_only) {
                     // Light-only path: only regenerate light data
-                    const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
+                    const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_borders) catch |err| {
                         std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                         continue;
                     };
@@ -424,7 +394,7 @@ pub const MeshWorker = struct {
                     _ = self.stats_light_only.fetchAdd(1, .monotonic);
                 } else {
                     // Full remesh path
-                    const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
+                    const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors, light_map, neighbor_borders) catch |err| {
                         std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                         continue;
                     };

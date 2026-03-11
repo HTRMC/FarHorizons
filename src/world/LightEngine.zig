@@ -2,6 +2,7 @@ const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const LightMapMod = @import("LightMap.zig");
 const LightMap = LightMapMod.LightMap;
+const LightBorderSnapshot = LightMapMod.LightBorderSnapshot;
 const BlockType = WorldState.BlockType;
 const block_properties = WorldState.block_properties;
 
@@ -57,17 +58,14 @@ fn getBlock(chunk: *const WorldState.Chunk, neighbors: [6]?*const WorldState.Chu
     return .air;
 }
 
-fn getNeighborLight(neighbor_lights: [6]?*const LightMap, face: usize, x: usize, y: usize, z: usize) [3]u8 {
-    const lm = neighbor_lights[face] orelse return .{ 0, 0, 0 };
-    // Skip dirty neighbors — their data is stale and will be recomputed
-    if (lm.dirty) return .{ 0, 0, 0 };
-    return lm.block_light.get(chunkIndex(x, y, z));
+fn getNeighborLight(neighbor_borders: [6]LightBorderSnapshot, face: usize, border_idx: usize) [3]u8 {
+    if (!neighbor_borders[face].valid) return .{ 0, 0, 0 };
+    return neighbor_borders[face].block[border_idx];
 }
 
-fn getNeighborSkyLight(neighbor_lights: [6]?*const LightMap, face: usize, x: usize, y: usize, z: usize) u8 {
-    const lm = neighbor_lights[face] orelse return 0;
-    if (lm.dirty) return 0;
-    return lm.sky_light.get(chunkIndex(x, y, z));
+fn getNeighborSkyLight(neighbor_borders: [6]LightBorderSnapshot, face: usize, border_idx: usize) u8 {
+    if (!neighbor_borders[face].valid) return 0;
+    return neighbor_borders[face].sky[border_idx];
 }
 
 const QueueEntry = struct {
@@ -94,15 +92,15 @@ const MAX_QUEUE = BLOCKS_PER_CHUNK * 2;
 pub fn computeChunkLight(
     chunk: *const WorldState.Chunk,
     neighbors: [6]?*const WorldState.Chunk,
-    neighbor_lights: [6]?*const LightMap,
+    neighbor_borders: [6]LightBorderSnapshot,
     light_map: *LightMap,
     chunk_cy: i32,
     surface_heights: ?*const [CHUNK_SIZE * CHUNK_SIZE]i32,
 ) u6 {
     light_map.clear();
 
-    computeSkyLight(chunk, neighbors, neighbor_lights, light_map, chunk_cy, surface_heights);
-    computeBlockLight(chunk, neighbors, neighbor_lights, light_map);
+    computeSkyLight(chunk, neighbors, neighbor_borders, light_map, chunk_cy, surface_heights);
+    computeBlockLight(chunk, neighbors, neighbor_borders, light_map);
 
     light_map.dirty = false;
 
@@ -187,7 +185,7 @@ pub fn computeChunkLight(
 fn computeSkyLight(
     chunk: *const WorldState.Chunk,
     _: [6]?*const WorldState.Chunk,
-    neighbor_lights: [6]?*const LightMap,
+    neighbor_borders: [6]LightBorderSnapshot,
     light_map: *LightMap,
     chunk_cy: i32,
     surface_heights: ?*const [CHUNK_SIZE * CHUNK_SIZE]i32,
@@ -225,7 +223,7 @@ fn computeSkyLight(
     // +X boundary: neighbor[3], their x=0 face → light travels -X (dir=1)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
-            const nl = getNeighborSkyLight(neighbor_lights, 3, 0, y, z);
+            const nl = getNeighborSkyLight(neighbor_borders, 3, y * CHUNK_SIZE + z);
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
@@ -242,7 +240,7 @@ fn computeSkyLight(
     // -X boundary: neighbor[2], their x=31 face → light travels +X (dir=0)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
-            const nl = getNeighborSkyLight(neighbor_lights, 2, CHUNK_SIZE - 1, y, z);
+            const nl = getNeighborSkyLight(neighbor_borders, 2, y * CHUNK_SIZE + z);
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(0, y, z);
@@ -259,7 +257,7 @@ fn computeSkyLight(
     // +Z boundary: neighbor[0], their z=0 face → light travels -Z (dir=5)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |x| {
-            const nl = getNeighborSkyLight(neighbor_lights, 0, x, y, 0);
+            const nl = getNeighborSkyLight(neighbor_borders, 0, y * CHUNK_SIZE + x);
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
@@ -276,7 +274,7 @@ fn computeSkyLight(
     // -Z boundary: neighbor[1], their z=31 face → light travels +Z (dir=4)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |x| {
-            const nl = getNeighborSkyLight(neighbor_lights, 1, x, y, CHUNK_SIZE - 1);
+            const nl = getNeighborSkyLight(neighbor_borders, 1, y * CHUNK_SIZE + x);
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(x, y, 0);
@@ -293,7 +291,7 @@ fn computeSkyLight(
     // +Y boundary: neighbor[4], their y=0 face → light travels -Y (dir=3)
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
-            const nl = getNeighborSkyLight(neighbor_lights, 4, x, 0, z);
+            const nl = getNeighborSkyLight(neighbor_borders, 4, z * CHUNK_SIZE + x);
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
@@ -310,7 +308,7 @@ fn computeSkyLight(
     // -Y boundary: neighbor[5], their y=31 face → light travels +Y (dir=2)
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
-            const nl = getNeighborSkyLight(neighbor_lights, 5, x, CHUNK_SIZE - 1, z);
+            const nl = getNeighborSkyLight(neighbor_borders, 5, z * CHUNK_SIZE + x);
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(x, 0, z);
@@ -365,7 +363,7 @@ fn computeSkyLight(
 fn computeBlockLight(
     chunk: *const WorldState.Chunk,
     neighbors: [6]?*const WorldState.Chunk,
-    neighbor_lights: [6]?*const LightMap,
+    neighbor_borders: [6]LightBorderSnapshot,
     light_map: *LightMap,
 ) void {
     _ = neighbors;
@@ -403,42 +401,42 @@ fn computeBlockLight(
     // +X boundary: neighbor[3], their x=0 face → light travels -X (dir=1)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
-            const nl = getNeighborLight(neighbor_lights, 3, 0, y, z);
+            const nl = getNeighborLight(neighbor_borders, 3, y * CHUNK_SIZE + z);
             seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(CHUNK_SIZE - 1), @intCast(y), @intCast(z), 1, nl);
         }
     }
     // -X boundary: neighbor[2], their x=31 face → light travels +X (dir=0)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
-            const nl = getNeighborLight(neighbor_lights, 2, CHUNK_SIZE - 1, y, z);
+            const nl = getNeighborLight(neighbor_borders, 2, y * CHUNK_SIZE + z);
             seedBoundaryBlockLight(&queue, &tail, chunk, light_map, 0, @intCast(y), @intCast(z), 0, nl);
         }
     }
     // +Z boundary: neighbor[0], their z=0 face → light travels -Z (dir=5)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |x| {
-            const nl = getNeighborLight(neighbor_lights, 0, x, y, 0);
+            const nl = getNeighborLight(neighbor_borders, 0, y * CHUNK_SIZE + x);
             seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), @intCast(CHUNK_SIZE - 1), 5, nl);
         }
     }
     // -Z boundary: neighbor[1], their z=31 face → light travels +Z (dir=4)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |x| {
-            const nl = getNeighborLight(neighbor_lights, 1, x, y, CHUNK_SIZE - 1);
+            const nl = getNeighborLight(neighbor_borders, 1, y * CHUNK_SIZE + x);
             seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), 0, 4, nl);
         }
     }
     // +Y boundary: neighbor[4], their y=0 face → light travels -Y (dir=3)
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
-            const nl = getNeighborLight(neighbor_lights, 4, x, 0, z);
+            const nl = getNeighborLight(neighbor_borders, 4, z * CHUNK_SIZE + x);
             seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(CHUNK_SIZE - 1), @intCast(z), 3, nl);
         }
     }
     // -Y boundary: neighbor[5], their y=31 face → light travels +Y (dir=2)
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
-            const nl = getNeighborLight(neighbor_lights, 5, x, CHUNK_SIZE - 1, z);
+            const nl = getNeighborLight(neighbor_borders, 5, z * CHUNK_SIZE + x);
             seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), 0, @intCast(z), 2, nl);
         }
     }
@@ -551,6 +549,7 @@ const Chunk = WorldState.Chunk;
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
 const no_light_neighbors: [6]?*const LightMap = .{ null, null, null, null, null, null };
+const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
 fn allocChunk() !*Chunk {
     const chunk = try testing.allocator.create(Chunk);
@@ -576,7 +575,7 @@ test "glowstone emitter lights surrounding blocks" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
     // Emitter itself should have full light
     const emit = lm.block_light.get(chunkIndex(16, 16, 16));
@@ -602,7 +601,7 @@ test "block light attenuates to zero" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
     // Glowstone emits 100 on blue channel. 100/8 = 12.5 steps, so at distance 13 should be 0.
     const far = lm.block_light.get(chunkIndex(16, 16, 16 + 13));
@@ -621,7 +620,7 @@ test "opaque block stops light propagation" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
     const behind = lm.block_light.get(chunkIndex(18, 16, 16));
     const no_wall_level = 255 - 2 * ATTENUATION;
@@ -634,7 +633,7 @@ test "sky light fills air chunk with no above neighbor" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
     try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(0, 0, 0)));
     try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 16, 16)));
@@ -652,7 +651,7 @@ test "sky light blocked by opaque block above" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
     try testing.expectEqual(@as(u8, 0), lm.sky_light.get(chunkIndex(16, 0, 16)));
 }
@@ -664,7 +663,7 @@ test "block light propagates across chunk boundary via neighbor light map" {
 
     const lm_a = try allocLightMap();
     defer freeLightMap(lm_a);
-    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
+    _ = computeChunkLight(chunk_a, no_neighbors, no_borders, lm_a, 0, null);
 
     try testing.expectEqual(@as(u8, 255), lm_a.block_light.get(chunkIndex(CHUNK_SIZE - 1, 16, 16))[0]);
 
@@ -675,10 +674,11 @@ test "block light propagates across chunk boundary via neighbor light map" {
 
     var b_neighbor_lights = no_light_neighbors;
     b_neighbor_lights[2] = lm_a;
+    const b_borders = LightMapMod.snapshotNeighborBorders(b_neighbor_lights);
     var b_neighbors = no_neighbors;
     b_neighbors[2] = chunk_a;
 
-    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b, 0, null);
+    _ = computeChunkLight(chunk_b, b_neighbors, b_borders, lm_b, 0, null);
 
     const received = lm_b.block_light.get(chunkIndex(0, 16, 16));
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), received[0]);
@@ -695,7 +695,7 @@ test "sky light propagates vertically via surface height map" {
     const lm = try allocLightMap();
     defer freeLightMap(lm);
     // Surface height = MIN means no opaque blocks anywhere → sky open everywhere
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, -1, null);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, -1, null);
 
     try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, CHUNK_SIZE - 1, 16)));
     try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 0, 16)));
@@ -711,7 +711,7 @@ test "surface height blocks sky in chunk below surface" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, &surface);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, &surface);
 
     // All blocks are below surface height → no sky light from column scan
     try testing.expectEqual(@as(u8, 0), lm.sky_light.get(chunkIndex(16, CHUNK_SIZE - 1, 16)));
@@ -728,7 +728,7 @@ test "surface height partially blocks chunk" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 1, &surface);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 1, &surface);
 
     // y=31 → world_y=63, above surface → sky light
     try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 31, 16)));
@@ -748,7 +748,7 @@ test "sky light propagates laterally across chunk boundary" {
     defer testing.allocator.destroy(chunk_a);
     const lm_a = try allocLightMap();
     defer freeLightMap(lm_a);
-    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
+    _ = computeChunkLight(chunk_a, no_neighbors, no_borders, lm_a, 0, null);
 
     // Chunk B: surface height blocks sky from above, but chunk A is its -X neighbor
     // Use surface heights that indicate opaque blocks above this chunk
@@ -763,10 +763,11 @@ test "sky light propagates laterally across chunk boundary" {
     b_neighbors[2] = chunk_a; // -X neighbor has sky light
     var b_neighbor_lights = no_light_neighbors;
     b_neighbor_lights[2] = lm_a;
+    const b_borders = LightMapMod.snapshotNeighborBorders(b_neighbor_lights);
 
     const lm_b = try allocLightMap();
     defer freeLightMap(lm_b);
-    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b, 0, &b_surface);
+    _ = computeChunkLight(chunk_b, b_neighbors, b_borders, lm_b, 0, &b_surface);
 
     // x=0 in chunk B should receive sky from chunk A's x=31 (255 - 8 = 247)
     const received = lm_b.sky_light.get(chunkIndex(0, 16, 16));
@@ -784,7 +785,7 @@ test "boundary mask set for face with light above attenuation" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    const mask = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
+    const mask = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
     try testing.expect(mask & (1 << 3) != 0);
 }
@@ -796,7 +797,7 @@ test "boundary mask not set for face with no light" {
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
-    const mask = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
+    const mask = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
     // Red channel 255 reaches all boundaries (255 - 16*8 = 127 > 8)
     try testing.expectEqual(@as(u6, 0b111111), mask);
@@ -809,7 +810,7 @@ test "dirty flag cleared after compute" {
     defer freeLightMap(lm);
     try testing.expect(lm.dirty);
 
-    _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
     try testing.expect(!lm.dirty);
 }
 
@@ -820,7 +821,7 @@ test "bidirectional boundary propagation" {
 
     const lm_a = try allocLightMap();
     defer freeLightMap(lm_a);
-    _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
+    _ = computeChunkLight(chunk_a, no_neighbors, no_borders, lm_a, 0, null);
 
     const chunk_b = try allocChunk();
     defer testing.allocator.destroy(chunk_b);
@@ -828,10 +829,11 @@ test "bidirectional boundary propagation" {
     defer freeLightMap(lm_b);
     var b_neighbor_lights = no_light_neighbors;
     b_neighbor_lights[2] = lm_a;
+    const b_borders = LightMapMod.snapshotNeighborBorders(b_neighbor_lights);
     var b_neighbors = no_neighbors;
     b_neighbors[2] = chunk_a;
 
-    _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b, 0, null);
+    _ = computeChunkLight(chunk_b, b_neighbors, b_borders, lm_b, 0, null);
 
     // Light at chunk A boundary (x=31): 255 - 1*8 = 247
     // Light entering chunk B at x=0: 247 - 8 = 239
