@@ -532,9 +532,9 @@ pub const WorldRenderer = struct {
             .stencilAttachmentFormat = vk.VK_FORMAT_UNDEFINED,
         };
 
-        const dynamic_states = [_]c.VkDynamicState{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
-        const dynamic_state_info = c.VkPipelineDynamicStateCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        const dynamic_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR };
+        const dynamic_state_info = vk.VkPipelineDynamicStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .dynamicStateCount = dynamic_states.len,

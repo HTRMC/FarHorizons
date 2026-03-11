@@ -118,17 +118,17 @@ pub const EntityRenderer = struct {
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
 
         // Clear depth buffer in this viewport region so world geometry doesn't interfere
-        const clear_attachment = vk.c.VkClearAttachment{
+        const clear_attachment = vk.VkClearAttachment{
             .aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT,
             .colorAttachment = 0,
             .clearValue = .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
         };
-        const clear_rect = vk.c.VkClearRect{
+        const clear_rect = vk.VkClearRect{
             .rect = scissor,
             .baseArrayLayer = 0,
             .layerCount = 1,
         };
-        vk.cmdClearAttachments(command_buffer, 1, &[_]vk.c.VkClearAttachment{clear_attachment}, 1, &[_]vk.c.VkClearRect{clear_rect});
+        vk.cmdClearAttachments(command_buffer, 1, &[_]vk.VkClearAttachment{clear_attachment}, 1, &[_]vk.VkClearRect{clear_rect});
 
         const aspect = vp_w / @max(vp_h, 1.0);
         const proj = zlm.Mat4.perspective(std.math.degreesToRadians(30.0), aspect, 0.1, 100.0);
@@ -641,8 +641,8 @@ pub const EntityRenderer = struct {
         const color_fmt = [_]vk.VkFormat{swapchain_format};
         const rendering_info = vk.VkPipelineRenderingCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .pNext = null, .viewMask = 0, .colorAttachmentCount = 1, .pColorAttachmentFormats = &color_fmt, .depthAttachmentFormat = vk.VK_FORMAT_D32_SFLOAT, .stencilAttachmentFormat = vk.VK_FORMAT_UNDEFINED };
 
-        const dyn_states = [_]c.VkDynamicState{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
-        const dyn_info = c.VkPipelineDynamicStateCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .pNext = null, .flags = 0, .dynamicStateCount = 2, .pDynamicStates = &dyn_states };
+        const dyn_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR };
+        const dyn_info = vk.VkPipelineDynamicStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .pNext = null, .flags = 0, .dynamicStateCount = 2, .pDynamicStates = &dyn_states };
 
         const base_info = vk.VkGraphicsPipelineCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &rendering_info, .flags = 0,

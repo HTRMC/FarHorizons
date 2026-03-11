@@ -86,6 +86,15 @@ pub const VkRenderingAttachmentInfo = c.VkRenderingAttachmentInfo;
 pub const VkPipelineRenderingCreateInfo = c.VkPipelineRenderingCreateInfo;
 pub const VkPhysicalDeviceVulkan13Features = c.VkPhysicalDeviceVulkan13Features;
 
+pub const VkDynamicState = c.VkDynamicState;
+pub const VkPipelineDynamicStateCreateInfo = c.VkPipelineDynamicStateCreateInfo;
+pub const VK_DYNAMIC_STATE_VIEWPORT = c.VK_DYNAMIC_STATE_VIEWPORT;
+pub const VK_DYNAMIC_STATE_SCISSOR = c.VK_DYNAMIC_STATE_SCISSOR;
+pub const VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+
+pub const VkClearAttachment = c.VkClearAttachment;
+pub const VkClearRect = c.VkClearRect;
+
 pub const VkDescriptorSetLayoutBindingFlagsCreateInfo = c.VkDescriptorSetLayoutBindingFlagsCreateInfo;
 pub const VkDescriptorSetVariableDescriptorCountAllocateInfo = c.VkDescriptorSetVariableDescriptorCountAllocateInfo;
 
@@ -1369,9 +1378,9 @@ pub fn cmdSetScissor(
 pub fn cmdClearAttachments(
     command_buffer: VkCommandBuffer,
     attachment_count: u32,
-    attachments: [*]const c.VkClearAttachment,
+    attachments: [*]const VkClearAttachment,
     rect_count: u32,
-    rects: [*]const c.VkClearRect,
+    rects: [*]const VkClearRect,
 ) void {
     if (c.vkCmdClearAttachments) |fn_ptr| {
         fn_ptr(command_buffer, attachment_count, attachments, rect_count, rects);
