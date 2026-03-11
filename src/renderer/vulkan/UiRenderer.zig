@@ -344,37 +344,58 @@ pub const UiRenderer = struct {
         self.vertex_count += 6;
     }
 
-    /// Draw an isometric block (3 visible faces) using Minecraft's [30°, 225°, 0°] projection.
-    /// x, y, w, h define the bounding rect; color is the base block color.
+    /// Draw an isometric block (3 visible faces) matching Minecraft's GUI display.
+    /// Minecraft applies rotationXYZ(30°, 225°, 0°) which is Ry(225) * Rx(30), then scale 0.625.
+    /// x, y, w, h define the slot bounding rect; color is the base block color.
     pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
         if (color[3] < 0.01) return;
 
-        // Pre-computed normalized vertex positions for [30°, 225°, 0°] isometric projection.
-        // Hex vertices mapped to [0,1] range:
-        const top = [2]f32{ x + w * 0.5, y };
-        const tr = [2]f32{ x + w, y + h * 0.225 };
-        const br = [2]f32{ x + w, y + h * 0.775 };
-        const bot = [2]f32{ x + w * 0.5, y + h };
-        const bl = [2]f32{ x, y + h * 0.775 };
-        const tl = [2]f32{ x, y + h * 0.225 };
-        const ctr = [2]f32{ x + w * 0.5, y + h * 0.45 };
+        // Pre-computed from R = Ry(225°) * Rx(30°) applied to unit cube ±0.5.
+        // Projected screen coords (x = proj_x, y = -proj_y for screen-down):
+        //
+        // Visible faces: TOP(+Y), WEST(-X), SOUTH(+Z). Center vertex: (-0.5,0.5,0.5)
+        //
+        // Hex outline vertices (normalized to [0,1]):
+        //   v1 (-0.5,0.5,-0.5) → (0.789, 0.0)    top-right
+        //   v2 (0.5,0.5,-0.5)  → (0.366, 0.0)    top-left
+        //   v3 (0.5,0.5,0.5)   → (0.0,   0.366)  left
+        //   v4 (0.5,-0.5,0.5)  → (0.212, 1.0)    bottom-left
+        //   v5 (-0.5,-0.5,0.5) → (0.634, 1.0)    bottom-right
+        //   v6 (-0.5,-0.5,-0.5)→ (1.0,   0.634)  right
+        //   ctr(-0.5,0.5,0.5)  → (0.423, 0.366)  center
+        //
+        // Bounding box: x=[−0.837,0.837] w=1.674, y=[−0.683,0.683] h=1.366
 
-        // Face shading factors (Minecraft-style)
-        const top_f: f32 = 1.0;
-        const right_f: f32 = 0.8;
-        const left_f: f32 = 0.6;
+        // Scale to fit within slot, maintaining correct aspect ratio.
+        const proj_w: f32 = 1.674;
+        const proj_h: f32 = 1.366;
+        const fit = 0.85;
+        const scale_x = w * fit / proj_w;
+        const scale_y = h * fit / proj_h;
+        const s = @min(scale_x, scale_y);
+        const bw = proj_w * s;
+        const bh = proj_h * s;
+        const ox = x + (w - bw) * 0.5;
+        const oy = y + (h - bh) * 0.5;
 
-        // Top face: top, tr, ctr, tl (brightest)
-        const top_col = [4]f32{ color[0] * top_f, color[1] * top_f, color[2] * top_f, color[3] };
-        self.drawQuad(top, tr, ctr, tl, top_col);
+        const v1 = [2]f32{ ox + bw * 0.789, oy + bh * 0.0 };
+        const v2 = [2]f32{ ox + bw * 0.366, oy + bh * 0.0 };
+        const v3 = [2]f32{ ox + bw * 0.0, oy + bh * 0.366 };
+        const v4 = [2]f32{ ox + bw * 0.212, oy + bh * 1.0 };
+        const v5 = [2]f32{ ox + bw * 0.634, oy + bh * 1.0 };
+        const v6 = [2]f32{ ox + bw * 1.0, oy + bh * 0.634 };
+        const ctr = [2]f32{ ox + bw * 0.423, oy + bh * 0.366 };
 
-        // Right face: tr, br, bot, ctr (medium)
-        const right_col = [4]f32{ color[0] * right_f, color[1] * right_f, color[2] * right_f, color[3] };
-        self.drawQuad(tr, br, bot, ctr, right_col);
+        // TOP face (+Y): v2, v1, ctr, v3 — brightest (1.0)
+        self.drawQuad(v2, v1, ctr, v3, color);
 
-        // Left face: tl, ctr, bot, bl (darkest)
-        const left_col = [4]f32{ color[0] * left_f, color[1] * left_f, color[2] * left_f, color[3] };
-        self.drawQuad(tl, ctr, bot, bl, left_col);
+        // WEST face (-X): v1, v6, v5, ctr — E/W shade (0.6)
+        const west_col = [4]f32{ color[0] * 0.6, color[1] * 0.6, color[2] * 0.6, color[3] };
+        self.drawQuad(v1, v6, v5, ctr, west_col);
+
+        // SOUTH face (+Z): v3, ctr, v5, v4 — N/S shade (0.8)
+        const south_col = [4]f32{ color[0] * 0.8, color[1] * 0.8, color[2] * 0.8, color[3] };
+        self.drawQuad(v3, ctr, v5, v4, south_col);
     }
 
     pub fn drawRectOutline(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, thickness: f32, color: [4]f32) void {

@@ -2,92 +2,92 @@
   <panel width="fill" height="fill" layout="anchor" background="#00000088">
 
     <!-- ======== Player panel (texture background) ======== -->
-    <panel width="202" height="208" anchor_x="center" anchor_y="center"
-           offset_x="-285" layout="anchor">
-      <image id="inv_player_bg" src="inv:player_panel" width="202" height="208"/>
+    <panel width="303" height="312" anchor_x="center" anchor_y="center"
+           offset_x="-428" layout="anchor">
+      <image id="inv_player_bg" src="inv:player_panel" width="303" height="312"/>
 
-      <!-- Left armor slots: 4 rows, pitch 36 -->
-      <panel id="armor_0" width="30" height="30" offset_x="18"  offset_y="18"/>
-      <panel id="armor_1" width="30" height="30" offset_x="18"  offset_y="54"/>
-      <panel id="armor_2" width="30" height="30" offset_x="18"  offset_y="90"/>
-      <panel id="armor_3" width="30" height="30" offset_x="18"  offset_y="126"/>
+      <!-- Left armor slots: 4 rows, pitch 54 -->
+      <panel id="armor_0" width="45" height="45" offset_x="27"  offset_y="27"/>
+      <panel id="armor_1" width="45" height="45" offset_x="27"  offset_y="81"/>
+      <panel id="armor_2" width="45" height="45" offset_x="27"  offset_y="135"/>
+      <panel id="armor_3" width="45" height="45" offset_x="27"  offset_y="189"/>
 
-      <!-- Right equipment slots: 4 rows, pitch 36 -->
-      <panel id="equip_0" width="30" height="30" offset_x="156" offset_y="18"/>
-      <panel id="equip_1" width="30" height="30" offset_x="156" offset_y="54"/>
-      <panel id="equip_2" width="30" height="30" offset_x="156" offset_y="90"/>
-      <panel id="equip_3" width="30" height="30" offset_x="156" offset_y="126"/>
+      <!-- Right equipment slots: 4 rows, pitch 54 -->
+      <panel id="equip_0" width="45" height="45" offset_x="234" offset_y="27"/>
+      <panel id="equip_1" width="45" height="45" offset_x="234" offset_y="81"/>
+      <panel id="equip_2" width="45" height="45" offset_x="234" offset_y="135"/>
+      <panel id="equip_3" width="45" height="45" offset_x="234" offset_y="189"/>
 
       <!-- Player viewport (between slot columns) -->
-      <panel id="player_viewport" width="96" height="138" offset_x="54" offset_y="18"/>
+      <panel id="player_viewport" width="144" height="207" offset_x="81" offset_y="27"/>
 
       <!-- Offhand slot (bottom center) -->
-      <panel id="inv_offhand" width="30" height="30" offset_x="88" offset_y="162"/>
+      <panel id="inv_offhand" width="45" height="45" offset_x="132" offset_y="243"/>
     </panel>
 
     <!-- ======== Inventory panel (texture background) ======== -->
-    <panel width="352" height="220" anchor_x="center" anchor_y="center" layout="anchor">
-      <image id="inv_bg" src="inv:inventory_bg" width="352" height="220"/>
+    <panel width="528" height="330" anchor_x="center" anchor_y="end" offset_y="-60" layout="anchor">
+      <image id="inv_bg" src="inv:inventory_bg" width="528" height="330"/>
 
       <!-- Header label -->
       <label text="INVENTORY" color="#CCCCCCE6" shadow="true" shadow_color="#000000AA"
-             anchor_x="center" offset_y="2"/>
+             anchor_x="center" offset_y="3"/>
 
-      <!-- Main inventory: 4 rows x 9 cols, slot pitch 36, 30x30 slots -->
-      <panel id="inv_0"  width="30" height="30" offset_x="18"  offset_y="22"/>
-      <panel id="inv_1"  width="30" height="30" offset_x="54"  offset_y="22"/>
-      <panel id="inv_2"  width="30" height="30" offset_x="90"  offset_y="22"/>
-      <panel id="inv_3"  width="30" height="30" offset_x="126" offset_y="22"/>
-      <panel id="inv_4"  width="30" height="30" offset_x="162" offset_y="22"/>
-      <panel id="inv_5"  width="30" height="30" offset_x="198" offset_y="22"/>
-      <panel id="inv_6"  width="30" height="30" offset_x="234" offset_y="22"/>
-      <panel id="inv_7"  width="30" height="30" offset_x="270" offset_y="22"/>
-      <panel id="inv_8"  width="30" height="30" offset_x="306" offset_y="22"/>
+      <!-- Main inventory: 4 rows x 9 cols, slot pitch 54, 45x45 slots -->
+      <panel id="inv_0"  width="45" height="45" offset_x="27"  offset_y="33"/>
+      <panel id="inv_1"  width="45" height="45" offset_x="81"  offset_y="33"/>
+      <panel id="inv_2"  width="45" height="45" offset_x="135" offset_y="33"/>
+      <panel id="inv_3"  width="45" height="45" offset_x="189" offset_y="33"/>
+      <panel id="inv_4"  width="45" height="45" offset_x="243" offset_y="33"/>
+      <panel id="inv_5"  width="45" height="45" offset_x="297" offset_y="33"/>
+      <panel id="inv_6"  width="45" height="45" offset_x="351" offset_y="33"/>
+      <panel id="inv_7"  width="45" height="45" offset_x="405" offset_y="33"/>
+      <panel id="inv_8"  width="45" height="45" offset_x="459" offset_y="33"/>
 
-      <panel id="inv_9"  width="30" height="30" offset_x="18"  offset_y="58"/>
-      <panel id="inv_10" width="30" height="30" offset_x="54"  offset_y="58"/>
-      <panel id="inv_11" width="30" height="30" offset_x="90"  offset_y="58"/>
-      <panel id="inv_12" width="30" height="30" offset_x="126" offset_y="58"/>
-      <panel id="inv_13" width="30" height="30" offset_x="162" offset_y="58"/>
-      <panel id="inv_14" width="30" height="30" offset_x="198" offset_y="58"/>
-      <panel id="inv_15" width="30" height="30" offset_x="234" offset_y="58"/>
-      <panel id="inv_16" width="30" height="30" offset_x="270" offset_y="58"/>
-      <panel id="inv_17" width="30" height="30" offset_x="306" offset_y="58"/>
+      <panel id="inv_9"  width="45" height="45" offset_x="27"  offset_y="87"/>
+      <panel id="inv_10" width="45" height="45" offset_x="81"  offset_y="87"/>
+      <panel id="inv_11" width="45" height="45" offset_x="135" offset_y="87"/>
+      <panel id="inv_12" width="45" height="45" offset_x="189" offset_y="87"/>
+      <panel id="inv_13" width="45" height="45" offset_x="243" offset_y="87"/>
+      <panel id="inv_14" width="45" height="45" offset_x="297" offset_y="87"/>
+      <panel id="inv_15" width="45" height="45" offset_x="351" offset_y="87"/>
+      <panel id="inv_16" width="45" height="45" offset_x="405" offset_y="87"/>
+      <panel id="inv_17" width="45" height="45" offset_x="459" offset_y="87"/>
 
-      <panel id="inv_18" width="30" height="30" offset_x="18"  offset_y="94"/>
-      <panel id="inv_19" width="30" height="30" offset_x="54"  offset_y="94"/>
-      <panel id="inv_20" width="30" height="30" offset_x="90"  offset_y="94"/>
-      <panel id="inv_21" width="30" height="30" offset_x="126" offset_y="94"/>
-      <panel id="inv_22" width="30" height="30" offset_x="162" offset_y="94"/>
-      <panel id="inv_23" width="30" height="30" offset_x="198" offset_y="94"/>
-      <panel id="inv_24" width="30" height="30" offset_x="234" offset_y="94"/>
-      <panel id="inv_25" width="30" height="30" offset_x="270" offset_y="94"/>
-      <panel id="inv_26" width="30" height="30" offset_x="306" offset_y="94"/>
+      <panel id="inv_18" width="45" height="45" offset_x="27"  offset_y="141"/>
+      <panel id="inv_19" width="45" height="45" offset_x="81"  offset_y="141"/>
+      <panel id="inv_20" width="45" height="45" offset_x="135" offset_y="141"/>
+      <panel id="inv_21" width="45" height="45" offset_x="189" offset_y="141"/>
+      <panel id="inv_22" width="45" height="45" offset_x="243" offset_y="141"/>
+      <panel id="inv_23" width="45" height="45" offset_x="297" offset_y="141"/>
+      <panel id="inv_24" width="45" height="45" offset_x="351" offset_y="141"/>
+      <panel id="inv_25" width="45" height="45" offset_x="405" offset_y="141"/>
+      <panel id="inv_26" width="45" height="45" offset_x="459" offset_y="141"/>
 
-      <panel id="inv_27" width="30" height="30" offset_x="18"  offset_y="130"/>
-      <panel id="inv_28" width="30" height="30" offset_x="54"  offset_y="130"/>
-      <panel id="inv_29" width="30" height="30" offset_x="90"  offset_y="130"/>
-      <panel id="inv_30" width="30" height="30" offset_x="126" offset_y="130"/>
-      <panel id="inv_31" width="30" height="30" offset_x="162" offset_y="130"/>
-      <panel id="inv_32" width="30" height="30" offset_x="198" offset_y="130"/>
-      <panel id="inv_33" width="30" height="30" offset_x="234" offset_y="130"/>
-      <panel id="inv_34" width="30" height="30" offset_x="270" offset_y="130"/>
-      <panel id="inv_35" width="30" height="30" offset_x="306" offset_y="130"/>
+      <panel id="inv_27" width="45" height="45" offset_x="27"  offset_y="195"/>
+      <panel id="inv_28" width="45" height="45" offset_x="81"  offset_y="195"/>
+      <panel id="inv_29" width="45" height="45" offset_x="135" offset_y="195"/>
+      <panel id="inv_30" width="45" height="45" offset_x="189" offset_y="195"/>
+      <panel id="inv_31" width="45" height="45" offset_x="243" offset_y="195"/>
+      <panel id="inv_32" width="45" height="45" offset_x="297" offset_y="195"/>
+      <panel id="inv_33" width="45" height="45" offset_x="351" offset_y="195"/>
+      <panel id="inv_34" width="45" height="45" offset_x="405" offset_y="195"/>
+      <panel id="inv_35" width="45" height="45" offset_x="459" offset_y="195"/>
 
       <!-- Hotbar row -->
-      <panel id="hotbar_0" width="30" height="30" offset_x="18"  offset_y="174"/>
-      <panel id="hotbar_1" width="30" height="30" offset_x="54"  offset_y="174"/>
-      <panel id="hotbar_2" width="30" height="30" offset_x="90"  offset_y="174"/>
-      <panel id="hotbar_3" width="30" height="30" offset_x="126" offset_y="174"/>
-      <panel id="hotbar_4" width="30" height="30" offset_x="162" offset_y="174"/>
-      <panel id="hotbar_5" width="30" height="30" offset_x="198" offset_y="174"/>
-      <panel id="hotbar_6" width="30" height="30" offset_x="234" offset_y="174"/>
-      <panel id="hotbar_7" width="30" height="30" offset_x="270" offset_y="174"/>
-      <panel id="hotbar_8" width="30" height="30" offset_x="306" offset_y="174"/>
+      <panel id="hotbar_0" width="45" height="45" offset_x="27"  offset_y="261"/>
+      <panel id="hotbar_1" width="45" height="45" offset_x="81"  offset_y="261"/>
+      <panel id="hotbar_2" width="45" height="45" offset_x="135" offset_y="261"/>
+      <panel id="hotbar_3" width="45" height="45" offset_x="189" offset_y="261"/>
+      <panel id="hotbar_4" width="45" height="45" offset_x="243" offset_y="261"/>
+      <panel id="hotbar_5" width="45" height="45" offset_x="297" offset_y="261"/>
+      <panel id="hotbar_6" width="45" height="45" offset_x="351" offset_y="261"/>
+      <panel id="hotbar_7" width="45" height="45" offset_x="405" offset_y="261"/>
+      <panel id="hotbar_8" width="45" height="45" offset_x="459" offset_y="261"/>
     </panel>
 
     <!-- Cursor item (follows mouse when carrying) -->
-    <panel id="cursor_item" width="32" height="32"
+    <panel id="cursor_item" width="48" height="48"
            anchor_x="left" anchor_y="top" visible="false"
            border_width="1" border_color="#FFFFFFAA"/>
 
