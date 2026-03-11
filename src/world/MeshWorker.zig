@@ -325,12 +325,45 @@ pub const MeshWorker = struct {
                     neighbor_lights[i] = local_light_maps.get(nk);
                 }
 
-                // Lock center light_map to prevent concurrent compute+read race.
+                // Lock center + neighbor light_maps to prevent concurrent compute+read race.
                 // Cascade re-enqueue can cause another worker to computeChunkLight
                 // (which frees PaletteStorage.data) while we're still reading it.
-                if (light_map) |lm| lm.mutex.lockUncancelable(io);
+                // Lock in pointer-address order to avoid deadlocks between workers.
+                var lock_set: [7]?*LightMap = .{null} ** 7;
+                if (light_map) |lm| lock_set[0] = lm;
+                for (0..6) |i| {
+                    if (neighbor_lights[i]) |nl| lock_set[i + 1] = @constCast(nl);
+                }
+                // Sort non-null entries by address for consistent lock ordering
+                var lock_ptrs: [7]*LightMap = undefined;
+                var lock_count: usize = 0;
+                for (&lock_set) |maybe| {
+                    if (maybe) |ptr| {
+                        // Insert sorted by address (small array, insertion sort)
+                        var j = lock_count;
+                        while (j > 0 and @intFromPtr(lock_ptrs[j - 1]) > @intFromPtr(ptr)) : (j -= 1) {
+                            lock_ptrs[j] = lock_ptrs[j - 1];
+                        }
+                        lock_ptrs[j] = ptr;
+                        lock_count += 1;
+                    }
+                }
+                // Deduplicate (same light map can appear as both center and neighbor)
+                var dedup_count: usize = 0;
+                for (0..lock_count) |i| {
+                    if (dedup_count == 0 or lock_ptrs[dedup_count - 1] != lock_ptrs[i]) {
+                        lock_ptrs[dedup_count] = lock_ptrs[i];
+                        dedup_count += 1;
+                    }
+                }
+                for (lock_ptrs[0..dedup_count]) |lm| lm.mutex.lockUncancelable(io);
                 defer {
-                    if (light_map) |lm| lm.mutex.unlock(io);
+                    // Unlock in reverse order
+                    var ri = dedup_count;
+                    while (ri > 0) {
+                        ri -= 1;
+                        lock_ptrs[ri].mutex.unlock(io);
+                    }
                 }
 
                 if (light_map) |lm| {
