@@ -1,6 +1,7 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
 const c = @import("../../platform/c.zig").c;
+const stbi = @import("../../platform/stb_image.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
@@ -468,8 +469,8 @@ pub const EntityRenderer = struct {
         var tw: c_int = 0;
         var th: c_int = 0;
         var tc: c_int = 0;
-        const pixels: [*]const u8 = c.stbi_load(path.ptr, &tw, &th, &tc, 4) orelse return error.TextureLoadFailed;
-        defer c.stbi_image_free(@constCast(@ptrCast(pixels)));
+        const pixels: [*]u8 = stbi.load(path.ptr, &tw, &th, &tc, 4) orelse return error.TextureLoadFailed;
+        defer stbi.free(pixels);
 
         const aw: u32 = @intCast(tw);
         const ah: u32 = @intCast(th);

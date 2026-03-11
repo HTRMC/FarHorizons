@@ -1,6 +1,7 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
 const c = @import("../../platform/c.zig").c;
+const stbi = @import("../../platform/stb_image.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
@@ -361,11 +362,11 @@ pub const TextRenderer = struct {
         var tw: c_int = 0;
         var th: c_int = 0;
         var tc: c_int = 0;
-        const pixels = c.stbi_load(texture_path.ptr, &tw, &th, &tc, 4) orelse {
+        const pixels = stbi.load(texture_path.ptr, &tw, &th, &tc, 4) orelse {
             std.log.err("Failed to load font texture from {s}", .{texture_path});
             return error.FontLoadFailed;
         };
-        defer c.stbi_image_free(pixels);
+        defer stbi.free(pixels);
 
         const img_w: u32 = @intCast(tw);
         const img_h: u32 = @intCast(th);

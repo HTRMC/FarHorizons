@@ -1,6 +1,7 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
 const c = @import("../../platform/c.zig").c;
+const stbi = @import("../../platform/stb_image.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
@@ -381,7 +382,7 @@ pub const UiRenderer = struct {
         var loaded_count: usize = 0;
 
         defer for (0..loaded_count) |i| {
-            c.stbi_image_free(pixels[i]);
+            stbi.free(pixels[i]);
         };
 
         var atlas_width: c_int = 0;
@@ -394,7 +395,7 @@ pub const UiRenderer = struct {
             var tw: c_int = 0;
             var th: c_int = 0;
             var tc: c_int = 0;
-            pixels[i] = c.stbi_load(path.ptr, &tw, &th, &tc, 4) orelse {
+            pixels[i] = stbi.load(path.ptr, &tw, &th, &tc, 4) orelse {
                 std.log.err("Failed to load HUD sprite: {s}", .{name});
                 return error.TextureLoadFailed;
             };
