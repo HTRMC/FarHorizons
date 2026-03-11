@@ -823,6 +823,7 @@ pub fn main() !void {
             if (game_state) |*gs| {
                 er.world_visible = gs.third_person;
                 er.world_pos = gs.render_entity_pos;
+                er.world_yaw = gs.camera.yaw;
             } else {
                 er.world_visible = false;
             }

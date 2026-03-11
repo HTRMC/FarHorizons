@@ -50,6 +50,7 @@ pub const EntityRenderer = struct {
     // Third person world rendering
     world_visible: bool = false,
     world_pos: [3]f32 = .{ 0, 0, 0 },
+    world_yaw: f32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat, gpu_alloc: *GpuAllocator) !EntityRenderer {
         const tz = tracy.zone(@src(), "EntityRenderer.init");
@@ -142,8 +143,10 @@ pub const EntityRenderer = struct {
     pub fn recordDrawWorld(self: *const EntityRenderer, command_buffer: vk.VkCommandBuffer, view_proj: zlm.Mat4) void {
         if (!self.world_visible or self.vertex_count == 0) return;
 
+        const sin_y = @sin(self.world_yaw + std.math.pi);
+        const cos_y = @cos(self.world_yaw + std.math.pi);
         const model = zlm.Mat4{
-            .m = .{ 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, self.world_pos[0], self.world_pos[1], self.world_pos[2], 1 },
+            .m = .{ cos_y, 0, -sin_y, 0, 0, 1, 0, 0, sin_y, 0, cos_y, 0, self.world_pos[0], self.world_pos[1], self.world_pos[2], 1 },
         };
         const mvp = zlm.Mat4.mul(view_proj, model);
 

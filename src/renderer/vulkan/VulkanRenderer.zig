@@ -28,6 +28,8 @@ const validation_layers = [_][*:0]const u8{"VK_LAYER_KHRONOS_validation"};
 
 const vk_log = std.log.scoped(.Vulkan);
 
+const third_person_dist: f32 = 4.0;
+
 fn debugCallback(
     message_severity: vk.VkDebugUtilsMessageSeverityFlagBitsEXT,
     message_type: vk.VkDebugUtilsMessageTypeFlagsEXT,
@@ -390,7 +392,12 @@ pub const VulkanRenderer = struct {
                 }
 
                 // Always: rebuild draw commands for this frame
-                self.render_state.world_renderer.buildIndirectCommands(&self.ctx, gs.camera.position);
+                // Use actual camera eye position (offset in third person) for face culling
+                const cull_pos = if (gs.third_person) blk: {
+                    const forward = gs.camera.getForward();
+                    break :blk zlm.Vec3.sub(gs.camera.position, zlm.Vec3.scale(forward, third_person_dist));
+                } else gs.camera.position;
+                self.render_state.world_renderer.buildIndirectCommands(&self.ctx, cull_pos);
                 self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
             }
         }
@@ -883,11 +890,10 @@ pub const VulkanRenderer = struct {
 
         if (self.game_state) |gs| {
             // Compute view matrix with third-person offset applied at render time
-            const tp_dist: f32 = 4.0;
             const view = blk: {
                 if (gs.third_person) {
                     const forward = gs.camera.getForward();
-                    const eye = zlm.Vec3.sub(gs.camera.position, zlm.Vec3.scale(forward, tp_dist));
+                    const eye = zlm.Vec3.sub(gs.camera.position, zlm.Vec3.scale(forward, third_person_dist));
                     const target = zlm.Vec3.add(eye, forward);
                     break :blk zlm.Mat4.lookAt(eye, target, zlm.Vec3.init(0.0, 1.0, 0.0));
                 } else {
