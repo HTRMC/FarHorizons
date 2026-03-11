@@ -241,10 +241,6 @@ pub const Perlin = struct {
     }
 };
 
-// ============================================================
-// OctavePerlin — exact port of Java's c.java (inverted FBm)
-// ============================================================
-
 const MAX_OCTAVES = 16;
 
 pub const OctavePerlin = struct {

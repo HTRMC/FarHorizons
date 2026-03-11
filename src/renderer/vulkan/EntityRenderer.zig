@@ -1,6 +1,6 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
-const c = @import("../../platform/c.zig").c;
+const stbi = @import("../../platform/stb_image.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
@@ -118,17 +118,30 @@ pub const EntityRenderer = struct {
         };
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
 
+        // Clear depth buffer in this viewport region so world geometry doesn't interfere
+        const clear_attachment = vk.VkClearAttachment{
+            .aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT,
+            .colorAttachment = 0,
+            .clearValue = .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+        };
+        const clear_rect = vk.VkClearRect{
+            .rect = scissor,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+        vk.cmdClearAttachments(command_buffer, 1, &[_]vk.VkClearAttachment{clear_attachment}, 1, &[_]vk.VkClearRect{clear_rect});
+
         const aspect = vp_w / @max(vp_h, 1.0);
         const proj = zlm.Mat4.perspective(std.math.degreesToRadians(30.0), aspect, 0.1, 100.0);
         const eye = zlm.Vec3.init(
             @sin(self.rotation_y) * 4.5,
-            1.0,
+            1.2,
             @cos(self.rotation_y) * 4.5,
         );
-        const view = zlm.Mat4.lookAt(eye, zlm.Vec3.init(0.0, 0.2, 0.0), zlm.Vec3.init(0.0, 1.0, 0.0));
+        const view = zlm.Mat4.lookAt(eye, zlm.Vec3.init(0.0, 0.85, 0.0), zlm.Vec3.init(0.0, 1.0, 0.0));
         const mvp = zlm.Mat4.mul(proj, view);
 
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_depth);
         vk.cmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &[_]vk.VkDescriptorSet{self.descriptor_set}, 0, null);
         vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(zlm.Mat4), &mvp.m);
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
@@ -458,8 +471,8 @@ pub const EntityRenderer = struct {
         var tw: c_int = 0;
         var th: c_int = 0;
         var tc: c_int = 0;
-        const pixels: [*]const u8 = c.stbi_load(path.ptr, &tw, &th, &tc, 4) orelse return error.TextureLoadFailed;
-        defer c.stbi_image_free(@constCast(@ptrCast(pixels)));
+        const pixels: [*]u8 = stbi.load(path.ptr, &tw, &th, &tc, 4) orelse return error.TextureLoadFailed;
+        defer stbi.free(pixels);
 
         const aw: u32 = @intCast(tw);
         const ah: u32 = @intCast(th);
@@ -569,9 +582,9 @@ pub const EntityRenderer = struct {
             .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO, .pNext = null, .flags = 0,
             .magFilter = vk.VK_FILTER_NEAREST, .minFilter = vk.VK_FILTER_NEAREST,
             .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
-            .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
             .mipLodBias = 0, .anisotropyEnable = vk.VK_FALSE, .maxAnisotropy = 1,
             .compareEnable = vk.VK_FALSE, .compareOp = 0,
             .minLod = 0, .maxLod = 0,
@@ -631,8 +644,8 @@ pub const EntityRenderer = struct {
         const color_fmt = [_]vk.VkFormat{swapchain_format};
         const rendering_info = vk.VkPipelineRenderingCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO, .pNext = null, .viewMask = 0, .colorAttachmentCount = 1, .pColorAttachmentFormats = &color_fmt, .depthAttachmentFormat = vk.VK_FORMAT_D32_SFLOAT, .stencilAttachmentFormat = vk.VK_FORMAT_UNDEFINED };
 
-        const dyn_states = [_]c.VkDynamicState{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
-        const dyn_info = c.VkPipelineDynamicStateCreateInfo{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .pNext = null, .flags = 0, .dynamicStateCount = 2, .pDynamicStates = &dyn_states };
+        const dyn_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR };
+        const dyn_info = vk.VkPipelineDynamicStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .pNext = null, .flags = 0, .dynamicStateCount = 2, .pDynamicStates = &dyn_states };
 
         const base_info = vk.VkGraphicsPipelineCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &rendering_info, .flags = 0,

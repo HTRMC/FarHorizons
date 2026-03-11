@@ -1,6 +1,6 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
-const c = @import("../../platform/c.zig").c;
+const stbi = @import("../../platform/stb_image.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
@@ -361,11 +361,11 @@ pub const TextRenderer = struct {
         var tw: c_int = 0;
         var th: c_int = 0;
         var tc: c_int = 0;
-        const pixels = c.stbi_load(texture_path.ptr, &tw, &th, &tc, 4) orelse {
+        const pixels = stbi.load(texture_path.ptr, &tw, &th, &tc, 4) orelse {
             std.log.err("Failed to load font texture from {s}", .{texture_path});
             return error.FontLoadFailed;
         };
-        defer c.stbi_image_free(pixels);
+        defer stbi.free(pixels);
 
         const img_w: u32 = @intCast(tw);
         const img_h: u32 = @intCast(th);
@@ -585,9 +585,9 @@ pub const TextRenderer = struct {
             .magFilter = vk.VK_FILTER_NEAREST,
             .minFilter = vk.VK_FILTER_NEAREST,
             .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
-            .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
             .mipLodBias = 0.0,
             .anisotropyEnable = vk.VK_FALSE,
             .maxAnisotropy = 1.0,
@@ -873,9 +873,9 @@ pub const TextRenderer = struct {
             .stencilAttachmentFormat = vk.VK_FORMAT_UNDEFINED,
         };
 
-        const dynamic_states = [_]c.VkDynamicState{ c.VK_DYNAMIC_STATE_VIEWPORT, c.VK_DYNAMIC_STATE_SCISSOR };
-        const dynamic_state_info = c.VkPipelineDynamicStateCreateInfo{
-            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        const dynamic_states = [_]vk.VkDynamicState{ vk.VK_DYNAMIC_STATE_VIEWPORT, vk.VK_DYNAMIC_STATE_SCISSOR };
+        const dynamic_state_info = vk.VkPipelineDynamicStateCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .dynamicStateCount = dynamic_states.len,

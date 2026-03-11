@@ -324,27 +324,126 @@ pub const MeshWorker = struct {
                     };
                     neighbor_lights[i] = local_light_maps.get(nk);
                 }
+
+                // Snapshot neighbor boundary light data under brief per-neighbor locks.
+                // This avoids holding all 7 locks for the entire mesh generation,
+                // preventing deadlocks and reducing contention.
+                const neighbor_borders = LightMapMod.snapshotNeighborBorders(neighbor_lights);
+
+                // Lock center light_map to prevent concurrent compute+read race.
+                if (light_map) |lm| lm.mutex.lockUncancelable(io);
+                defer {
+                    if (light_map) |lm| lm.mutex.unlock(io);
+                }
+
                 if (light_map) |lm| {
                     if (lm.dirty) {
+                        // Full recompute path (initial load or fallback).
+                        // Clear any stale incremental update.
+                        lm.incremental = null;
+                        // Save which faces had light BEFORE clearing, so we can
+                        // detect light disappearing (not just appearing).
+                        const old_mask = LightEngine.computeBoundaryMask(lm);
                         const surface_heights = local_shm.getHeights(key.cx, key.cz);
-                        const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_lights, lm, key.cy, surface_heights);
-                        // Enqueue face neighbors whose boundary light changed
-                        // so they re-mesh with updated padded border values
-                        if (boundary_mask != 0) {
-                            var cascade_keys: [6]ChunkKey = undefined;
-                            var cascade_count: usize = 0;
+                        const new_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
+
+                        // Faces where light appeared or disappeared need dirty cascade
+                        // so the neighbor fully recomputes its seeded values.
+                        const changed_mask = old_mask ^ new_mask;
+                        // Faces where light was present before and after just need
+                        // mesh padding refresh (light-only). Marking these dirty would
+                        // cause infinite cascading between adjacent lit chunks.
+                        const stable_mask = old_mask & new_mask;
+
+                        if (changed_mask != 0) {
+                            var dirty_keys: [6]ChunkKey = undefined;
+                            var dirty_count: usize = 0;
                             for (0..6) |i| {
-                                if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                                    cascade_keys[cascade_count] = .{
+                                if (changed_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                    const nk = ChunkKey{
                                         .cx = key.cx + offsets[i][0],
                                         .cy = key.cy + offsets[i][1],
                                         .cz = key.cz + offsets[i][2],
                                     };
-                                    cascade_count += 1;
+                                    if (local_light_maps.get(nk)) |nlm| {
+                                        nlm.dirty = true;
+                                    }
+                                    dirty_keys[dirty_count] = nk;
+                                    dirty_count += 1;
                                 }
                             }
-                            if (cascade_count > 0) {
-                                self.enqueueLightOnlyBatch(cascade_keys[0..cascade_count]);
+                            if (dirty_count > 0) {
+                                self.enqueueBatch(dirty_keys[0..dirty_count]);
+                            }
+                        }
+                        if (stable_mask != 0) {
+                            var lo_keys: [6]ChunkKey = undefined;
+                            var lo_count: usize = 0;
+                            for (0..6) |i| {
+                                if (stable_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                    lo_keys[lo_count] = .{
+                                        .cx = key.cx + offsets[i][0],
+                                        .cy = key.cy + offsets[i][1],
+                                        .cz = key.cz + offsets[i][2],
+                                    };
+                                    lo_count += 1;
+                                }
+                            }
+                            if (lo_count > 0) {
+                                self.enqueueLightOnlyBatch(lo_keys[0..lo_count]);
+                            }
+                        }
+                    } else if (lm.incremental) |update| {
+                        // Incremental update path — only update block light for a single change.
+                        lm.incremental = null;
+                        if (LightEngine.applyBlockChange(chunk, lm, update.lx, update.ly, update.lz, update.old_block)) |boundary_mask| {
+                            // Incremental succeeded. Cascade to face-neighbors if boundary changed.
+                            if (boundary_mask != 0) {
+                                var cascade_keys: [6]ChunkKey = undefined;
+                                var cascade_count: usize = 0;
+                                for (0..6) |i| {
+                                    if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                        const nk = ChunkKey{
+                                            .cx = key.cx + offsets[i][0],
+                                            .cy = key.cy + offsets[i][1],
+                                            .cz = key.cz + offsets[i][2],
+                                        };
+                                        // Mark neighbor for full light recompute
+                                        if (local_light_maps.get(nk)) |nlm| {
+                                            nlm.dirty = true;
+                                        }
+                                        cascade_keys[cascade_count] = nk;
+                                        cascade_count += 1;
+                                    }
+                                }
+                                if (cascade_count > 0) {
+                                    self.enqueueBatch(cascade_keys[0..cascade_count]);
+                                }
+                            }
+                        } else {
+                            // Incremental update declined (sky light affected) — fall back to full.
+                            const surface_heights = local_shm.getHeights(key.cx, key.cz);
+                            const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
+                            if (boundary_mask != 0) {
+                                var cascade_keys: [6]ChunkKey = undefined;
+                                var cascade_count: usize = 0;
+                                for (0..6) |i| {
+                                    if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                        const nk = ChunkKey{
+                                            .cx = key.cx + offsets[i][0],
+                                            .cy = key.cy + offsets[i][1],
+                                            .cz = key.cz + offsets[i][2],
+                                        };
+                                        if (local_light_maps.get(nk)) |nlm| {
+                                            nlm.dirty = true;
+                                        }
+                                        cascade_keys[cascade_count] = nk;
+                                        cascade_count += 1;
+                                    }
+                                }
+                                if (cascade_count > 0) {
+                                    self.enqueueBatch(cascade_keys[0..cascade_count]);
+                                }
                             }
                         }
                     }
@@ -352,7 +451,7 @@ pub const MeshWorker = struct {
 
                 if (light_only) {
                     // Light-only path: only regenerate light data
-                    const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
+                    const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_borders) catch |err| {
                         std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                         continue;
                     };
@@ -382,7 +481,7 @@ pub const MeshWorker = struct {
                     _ = self.stats_light_only.fetchAdd(1, .monotonic);
                 } else {
                     // Full remesh path
-                    const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
+                    const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors, light_map, neighbor_borders) catch |err| {
                         std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                         continue;
                     };

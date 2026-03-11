@@ -28,7 +28,7 @@ pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
 pub const HOTBAR_SIZE: u8 = 9;
 pub const INV_ROWS: u8 = 4;
 pub const INV_COLS: u8 = 9;
-pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 27
+pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 36
 pub const ARMOR_SLOTS: u8 = 4; // head, chest, legs, feet
 
 // Initial load radius in chunks (per axis from center)
@@ -126,7 +126,12 @@ saved_camera: Camera,
 
 selected_slot: u8 = 0,
 hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .sand, .snow, .gravel, .glass, .glowstone, .water },
-inventory: [INV_SIZE]WorldState.BlockType = .{.air} ** INV_SIZE,
+inventory: [INV_SIZE]WorldState.BlockType = .{
+    .cobblestone, .oak_log,      .oak_planks,   .bricks,       .bedrock,       .gold_ore,      .iron_ore,      .coal_ore,      .diamond_ore,
+    .sponge,      .pumice,       .wool,         .gold_block,   .iron_block,    .diamond_block, .bookshelf,     .obsidian,      .oak_leaves,
+    .air,         .air,          .air,          .air,          .air,           .air,           .air,           .air,           .air,
+    .air,         .air,          .air,          .air,          .air,           .air,           .air,           .air,           .air,
+},
 armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
 offhand: WorldState.BlockType = .air,
 carried_item: WorldState.BlockType = .air,
@@ -141,7 +146,7 @@ streaming_initialized: bool,
 world_tick_pending: bool = false,
 
 // Player-caused dirty chunks — fed to MeshWorker every frame for low latency
-player_dirty_chunks: DirtyChunkSet = DirtyChunkSet.empty(),
+player_dirty_chunks: DirtyChunkSet,
 
 // Pending unloads (collected by worldTick, applied by renderer)
 pending_unload_keys: [MAX_PENDING_UNLOADS]WorldState.ChunkKey = undefined,
@@ -190,26 +195,30 @@ pub const FrameTiming = struct {
 };
 
 pub const DirtyChunkSet = struct {
-    const MAX_DIRTY = 512;
-    keys: [MAX_DIRTY]WorldState.ChunkKey,
-    count: u16,
+    map: std.AutoArrayHashMap(WorldState.ChunkKey, void),
 
-    pub fn empty() DirtyChunkSet {
-        return .{ .keys = undefined, .count = 0 };
+    pub fn init(allocator: std.mem.Allocator) DirtyChunkSet {
+        return .{ .map = std.AutoArrayHashMap(WorldState.ChunkKey, void).init(allocator) };
+    }
+
+    pub fn deinit(self: *DirtyChunkSet) void {
+        self.map.deinit();
     }
 
     pub fn add(self: *DirtyChunkSet, key: WorldState.ChunkKey) void {
-        for (self.keys[0..self.count]) |k| {
-            if (k.eql(key)) return;
-        }
-        if (self.count < MAX_DIRTY) {
-            self.keys[self.count] = key;
-            self.count += 1;
-        }
+        self.map.put(key, {}) catch {};
     }
 
     pub fn clear(self: *DirtyChunkSet) void {
-        self.count = 0;
+        self.map.clearRetainingCapacity();
+    }
+
+    pub fn count(self: *const DirtyChunkSet) u32 {
+        return @intCast(self.map.count());
+    }
+
+    pub fn keys(self: *const DirtyChunkSet) []const WorldState.ChunkKey {
+        return self.map.keys();
     }
 };
 
@@ -317,7 +326,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .jump_requested = false,
         .jump_cooldown = 0,
         .hit_result = null,
-        .dirty_chunks = DirtyChunkSet.empty(),
+        .dirty_chunks = DirtyChunkSet.init(allocator),
+        .player_dirty_chunks = DirtyChunkSet.init(allocator),
         .world_seed = world_seed,
         .world_type = world_type,
         .storage = storage_inst,
@@ -366,6 +376,8 @@ pub fn save(self: *GameState) void {
 }
 
 pub fn deinit(self: *GameState) void {
+    self.dirty_chunks.deinit();
+    self.player_dirty_chunks.deinit();
     if (self.storage) |s| s.deinit();
     var lm_it = self.light_maps.iterator();
     while (lm_it.next()) |entry| {
@@ -563,18 +575,49 @@ fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
     }
 }
 
+/// Try to use incremental light update for a single block change.
+/// Falls back to full markDirty if the light map isn't ready for incremental updates.
+fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: WorldState.BlockType) void {
+    const base_key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+
+    // Try to set an incremental update on the center chunk's LightMap.
+    if (self.light_maps.get(base_key)) |lm| {
+        if (!lm.dirty and lm.incremental == null) {
+            lm.incremental = .{
+                .lx = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE))),
+                .ly = @intCast(@mod(wy, @as(i32, WorldState.CHUNK_SIZE))),
+                .lz = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE))),
+                .old_block = old_block,
+            };
+
+            // Enqueue center chunk + geometry-affected neighbors for processing.
+            // Don't mark any LightMaps dirty yet — the worker will cascade
+            // to face-neighbors only if the incremental update changes boundary values.
+            const affected = WorldState.affectedChunks(wx, wy, wz);
+            for (affected.keys[0..affected.count]) |key| {
+                self.player_dirty_chunks.add(key);
+            }
+            return;
+        }
+    }
+
+    // Fall back to full recompute.
+    self.markDirty(wx, wy, wz, true);
+}
+
 pub fn breakBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
     const wx = hit.block_pos[0];
     const wy = hit.block_pos[1];
     const wz = hit.block_pos[2];
+    const old_block = self.chunk_map.getBlock(wx, wy, wz);
     self.chunk_map.setBlock(wx, wy, wz, .air);
     // Rebuild surface height for this column (broken block may have been the surface)
     const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
     const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
     const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
     self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
-    self.markDirty(wx, wy, wz, true);
+    self.markDirtyIncremental(wx, wy, wz, old_block);
     self.queueChunkSave(wx, wy, wz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
@@ -589,6 +632,7 @@ pub fn placeBlock(self: *GameState) void {
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
     if (WorldState.block_properties.isSolid(block_type) and blockOverlapsPlayer(px, py, pz, self.entity_pos)) return;
+    const old_block = self.chunk_map.getBlock(px, py, pz);
     self.chunk_map.setBlock(px, py, pz, block_type);
     // Update surface height if placing an opaque block
     if (WorldState.block_properties.isOpaque(block_type)) {
@@ -597,7 +641,7 @@ pub fn placeBlock(self: *GameState) void {
         const local_z: usize = @intCast(@mod(pz, @as(i32, WorldState.CHUNK_SIZE)));
         self.surface_height_map.updateBlockPlaced(key.cx, key.cz, local_x, local_z, py);
     }
-    self.markDirty(px, py, pz, true);
+    self.markDirtyIncremental(px, py, pz, old_block);
     self.queueChunkSave(px, py, pz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }

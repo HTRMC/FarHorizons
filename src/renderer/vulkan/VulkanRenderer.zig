@@ -362,17 +362,19 @@ pub const VulkanRenderer = struct {
                 // Player fast path: feed player-caused dirty chunks EVERY frame
                 // (bypass tick gate for instant responsiveness)
                 if (self.mesh_worker) |mw| {
-                    if (gs.player_dirty_chunks.count > 0) {
-                        mw.enqueueBatch(gs.player_dirty_chunks.keys[0..gs.player_dirty_chunks.count]);
+                    if (gs.player_dirty_chunks.count() > 0) {
+                        mw.enqueueBatch(gs.player_dirty_chunks.keys());
                         gs.player_dirty_chunks.clear();
                     }
                 }
 
+                // Always: drain committed chunks from transfer pipeline
+                // (must run even when paused so the queue doesn't overflow)
+                self.drainCommittedChunks(cf);
+
                 // Tick-gated: only when 30 Hz tick fired since last frame
                 if (gs.world_tick_pending) {
                     gs.world_tick_pending = false;
-
-                    self.drainCommittedChunks(cf);
 
                     gs.applyUnloadsToGpu(
                         &self.render_state.world_renderer,
@@ -384,8 +386,8 @@ pub const VulkanRenderer = struct {
 
                     if (self.mesh_worker) |mw| {
                         mw.syncChunkMap(&gs.chunk_map, &gs.light_maps, &gs.surface_height_map, gs.player_chunk);
-                        if (gs.dirty_chunks.count > 0) {
-                            mw.enqueueBatch(gs.dirty_chunks.keys[0..gs.dirty_chunks.count]);
+                        if (gs.dirty_chunks.count() > 0) {
+                            mw.enqueueBatch(gs.dirty_chunks.keys());
                             gs.dirty_chunks.clear();
                         }
                     }
@@ -974,8 +976,8 @@ pub const VulkanRenderer = struct {
     }
 
     fn createPipelineCache(device: vk.VkDevice, cache_data: ?[]const u8) !vk.VkPipelineCache {
-        const create_info = vk.c.VkPipelineCacheCreateInfo{
-            .sType = vk.c.VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+        const create_info = vk.VkPipelineCacheCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .initialDataSize = if (cache_data) |d| d.len else 0,
@@ -1278,8 +1280,8 @@ pub const VulkanRenderer = struct {
 
         const device_extensions = [_][*:0]const u8{vk.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-        var vulkan11_features: vk.c.VkPhysicalDeviceVulkan11Features = std.mem.zeroes(vk.c.VkPhysicalDeviceVulkan11Features);
-        vulkan11_features.sType = vk.c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        var vulkan11_features: vk.VkPhysicalDeviceVulkan11Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan11Features);
+        vulkan11_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         vulkan11_features.shaderDrawParameters = vk.VK_TRUE;
 
         var vulkan12_features: vk.VkPhysicalDeviceVulkan12Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan12Features);

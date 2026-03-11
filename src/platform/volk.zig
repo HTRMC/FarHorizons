@@ -21,6 +21,7 @@ pub const VkPhysicalDeviceProperties = c.VkPhysicalDeviceProperties;
 pub const VkQueueFamilyProperties = c.VkQueueFamilyProperties;
 pub const VkDeviceCreateInfo = c.VkDeviceCreateInfo;
 pub const VkDeviceQueueCreateInfo = c.VkDeviceQueueCreateInfo;
+pub const VkPhysicalDeviceVulkan11Features = c.VkPhysicalDeviceVulkan11Features;
 pub const VkPhysicalDeviceVulkan12Features = c.VkPhysicalDeviceVulkan12Features;
 pub const VkSurfaceCapabilitiesKHR = c.VkSurfaceCapabilitiesKHR;
 pub const VkSurfaceFormatKHR = c.VkSurfaceFormatKHR;
@@ -36,6 +37,7 @@ pub const VkAttachmentReference = c.VkAttachmentReference;
 pub const VkSubpassDescription = c.VkSubpassDescription;
 pub const VkSubpassDependency = c.VkSubpassDependency;
 pub const VkPipelineCache = c.VkPipelineCache;
+pub const VkPipelineCacheCreateInfo = c.VkPipelineCacheCreateInfo;
 pub const VkCommandPool = c.VkCommandPool;
 pub const VkCommandBuffer = c.VkCommandBuffer;
 pub const VkSemaphore = c.VkSemaphore;
@@ -86,6 +88,16 @@ pub const VkRenderingAttachmentInfo = c.VkRenderingAttachmentInfo;
 pub const VkPipelineRenderingCreateInfo = c.VkPipelineRenderingCreateInfo;
 pub const VkPhysicalDeviceVulkan13Features = c.VkPhysicalDeviceVulkan13Features;
 
+pub const VkDynamicState = c.VkDynamicState;
+pub const VkPipelineDynamicStateCreateInfo = c.VkPipelineDynamicStateCreateInfo;
+pub const VK_DYNAMIC_STATE_VIEWPORT = c.VK_DYNAMIC_STATE_VIEWPORT;
+pub const VK_DYNAMIC_STATE_SCISSOR = c.VK_DYNAMIC_STATE_SCISSOR;
+pub const VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+
+pub const VkClearAttachment = c.VkClearAttachment;
+pub const VkClearRect = c.VkClearRect;
+
+pub const VkDescriptorBindingFlags = c.VkDescriptorBindingFlags;
 pub const VkDescriptorSetLayoutBindingFlagsCreateInfo = c.VkDescriptorSetLayoutBindingFlagsCreateInfo;
 pub const VkDescriptorSetVariableDescriptorCountAllocateInfo = c.VkDescriptorSetVariableDescriptorCountAllocateInfo;
 
@@ -97,7 +109,9 @@ pub const VK_STRUCTURE_TYPE_APPLICATION_INFO = c.VK_STRUCTURE_TYPE_APPLICATION_I
 pub const VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
 pub const VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+pub const VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 pub const VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
 pub const VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -199,6 +213,7 @@ pub const VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO = c.VK_STRUCTURE_TYPE_SAMPLER_CR
 pub const VK_FILTER_NEAREST = c.VK_FILTER_NEAREST;
 pub const VK_SAMPLER_MIPMAP_MODE_NEAREST = c.VK_SAMPLER_MIPMAP_MODE_NEAREST;
 pub const VK_SAMPLER_ADDRESS_MODE_REPEAT = c.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+pub const VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 pub const VK_BORDER_COLOR_INT_OPAQUE_BLACK = c.VK_BORDER_COLOR_INT_OPAQUE_BLACK;
 
 pub const VK_PIPELINE_STAGE_TRANSFER_BIT = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
@@ -1366,9 +1381,21 @@ pub fn cmdSetScissor(
     }
 }
 
+pub fn cmdClearAttachments(
+    command_buffer: VkCommandBuffer,
+    attachment_count: u32,
+    attachments: [*]const VkClearAttachment,
+    rect_count: u32,
+    rects: [*]const VkClearRect,
+) void {
+    if (c.vkCmdClearAttachments) |fn_ptr| {
+        fn_ptr(command_buffer, attachment_count, attachments, rect_count, rects);
+    }
+}
+
 pub fn createPipelineCache(
     device: VkDevice,
-    create_info: *const c.VkPipelineCacheCreateInfo,
+    create_info: *const VkPipelineCacheCreateInfo,
     allocator: ?*const VkAllocationCallbacks,
 ) VulkanError!VkPipelineCache {
     const fn_ptr = c.vkCreatePipelineCache orelse return error.FunctionNotLoaded;
