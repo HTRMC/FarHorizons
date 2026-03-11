@@ -970,8 +970,8 @@ pub const VulkanRenderer = struct {
     }
 
     fn createPipelineCache(device: vk.VkDevice, cache_data: ?[]const u8) !vk.VkPipelineCache {
-        const create_info = vk.c.VkPipelineCacheCreateInfo{
-            .sType = vk.c.VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+        const create_info = vk.VkPipelineCacheCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
             .pNext = null,
             .flags = 0,
             .initialDataSize = if (cache_data) |d| d.len else 0,
@@ -1274,8 +1274,8 @@ pub const VulkanRenderer = struct {
 
         const device_extensions = [_][*:0]const u8{vk.VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
-        var vulkan11_features: vk.c.VkPhysicalDeviceVulkan11Features = std.mem.zeroes(vk.c.VkPhysicalDeviceVulkan11Features);
-        vulkan11_features.sType = vk.c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+        var vulkan11_features: vk.VkPhysicalDeviceVulkan11Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan11Features);
+        vulkan11_features.sType = vk.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
         vulkan11_features.shaderDrawParameters = vk.VK_TRUE;
 
         var vulkan12_features: vk.VkPhysicalDeviceVulkan12Features = std.mem.zeroes(vk.VkPhysicalDeviceVulkan12Features);

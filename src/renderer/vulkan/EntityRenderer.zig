@@ -1,6 +1,5 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
-const c = @import("../../platform/c.zig").c;
 const stbi = @import("../../platform/stb_image.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
@@ -580,9 +579,9 @@ pub const EntityRenderer = struct {
             .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO, .pNext = null, .flags = 0,
             .magFilter = vk.VK_FILTER_NEAREST, .minFilter = vk.VK_FILTER_NEAREST,
             .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
-            .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+            .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
             .mipLodBias = 0, .anisotropyEnable = vk.VK_FALSE, .maxAnisotropy = 1,
             .compareEnable = vk.VK_FALSE, .compareOp = 0,
             .minLod = 0, .maxLod = 0,

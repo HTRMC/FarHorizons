@@ -1,6 +1,5 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
-const c = @import("../../platform/c.zig").c;
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");

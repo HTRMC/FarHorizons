@@ -1,6 +1,5 @@
 const std = @import("std");
 const vk = @import("../../platform/volk.zig");
-const c = @import("../../platform/c.zig").c;
 const stbi = @import("../../platform/stb_image.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
@@ -405,7 +404,7 @@ pub const TextureManager = struct {
             },
         };
 
-        const binding_flags = [_]c.VkDescriptorBindingFlags{
+        const binding_flags = [_]vk.VkDescriptorBindingFlags{
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
             vk.VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
