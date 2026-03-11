@@ -298,7 +298,7 @@ pub const UiManager = struct {
     }
 
 
-    fn topTree(self: *UiManager) ?*WidgetTree {
+    pub fn topTree(self: *UiManager) ?*WidgetTree {
         const screen = self.topScreen() orelse return null;
         if (!screen.active) return null;
         return &screen.tree;

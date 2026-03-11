@@ -6,11 +6,13 @@ const GameState = @import("GameState.zig");
 const WorldState = @import("world/WorldState.zig");
 const MenuController = @import("ui/MenuController.zig").MenuController;
 const UiManager = @import("ui/UiManager.zig").UiManager;
+const Focus = @import("ui/Focus.zig");
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
 const Logger = @import("Logger.zig");
 const app_config = @import("app_config.zig");
 const Options = @import("Options.zig");
+const Gamepad = @import("Gamepad.zig");
 
 var file_logger_instance: ?*Logger.FileLogger = null;
 
@@ -209,6 +211,7 @@ const InputState = struct {
     debug_screen_toggle: ?u3 = null,
     hotbar_scroll_delta: f32 = 0.0,
     hotbar_slot_requested: ?u8 = null,
+    gamepad: Gamepad = .{},
 };
 
 fn cursorPosCallback(window: ?*glfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
@@ -476,6 +479,170 @@ fn framebufferSizeCallback(window: ?*glfw.Window, width: c_int, height: c_int) c
     input_state.framebuffer_resized.* = true;
 }
 
+fn processGamepadInput(input_state: *InputState) void {
+    const gp = &input_state.gamepad;
+    if (!gp.connected()) return;
+
+    switch (input_state.menu_ctrl.app_state) {
+        .playing => {
+            // Start → pause
+            if (gp.pressed(.start)) {
+                input_state.menu_ctrl.showPauseMenu();
+                input_state.mouse_captured = false;
+                input_state.first_mouse = true;
+                glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+                var win_w: c_int = 0;
+                var win_h: c_int = 0;
+                glfw.getWindowSize(input_state.window.handle, &win_w, &win_h);
+                glfw.setCursorPos(input_state.window.handle, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
+                return;
+            }
+
+            // Y → inventory
+            if (gp.pressed(.y)) {
+                input_state.menu_ctrl.showInventory();
+                input_state.mouse_captured = false;
+                input_state.first_mouse = true;
+                glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+                var win_w: c_int = 0;
+                var win_h: c_int = 0;
+                glfw.getWindowSize(input_state.window.handle, &win_w, &win_h);
+                glfw.setCursorPos(input_state.window.handle, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
+                return;
+            }
+
+            const gs = input_state.game_state orelse return;
+
+            // Triggers → place / attack
+            if (gp.leftTriggerPressed()) {
+                if (!gs.debug_camera_active) gs.placeBlock();
+            }
+            if (gp.rightTriggerPressed()) {
+                if (!gs.debug_camera_active) gs.breakBlock();
+            }
+
+            // Bumpers → hotbar scroll
+            if (gp.pressed(.right_bumper)) {
+                input_state.hotbar_scroll_delta -= 1.0;
+            }
+            if (gp.pressed(.left_bumper)) {
+                input_state.hotbar_scroll_delta += 1.0;
+            }
+
+            // X → pick block
+            if (gp.pressed(.x)) {
+                if (!gs.debug_camera_active) gs.pickBlock();
+            }
+
+            // D-pad up/down → speed adjust (debug camera)
+            if (gp.pressed(.dpad_up)) {
+                input_state.move_speed = @min(input_state.move_speed * 1.25, 500.0);
+            }
+            if (gp.pressed(.dpad_down)) {
+                input_state.move_speed = @max(input_state.move_speed / 1.25, 1.0);
+            }
+
+            // Left thumb (L3) → toggle debug camera
+            if (gp.pressed(.left_thumb)) {
+                input_state.debug_toggle_requested = true;
+            }
+
+            // A double-tap → mode toggle (flying/walking)
+            if (gp.pressed(.a)) {
+                const now = glfw.getTime();
+                if (now - input_state.last_space_press_time < DOUBLE_TAP_THRESHOLD) {
+                    input_state.mode_toggle_requested = true;
+                    input_state.last_space_press_time = 0.0;
+                } else {
+                    input_state.last_space_press_time = now;
+                }
+            }
+        },
+        .pause_menu => {
+            gamepadNavigateUi(input_state);
+            // Start or B → resume
+            if (gp.pressed(.start) or gp.pressed(.b)) {
+                input_state.menu_ctrl.hidePauseMenu();
+                input_state.menu_ctrl.action = .resume_game;
+            }
+        },
+        .inventory => {
+            gamepadNavigateUi(input_state);
+            // Y or B → close inventory
+            if (gp.pressed(.y) or gp.pressed(.b)) {
+                input_state.menu_ctrl.hideInventory(input_state.game_state);
+                input_state.mouse_captured = true;
+                input_state.first_mouse = true;
+                glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+            }
+        },
+        .title_menu => {
+            gamepadNavigateUi(input_state);
+        },
+        .singleplayer_menu => {
+            gamepadNavigateUi(input_state);
+            if (gp.pressed(.b)) {
+                input_state.menu_ctrl.transitionTo(.title_menu);
+            }
+        },
+        .create_world => {
+            gamepadNavigateUi(input_state);
+            if (gp.pressed(.b)) {
+                input_state.menu_ctrl.transitionTo(.singleplayer_menu);
+            }
+        },
+        .controls_title => {
+            gamepadNavigateUi(input_state);
+            if (gp.pressed(.b)) {
+                input_state.menu_ctrl.cancelRebind();
+                input_state.menu_ctrl.transitionTo(.title_menu);
+            }
+        },
+        .controls_pause => {
+            gamepadNavigateUi(input_state);
+            if (gp.pressed(.b)) {
+                input_state.menu_ctrl.cancelRebind();
+                input_state.menu_ctrl.transitionTo(.pause_menu);
+            }
+        },
+        else => {},
+    }
+}
+
+/// Translate gamepad buttons into UI navigation events.
+fn gamepadNavigateUi(input_state: *InputState) void {
+    const gp = &input_state.gamepad;
+    const ui = input_state.ui_manager;
+    const tree = ui.topTree() orelse return;
+
+    // D-pad or left stick → spatial focus navigation
+    const nav_left = gp.pressed(.dpad_left) or gp.stickNavPressed(.left);
+    const nav_right = gp.pressed(.dpad_right) or gp.stickNavPressed(.right);
+    const nav_up = gp.pressed(.dpad_up) or gp.stickNavPressed(.up);
+    const nav_down = gp.pressed(.dpad_down) or gp.stickNavPressed(.down);
+
+    // Try slider/dropdown adjust first for left/right on the focused widget
+    if (nav_left) {
+        if (!ui.handleKey(glfw.GLFW_KEY_LEFT, glfw.GLFW_PRESS, 0))
+            Focus.navigateSpatial(tree, .left);
+    }
+    if (nav_right) {
+        if (!ui.handleKey(glfw.GLFW_KEY_RIGHT, glfw.GLFW_PRESS, 0))
+            Focus.navigateSpatial(tree, .right);
+    }
+    if (nav_up) {
+        Focus.navigateSpatial(tree, .up);
+    }
+    if (nav_down) {
+        Focus.navigateSpatial(tree, .down);
+    }
+
+    // A → confirm (Enter)
+    if (gp.pressed(.a)) {
+        _ = ui.handleKey(glfw.GLFW_KEY_ENTER, glfw.GLFW_PRESS, 0);
+    }
+}
+
 fn saveWorkerFn(gs: *GameState, done: *std.atomic.Value(bool)) void {
     gs.save();
     done.store(true, .release);
@@ -578,6 +745,8 @@ pub fn main() !void {
 
     while (!window.shouldClose()) {
         window.pollEvents();
+        input_state.gamepad.poll();
+        processGamepadInput(&input_state);
 
         const current_time = glfw.getTime();
         const delta_time: f32 = @floatCast(current_time - last_time);
@@ -721,6 +890,15 @@ pub fn main() !void {
                     }
                 }
 
+                // Gamepad right stick → camera look
+                if (input_state.gamepad.connected()) {
+                    const gpx = input_state.gamepad.right_x;
+                    const gpy = input_state.gamepad.right_y;
+                    if (gpx != 0 or gpy != 0) {
+                        gs.camera.look(-gpx * Gamepad.LOOK_SPEED * delta_time, -gpy * Gamepad.LOOK_SPEED * delta_time);
+                    }
+                }
+
                 if (input_state.debug_toggle_requested) {
                     input_state.debug_toggle_requested = false;
                     gs.toggleDebugCamera();
@@ -764,6 +942,15 @@ pub fn main() !void {
                 if (options.isKeyHeld(window.handle, .jump)) up_input += 1.0;
                 if (options.isKeyHeld(window.handle, .sneak)) up_input -= 1.0;
 
+                // Merge gamepad stick input (left stick = movement)
+                const gp = &input_state.gamepad;
+                if (gp.connected()) {
+                    forward_input = std.math.clamp(forward_input - gp.left_y, -1.0, 1.0);
+                    right_input = std.math.clamp(right_input + gp.left_x, -1.0, 1.0);
+                    if (gp.held(.a)) up_input = std.math.clamp(up_input + 1.0, -1.0, 1.0);
+                    if (gp.held(.b)) up_input = std.math.clamp(up_input - 1.0, -1.0, 1.0);
+                }
+
                 if (gs.debug_camera_active) {
                     const speed = input_state.move_speed * delta_time;
                     gs.camera.move(forward_input * speed, right_input * speed, up_input * speed);
@@ -775,7 +962,7 @@ pub fn main() !void {
 
                     gs.input_move = .{ forward_input, up_input, right_input };
 
-                    const space_held = options.isKeyHeld(window.handle, .jump);
+                    const space_held = options.isKeyHeld(window.handle, .jump) or input_state.gamepad.held(.a);
                     if (space_held and !input_state.space_was_held) {
                         gs.jump_requested = true;
                     }
