@@ -133,7 +133,7 @@ fn drawF4(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_all
     text.drawText(x, y, dc_text, yellow);
     y += LINE_HEIGHT;
 
-    const dirty_text = std.fmt.bufPrint(&buf, "Dirty Chunks: {d}", .{gs.dirty_chunks.count}) catch "Dirty Chunks: ?";
+    const dirty_text = std.fmt.bufPrint(&buf, "Dirty Chunks: {d}", .{gs.dirty_chunks.count()}) catch "Dirty Chunks: ?";
     text.drawText(x, y, dirty_text, yellow);
     y += LINE_HEIGHT;
 

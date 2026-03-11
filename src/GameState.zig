@@ -141,7 +141,7 @@ streaming_initialized: bool,
 world_tick_pending: bool = false,
 
 // Player-caused dirty chunks — fed to MeshWorker every frame for low latency
-player_dirty_chunks: DirtyChunkSet = DirtyChunkSet.empty(),
+player_dirty_chunks: DirtyChunkSet,
 
 // Pending unloads (collected by worldTick, applied by renderer)
 pending_unload_keys: [MAX_PENDING_UNLOADS]WorldState.ChunkKey = undefined,
@@ -190,26 +190,30 @@ pub const FrameTiming = struct {
 };
 
 pub const DirtyChunkSet = struct {
-    const MAX_DIRTY = 512;
-    keys: [MAX_DIRTY]WorldState.ChunkKey,
-    count: u16,
+    map: std.AutoArrayHashMap(WorldState.ChunkKey, void),
 
-    pub fn empty() DirtyChunkSet {
-        return .{ .keys = undefined, .count = 0 };
+    pub fn init(allocator: std.mem.Allocator) DirtyChunkSet {
+        return .{ .map = std.AutoArrayHashMap(WorldState.ChunkKey, void).init(allocator) };
+    }
+
+    pub fn deinit(self: *DirtyChunkSet) void {
+        self.map.deinit();
     }
 
     pub fn add(self: *DirtyChunkSet, key: WorldState.ChunkKey) void {
-        for (self.keys[0..self.count]) |k| {
-            if (k.eql(key)) return;
-        }
-        if (self.count < MAX_DIRTY) {
-            self.keys[self.count] = key;
-            self.count += 1;
-        }
+        self.map.put(key, {}) catch {};
     }
 
     pub fn clear(self: *DirtyChunkSet) void {
-        self.count = 0;
+        self.map.clearRetainingCapacity();
+    }
+
+    pub fn count(self: *const DirtyChunkSet) u32 {
+        return @intCast(self.map.count());
+    }
+
+    pub fn keys(self: *const DirtyChunkSet) []const WorldState.ChunkKey {
+        return self.map.keys();
     }
 };
 
@@ -317,7 +321,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .jump_requested = false,
         .jump_cooldown = 0,
         .hit_result = null,
-        .dirty_chunks = DirtyChunkSet.empty(),
+        .dirty_chunks = DirtyChunkSet.init(allocator),
+        .player_dirty_chunks = DirtyChunkSet.init(allocator),
         .world_seed = world_seed,
         .world_type = world_type,
         .storage = storage_inst,
@@ -366,6 +371,8 @@ pub fn save(self: *GameState) void {
 }
 
 pub fn deinit(self: *GameState) void {
+    self.dirty_chunks.deinit();
+    self.player_dirty_chunks.deinit();
     if (self.storage) |s| s.deinit();
     var lm_it = self.light_maps.iterator();
     while (lm_it.next()) |entry| {

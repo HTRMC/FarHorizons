@@ -360,8 +360,8 @@ pub const VulkanRenderer = struct {
                 // Player fast path: feed player-caused dirty chunks EVERY frame
                 // (bypass tick gate for instant responsiveness)
                 if (self.mesh_worker) |mw| {
-                    if (gs.player_dirty_chunks.count > 0) {
-                        mw.enqueueBatch(gs.player_dirty_chunks.keys[0..gs.player_dirty_chunks.count]);
+                    if (gs.player_dirty_chunks.count() > 0) {
+                        mw.enqueueBatch(gs.player_dirty_chunks.keys());
                         gs.player_dirty_chunks.clear();
                     }
                 }
@@ -382,8 +382,8 @@ pub const VulkanRenderer = struct {
 
                     if (self.mesh_worker) |mw| {
                         mw.syncChunkMap(&gs.chunk_map, &gs.light_maps, &gs.surface_height_map, gs.player_chunk);
-                        if (gs.dirty_chunks.count > 0) {
-                            mw.enqueueBatch(gs.dirty_chunks.keys[0..gs.dirty_chunks.count]);
+                        if (gs.dirty_chunks.count() > 0) {
+                            mw.enqueueBatch(gs.dirty_chunks.keys());
                             gs.dirty_chunks.clear();
                         }
                     }
