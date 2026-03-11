@@ -314,6 +314,7 @@ pub const MenuController = struct {
         if (tree.getData(id)) |data| {
             data.panel.setAction("inv_slot_click");
             data.panel.hover_color = hover_col;
+            data.panel.draw_isometric = true;
         }
     }
 

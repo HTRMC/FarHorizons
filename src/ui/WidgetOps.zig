@@ -21,7 +21,11 @@ pub fn drawWidget(
     const data = tree.getDataConst(id) orelse return;
 
     if (w.background.a > 0.01) {
-        ui.drawRect(r.x, r.y, r.w, r.h, w.background.toArray());
+        if (w.kind == .panel and data.panel.draw_isometric) {
+            ui.drawIsometricBlock(r.x, r.y, r.w, r.h, w.background.toArray());
+        } else {
+            ui.drawRect(r.x, r.y, r.w, r.h, w.background.toArray());
+        }
     }
 
     if (w.border_width > 0 and w.border_color.a > 0.01) {

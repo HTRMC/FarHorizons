@@ -23,6 +23,7 @@ pub const PanelData = struct {
     on_click_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
     on_click_action_len: u8 = 0,
     hover_color: Color = Color.fromHex(0x00000000),
+    draw_isometric: bool = false,
 
     pub fn setAction(self: *PanelData, str: []const u8) void {
         const len: u8 = @intCast(@min(str.len, MAX_ACTION_LEN));

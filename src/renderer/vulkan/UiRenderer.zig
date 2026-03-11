@@ -323,6 +323,60 @@ pub const UiRenderer = struct {
         self.drawTexturedRect(x + w - bx, y + h - by, bx, by, uv_r - bux, uv_b - bvy, uv_r, uv_b, tint);
     }
 
+    /// Draw an arbitrary quad (4 corners, 2 triangles). Winding: p0-p1-p2, p0-p2-p3.
+    pub fn drawQuad(self: *UiRenderer, p0: [2]f32, p1: [2]f32, p2: [2]f32, p3: [2]f32, color: [4]f32) void {
+        if (color[3] < 0.01) return;
+        const verts = self.mapped_vertices orelse return;
+        if (self.vertex_count + 6 > MAX_VERTICES) return;
+
+        const s = self.clip_scale;
+        const cr = [4]f32{ self.clip_rect[0] * s, self.clip_rect[1] * s, self.clip_rect[2] * s, self.clip_rect[3] * s };
+        const pts = [4][2]f32{ p0, p1, p2, p3 };
+        const indices = [6]u8{ 0, 1, 2, 0, 2, 3 };
+        for (indices, 0..) |idx, i| {
+            verts[self.vertex_count + i] = .{
+                .px = pts[idx][0], .py = pts[idx][1],
+                .u = -1, .v = -1,
+                .r = color[0], .g = color[1], .b = color[2], .a = color[3],
+                .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3],
+            };
+        }
+        self.vertex_count += 6;
+    }
+
+    /// Draw an isometric block (3 visible faces) using Minecraft's [30°, 225°, 0°] projection.
+    /// x, y, w, h define the bounding rect; color is the base block color.
+    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
+        if (color[3] < 0.01) return;
+
+        // Pre-computed normalized vertex positions for [30°, 225°, 0°] isometric projection.
+        // Hex vertices mapped to [0,1] range:
+        const top = [2]f32{ x + w * 0.5, y };
+        const tr = [2]f32{ x + w, y + h * 0.225 };
+        const br = [2]f32{ x + w, y + h * 0.775 };
+        const bot = [2]f32{ x + w * 0.5, y + h };
+        const bl = [2]f32{ x, y + h * 0.775 };
+        const tl = [2]f32{ x, y + h * 0.225 };
+        const ctr = [2]f32{ x + w * 0.5, y + h * 0.45 };
+
+        // Face shading factors (Minecraft-style)
+        const top_f: f32 = 1.0;
+        const right_f: f32 = 0.8;
+        const left_f: f32 = 0.6;
+
+        // Top face: top, tr, ctr, tl (brightest)
+        const top_col = [4]f32{ color[0] * top_f, color[1] * top_f, color[2] * top_f, color[3] };
+        self.drawQuad(top, tr, ctr, tl, top_col);
+
+        // Right face: tr, br, bot, ctr (medium)
+        const right_col = [4]f32{ color[0] * right_f, color[1] * right_f, color[2] * right_f, color[3] };
+        self.drawQuad(tr, br, bot, ctr, right_col);
+
+        // Left face: tl, ctr, bot, bl (darkest)
+        const left_col = [4]f32{ color[0] * left_f, color[1] * left_f, color[2] * left_f, color[3] };
+        self.drawQuad(tl, ctr, bot, bl, left_col);
+    }
+
     pub fn drawRectOutline(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, thickness: f32, color: [4]f32) void {
         if (thickness <= 0 or color[3] < 0.01) return;
         self.drawRect(x, y, w, thickness, color);

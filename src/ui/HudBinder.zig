@@ -21,7 +21,7 @@ pub const HudBinder = struct {
     block_name_id: WidgetId = NULL_WIDGET,
     slot_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
 
-    pub fn init(tree: *const WidgetTree) HudBinder {
+    pub fn init(tree: *WidgetTree) HudBinder {
         var self = HudBinder{};
         self.crosshair_id = tree.findById("crosshair") orelse NULL_WIDGET;
         self.hotbar_bg_id = tree.findById("hotbar_bg") orelse NULL_WIDGET;
@@ -31,7 +31,13 @@ pub const HudBinder = struct {
 
         inline for (0..HOTBAR_SIZE) |i| {
             const name = comptime std.fmt.comptimePrint("slot_{d}", .{i});
-            self.slot_ids[i] = tree.findById(name) orelse NULL_WIDGET;
+            const id = tree.findById(name) orelse NULL_WIDGET;
+            self.slot_ids[i] = id;
+            if (id != NULL_WIDGET) {
+                if (tree.getData(id)) |data| {
+                    data.panel.draw_isometric = true;
+                }
+            }
         }
 
         return self;

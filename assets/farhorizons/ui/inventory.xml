@@ -2,25 +2,27 @@
   <panel width="fill" height="fill" layout="anchor" background="#00000088">
 
     <!-- ======== Player panel (texture background) ======== -->
-    <panel width="192" height="320" anchor_x="center" anchor_y="center"
-           offset_x="-290" layout="anchor">
-      <image id="inv_player_bg" src="inv:player_panel" width="192" height="320"/>
+    <panel width="202" height="208" anchor_x="center" anchor_y="center"
+           offset_x="-285" layout="anchor">
+      <image id="inv_player_bg" src="inv:player_panel" width="202" height="208"/>
 
-      <!-- Header label -->
-      <label text="PLAYER" color="#CCCCCCE6" shadow="true" shadow_color="#000000AA"
-             anchor_x="center" offset_y="4"/>
+      <!-- Left armor slots: 4 rows, pitch 36 -->
+      <panel id="armor_0" width="30" height="30" offset_x="18"  offset_y="18"/>
+      <panel id="armor_1" width="30" height="30" offset_x="18"  offset_y="54"/>
+      <panel id="armor_2" width="30" height="30" offset_x="18"  offset_y="90"/>
+      <panel id="armor_3" width="30" height="30" offset_x="18"  offset_y="126"/>
 
-      <!-- Armor slots (positioned to match sprite at 2x) -->
-      <panel id="armor_0" width="36" height="36" offset_x="6"  offset_y="40"/>
-      <panel id="armor_2" width="36" height="36" offset_x="6"  offset_y="88"/>
-      <panel id="armor_1" width="36" height="36" offset_x="150" offset_y="40"/>
-      <panel id="armor_3" width="36" height="36" offset_x="150" offset_y="88"/>
+      <!-- Right equipment slots: 4 rows, pitch 36 -->
+      <panel id="equip_0" width="30" height="30" offset_x="156" offset_y="18"/>
+      <panel id="equip_1" width="30" height="30" offset_x="156" offset_y="54"/>
+      <panel id="equip_2" width="30" height="30" offset_x="156" offset_y="90"/>
+      <panel id="equip_3" width="30" height="30" offset_x="156" offset_y="126"/>
 
-      <!-- Player viewport -->
-      <panel id="player_viewport" width="72" height="232" offset_x="60" offset_y="32"/>
+      <!-- Player viewport (between slot columns) -->
+      <panel id="player_viewport" width="96" height="138" offset_x="54" offset_y="18"/>
 
-      <!-- Offhand slot -->
-      <panel id="inv_offhand" width="36" height="36" offset_x="78" offset_y="276"/>
+      <!-- Offhand slot (bottom center) -->
+      <panel id="inv_offhand" width="30" height="30" offset_x="88" offset_y="162"/>
     </panel>
 
     <!-- ======== Inventory panel (texture background) ======== -->
