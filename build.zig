@@ -86,10 +86,9 @@ pub fn build(b: *std.Build) void {
     }
 
     // Hide the console window on Windows
-    // TODO: re-enable for release builds
-    // if (exe.root_module.resolved_target.?.result.os.tag == .windows) {
-    //     exe.subsystem = .windows;
-    // }
+    if (exe.root_module.resolved_target.?.result.os.tag == .windows) {
+        exe.subsystem = .windows;
+    }
 
     b.installArtifact(exe);
 
