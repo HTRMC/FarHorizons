@@ -121,10 +121,10 @@ pub const EntityRenderer = struct {
         const proj = zlm.Mat4.perspective(std.math.degreesToRadians(30.0), aspect, 0.1, 100.0);
         const eye = zlm.Vec3.init(
             @sin(self.rotation_y) * 4.5,
-            1.0,
+            1.2,
             @cos(self.rotation_y) * 4.5,
         );
-        const view = zlm.Mat4.lookAt(eye, zlm.Vec3.init(0.0, 0.2, 0.0), zlm.Vec3.init(0.0, 1.0, 0.0));
+        const view = zlm.Mat4.lookAt(eye, zlm.Vec3.init(0.0, 0.85, 0.0), zlm.Vec3.init(0.0, 1.0, 0.0));
         const mvp = zlm.Mat4.mul(proj, view);
 
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
