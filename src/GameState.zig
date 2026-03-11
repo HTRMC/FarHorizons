@@ -30,6 +30,7 @@ pub const INV_ROWS: u8 = 4;
 pub const INV_COLS: u8 = 9;
 pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 36
 pub const ARMOR_SLOTS: u8 = 4; // head, chest, legs, feet
+pub const EQUIP_SLOTS: u8 = 4;
 
 // Initial load radius in chunks (per axis from center)
 const LOAD_RADIUS_XZ: i32 = 2;
@@ -133,6 +134,7 @@ inventory: [INV_SIZE]WorldState.BlockType = .{
     .air,         .air,          .air,          .air,          .air,           .air,           .air,           .air,           .air,
 },
 armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
+equip: [EQUIP_SLOTS]WorldState.BlockType = .{.air} ** EQUIP_SLOTS,
 offhand: WorldState.BlockType = .air,
 carried_item: WorldState.BlockType = .air,
 inventory_open: bool = false,
@@ -223,11 +225,12 @@ pub const DirtyChunkSet = struct {
 };
 
 /// Get a pointer to the block in a unified slot index.
-/// Slots 0-8: hotbar, 9-35: main inventory, 36-39: armor, 40: offhand.
+/// Slots 0-8: hotbar, 9-44: main inventory, 45-48: armor, 49-52: equip, 53: offhand.
 pub fn slotPtr(self: *GameState, slot: u8) *WorldState.BlockType {
     if (slot < HOTBAR_SIZE) return &self.hotbar[slot];
     if (slot < HOTBAR_SIZE + INV_SIZE) return &self.inventory[slot - HOTBAR_SIZE];
     if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS) return &self.armor[slot - HOTBAR_SIZE - INV_SIZE];
+    if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS) return &self.equip[slot - HOTBAR_SIZE - INV_SIZE - ARMOR_SLOTS];
     return &self.offhand;
 }
 

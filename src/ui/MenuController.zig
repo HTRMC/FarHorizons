@@ -77,6 +77,7 @@ pub const MenuController = struct {
     inv_slot_ids: [GameState.HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.HOTBAR_SIZE, // hotbar row
     inv_main_ids: [GameState.INV_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.INV_SIZE, // 3x9 main
     inv_armor_ids: [GameState.ARMOR_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS,
+    inv_equip_ids: [GameState.EQUIP_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.EQUIP_SLOTS,
     inv_offhand_id: WidgetId = NULL_WIDGET,
     inv_player_viewport_id: WidgetId = NULL_WIDGET,
     cursor_item_id: WidgetId = NULL_WIDGET,
@@ -275,6 +276,12 @@ pub const MenuController = struct {
             self.inv_armor_ids[i] = id;
             self.makeSlotClickable(tree, id, hover_col);
         }
+        inline for (0..GameState.EQUIP_SLOTS) |i| {
+            const name = comptime std.fmt.comptimePrint("equip_{d}", .{i});
+            const id = tree.findById(name) orelse NULL_WIDGET;
+            self.inv_equip_ids[i] = id;
+            self.makeSlotClickable(tree, id, hover_col);
+        }
         self.inv_offhand_id = tree.findById("inv_offhand") orelse NULL_WIDGET;
         self.makeSlotClickable(tree, self.inv_offhand_id, hover_col);
         self.inv_player_viewport_id = tree.findById("player_viewport") orelse NULL_WIDGET;
@@ -322,6 +329,7 @@ pub const MenuController = struct {
         self.inv_slot_ids = .{NULL_WIDGET} ** GameState.HOTBAR_SIZE;
         self.inv_main_ids = .{NULL_WIDGET} ** GameState.INV_SIZE;
         self.inv_armor_ids = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS;
+        self.inv_equip_ids = .{NULL_WIDGET} ** GameState.EQUIP_SLOTS;
         self.inv_offhand_id = NULL_WIDGET;
         self.inv_player_viewport_id = NULL_WIDGET;
         self.cursor_item_id = NULL_WIDGET;
@@ -591,6 +599,16 @@ pub const MenuController = struct {
             if (self.inv_armor_ids[i] != NULL_WIDGET) {
                 if (tree.getWidget(self.inv_armor_ids[i])) |w| {
                     const block = gs.armor[i];
+                    updateSlotWidget(w, block);
+                }
+            }
+        }
+
+        // Update equip slots
+        for (0..GameState.EQUIP_SLOTS) |i| {
+            if (self.inv_equip_ids[i] != NULL_WIDGET) {
+                if (tree.getWidget(self.inv_equip_ids[i])) |w| {
+                    const block = gs.equip[i];
                     updateSlotWidget(w, block);
                 }
             }
@@ -1052,7 +1070,10 @@ pub const MenuController = struct {
             for (self.inv_armor_ids, 0..) |id, i| {
                 if (id == pressed) break :blk @as(u8, GameState.HOTBAR_SIZE + GameState.INV_SIZE) + @as(u8, @intCast(i)); // armor: 36-39
             }
-            if (self.inv_offhand_id == pressed) break :blk GameState.HOTBAR_SIZE + GameState.INV_SIZE + GameState.ARMOR_SLOTS; // offhand: 40
+            for (self.inv_equip_ids, 0..) |id, i| {
+                if (id == pressed) break :blk @as(u8, GameState.HOTBAR_SIZE + GameState.INV_SIZE + GameState.ARMOR_SLOTS) + @as(u8, @intCast(i)); // equip: 40-43
+            }
+            if (self.inv_offhand_id == pressed) break :blk GameState.HOTBAR_SIZE + GameState.INV_SIZE + GameState.ARMOR_SLOTS + GameState.EQUIP_SLOTS; // offhand: 44
             break :blk null;
         };
 
