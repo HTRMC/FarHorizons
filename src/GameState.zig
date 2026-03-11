@@ -28,7 +28,7 @@ pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
 pub const HOTBAR_SIZE: u8 = 9;
 pub const INV_ROWS: u8 = 4;
 pub const INV_COLS: u8 = 9;
-pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 27
+pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 36
 pub const ARMOR_SLOTS: u8 = 4; // head, chest, legs, feet
 
 // Initial load radius in chunks (per axis from center)
@@ -126,7 +126,12 @@ saved_camera: Camera,
 
 selected_slot: u8 = 0,
 hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .sand, .snow, .gravel, .glass, .glowstone, .water },
-inventory: [INV_SIZE]WorldState.BlockType = .{.air} ** INV_SIZE,
+inventory: [INV_SIZE]WorldState.BlockType = .{
+    .cobblestone, .oak_log,      .oak_planks,   .bricks,       .bedrock,       .gold_ore,      .iron_ore,      .coal_ore,      .diamond_ore,
+    .sponge,      .pumice,       .wool,         .gold_block,   .iron_block,    .diamond_block, .bookshelf,     .obsidian,      .oak_leaves,
+    .air,         .air,          .air,          .air,          .air,           .air,           .air,           .air,           .air,
+    .air,         .air,          .air,          .air,          .air,           .air,           .air,           .air,           .air,
+},
 armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
 offhand: WorldState.BlockType = .air,
 carried_item: WorldState.BlockType = .air,
