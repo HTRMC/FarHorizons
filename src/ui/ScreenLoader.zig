@@ -546,17 +546,17 @@ test "parse helpers" {
     try std.testing.expectEqual(SizeSpec{ .px = 320 }, parseSize("320"));
     try std.testing.expectEqual(SizeSpec{ .percent = 50 }, parseSize("50%"));
 
-    const c = parseColor("#FF8800FF");
-    try std.testing.expectApproxEqAbs(@as(f32, 1.0), c.r, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 0.533), c.g, 0.01);
+    const color = parseColor("#FF8800FF");
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), color.r, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.533), color.g, 0.01);
 
-    const e1 = parseEdges("16");
-    try std.testing.expectApproxEqAbs(@as(f32, 16), e1.top, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 16), e1.left, 0.01);
+    const edges1 = parseEdges("16");
+    try std.testing.expectApproxEqAbs(@as(f32, 16), edges1.top, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 16), edges1.left, 0.01);
 
-    const e2 = parseEdges("8,16,8,16");
-    try std.testing.expectApproxEqAbs(@as(f32, 8), e2.top, 0.01);
-    try std.testing.expectApproxEqAbs(@as(f32, 16), e2.right, 0.01);
+    const edges2 = parseEdges("8,16,8,16");
+    try std.testing.expectApproxEqAbs(@as(f32, 8), edges2.top, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 16), edges2.right, 0.01);
 
     try std.testing.expect(parseBool("true"));
     try std.testing.expect(!parseBool("false"));
