@@ -61,13 +61,13 @@ fn getNeighborLight(neighbor_lights: [6]?*const LightMap, face: usize, x: usize,
     const lm = neighbor_lights[face] orelse return .{ 0, 0, 0 };
     // Skip dirty neighbors — their data is stale and will be recomputed
     if (lm.dirty) return .{ 0, 0, 0 };
-    return lm.block_light[chunkIndex(x, y, z)];
+    return lm.block_light.get(chunkIndex(x, y, z));
 }
 
 fn getNeighborSkyLight(neighbor_lights: [6]?*const LightMap, face: usize, x: usize, y: usize, z: usize) u8 {
     const lm = neighbor_lights[face] orelse return 0;
     if (lm.dirty) return 0;
-    return lm.sky_light[chunkIndex(x, y, z)];
+    return lm.sky_light.get(chunkIndex(x, y, z));
 }
 
 const QueueEntry = struct {
@@ -99,8 +99,7 @@ pub fn computeChunkLight(
     chunk_cy: i32,
     surface_heights: ?*const [CHUNK_SIZE * CHUNK_SIZE]i32,
 ) u6 {
-    @memset(std.mem.asBytes(&light_map.block_light), 0);
-    @memset(&light_map.sky_light, 0);
+    light_map.clear();
 
     computeSkyLight(chunk, neighbors, neighbor_lights, light_map, chunk_cy, surface_heights);
     computeBlockLight(chunk, neighbors, neighbor_lights, light_map);
@@ -113,8 +112,8 @@ pub fn computeChunkLight(
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
             const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
-            const bl = light_map.block_light[idx];
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
                 boundary_mask |= (1 << 3);
                 break;
             }
@@ -125,8 +124,8 @@ pub fn computeChunkLight(
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
             const idx = chunkIndex(0, y, z);
-            const bl = light_map.block_light[idx];
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
                 boundary_mask |= (1 << 2);
                 break;
             }
@@ -137,8 +136,8 @@ pub fn computeChunkLight(
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |x| {
             const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
-            const bl = light_map.block_light[idx];
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
                 boundary_mask |= (1 << 0);
                 break;
             }
@@ -149,8 +148,8 @@ pub fn computeChunkLight(
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |x| {
             const idx = chunkIndex(x, y, 0);
-            const bl = light_map.block_light[idx];
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
                 boundary_mask |= (1 << 1);
                 break;
             }
@@ -161,8 +160,8 @@ pub fn computeChunkLight(
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
             const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
-            const bl = light_map.block_light[idx];
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
                 boundary_mask |= (1 << 4);
                 break;
             }
@@ -173,8 +172,8 @@ pub fn computeChunkLight(
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
             const idx = chunkIndex(x, 0, z);
-            const bl = light_map.block_light[idx];
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light[idx] > ATTENUATION) {
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
                 boundary_mask |= (1 << 5);
                 break;
             }
@@ -213,7 +212,7 @@ fn computeSkyLight(
                 if (world_y <= sh) break; // at or below surface — no sky
                 const uy: usize = @intCast(y);
                 if (block_properties.isOpaque(chunk.blocks[chunkIndex(x, uy, z)])) break;
-                light_map.sky_light[chunkIndex(x, uy, z)] = 255;
+                light_map.sky_light.set(chunkIndex(x, uy, z), 255);
                 if (tail < MAX_QUEUE) {
                     queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = @intCast(z), .dir = 6, .level = 255 };
                     tail += 1;
@@ -230,8 +229,8 @@ fn computeSkyLight(
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
-                if (new_level > light_map.sky_light[idx] and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light[idx] = new_level;
+                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
+                    light_map.sky_light.set(idx, new_level);
                     if (tail < MAX_QUEUE) {
                         queue[tail] = .{ .x = @intCast(CHUNK_SIZE - 1), .y = @intCast(y), .z = @intCast(z), .dir = 1, .level = new_level };
                         tail += 1;
@@ -247,8 +246,8 @@ fn computeSkyLight(
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(0, y, z);
-                if (new_level > light_map.sky_light[idx] and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light[idx] = new_level;
+                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
+                    light_map.sky_light.set(idx, new_level);
                     if (tail < MAX_QUEUE) {
                         queue[tail] = .{ .x = 0, .y = @intCast(y), .z = @intCast(z), .dir = 0, .level = new_level };
                         tail += 1;
@@ -264,8 +263,8 @@ fn computeSkyLight(
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
-                if (new_level > light_map.sky_light[idx] and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light[idx] = new_level;
+                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
+                    light_map.sky_light.set(idx, new_level);
                     if (tail < MAX_QUEUE) {
                         queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = @intCast(CHUNK_SIZE - 1), .dir = 5, .level = new_level };
                         tail += 1;
@@ -281,8 +280,8 @@ fn computeSkyLight(
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(x, y, 0);
-                if (new_level > light_map.sky_light[idx] and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light[idx] = new_level;
+                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
+                    light_map.sky_light.set(idx, new_level);
                     if (tail < MAX_QUEUE) {
                         queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = 0, .dir = 4, .level = new_level };
                         tail += 1;
@@ -298,8 +297,8 @@ fn computeSkyLight(
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
-                if (new_level > light_map.sky_light[idx] and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light[idx] = new_level;
+                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
+                    light_map.sky_light.set(idx, new_level);
                     if (tail < MAX_QUEUE) {
                         queue[tail] = .{ .x = @intCast(x), .y = @intCast(CHUNK_SIZE - 1), .z = @intCast(z), .dir = 3, .level = new_level };
                         tail += 1;
@@ -315,8 +314,8 @@ fn computeSkyLight(
             if (nl > ATTENUATION) {
                 const new_level = nl - ATTENUATION;
                 const idx = chunkIndex(x, 0, z);
-                if (new_level > light_map.sky_light[idx] and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light[idx] = new_level;
+                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
+                    light_map.sky_light.set(idx, new_level);
                     if (tail < MAX_QUEUE) {
                         queue[tail] = .{ .x = @intCast(x), .y = 0, .z = @intCast(z), .dir = 2, .level = new_level };
                         tail += 1;
@@ -352,9 +351,9 @@ fn computeSkyLight(
             if (new_level == 0) continue;
 
             const idx = chunkIndex(ux, uy, uz);
-            if (new_level <= light_map.sky_light[idx]) continue;
+            if (new_level <= light_map.sky_light.get(idx)) continue;
 
-            light_map.sky_light[idx] = new_level;
+            light_map.sky_light.set(idx, new_level);
             if (tail < MAX_QUEUE) {
                 queue[tail] = .{ .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz), .dir = @intCast(dir), .level = new_level };
                 tail += 1;
@@ -382,7 +381,7 @@ fn computeBlockLight(
                 const block = chunk.blocks[chunkIndex(x, y, z)];
                 const emit = block_properties.emittedLight(block);
                 if (emit[0] > 0 or emit[1] > 0 or emit[2] > 0) {
-                    light_map.block_light[chunkIndex(x, y, z)] = emit;
+                    light_map.block_light.set(chunkIndex(x, y, z), emit);
                     if (tail < MAX_QUEUE) {
                         queue[tail] = .{
                             .x = @intCast(x),
@@ -471,12 +470,15 @@ fn computeBlockLight(
             if (nr == 0 and ng == 0 and nb == 0) continue;
 
             const idx = chunkIndex(ux, uy, uz);
-            const existing = &light_map.block_light[idx];
+            const existing = light_map.block_light.get(idx);
             if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
 
-            existing[0] = @max(existing[0], nr);
-            existing[1] = @max(existing[1], ng);
-            existing[2] = @max(existing[2], nb);
+            const updated = [3]u8{
+                @max(existing[0], nr),
+                @max(existing[1], ng),
+                @max(existing[2], nb),
+            };
+            light_map.block_light.set(idx, updated);
 
             if (tail < MAX_QUEUE) {
                 queue[tail] = .{
@@ -484,9 +486,9 @@ fn computeBlockLight(
                     .y = @intCast(ny),
                     .z = @intCast(nz),
                     .dir = @intCast(dir),
-                    .r = existing[0],
-                    .g = existing[1],
-                    .b = existing[2],
+                    .r = updated[0],
+                    .g = updated[1],
+                    .b = updated[2],
                 };
                 tail += 1;
             }
@@ -517,12 +519,15 @@ fn seedBoundaryBlockLight(
 
     if (block_properties.isOpaque(chunk.blocks[idx])) return;
 
-    const existing = &light_map.block_light[idx];
+    const existing = light_map.block_light.get(idx);
     if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) return;
 
-    existing[0] = @max(existing[0], nr);
-    existing[1] = @max(existing[1], ng);
-    existing[2] = @max(existing[2], nb);
+    const updated = [3]u8{
+        @max(existing[0], nr),
+        @max(existing[1], ng),
+        @max(existing[2], nb),
+    };
+    light_map.block_light.set(idx, updated);
 
     if (tail.* < MAX_QUEUE) {
         queue[tail.*] = .{
@@ -530,9 +535,9 @@ fn seedBoundaryBlockLight(
             .y = y,
             .z = z,
             .dir = dir,
-            .r = existing[0],
-            .g = existing[1],
-            .b = existing[2],
+            .r = updated[0],
+            .g = updated[1],
+            .b = updated[2],
         };
         tail.* += 1;
     }
@@ -555,8 +560,13 @@ fn allocChunk() !*Chunk {
 
 fn allocLightMap() !*LightMap {
     const lm = try testing.allocator.create(LightMap);
-    lm.clear();
+    lm.* = LightMap.init(testing.allocator);
     return lm;
+}
+
+fn freeLightMap(lm: *LightMap) void {
+    lm.deinit();
+    testing.allocator.destroy(lm);
 }
 
 test "glowstone emitter lights surrounding blocks" {
@@ -565,23 +575,23 @@ test "glowstone emitter lights surrounding blocks" {
     chunk.blocks[chunkIndex(16, 16, 16)] = .glowstone;
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     // Emitter itself should have full light
-    const emit = lm.block_light[chunkIndex(16, 16, 16)];
+    const emit = lm.block_light.get(chunkIndex(16, 16, 16));
     try testing.expectEqual(@as(u8, 255), emit[0]);
     try testing.expectEqual(@as(u8, 200), emit[1]);
     try testing.expectEqual(@as(u8, 100), emit[2]);
 
     // Adjacent block should have emitter - ATTENUATION
-    const adj = lm.block_light[chunkIndex(17, 16, 16)];
+    const adj = lm.block_light.get(chunkIndex(17, 16, 16));
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), adj[0]);
     try testing.expectEqual(@as(u8, 200 - ATTENUATION), adj[1]);
     try testing.expectEqual(@as(u8, 100 - ATTENUATION), adj[2]);
 
     // Two blocks away
-    const adj2 = lm.block_light[chunkIndex(18, 16, 16)];
+    const adj2 = lm.block_light.get(chunkIndex(18, 16, 16));
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), adj2[0]);
 }
 
@@ -591,15 +601,15 @@ test "block light attenuates to zero" {
     chunk.blocks[chunkIndex(16, 16, 16)] = .glowstone;
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     // Glowstone emits 100 on blue channel. 100/8 = 12.5 steps, so at distance 13 should be 0.
-    const far = lm.block_light[chunkIndex(16, 16, 16 + 13)];
+    const far = lm.block_light.get(chunkIndex(16, 16, 16 + 13));
     try testing.expectEqual(@as(u8, 0), far[2]);
 
     // But distance 12 should still have some
-    const near = lm.block_light[chunkIndex(16, 16, 16 + 12)];
+    const near = lm.block_light.get(chunkIndex(16, 16, 16 + 12));
     try testing.expect(near[2] > 0);
 }
 
@@ -610,10 +620,10 @@ test "opaque block stops light propagation" {
     chunk.blocks[chunkIndex(17, 16, 16)] = .stone;
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
-    const behind = lm.block_light[chunkIndex(18, 16, 16)];
+    const behind = lm.block_light.get(chunkIndex(18, 16, 16));
     const no_wall_level = 255 - 2 * ATTENUATION;
     try testing.expect(behind[0] < no_wall_level);
 }
@@ -623,12 +633,12 @@ test "sky light fills air chunk with no above neighbor" {
     defer testing.allocator.destroy(chunk);
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
-    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(0, 0, 0)]);
-    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 16, 16)]);
-    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(CHUNK_SIZE - 1, CHUNK_SIZE - 1, CHUNK_SIZE - 1)]);
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(0, 0, 0)));
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 16, 16)));
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(CHUNK_SIZE - 1, CHUNK_SIZE - 1, CHUNK_SIZE - 1)));
 }
 
 test "sky light blocked by opaque block above" {
@@ -641,10 +651,10 @@ test "sky light blocked by opaque block above" {
     }
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
-    try testing.expectEqual(@as(u8, 0), lm.sky_light[chunkIndex(16, 0, 16)]);
+    try testing.expectEqual(@as(u8, 0), lm.sky_light.get(chunkIndex(16, 0, 16)));
 }
 
 test "block light propagates across chunk boundary via neighbor light map" {
@@ -653,15 +663,15 @@ test "block light propagates across chunk boundary via neighbor light map" {
     chunk_a.blocks[chunkIndex(CHUNK_SIZE - 1, 16, 16)] = .glowstone;
 
     const lm_a = try allocLightMap();
-    defer testing.allocator.destroy(lm_a);
+    defer freeLightMap(lm_a);
     _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
 
-    try testing.expectEqual(@as(u8, 255), lm_a.block_light[chunkIndex(CHUNK_SIZE - 1, 16, 16)][0]);
+    try testing.expectEqual(@as(u8, 255), lm_a.block_light.get(chunkIndex(CHUNK_SIZE - 1, 16, 16))[0]);
 
     const chunk_b = try allocChunk();
     defer testing.allocator.destroy(chunk_b);
     const lm_b = try allocLightMap();
-    defer testing.allocator.destroy(lm_b);
+    defer freeLightMap(lm_b);
 
     var b_neighbor_lights = no_light_neighbors;
     b_neighbor_lights[2] = lm_a;
@@ -670,10 +680,10 @@ test "block light propagates across chunk boundary via neighbor light map" {
 
     _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b, 0, null);
 
-    const received = lm_b.block_light[chunkIndex(0, 16, 16)];
+    const received = lm_b.block_light.get(chunkIndex(0, 16, 16));
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), received[0]);
 
-    const further = lm_b.block_light[chunkIndex(1, 16, 16)];
+    const further = lm_b.block_light.get(chunkIndex(1, 16, 16));
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), further[0]);
 }
 
@@ -683,12 +693,12 @@ test "sky light propagates vertically via surface height map" {
     defer testing.allocator.destroy(chunk);
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     // Surface height = MIN means no opaque blocks anywhere → sky open everywhere
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, -1, null);
 
-    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, CHUNK_SIZE - 1, 16)]);
-    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 0, 16)]);
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, CHUNK_SIZE - 1, 16)));
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 0, 16)));
 }
 
 test "surface height blocks sky in chunk below surface" {
@@ -700,12 +710,12 @@ test "surface height blocks sky in chunk below surface" {
     @memset(&surface, 50); // surface at y=50, entire chunk is below
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, &surface);
 
     // All blocks are below surface height → no sky light from column scan
-    try testing.expectEqual(@as(u8, 0), lm.sky_light[chunkIndex(16, CHUNK_SIZE - 1, 16)]);
-    try testing.expectEqual(@as(u8, 0), lm.sky_light[chunkIndex(16, 0, 16)]);
+    try testing.expectEqual(@as(u8, 0), lm.sky_light.get(chunkIndex(16, CHUNK_SIZE - 1, 16)));
+    try testing.expectEqual(@as(u8, 0), lm.sky_light.get(chunkIndex(16, 0, 16)));
 }
 
 test "surface height partially blocks chunk" {
@@ -717,19 +727,19 @@ test "surface height partially blocks chunk" {
     @memset(&surface, 40); // surface at world y=40
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 1, &surface);
 
     // y=31 → world_y=63, above surface → sky light
-    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 31, 16)]);
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 31, 16)));
     // y=10 → world_y=42, above surface → sky light
-    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 10, 16)]);
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 10, 16)));
     // y=9 → world_y=41, above surface → sky light
-    try testing.expectEqual(@as(u8, 255), lm.sky_light[chunkIndex(16, 9, 16)]);
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 9, 16)));
     // y=8 → world_y=40, AT surface → no direct sky, but gets BFS from y=9 (255-8=247)
-    try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.sky_light[chunkIndex(16, 8, 16)]);
+    try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.sky_light.get(chunkIndex(16, 8, 16)));
     // y=0 → world_y=32, below surface → only BFS propagation (255 - 9*8 = 183)
-    try testing.expectEqual(@as(u8, 255 - 9 * ATTENUATION), lm.sky_light[chunkIndex(16, 0, 16)]);
+    try testing.expectEqual(@as(u8, 255 - 9 * ATTENUATION), lm.sky_light.get(chunkIndex(16, 0, 16)));
 }
 
 test "sky light propagates laterally across chunk boundary" {
@@ -737,7 +747,7 @@ test "sky light propagates laterally across chunk boundary" {
     const chunk_a = try allocChunk();
     defer testing.allocator.destroy(chunk_a);
     const lm_a = try allocLightMap();
-    defer testing.allocator.destroy(lm_a);
+    defer freeLightMap(lm_a);
     _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
 
     // Chunk B: surface height blocks sky from above, but chunk A is its -X neighbor
@@ -755,15 +765,15 @@ test "sky light propagates laterally across chunk boundary" {
     b_neighbor_lights[2] = lm_a;
 
     const lm_b = try allocLightMap();
-    defer testing.allocator.destroy(lm_b);
+    defer freeLightMap(lm_b);
     _ = computeChunkLight(chunk_b, b_neighbors, b_neighbor_lights, lm_b, 0, &b_surface);
 
     // x=0 in chunk B should receive sky from chunk A's x=31 (255 - 8 = 247)
-    const received = lm_b.sky_light[chunkIndex(0, 16, 16)];
+    const received = lm_b.sky_light.get(chunkIndex(0, 16, 16));
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), received);
 
     // Should propagate further into chunk B
-    const further = lm_b.sky_light[chunkIndex(1, 16, 16)];
+    const further = lm_b.sky_light.get(chunkIndex(1, 16, 16));
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), further);
 }
 
@@ -773,7 +783,7 @@ test "boundary mask set for face with light above attenuation" {
     chunk.blocks[chunkIndex(CHUNK_SIZE - 1, 16, 16)] = .glowstone;
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     const mask = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     try testing.expect(mask & (1 << 3) != 0);
@@ -785,7 +795,7 @@ test "boundary mask not set for face with no light" {
     chunk.blocks[chunkIndex(16, 16, 16)] = .glowstone;
 
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     const mask = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
 
     // Red channel 255 reaches all boundaries (255 - 16*8 = 127 > 8)
@@ -796,7 +806,7 @@ test "dirty flag cleared after compute" {
     const chunk = try allocChunk();
     defer testing.allocator.destroy(chunk);
     const lm = try allocLightMap();
-    defer testing.allocator.destroy(lm);
+    defer freeLightMap(lm);
     try testing.expect(lm.dirty);
 
     _ = computeChunkLight(chunk, no_neighbors, no_light_neighbors, lm, 0, null);
@@ -809,13 +819,13 @@ test "bidirectional boundary propagation" {
     chunk_a.blocks[chunkIndex(CHUNK_SIZE - 2, 16, 16)] = .glowstone;
 
     const lm_a = try allocLightMap();
-    defer testing.allocator.destroy(lm_a);
+    defer freeLightMap(lm_a);
     _ = computeChunkLight(chunk_a, no_neighbors, no_light_neighbors, lm_a, 0, null);
 
     const chunk_b = try allocChunk();
     defer testing.allocator.destroy(chunk_b);
     const lm_b = try allocLightMap();
-    defer testing.allocator.destroy(lm_b);
+    defer freeLightMap(lm_b);
     var b_neighbor_lights = no_light_neighbors;
     b_neighbor_lights[2] = lm_a;
     var b_neighbors = no_neighbors;
@@ -825,10 +835,10 @@ test "bidirectional boundary propagation" {
 
     // Light at chunk A boundary (x=31): 255 - 1*8 = 247
     // Light entering chunk B at x=0: 247 - 8 = 239
-    const at_b_0 = lm_b.block_light[chunkIndex(0, 16, 16)];
+    const at_b_0 = lm_b.block_light.get(chunkIndex(0, 16, 16));
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), at_b_0[0]);
 
     // Light at x=5 in chunk B: 255 - 7*8 = 199
-    const at_b_5 = lm_b.block_light[chunkIndex(5, 16, 16)];
+    const at_b_5 = lm_b.block_light.get(chunkIndex(5, 16, 16));
     try testing.expectEqual(@as(u8, 255 - 7 * ATTENUATION), at_b_5[0]);
 }

@@ -1,16 +1,35 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
+const PaletteStorage = @import("../allocators/PaletteStorage.zig").PaletteStorage;
 const Io = std.Io;
 
+pub const BlockLightStorage = PaletteStorage([3]u8, BLOCKS_PER_CHUNK);
+pub const SkyLightStorage = PaletteStorage(u8, BLOCKS_PER_CHUNK);
+
 pub const LightMap = struct {
-    block_light: [BLOCKS_PER_CHUNK][3]u8,
-    sky_light: [BLOCKS_PER_CHUNK]u8,
+    block_light: BlockLightStorage,
+    sky_light: SkyLightStorage,
     dirty: bool,
+    mutex: Io.Mutex = .init,
+
+    pub fn init(allocator: std.mem.Allocator) LightMap {
+        return .{
+            .block_light = BlockLightStorage.init(allocator),
+            .sky_light = SkyLightStorage.init(allocator),
+            .dirty = true,
+            .mutex = .init,
+        };
+    }
+
+    pub fn deinit(self: *LightMap) void {
+        self.block_light.deinit();
+        self.sky_light.deinit();
+    }
 
     pub fn clear(self: *LightMap) void {
-        @memset(std.mem.asBytes(&self.block_light), 0);
-        @memset(&self.sky_light, 0);
+        self.block_light.fillUniform(.{ 0, 0, 0 });
+        self.sky_light.fillUniform(0);
         self.dirty = true;
     }
 };
@@ -30,6 +49,7 @@ pub const LightMapPool = struct {
 
     pub fn deinit(self: *LightMapPool) void {
         for (self.free_list.items) |lm| {
+            lm.deinit();
             self.allocator.destroy(lm);
         }
         self.free_list.deinit(self.allocator);
@@ -50,15 +70,18 @@ pub const LightMapPool = struct {
         }
 
         const lm = self.allocator.create(LightMap) catch @panic("LightMapPool: out of memory");
-        lm.clear();
+        lm.* = LightMap.init(self.allocator);
         return lm;
     }
 
     pub fn release(self: *LightMapPool, lm: *LightMap) void {
+        // Shrink to minimal footprint while pooled
+        lm.clear();
         const io = Io.Threaded.global_single_threaded.io();
         self.mutex.lockUncancelable(io);
         self.free_list.append(self.allocator, lm) catch {
             self.mutex.unlock(io);
+            lm.deinit();
             self.allocator.destroy(lm);
             return;
         };

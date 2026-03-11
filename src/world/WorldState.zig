@@ -515,8 +515,8 @@ fn buildPaddedLight(
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, y, z);
                 const pi = paddedIndex(x + 1, y + 1, z + 1);
-                padded_sky[pi] = lm.sky_light[ci];
-                padded_block[pi] = lm.block_light[ci];
+                padded_sky[pi] = lm.sky_light.get(ci);
+                padded_block[pi] = lm.block_light.get(ci);
             }
         }
     }
@@ -529,8 +529,8 @@ fn buildPaddedLight(
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, y, 0);
                 const pi = paddedIndex(x + 1, y + 1, PADDED_SIZE - 1);
-                padded_sky[pi] = n.sky_light[ci];
-                padded_block[pi] = n.block_light[ci];
+                padded_sky[pi] = n.sky_light.get(ci);
+                padded_block[pi] = n.block_light.get(ci);
             }
         }
     }
@@ -540,8 +540,8 @@ fn buildPaddedLight(
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, y, CHUNK_SIZE - 1);
                 const pi = paddedIndex(x + 1, y + 1, 0);
-                padded_sky[pi] = n.sky_light[ci];
-                padded_block[pi] = n.block_light[ci];
+                padded_sky[pi] = n.sky_light.get(ci);
+                padded_block[pi] = n.block_light.get(ci);
             }
         }
     }
@@ -551,8 +551,8 @@ fn buildPaddedLight(
             for (0..CHUNK_SIZE) |z| {
                 const ci = chunkIndex(CHUNK_SIZE - 1, y, z);
                 const pi = paddedIndex(0, y + 1, z + 1);
-                padded_sky[pi] = n.sky_light[ci];
-                padded_block[pi] = n.block_light[ci];
+                padded_sky[pi] = n.sky_light.get(ci);
+                padded_block[pi] = n.block_light.get(ci);
             }
         }
     }
@@ -562,8 +562,8 @@ fn buildPaddedLight(
             for (0..CHUNK_SIZE) |z| {
                 const ci = chunkIndex(0, y, z);
                 const pi = paddedIndex(PADDED_SIZE - 1, y + 1, z + 1);
-                padded_sky[pi] = n.sky_light[ci];
-                padded_block[pi] = n.block_light[ci];
+                padded_sky[pi] = n.sky_light.get(ci);
+                padded_block[pi] = n.block_light.get(ci);
             }
         }
     }
@@ -573,8 +573,8 @@ fn buildPaddedLight(
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, 0, z);
                 const pi = paddedIndex(x + 1, PADDED_SIZE - 1, z + 1);
-                padded_sky[pi] = n.sky_light[ci];
-                padded_block[pi] = n.block_light[ci];
+                padded_sky[pi] = n.sky_light.get(ci);
+                padded_block[pi] = n.block_light.get(ci);
             }
         }
     }
@@ -584,8 +584,8 @@ fn buildPaddedLight(
             for (0..CHUNK_SIZE) |x| {
                 const ci = chunkIndex(x, CHUNK_SIZE - 1, z);
                 const pi = paddedIndex(x + 1, 0, z + 1);
-                padded_sky[pi] = n.sky_light[ci];
-                padded_block[pi] = n.block_light[ci];
+                padded_sky[pi] = n.sky_light.get(ci);
+                padded_block[pi] = n.block_light.get(ci);
             }
         }
     }

@@ -324,6 +324,15 @@ pub const MeshWorker = struct {
                     };
                     neighbor_lights[i] = local_light_maps.get(nk);
                 }
+
+                // Lock center light_map to prevent concurrent compute+read race.
+                // Cascade re-enqueue can cause another worker to computeChunkLight
+                // (which frees PaletteStorage.data) while we're still reading it.
+                if (light_map) |lm| lm.mutex.lockUncancelable(io);
+                defer {
+                    if (light_map) |lm| lm.mutex.unlock(io);
+                }
+
                 if (light_map) |lm| {
                     if (lm.dirty) {
                         const surface_heights = local_shm.getHeights(key.cx, key.cz);
