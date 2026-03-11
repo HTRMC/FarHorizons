@@ -5,8 +5,6 @@ const NULL_WIDGET = Widget.NULL_WIDGET;
 const WidgetTree = @import("WidgetTree.zig").WidgetTree;
 const EventDispatch = @import("EventDispatch.zig");
 
-const Rect = Widget.Rect;
-
 const MAX_FOCUSABLE = 64;
 
 pub const Direction = enum { up, down, left, right };

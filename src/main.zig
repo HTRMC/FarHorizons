@@ -306,34 +306,20 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
         .inventory => {
             if ((opts.keyMatches(.open_inventory, key) or opts.keyMatches(.pause, key)) and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.hideInventory(input_state.game_state);
-                input_state.mouse_captured = true;
-                input_state.first_mouse = true;
-                glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+                captureMouse(input_state);
                 return;
             }
         },
         .playing => {
             if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.showPauseMenu();
-                input_state.mouse_captured = false;
-                input_state.first_mouse = true;
-                glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
-                var win_w: c_int = 0;
-                var win_h: c_int = 0;
-                glfw.getWindowSize(window.?, &win_w, &win_h);
-                glfw.setCursorPos(window.?, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
+                uncaptureMouse(input_state);
                 return;
             }
 
             if (opts.keyMatches(.open_inventory, key) and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.showInventory();
-                input_state.mouse_captured = false;
-                input_state.first_mouse = true;
-                glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
-                var win_w: c_int = 0;
-                var win_h: c_int = 0;
-                glfw.getWindowSize(window.?, &win_w, &win_h);
-                glfw.setCursorPos(window.?, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
+                uncaptureMouse(input_state);
                 return;
             }
 
@@ -463,9 +449,7 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
         }
     } else if (opts.mouseMatches(.use_item, button)) {
         if (!input_state.mouse_captured) {
-            input_state.mouse_captured = true;
-            input_state.first_mouse = true;
-            glfw.setInputMode(window.?, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+            captureMouse(input_state);
         } else if (!gs.debug_camera_active) {
             gs.placeBlock();
         }
@@ -479,6 +463,22 @@ fn framebufferSizeCallback(window: ?*glfw.Window, width: c_int, height: c_int) c
     input_state.framebuffer_resized.* = true;
 }
 
+fn captureMouse(input_state: *InputState) void {
+    input_state.mouse_captured = true;
+    input_state.first_mouse = true;
+    glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+}
+
+fn uncaptureMouse(input_state: *InputState) void {
+    input_state.mouse_captured = false;
+    input_state.first_mouse = true;
+    glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+    var win_w: c_int = 0;
+    var win_h: c_int = 0;
+    glfw.getWindowSize(input_state.window.handle, &win_w, &win_h);
+    glfw.setCursorPos(input_state.window.handle, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
+}
+
 fn processGamepadInput(input_state: *InputState) void {
     const gp = &input_state.gamepad;
     if (!gp.connected()) return;
@@ -488,26 +488,14 @@ fn processGamepadInput(input_state: *InputState) void {
             // Start → pause
             if (gp.pressed(.start)) {
                 input_state.menu_ctrl.showPauseMenu();
-                input_state.mouse_captured = false;
-                input_state.first_mouse = true;
-                glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
-                var win_w: c_int = 0;
-                var win_h: c_int = 0;
-                glfw.getWindowSize(input_state.window.handle, &win_w, &win_h);
-                glfw.setCursorPos(input_state.window.handle, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
+                uncaptureMouse(input_state);
                 return;
             }
 
             // Y → inventory
             if (gp.pressed(.y)) {
                 input_state.menu_ctrl.showInventory();
-                input_state.mouse_captured = false;
-                input_state.first_mouse = true;
-                glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
-                var win_w: c_int = 0;
-                var win_h: c_int = 0;
-                glfw.getWindowSize(input_state.window.handle, &win_w, &win_h);
-                glfw.setCursorPos(input_state.window.handle, @as(f64, @floatFromInt(win_w)) / 2.0, @as(f64, @floatFromInt(win_h)) / 2.0);
+                uncaptureMouse(input_state);
                 return;
             }
 
@@ -571,9 +559,7 @@ fn processGamepadInput(input_state: *InputState) void {
             // Y or B → close inventory
             if (gp.pressed(.y) or gp.pressed(.b)) {
                 input_state.menu_ctrl.hideInventory(input_state.game_state);
-                input_state.mouse_captured = true;
-                input_state.first_mouse = true;
-                glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+                captureMouse(input_state);
             }
         },
         .title_menu => {
@@ -790,9 +776,7 @@ pub fn main() !void {
                     }
                 },
                 .resume_game => {
-                    input_state.mouse_captured = true;
-                    input_state.first_mouse = true;
-                    glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+                    captureMouse(&input_state);
                 },
                 .return_to_title => {
                     if (game_state) |*gs| {
@@ -801,8 +785,7 @@ pub fn main() !void {
                         if (save_thread != null) {
                             // Save runs in background — main loop stays alive
                             input_state.game_state = null;
-                            input_state.mouse_captured = false;
-                            glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_NORMAL);
+                            uncaptureMouse(&input_state);
                             if (menu_ctrl.app_state == .pause_menu) {
                                 menu_ctrl.ui_manager.removeTopScreen();
                             }
@@ -847,9 +830,7 @@ pub fn main() !void {
                 gs.world_tick_pending = true;
                 if (gs.initial_load_ready) {
                     menu_ctrl.app_state = .playing;
-                    input_state.mouse_captured = true;
-                    input_state.first_mouse = true;
-                    glfw.setInputMode(window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+                    captureMouse(&input_state);
                 }
             }
         }

@@ -30,25 +30,6 @@ pub const Button = enum(u5) {
 
     pub const count = @typeInfo(Button).@"enum".fields.len;
 
-    pub fn displayName(self: Button) []const u8 {
-        return switch (self) {
-            .a => "A",
-            .b => "B",
-            .x => "X",
-            .y => "Y",
-            .left_bumper => "LB",
-            .right_bumper => "RB",
-            .back => "Back",
-            .start => "Start",
-            .guide => "Guide",
-            .left_thumb => "L3",
-            .right_thumb => "R3",
-            .dpad_up => "D-Up",
-            .dpad_right => "D-Right",
-            .dpad_down => "D-Down",
-            .dpad_left => "D-Left",
-        };
-    }
 };
 
 /// Joystick ID of the connected gamepad, or null.
@@ -89,12 +70,6 @@ pub fn held(self: *const Gamepad, btn: Button) bool {
     return (self.buttons & mask) != 0;
 }
 
-/// Returns true on the frame a button was released.
-pub fn released(self: *const Gamepad, btn: Button) bool {
-    const mask = @as(u16, 1) << @as(u4, @intCast(@intFromEnum(btn)));
-    return (self.buttons & mask) == 0 and (self.prev_buttons & mask) != 0;
-}
-
 pub const NavDir = enum { up, down, left, right };
 
 const STICK_NAV_THRESHOLD: f32 = 0.6;
@@ -127,13 +102,22 @@ pub fn poll(self: *Gamepad) void {
     self.prev_left_trigger = self.left_trigger;
     self.prev_right_trigger = self.right_trigger;
 
-    // Find a connected gamepad
-    var jid: c_int = c.GLFW_JOYSTICK_1;
+    // Check cached jid first; only scan all slots if it's stale
+    var jid: c_int = undefined;
     var found = false;
-    while (jid <= c.GLFW_JOYSTICK_LAST) : (jid += 1) {
-        if (c.glfwJoystickIsGamepad(jid) == c.GLFW_TRUE) {
+    if (self.jid) |cached| {
+        if (c.glfwJoystickIsGamepad(cached) == c.GLFW_TRUE) {
+            jid = cached;
             found = true;
-            break;
+        }
+    }
+    if (!found) {
+        jid = c.GLFW_JOYSTICK_1;
+        while (jid <= c.GLFW_JOYSTICK_LAST) : (jid += 1) {
+            if (c.glfwJoystickIsGamepad(jid) == c.GLFW_TRUE) {
+                found = true;
+                break;
+            }
         }
     }
 
