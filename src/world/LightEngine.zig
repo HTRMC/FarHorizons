@@ -88,6 +88,85 @@ const SkyQueueEntry = struct {
 
 const MAX_QUEUE = BLOCKS_PER_CHUNK * 2;
 
+/// Scan boundary faces and return a 6-bit mask of faces that have light > ATTENUATION.
+/// Can be called on an existing light map (before clearing) to get the "old" mask.
+pub fn computeBoundaryMask(light_map: *const LightMap) u6 {
+    var mask: u6 = 0;
+    // +X face (3): check x=31
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |z| {
+            const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
+                mask |= (1 << 3);
+                break;
+            }
+        }
+        if (mask & (1 << 3) != 0) break;
+    }
+    // -X face (2): check x=0
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |z| {
+            const idx = chunkIndex(0, y, z);
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
+                mask |= (1 << 2);
+                break;
+            }
+        }
+        if (mask & (1 << 2) != 0) break;
+    }
+    // +Z face (0): check z=31
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |x| {
+            const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
+                mask |= (1 << 0);
+                break;
+            }
+        }
+        if (mask & (1 << 0) != 0) break;
+    }
+    // -Z face (1): check z=0
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |x| {
+            const idx = chunkIndex(x, y, 0);
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
+                mask |= (1 << 1);
+                break;
+            }
+        }
+        if (mask & (1 << 1) != 0) break;
+    }
+    // +Y face (4): check y=31
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |x| {
+            const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
+                mask |= (1 << 4);
+                break;
+            }
+        }
+        if (mask & (1 << 4) != 0) break;
+    }
+    // -Y face (5): check y=0
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |x| {
+            const idx = chunkIndex(x, 0, z);
+            const bl = light_map.block_light.get(idx);
+            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
+                mask |= (1 << 5);
+                break;
+            }
+        }
+        if (mask & (1 << 5) != 0) break;
+    }
+    return mask;
+}
+
 /// Returns a 6-bit mask of faces that have nonzero boundary light (for cascade).
 pub fn computeChunkLight(
     chunk: *const WorldState.Chunk,
@@ -104,82 +183,7 @@ pub fn computeChunkLight(
 
     light_map.dirty = false;
 
-    // Check boundary faces for nonzero light > attenuation (can propagate further)
-    var boundary_mask: u6 = 0;
-    // +X face (3): check x=31
-    for (0..CHUNK_SIZE) |y| {
-        for (0..CHUNK_SIZE) |z| {
-            const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
-            const bl = light_map.block_light.get(idx);
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
-                boundary_mask |= (1 << 3);
-                break;
-            }
-        }
-        if (boundary_mask & (1 << 3) != 0) break;
-    }
-    // -X face (2): check x=0
-    for (0..CHUNK_SIZE) |y| {
-        for (0..CHUNK_SIZE) |z| {
-            const idx = chunkIndex(0, y, z);
-            const bl = light_map.block_light.get(idx);
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
-                boundary_mask |= (1 << 2);
-                break;
-            }
-        }
-        if (boundary_mask & (1 << 2) != 0) break;
-    }
-    // +Z face (0): check z=31
-    for (0..CHUNK_SIZE) |y| {
-        for (0..CHUNK_SIZE) |x| {
-            const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
-            const bl = light_map.block_light.get(idx);
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
-                boundary_mask |= (1 << 0);
-                break;
-            }
-        }
-        if (boundary_mask & (1 << 0) != 0) break;
-    }
-    // -Z face (1): check z=0
-    for (0..CHUNK_SIZE) |y| {
-        for (0..CHUNK_SIZE) |x| {
-            const idx = chunkIndex(x, y, 0);
-            const bl = light_map.block_light.get(idx);
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
-                boundary_mask |= (1 << 1);
-                break;
-            }
-        }
-        if (boundary_mask & (1 << 1) != 0) break;
-    }
-    // +Y face (4): check y=31
-    for (0..CHUNK_SIZE) |z| {
-        for (0..CHUNK_SIZE) |x| {
-            const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
-            const bl = light_map.block_light.get(idx);
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
-                boundary_mask |= (1 << 4);
-                break;
-            }
-        }
-        if (boundary_mask & (1 << 4) != 0) break;
-    }
-    // -Y face (5): check y=0
-    for (0..CHUNK_SIZE) |z| {
-        for (0..CHUNK_SIZE) |x| {
-            const idx = chunkIndex(x, 0, z);
-            const bl = light_map.block_light.get(idx);
-            if (bl[0] > ATTENUATION or bl[1] > ATTENUATION or bl[2] > ATTENUATION or light_map.sky_light.get(idx) > ATTENUATION) {
-                boundary_mask |= (1 << 5);
-                break;
-            }
-        }
-        if (boundary_mask & (1 << 5) != 0) break;
-    }
-
-    return boundary_mask;
+    return computeBoundaryMask(light_map);
 }
 
 fn computeSkyLight(

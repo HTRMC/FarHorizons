@@ -341,25 +341,56 @@ pub const MeshWorker = struct {
                         // Full recompute path (initial load or fallback).
                         // Clear any stale incremental update.
                         lm.incremental = null;
+                        // Save which faces had light BEFORE clearing, so we can
+                        // detect light disappearing (not just appearing).
+                        const old_mask = LightEngine.computeBoundaryMask(lm);
                         const surface_heights = local_shm.getHeights(key.cx, key.cz);
-                        const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
-                        // Enqueue face neighbors whose boundary light changed
-                        // so they re-mesh with updated padded border values
-                        if (boundary_mask != 0) {
-                            var cascade_keys: [6]ChunkKey = undefined;
-                            var cascade_count: usize = 0;
+                        const new_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
+
+                        // Faces where light appeared or disappeared need dirty cascade
+                        // so the neighbor fully recomputes its seeded values.
+                        const changed_mask = old_mask ^ new_mask;
+                        // Faces where light was present before and after just need
+                        // mesh padding refresh (light-only). Marking these dirty would
+                        // cause infinite cascading between adjacent lit chunks.
+                        const stable_mask = old_mask & new_mask;
+
+                        if (changed_mask != 0) {
+                            var dirty_keys: [6]ChunkKey = undefined;
+                            var dirty_count: usize = 0;
                             for (0..6) |i| {
-                                if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                                    cascade_keys[cascade_count] = .{
+                                if (changed_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                    const nk = ChunkKey{
                                         .cx = key.cx + offsets[i][0],
                                         .cy = key.cy + offsets[i][1],
                                         .cz = key.cz + offsets[i][2],
                                     };
-                                    cascade_count += 1;
+                                    if (local_light_maps.get(nk)) |nlm| {
+                                        nlm.dirty = true;
+                                    }
+                                    dirty_keys[dirty_count] = nk;
+                                    dirty_count += 1;
                                 }
                             }
-                            if (cascade_count > 0) {
-                                self.enqueueLightOnlyBatch(cascade_keys[0..cascade_count]);
+                            if (dirty_count > 0) {
+                                self.enqueueBatch(dirty_keys[0..dirty_count]);
+                            }
+                        }
+                        if (stable_mask != 0) {
+                            var lo_keys: [6]ChunkKey = undefined;
+                            var lo_count: usize = 0;
+                            for (0..6) |i| {
+                                if (stable_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                    lo_keys[lo_count] = .{
+                                        .cx = key.cx + offsets[i][0],
+                                        .cy = key.cy + offsets[i][1],
+                                        .cz = key.cz + offsets[i][2],
+                                    };
+                                    lo_count += 1;
+                                }
+                            }
+                            if (lo_count > 0) {
+                                self.enqueueLightOnlyBatch(lo_keys[0..lo_count]);
                             }
                         }
                     } else if (lm.incremental) |update| {
