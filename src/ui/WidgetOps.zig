@@ -402,7 +402,7 @@ pub fn drawOverlays(
         if (tx < 0) tx = 0;
         if (ty < 0) ty = 0;
 
-        ui.drawRect(tx, ty, tip_w, tip_h, Color.fromHex(0x222233EE).toArray());
+        ui.drawRect(tx, ty, tip_w, tip_h, Color.fromHex(0x222222EE).toArray());
         tr.drawText(tx + pad, ty + pad, tip_text, Color.white.toArray());
     }
 }

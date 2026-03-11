@@ -436,7 +436,7 @@ pub const MenuController = struct {
                 if (tree.getWidget(img_id)) |w| {
                     w.width = .{ .px = 56 };
                     w.height = .{ .px = 56 };
-                    w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 1.0 };
+                    w.background = .{ .r = 0.2, .g = 0.2, .b = 0.2, .a = 1.0 };
                 }
 
                 const col_id = tree.addWidget(.panel, row_id) orelse break;
@@ -762,7 +762,7 @@ pub const MenuController = struct {
             if (tree.getWidget(btn_id)) |w| {
                 w.width = .{ .px = 140 };
                 w.height = .{ .px = 24 };
-                w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 1.0 };
+                w.background = .{ .r = 0.2, .g = 0.2, .b = 0.2, .a = 1.0 };
             }
             if (tree.getData(btn_id)) |data| {
                 data.button.setText(key_display);
@@ -787,7 +787,7 @@ pub const MenuController = struct {
             data.button.text_color = .{ .r = 1.0, .g = 1.0, .b = 0.6, .a = 1.0 };
         }
         if (tree.getWidget(btn_id)) |w| {
-            w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 1.0 };
+            w.background = .{ .r = 0.2, .g = 0.2, .b = 0.2, .a = 1.0 };
         }
     }
 
@@ -1107,7 +1107,7 @@ pub const MenuController = struct {
             @memcpy(w.tooltip[0..len], name[0..len]);
             w.tooltip_len = len;
         } else {
-            w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
+            w.background = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
             w.tooltip_len = 0;
         }
     }
