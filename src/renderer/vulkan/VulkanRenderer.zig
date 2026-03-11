@@ -366,11 +366,13 @@ pub const VulkanRenderer = struct {
                     }
                 }
 
+                // Always: drain committed chunks from transfer pipeline
+                // (must run even when paused so the queue doesn't overflow)
+                self.drainCommittedChunks(cf);
+
                 // Tick-gated: only when 30 Hz tick fired since last frame
                 if (gs.world_tick_pending) {
                     gs.world_tick_pending = false;
-
-                    self.drainCommittedChunks(cf);
 
                     gs.applyUnloadsToGpu(
                         &self.render_state.world_renderer,
