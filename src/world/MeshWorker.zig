@@ -338,6 +338,9 @@ pub const MeshWorker = struct {
 
                 if (light_map) |lm| {
                     if (lm.dirty) {
+                        // Full recompute path (initial load or fallback).
+                        // Clear any stale incremental update.
+                        lm.incremental = null;
                         const surface_heights = local_shm.getHeights(key.cx, key.cz);
                         const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
                         // Enqueue face neighbors whose boundary light changed
@@ -357,6 +360,59 @@ pub const MeshWorker = struct {
                             }
                             if (cascade_count > 0) {
                                 self.enqueueLightOnlyBatch(cascade_keys[0..cascade_count]);
+                            }
+                        }
+                    } else if (lm.incremental) |update| {
+                        // Incremental update path — only update block light for a single change.
+                        lm.incremental = null;
+                        if (LightEngine.applyBlockChange(chunk, lm, update.lx, update.ly, update.lz, update.old_block)) |boundary_mask| {
+                            // Incremental succeeded. Cascade to face-neighbors if boundary changed.
+                            if (boundary_mask != 0) {
+                                var cascade_keys: [6]ChunkKey = undefined;
+                                var cascade_count: usize = 0;
+                                for (0..6) |i| {
+                                    if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                        const nk = ChunkKey{
+                                            .cx = key.cx + offsets[i][0],
+                                            .cy = key.cy + offsets[i][1],
+                                            .cz = key.cz + offsets[i][2],
+                                        };
+                                        // Mark neighbor for full light recompute
+                                        if (local_light_maps.get(nk)) |nlm| {
+                                            nlm.dirty = true;
+                                        }
+                                        cascade_keys[cascade_count] = nk;
+                                        cascade_count += 1;
+                                    }
+                                }
+                                if (cascade_count > 0) {
+                                    self.enqueueBatch(cascade_keys[0..cascade_count]);
+                                }
+                            }
+                        } else {
+                            // Incremental update declined (sky light affected) — fall back to full.
+                            const surface_heights = local_shm.getHeights(key.cx, key.cz);
+                            const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
+                            if (boundary_mask != 0) {
+                                var cascade_keys: [6]ChunkKey = undefined;
+                                var cascade_count: usize = 0;
+                                for (0..6) |i| {
+                                    if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                                        const nk = ChunkKey{
+                                            .cx = key.cx + offsets[i][0],
+                                            .cy = key.cy + offsets[i][1],
+                                            .cz = key.cz + offsets[i][2],
+                                        };
+                                        if (local_light_maps.get(nk)) |nlm| {
+                                            nlm.dirty = true;
+                                        }
+                                        cascade_keys[cascade_count] = nk;
+                                        cascade_count += 1;
+                                    }
+                                }
+                                if (cascade_count > 0) {
+                                    self.enqueueBatch(cascade_keys[0..cascade_count]);
+                                }
                             }
                         }
                     }

@@ -575,18 +575,49 @@ fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
     }
 }
 
+/// Try to use incremental light update for a single block change.
+/// Falls back to full markDirty if the light map isn't ready for incremental updates.
+fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: WorldState.BlockType) void {
+    const base_key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+
+    // Try to set an incremental update on the center chunk's LightMap.
+    if (self.light_maps.get(base_key)) |lm| {
+        if (!lm.dirty and lm.incremental == null) {
+            lm.incremental = .{
+                .lx = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE))),
+                .ly = @intCast(@mod(wy, @as(i32, WorldState.CHUNK_SIZE))),
+                .lz = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE))),
+                .old_block = old_block,
+            };
+
+            // Enqueue center chunk + geometry-affected neighbors for processing.
+            // Don't mark any LightMaps dirty yet — the worker will cascade
+            // to face-neighbors only if the incremental update changes boundary values.
+            const affected = WorldState.affectedChunks(wx, wy, wz);
+            for (affected.keys[0..affected.count]) |key| {
+                self.player_dirty_chunks.add(key);
+            }
+            return;
+        }
+    }
+
+    // Fall back to full recompute.
+    self.markDirty(wx, wy, wz, true);
+}
+
 pub fn breakBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
     const wx = hit.block_pos[0];
     const wy = hit.block_pos[1];
     const wz = hit.block_pos[2];
+    const old_block = self.chunk_map.getBlock(wx, wy, wz);
     self.chunk_map.setBlock(wx, wy, wz, .air);
     // Rebuild surface height for this column (broken block may have been the surface)
     const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
     const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
     const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
     self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
-    self.markDirty(wx, wy, wz, true);
+    self.markDirtyIncremental(wx, wy, wz, old_block);
     self.queueChunkSave(wx, wy, wz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
@@ -601,6 +632,7 @@ pub fn placeBlock(self: *GameState) void {
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
     if (WorldState.block_properties.isSolid(block_type) and blockOverlapsPlayer(px, py, pz, self.entity_pos)) return;
+    const old_block = self.chunk_map.getBlock(px, py, pz);
     self.chunk_map.setBlock(px, py, pz, block_type);
     // Update surface height if placing an opaque block
     if (WorldState.block_properties.isOpaque(block_type)) {
@@ -609,7 +641,7 @@ pub fn placeBlock(self: *GameState) void {
         const local_z: usize = @intCast(@mod(pz, @as(i32, WorldState.CHUNK_SIZE)));
         self.surface_height_map.updateBlockPlaced(key.cx, key.cz, local_x, local_z, py);
     }
-    self.markDirty(px, py, pz, true);
+    self.markDirtyIncremental(px, py, pz, old_block);
     self.queueChunkSave(px, py, pz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }

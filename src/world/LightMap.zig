@@ -1,8 +1,17 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
+const BlockType = WorldState.BlockType;
 const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
 const PaletteStorage = @import("../allocators/PaletteStorage.zig").PaletteStorage;
 const Io = std.Io;
+
+/// Pending single-block incremental light update (set by game thread, processed by worker).
+pub const IncrementalUpdate = struct {
+    lx: u8,
+    ly: u8,
+    lz: u8,
+    old_block: BlockType,
+};
 
 pub const BlockLightStorage = PaletteStorage([3]u8, BLOCKS_PER_CHUNK);
 pub const SkyLightStorage = PaletteStorage(u8, BLOCKS_PER_CHUNK);
@@ -11,6 +20,7 @@ pub const LightMap = struct {
     block_light: BlockLightStorage,
     sky_light: SkyLightStorage,
     dirty: bool,
+    incremental: ?IncrementalUpdate = null,
     mutex: Io.Mutex = .init,
 
     pub fn init(allocator: std.mem.Allocator) LightMap {
@@ -18,6 +28,7 @@ pub const LightMap = struct {
             .block_light = BlockLightStorage.init(allocator),
             .sky_light = SkyLightStorage.init(allocator),
             .dirty = true,
+            .incremental = null,
             .mutex = .init,
         };
     }
@@ -31,6 +42,7 @@ pub const LightMap = struct {
         self.block_light.fillUniform(.{ 0, 0, 0 });
         self.sky_light.fillUniform(0);
         self.dirty = true;
+        self.incremental = null;
     }
 };
 
