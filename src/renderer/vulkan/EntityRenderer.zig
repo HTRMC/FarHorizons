@@ -117,6 +117,19 @@ pub const EntityRenderer = struct {
         };
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
 
+        // Clear depth buffer in this viewport region so world geometry doesn't interfere
+        const clear_attachment = vk.c.VkClearAttachment{
+            .aspectMask = vk.VK_IMAGE_ASPECT_DEPTH_BIT,
+            .colorAttachment = 0,
+            .clearValue = .{ .depthStencil = .{ .depth = 1.0, .stencil = 0 } },
+        };
+        const clear_rect = vk.c.VkClearRect{
+            .rect = scissor,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+        vk.cmdClearAttachments(command_buffer, 1, &[_]vk.c.VkClearAttachment{clear_attachment}, 1, &[_]vk.c.VkClearRect{clear_rect});
+
         const aspect = vp_w / @max(vp_h, 1.0);
         const proj = zlm.Mat4.perspective(std.math.degreesToRadians(30.0), aspect, 0.1, 100.0);
         const eye = zlm.Vec3.init(
@@ -127,7 +140,7 @@ pub const EntityRenderer = struct {
         const view = zlm.Mat4.lookAt(eye, zlm.Vec3.init(0.0, 0.85, 0.0), zlm.Vec3.init(0.0, 1.0, 0.0));
         const mvp = zlm.Mat4.mul(proj, view);
 
-        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_depth);
         vk.cmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &[_]vk.VkDescriptorSet{self.descriptor_set}, 0, null);
         vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(zlm.Mat4), &mvp.m);
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);

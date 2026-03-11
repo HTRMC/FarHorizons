@@ -1366,6 +1366,18 @@ pub fn cmdSetScissor(
     }
 }
 
+pub fn cmdClearAttachments(
+    command_buffer: VkCommandBuffer,
+    attachment_count: u32,
+    attachments: [*]const c.VkClearAttachment,
+    rect_count: u32,
+    rects: [*]const c.VkClearRect,
+) void {
+    if (c.vkCmdClearAttachments) |fn_ptr| {
+        fn_ptr(command_buffer, attachment_count, attachments, rect_count, rects);
+    }
+}
+
 pub fn createPipelineCache(
     device: VkDevice,
     create_info: *const c.VkPipelineCacheCreateInfo,
