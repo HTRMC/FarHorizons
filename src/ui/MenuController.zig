@@ -570,12 +570,7 @@ pub const MenuController = struct {
             if (self.inv_slot_ids[i] != NULL_WIDGET) {
                 if (tree.getWidget(self.inv_slot_ids[i])) |w| {
                     const block = gs.hotbar[i];
-                    if (block != .air) {
-                        const c = GameState.blockColor(block);
-                        w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
-                    } else {
-                        w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
-                    }
+                    updateSlotWidget(w, block);
                 }
             }
         }
@@ -585,12 +580,7 @@ pub const MenuController = struct {
             if (self.inv_main_ids[i] != NULL_WIDGET) {
                 if (tree.getWidget(self.inv_main_ids[i])) |w| {
                     const block = gs.inventory[i];
-                    if (block != .air) {
-                        const c = GameState.blockColor(block);
-                        w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
-                    } else {
-                        w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
-                    }
+                    updateSlotWidget(w, block);
                 }
             }
         }
@@ -600,12 +590,7 @@ pub const MenuController = struct {
             if (self.inv_armor_ids[i] != NULL_WIDGET) {
                 if (tree.getWidget(self.inv_armor_ids[i])) |w| {
                     const block = gs.armor[i];
-                    if (block != .air) {
-                        const c = GameState.blockColor(block);
-                        w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
-                    } else {
-                        w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
-                    }
+                    updateSlotWidget(w, block);
                 }
             }
         }
@@ -613,13 +598,7 @@ pub const MenuController = struct {
         // Update offhand
         if (self.inv_offhand_id != NULL_WIDGET) {
             if (tree.getWidget(self.inv_offhand_id)) |w| {
-                const block = gs.offhand;
-                if (block != .air) {
-                    const c = GameState.blockColor(block);
-                    w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
-                } else {
-                    w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
-                }
+                updateSlotWidget(w, gs.offhand);
             }
         }
 
@@ -1114,6 +1093,22 @@ pub const MenuController = struct {
                 self.setRebindingVisual(act);
                 return;
             }
+        }
+    }
+
+    const WorldState = @import("../world/WorldState.zig");
+
+    fn updateSlotWidget(w: *Widget.Widget, block: WorldState.BlockType) void {
+        if (block != .air) {
+            const c = GameState.blockColor(block);
+            w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+            const name = GameState.blockName(block);
+            const len: u8 = @intCast(@min(name.len, 64));
+            @memcpy(w.tooltip[0..len], name[0..len]);
+            w.tooltip_len = len;
+        } else {
+            w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.6 };
+            w.tooltip_len = 0;
         }
     }
 
