@@ -104,6 +104,17 @@ pub const UiManager = struct {
     }
 
     pub fn draw(self: *UiManager, ui: *UiRenderer, tr: *TextRenderer) void {
+        // Snap cursor-following widget to latest mouse position before drawing
+        if (self.cursor_follow_widget != NULL_WIDGET) {
+            if (self.topTree()) |t| {
+                if (t.getWidget(self.cursor_follow_widget)) |w| {
+                    const half_w = if (w.width == .px) w.width.px * 0.5 else 16;
+                    const half_h = if (w.height == .px) w.height.px * 0.5 else 16;
+                    w.computed_rect.x = self.last_mouse_x - half_w;
+                    w.computed_rect.y = self.last_mouse_y - half_h;
+                }
+            }
+        }
         for (0..self.screen_count) |i| {
             const screen = &self.screens[i];
             if (!screen.active) continue;
