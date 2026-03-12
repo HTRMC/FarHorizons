@@ -68,6 +68,7 @@ pub fn build(b: *std.Build) void {
 
     const tracy_enabled = b.option(bool, "tracy", "Enable Tracy profiling") orelse false;
     const zstd_enabled = b.option(bool, "zstd", "Enable ZSTD compression") orelse true;
+    const console_enabled = b.option(bool, "console", "Show console window on Windows") orelse false;
 
     const options = b.addOptions();
     options.addOption(bool, "tracy_enabled", tracy_enabled);
@@ -85,8 +86,8 @@ pub fn build(b: *std.Build) void {
         });
     }
 
-    // Hide the console window on Windows
-    if (exe.root_module.resolved_target.?.result.os.tag == .windows) {
+    // Hide the console window on Windows unless -Dconsole=true
+    if (exe.root_module.resolved_target.?.result.os.tag == .windows and !console_enabled) {
         exe.subsystem = .windows;
     }
 
