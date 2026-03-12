@@ -10,6 +10,7 @@ pub const TextRenderer = @import("TextRenderer.zig").TextRenderer;
 pub const UiRenderer = @import("UiRenderer.zig").UiRenderer;
 pub const EntityRenderer = @import("EntityRenderer.zig").EntityRenderer;
 pub const SkyRenderer = @import("SkyRenderer.zig").SkyRenderer;
+pub const HandRenderer = @import("HandRenderer.zig").HandRenderer;
 
 pub const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -19,6 +20,7 @@ pub const RenderState = struct {
     text_renderer: TextRenderer,
     ui_renderer: UiRenderer,
     entity_renderer: EntityRenderer,
+    hand_renderer: HandRenderer,
     sky_renderer: SkyRenderer,
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
@@ -54,6 +56,19 @@ pub const RenderState = struct {
         self.entity_renderer = try EntityRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer self.entity_renderer.deinit(ctx.device);
 
+        self.hand_renderer = try HandRenderer.init(
+            allocator,
+            &shader_compiler,
+            ctx,
+            swapchain_format,
+            gpu_alloc,
+            self.entity_renderer.skin_image_view,
+            self.entity_renderer.skin_sampler,
+            self.world_renderer.texture_manager.texture_image_view,
+            self.world_renderer.texture_manager.texture_sampler,
+        );
+        errdefer self.hand_renderer.deinit(ctx.device);
+
         self.sky_renderer = try SkyRenderer.init(allocator, &shader_compiler, ctx, swapchain_format);
         errdefer self.sky_renderer.deinit(ctx.device);
 
@@ -79,6 +94,7 @@ pub const RenderState = struct {
         self.debug_renderer.deinit(device);
         self.text_renderer.deinit(device);
         self.entity_renderer.deinit(device);
+        self.hand_renderer.deinit(device);
         self.ui_renderer.deinit(device);
         self.sky_renderer.deinit(device);
     }

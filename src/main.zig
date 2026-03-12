@@ -995,6 +995,18 @@ pub fn main() !void {
             } else {
                 er.world_visible = false;
             }
+
+            // Sync hand renderer with held block
+            const hr = &vk_impl.render_state.hand_renderer;
+            if (game_state) |*gs| {
+                const held = gs.hotbar[gs.selected_slot];
+                const tex = GameState.blockTexIndices(held);
+                hr.block_tex_top = tex.top;
+                hr.block_tex_side = tex.side;
+            } else {
+                hr.block_tex_top = -1;
+                hr.block_tex_side = -1;
+            }
         }
 
         ui_manager.tickCursorBlink(delta_time);
