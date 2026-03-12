@@ -758,6 +758,32 @@ pub fn generateChunkMesh(
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                         corner_block_brightness = .{ 255, 255, 255, 255 };
                     } else {
+                        // Normal-direction shadow (Cubyz getLightSampleAligned technique):
+                        // Compare light at face neighbor with one step further in normal
+                        // direction. If darker ahead, face is facing away from light → shadow.
+                        var sky_shadow: u8 = 0;
+                        var blk_shadow: [3]u8 = .{ 0, 0, 0 };
+                        const can_shadow: bool = switch (face) {
+                            0 => bz <= CHUNK_SIZE - 2, // +Z
+                            1 => bz >= 1, // -Z
+                            2 => bx >= 1, // -X
+                            3 => bx <= CHUNK_SIZE - 2, // +X
+                            4 => by <= CHUNK_SIZE - 2, // +Y
+                            5 => by >= 1, // -Y
+                            else => unreachable,
+                        };
+                        if (can_shadow) {
+                            const next_idx: usize = @intCast(@as(i32, @intCast(face_neighbor_idx)) + padded_face_deltas[face]);
+                            const sky_diff: u8 = @min(@as(u8, 8), padded_sky[face_neighbor_idx] -| padded_sky[next_idx]);
+                            sky_shadow = sky_diff * 5 / 2;
+                            const fn_blk = padded_block_light[face_neighbor_idx];
+                            const nx_blk = padded_block_light[next_idx];
+                            for (0..3) |ch| {
+                                const blk_diff: u8 = @min(@as(u8, 8), fn_blk[ch] -| nx_blk[ch]);
+                                blk_shadow[ch] = blk_diff * 5 / 2;
+                            }
+                        }
+
                         // Sample light at each AO corner position for smooth per-corner light
                         for (0..4) |corner| {
                             const deltas = padded_ao_deltas[face][corner];
@@ -781,11 +807,11 @@ pub fn generateChunkMesh(
                                 }
                             }
 
-                            const avg_sky: u8 = @intCast(sky_sum / count);
+                            const avg_sky: u8 = @as(u8, @intCast(sky_sum / count)) -| sky_shadow;
                             const avg_blk: [3]u8 = .{
-                                @intCast(blk_sum[0] / count),
-                                @intCast(blk_sum[1] / count),
-                                @intCast(blk_sum[2] / count),
+                                @as(u8, @intCast(blk_sum[0] / count)) -| blk_shadow[0],
+                                @as(u8, @intCast(blk_sum[1] / count)) -| blk_shadow[1],
+                                @as(u8, @intCast(blk_sum[2] / count)) -| blk_shadow[2],
                             };
                             corner_packed[corner] = packLight(avg_sky, avg_blk);
                             corner_block_brightness[corner] = @intCast(@max(blk_sum[0] / count, @max(blk_sum[1] / count, blk_sum[2] / count)));
@@ -921,8 +947,30 @@ pub fn generateChunkLightOnly(
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                     } else {
                         // Sample light at the face neighbor position
-                        const face_sky = padded_sky[face_neighbor_idx2];
-                        const face_blk = padded_block_light[face_neighbor_idx2];
+                        var face_sky = padded_sky[face_neighbor_idx2];
+                        var face_blk = padded_block_light[face_neighbor_idx2];
+
+                        // Normal-direction shadow (same technique as generateChunkMesh)
+                        const can_shadow: bool = switch (face) {
+                            0 => bz <= CHUNK_SIZE - 2,
+                            1 => bz >= 1,
+                            2 => bx >= 1,
+                            3 => bx <= CHUNK_SIZE - 2,
+                            4 => by <= CHUNK_SIZE - 2,
+                            5 => by >= 1,
+                            else => unreachable,
+                        };
+                        if (can_shadow) {
+                            const next_idx: usize = @intCast(@as(i32, @intCast(face_neighbor_idx2)) + padded_face_deltas[face]);
+                            const sky_diff: u8 = @min(@as(u8, 8), face_sky -| padded_sky[next_idx]);
+                            face_sky = face_sky -| (sky_diff * 5 / 2);
+                            const nx_blk = padded_block_light[next_idx];
+                            for (0..3) |ch| {
+                                const blk_diff: u8 = @min(@as(u8, 8), face_blk[ch] -| nx_blk[ch]);
+                                face_blk[ch] = face_blk[ch] -| (blk_diff * 5 / 2);
+                            }
+                        }
+
                         const lp = packLight(face_sky, face_blk);
                         corner_packed = .{ lp, lp, lp, lp };
                     }
