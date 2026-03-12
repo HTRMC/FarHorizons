@@ -9,6 +9,7 @@ pub const DebugRenderer = @import("DebugRenderer.zig").DebugRenderer;
 pub const TextRenderer = @import("TextRenderer.zig").TextRenderer;
 pub const UiRenderer = @import("UiRenderer.zig").UiRenderer;
 pub const EntityRenderer = @import("EntityRenderer.zig").EntityRenderer;
+pub const SkyRenderer = @import("SkyRenderer.zig").SkyRenderer;
 
 pub const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -18,6 +19,7 @@ pub const RenderState = struct {
     text_renderer: TextRenderer,
     ui_renderer: UiRenderer,
     entity_renderer: EntityRenderer,
+    sky_renderer: SkyRenderer,
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence,
@@ -45,6 +47,9 @@ pub const RenderState = struct {
         self.entity_renderer = try EntityRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer self.entity_renderer.deinit(ctx.device);
 
+        self.sky_renderer = try SkyRenderer.init(allocator, &shader_compiler, ctx, swapchain_format);
+        errdefer self.sky_renderer.deinit(ctx.device);
+
         self.command_buffers = [_]vk.VkCommandBuffer{null} ** MAX_FRAMES_IN_FLIGHT;
         self.image_available_semaphores = [_]vk.VkSemaphore{null} ** MAX_FRAMES_IN_FLIGHT;
         self.in_flight_fences = [_]vk.VkFence{null} ** MAX_FRAMES_IN_FLIGHT;
@@ -68,6 +73,7 @@ pub const RenderState = struct {
         self.text_renderer.deinit(device);
         self.entity_renderer.deinit(device);
         self.ui_renderer.deinit(device);
+        self.sky_renderer.deinit(device);
     }
 
     fn createCommandBuffers(self: *RenderState, ctx: *const VulkanContext) !void {

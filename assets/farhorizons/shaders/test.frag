@@ -8,7 +8,10 @@ layout(location=2) flat in uvec4 fragLightPacked;
 layout(location=3) flat in uint fragAoData;
 layout(location=4) flat in vec3 fragNormal;
 
-layout(push_constant) uniform PC { layout(offset=64) float contrast; } pc;
+layout(push_constant) uniform PC {
+    layout(offset=64) float contrast;
+    layout(offset=80) vec3 ambientLight;
+} pc;
 
 layout(location=0) out vec4 outColor;
 
@@ -49,7 +52,7 @@ void main() {
     vec3 blockLight = mix(mix(blk00, blk10, st.x), mix(blk01, blk11, st.x), st.y);
 
     // Directional shading only on sky light (sun has direction, torches don't)
-    vec3 sky = skyLight * lightVariation(fragNormal);
+    vec3 sky = skyLight * lightVariation(fragNormal) * pc.ambientLight;
     vec3 light = min(vec3(1.0), sqrt(sky * sky + blockLight * blockLight));
 
     // Bilinear interpolation of AO across the quad

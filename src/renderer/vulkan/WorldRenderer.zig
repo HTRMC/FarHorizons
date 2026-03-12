@@ -275,7 +275,7 @@ pub const WorldRenderer = struct {
         self.draw_counts = layer_counts;
     }
 
-    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool) void {
+    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool, ambient_light: [3]f32) void {
         var total_draws: u32 = 0;
         for (self.draw_counts) |dc| total_draws += dc;
         if (total_draws == 0) return;
@@ -310,6 +310,14 @@ pub const WorldRenderer = struct {
             @sizeOf(zlm.Mat4),
             @sizeOf(f32),
             @ptrCast(&contrast),
+        );
+        vk.cmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+            80,
+            @sizeOf([3]f32),
+            @ptrCast(&ambient_light),
         );
 
         const cmd_stride: u32 = @sizeOf(vk.VkDrawIndexedIndirectCommand);
@@ -505,7 +513,7 @@ pub const WorldRenderer = struct {
         const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
-            .size = 68,
+            .size = 92,
         };
 
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{

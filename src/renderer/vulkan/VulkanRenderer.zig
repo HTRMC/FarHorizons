@@ -823,12 +823,17 @@ pub const VulkanRenderer = struct {
             &[_]vk.VkImageMemoryBarrier{color_barrier},
         );
 
+        const day_night = if (self.game_state) |gs| GameState.dayNightCycle(gs.game_time) else GameState.DayNightResult{
+            .ambient_light = .{ 1.0, 1.0, 1.0 },
+            .sky_color = .{ 0.224, 0.643, 0.918 },
+        };
+
         const clear_color: [4]f32 = if (!has_game)
             .{ 0.05, 0.05, 0.1, 1.0 }
         else if (overdraw)
             .{ 0.0, 0.0, 0.0, 1.0 }
         else
-            .{ 0.224, 0.643, 0.918, 1.0 };
+            .{ day_night.sky_color[0], day_night.sky_color[1], day_night.sky_color[2], 1.0 };
 
         const color_attachment = vk.VkRenderingAttachmentInfo{
             .sType = vk.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -905,7 +910,16 @@ pub const VulkanRenderer = struct {
             const proj = gs.camera.getProjectionMatrix();
             const mvp = zlm.Mat4.mul(proj, view);
 
-            self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw);
+            self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw, day_night.ambient_light);
+
+            // Sun/moon celestial bodies (rendered on sky background via depth test)
+            if (!overdraw) {
+                const pi = std.math.pi;
+                const angle: f32 = @as(f32, @floatFromInt(@mod(gs.game_time, GameState.DAY_CYCLE))) / @as(f32, @floatFromInt(GameState.DAY_CYCLE)) * 2.0 * pi;
+                const sun_dir = [3]f32{ 0.0, @cos(angle), @sin(angle) };
+                const moon_dir = [3]f32{ 0.0, -@cos(angle), -@sin(angle) };
+                self.render_state.sky_renderer.record(command_buffer, &mvp.m, sun_dir, moon_dir);
+            }
 
             // Third-person player model (rendered with world depth)
             if (gs.third_person and !overdraw) {

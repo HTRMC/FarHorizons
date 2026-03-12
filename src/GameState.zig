@@ -32,6 +32,65 @@ pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 36
 pub const ARMOR_SLOTS: u8 = 4; // head, chest, legs, feet
 pub const EQUIP_SLOTS: u8 = 4;
 
+// Day/night cycle: 12000 ticks at 30Hz ≈ 6.7 minutes per full day
+pub const DAY_CYCLE: i64 = 12000;
+
+pub const DayNightResult = struct {
+    ambient_light: [3]f32,
+    sky_color: [3]f32,
+};
+
+pub fn dayNightCycle(game_time: i64) DayNightResult {
+    // dayTime is symmetric around midnight: 0 at midnight, DAY_CYCLE/2 at noon
+    const cycle = @mod(game_time, DAY_CYCLE);
+    const half = @divTrunc(DAY_CYCLE, 2);
+    const day_time = @as(i64, @intCast(@abs(cycle - half)));
+
+    const quarter = @divTrunc(DAY_CYCLE, 4);
+    const sixteenth = @divTrunc(DAY_CYCLE, 16);
+
+    const night_end = quarter - sixteenth; // 2250
+    const day_start = quarter + sixteenth; // 3750
+
+    if (day_time < night_end) {
+        // Full night
+        return .{
+            .ambient_light = .{ 0.1, 0.1, 0.1 },
+            .sky_color = .{ 0.02, 0.02, 0.06 },
+        };
+    } else if (day_time > day_start) {
+        // Full day
+        return .{
+            .ambient_light = .{ 1.0, 1.0, 1.0 },
+            .sky_color = .{ 0.224, 0.643, 0.918 },
+        };
+    } else {
+        // Sunrise/sunset transition
+        const range: f32 = @floatFromInt(day_start - night_end);
+        const t: f32 = @as(f32, @floatFromInt(day_time - night_end)) / range;
+        // Smoothstep for natural feel
+        const s = t * t * (3.0 - 2.0 * t);
+
+        // Ambient interpolation
+        const ambient = 0.1 + 0.9 * s;
+
+        // Sky color: night → warm sunrise/sunset → day
+        // Red/orange leads, blue trails for warm sunrise tones
+        const r_t = @min(1.0, s * 1.4); // red leads
+        const g_t = s; // green is normal
+        const b_t = @max(0.0, s * 0.7 + 0.3 * s * s); // blue trails
+
+        return .{
+            .ambient_light = .{ ambient, ambient, ambient },
+            .sky_color = .{
+                0.02 + (0.224 - 0.02) * r_t + 0.3 * r_t * (1.0 - r_t), // warm red bump
+                0.02 + (0.643 - 0.02) * g_t + 0.1 * g_t * (1.0 - g_t), // slight warm green
+                0.06 + (0.918 - 0.06) * b_t,
+            },
+        };
+    }
+}
+
 // Initial load radius in chunks (per axis from center)
 const LOAD_RADIUS_XZ: i32 = 2;
 const LOAD_RADIUS_Y: i32 = 1;
@@ -164,6 +223,7 @@ mesh_worker: ?*MeshWorker = null,
 transfer_pipeline: ?*TransferPipeline = null,
 stats_last_time: ?Io.Timestamp = null,
 
+game_time: i64 = 0,
 debug_screens: u8 = 0,
 show_chunk_borders: bool = false,
 show_hitbox: bool = false,
@@ -433,6 +493,7 @@ pub fn toggleMode(self: *GameState) void {
 }
 
 pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
+    self.game_time +%= 1;
     self.prev_entity_pos = self.entity_pos;
     self.prev_camera_pos = self.camera.position;
 
