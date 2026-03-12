@@ -48,9 +48,9 @@ void main() {
     vec3 skyLight = mix(mix(sky00, sky10, st.x), mix(sky01, sky11, st.x), st.y);
     vec3 blockLight = mix(mix(blk00, blk10, st.x), mix(blk01, blk11, st.x), st.y);
 
-    // Directional shading only on sky light (sun has direction, torches don't)
-    vec3 sky = skyLight * lightVariation(fragNormal);
-    vec3 light = min(vec3(1.0), sqrt(sky * sky + blockLight * blockLight));
+    // Combine sky and block light, then apply directional shading to both
+    vec3 light = min(vec3(1.0), sqrt(skyLight * skyLight + blockLight * blockLight));
+    light *= lightVariation(fragNormal);
 
     // Bilinear interpolation of AO across the quad
     // UV-to-corner mapping: (0,0)=corner3, (1,0)=corner2, (0,1)=corner0, (1,1)=corner1
