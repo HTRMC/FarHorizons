@@ -88,8 +88,7 @@
 
     <!-- Cursor item (follows mouse when carrying) -->
     <panel id="cursor_item" width="48" height="48"
-           anchor_x="left" anchor_y="top" visible="false"
-           border_width="1" border_color="#FFFFFFAA"/>
+           anchor_x="left" anchor_y="top" visible="false"/>
 
   </panel>
 </screen>
