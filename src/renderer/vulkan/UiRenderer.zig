@@ -386,12 +386,14 @@ pub const UiRenderer = struct {
     }
 
     /// Draw an isometric block (3 visible faces) matching Minecraft's GUI display.
+    /// Rotation: Rx(30°) * Ry(225°) with Vulkan Y-down, giving a symmetric hexagonal silhouette.
+    /// Visible faces: TOP(+Y), EAST(+X) on left, NORTH(-Z) on right.
     /// tex_top/tex_side are block texture array layer indices (-1 = use solid color fallback).
     pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32, tex_top: i16, tex_side: i16) void {
         if (color[3] < 0.01) return;
 
-        const proj_w: f32 = 1.674;
-        const proj_h: f32 = 1.366;
+        const proj_w: f32 = 1.4142;
+        const proj_h: f32 = 1.5731;
         const fit = 0.85;
         const scale_x = w * fit / proj_w;
         const scale_y = h * fit / proj_h;
@@ -401,32 +403,33 @@ pub const UiRenderer = struct {
         const ox = x + (w - bw) * 0.5;
         const oy = y + (h - bh) * 0.5;
 
-        const v1 = [2]f32{ ox + bw * 0.789, oy + bh * 0.0 };
-        const v2 = [2]f32{ ox + bw * 0.366, oy + bh * 0.0 };
-        const v3 = [2]f32{ ox + bw * 0.0, oy + bh * 0.366 };
-        const v4 = [2]f32{ ox + bw * 0.212, oy + bh * 1.0 };
-        const v5 = [2]f32{ ox + bw * 0.634, oy + bh * 1.0 };
-        const v6 = [2]f32{ ox + bw * 1.0, oy + bh * 0.634 };
-        const ctr = [2]f32{ ox + bw * 0.423, oy + bh * 0.366 };
+        // Symmetric isometric vertices (normalized 0-1, then scaled by bw/bh)
+        const top = [2]f32{ ox + bw * 0.5, oy + bh * 0.0 }; // top center
+        const ul = [2]f32{ ox + bw * 0.0, oy + bh * 0.225 }; // upper left
+        const ur = [2]f32{ ox + bw * 1.0, oy + bh * 0.225 }; // upper right
+        const ctr = [2]f32{ ox + bw * 0.5, oy + bh * 0.450 }; // center junction
+        const ll = [2]f32{ ox + bw * 0.0, oy + bh * 0.775 }; // lower left
+        const lr = [2]f32{ ox + bw * 1.0, oy + bh * 0.775 }; // lower right
+        const bot = [2]f32{ ox + bw * 0.5, oy + bh * 1.0 }; // bottom center
 
         if (tex_top >= 0) {
-            // TOP face (+Y): v2, v1, ctr, v3 — textured, brightest (1.0)
-            self.drawTexturedQuad(v2, v1, ctr, v3, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 1 }, .{ 1, 1 }, @floatFromInt(tex_top), .{ 1, 1, 1, 1 });
+            // TOP face (+Y): diamond at top — shade 1.0
+            self.drawTexturedQuad(top, ul, ctr, ur, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0, 0 }, @floatFromInt(tex_top), .{ 1, 1, 1, 1 });
         } else {
-            self.drawQuad(v2, v1, ctr, v3, color);
+            self.drawQuad(top, ul, ctr, ur, color);
         }
 
         if (tex_side >= 0) {
             const ti: f32 = @floatFromInt(tex_side);
-            // WEST face (-X): v1, v6, v5, ctr — shade 0.6
-            self.drawTexturedQuad(v1, v6, v5, ctr, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 }, .{ 0, 0 }, ti, .{ 0.6, 0.6, 0.6, 1 });
-            // SOUTH face (+Z): v3, ctr, v5, v4 — shade 0.8
-            self.drawTexturedQuad(v3, ctr, v5, v4, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 1 }, .{ 1, 1 }, ti, .{ 0.8, 0.8, 0.8, 1 });
+            // EAST face (+X): left parallelogram — shade 0.6
+            self.drawTexturedQuad(ul, ll, bot, ctr, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 }, .{ 0, 0 }, ti, .{ 0.6, 0.6, 0.6, 1 });
+            // NORTH face (-Z): right parallelogram — shade 0.8
+            self.drawTexturedQuad(ur, ctr, bot, lr, .{ 0, 0 }, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 }, ti, .{ 0.8, 0.8, 0.8, 1 });
         } else {
-            const west_col = [4]f32{ color[0] * 0.6, color[1] * 0.6, color[2] * 0.6, color[3] };
-            self.drawQuad(v1, v6, v5, ctr, west_col);
-            const south_col = [4]f32{ color[0] * 0.8, color[1] * 0.8, color[2] * 0.8, color[3] };
-            self.drawQuad(v3, ctr, v5, v4, south_col);
+            const east_col = [4]f32{ color[0] * 0.6, color[1] * 0.6, color[2] * 0.6, color[3] };
+            self.drawQuad(ul, ll, bot, ctr, east_col);
+            const north_col = [4]f32{ color[0] * 0.8, color[1] * 0.8, color[2] * 0.8, color[3] };
+            self.drawQuad(ur, ctr, bot, lr, north_col);
         }
     }
 
