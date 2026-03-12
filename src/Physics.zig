@@ -144,10 +144,10 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
     return .{ .distance = safe_dist, .hit = hit };
 }
 
-const BlockBox = struct { min: [3]f32, max: [3]f32 };
-const BlockBoxes = struct { boxes: [2]BlockBox, count: u8 };
+pub const BlockBox = struct { min: [3]f32, max: [3]f32 };
+pub const BlockBoxes = struct { boxes: [2]BlockBox, count: u8 };
 
-fn getBlockBoxes(block: WorldState.BlockType) BlockBoxes {
+pub fn getBlockBoxes(block: WorldState.BlockType) BlockBoxes {
     return switch (block) {
         .oak_slab_bottom => .{
             .boxes = .{
