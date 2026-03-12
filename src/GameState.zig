@@ -743,7 +743,7 @@ pub fn breakBlock(self: *GameState) void {
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
-fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit_dir: Raycast.Direction) WorldState.BlockType {
+fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit: Raycast.BlockHitResult) WorldState.BlockType {
     // Orient stairs based on player's facing direction
     switch (block_type) {
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => {
@@ -757,8 +757,12 @@ fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit_dir: Rayca
             return .oak_stairs_south;
         },
         .oak_slab_bottom, .oak_slab_top => {
-            // Place top slab when clicking on underside of block, bottom slab otherwise
-            if (hit_dir == .down) return .oak_slab_top;
+            // Top slab when clicking underside of block, or upper half of a side face
+            if (hit.direction == .down) return .oak_slab_top;
+            if (hit.direction == .up) return .oak_slab_bottom;
+            // Side face: check if click was on upper or lower half
+            const frac_y = hit.hit_pos[1] - @floor(hit.hit_pos[1]);
+            if (frac_y >= 0.5) return .oak_slab_top;
             return .oak_slab_bottom;
         },
         else => return block_type,
@@ -776,8 +780,8 @@ pub fn placeBlock(self: *GameState) void {
     if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
     if (WorldState.block_properties.isSolid(block_type) and blockOverlapsPlayer(px, py, pz, self.entity_pos)) return;
 
-    // Orient stairs based on player yaw, and slabs based on hit face
-    block_type = resolveOrientation(block_type, self.camera.yaw, hit.direction);
+    // Orient stairs based on player yaw, and slabs based on hit face/position
+    block_type = resolveOrientation(block_type, self.camera.yaw, hit);
 
     const old_block = self.chunk_map.getBlock(px, py, pz);
     self.chunk_map.setBlock(px, py, pz, block_type);

@@ -28,6 +28,7 @@ pub const Direction = enum {
 pub const BlockHitResult = struct {
     block_pos: [3]i32,
     direction: Direction,
+    hit_pos: [3]f32, // exact world-space hit point
 };
 
 pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?BlockHitResult {
@@ -39,6 +40,7 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
         return .{
             .block_pos = .{ block_x, block_y, block_z },
             .direction = .up,
+            .hit_pos = .{ origin.x, origin.y, origin.z },
         };
     }
 
@@ -75,19 +77,23 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
 
     for (0..max_steps) |_| {
         var face: Direction = undefined;
+        var hit_t: f32 = undefined;
 
         if (t_max_x < t_max_y and t_max_x < t_max_z) {
             if (t_max_x > MAX_RANGE) return null;
+            hit_t = t_max_x;
             block_x += step_x;
             t_max_x += t_delta_x;
             face = if (step_x > 0) .west else .east;
         } else if (t_max_y < t_max_z) {
             if (t_max_y > MAX_RANGE) return null;
+            hit_t = t_max_y;
             block_y += step_y;
             t_max_y += t_delta_y;
             face = if (step_y > 0) .down else .up;
         } else {
             if (t_max_z > MAX_RANGE) return null;
+            hit_t = t_max_z;
             block_z += step_z;
             t_max_z += t_delta_z;
             face = if (step_z > 0) .north else .south;
@@ -97,6 +103,11 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
             return .{
                 .block_pos = .{ block_x, block_y, block_z },
                 .direction = face,
+                .hit_pos = .{
+                    origin.x + dir.x * hit_t,
+                    origin.y + dir.y * hit_t,
+                    origin.z + dir.z * hit_t,
+                },
             };
         }
     }
