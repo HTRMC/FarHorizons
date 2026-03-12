@@ -430,6 +430,76 @@ fn computePaddedAoDeltas() [6][4][3]i32 {
     return result;
 }
 
+/// Comptime trilinear light sample offsets and weights per face/corner.
+/// Derived from Cubyz getCornerLight: lightPos = vertex + normal*0.5 - 0.5,
+/// then trilinear interpolation over 8 surrounding blocks.
+/// For axis-aligned faces, collapses to 4 samples with equal weight (64/256 each).
+const TrilinearSample = struct {
+    delta: i32,
+    weight: u16,
+};
+
+const trilinear_light_samples = computeTrilinearLightSamples();
+
+fn computeTrilinearLightSamples() [6][4][4]TrilinearSample {
+    @setEvalBranchQuota(10000);
+    var result: [6][4][4]TrilinearSample = undefined;
+    for (0..6) |face| {
+        const normal = face_neighbor_offsets[face];
+        for (0..4) |corner| {
+            const vert = face_vertices[face][corner];
+
+            // lightPos = vertex + normal * 0.5 - 0.5 (per axis)
+            const light_pos = [3]f32{
+                vert.px + @as(f32, @floatFromInt(normal[0])) * 0.5 - 0.5,
+                vert.py + @as(f32, @floatFromInt(normal[1])) * 0.5 - 0.5,
+                vert.pz + @as(f32, @floatFromInt(normal[2])) * 0.5 - 0.5,
+            };
+            const start = [3]i32{
+                @intFromFloat(@floor(light_pos[0])),
+                @intFromFloat(@floor(light_pos[1])),
+                @intFromFloat(@floor(light_pos[2])),
+            };
+            const interp = [3]f32{
+                light_pos[0] - @as(f32, @floatFromInt(start[0])),
+                light_pos[1] - @as(f32, @floatFromInt(start[1])),
+                light_pos[2] - @as(f32, @floatFromInt(start[2])),
+            };
+
+            var si: usize = 0;
+            for (0..2) |dxi| {
+                const dx: i32 = @intCast(dxi);
+                for (0..2) |dyi| {
+                    const dy: i32 = @intCast(dyi);
+                    for (0..2) |dzi| {
+                        const dz: i32 = @intCast(dzi);
+                        var w: f32 = 1.0;
+                        w *= if (dx == 0) (1.0 - interp[0]) else interp[0];
+                        w *= if (dy == 0) (1.0 - interp[1]) else interp[1];
+                        w *= if (dz == 0) (1.0 - interp[2]) else interp[2];
+
+                        const iw: u16 = @intFromFloat(w * 256.0);
+                        if (iw > 0) {
+                            const sx = start[0] + dx;
+                            const sy = start[1] + dy;
+                            const sz = start[2] + dz;
+                            result[face][corner][si] = .{
+                                .delta = sy * @as(i32, PADDED_SIZE * PADDED_SIZE) + sz * @as(i32, PADDED_SIZE) + sx,
+                                .weight = iw,
+                            };
+                            si += 1;
+                        }
+                    }
+                }
+            }
+            while (si < 4) : (si += 1) {
+                result[face][corner][si] = .{ .delta = 0, .weight = 0 };
+            }
+        }
+    }
+    return result;
+}
+
 /// Build a 34³ padded block array: center 32³ from chunk, 1-block border from neighbors, .air elsewhere.
 fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, neighbors: [6]?*const Chunk) void {
     @memset(padded, .air);
@@ -601,6 +671,74 @@ fn packLight(sky_val: u8, block_light_val: [3]u8) u32 {
     return (s5 << 0) | (s5 << 5) | (s5 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
 }
 
+/// Trilinear light sampling for one corner of a face quad.
+/// Samples 4 surrounding block positions with precomputed weights (Cubyz-style).
+const TrilinearLightResult = struct { sky: u8, block: [3]u8 };
+
+fn sampleTrilinearLight(
+    base: i32,
+    face: usize,
+    corner: usize,
+    padded: *const [PADDED_BLOCKS]BlockType,
+    padded_sky: *const [PADDED_BLOCKS]u8,
+    padded_block_light: *const [PADDED_BLOCKS][3]u8,
+) TrilinearLightResult {
+    const samples = trilinear_light_samples[face][corner];
+    const face_delta = padded_face_deltas[face];
+    var sky_sum: u32 = 0;
+    var blk_sum: [3]u32 = .{ 0, 0, 0 };
+    var total_weight: u32 = 0;
+
+    for (0..4) |s| {
+        const sample = samples[s];
+        if (sample.weight == 0) continue;
+        const sample_idx: usize = @intCast(base + sample.delta);
+        // Skip opaque samples — AO already handles corner darkening
+        if (block_properties.isOpaque(padded[sample_idx])) continue;
+        const w: u32 = sample.weight;
+        total_weight += w;
+
+        // Per-sample directional shadow: compare light at sample with one
+        // step further in normal direction; darken if facing away from light.
+        var sky_val: u8 = padded_sky[sample_idx];
+        var blk_val: [3]u8 = padded_block_light[sample_idx];
+        const next_signed: i32 = @as(i32, @intCast(sample_idx)) + face_delta;
+        if (next_signed >= 0 and next_signed < PADDED_BLOCKS) {
+            const next_idx: usize = @intCast(next_signed);
+            const sky_diff: u8 = @min(8, sky_val -| padded_sky[next_idx]);
+            sky_val -|= sky_diff * 5 / 2;
+            const next_blk = padded_block_light[next_idx];
+            inline for (0..3) |ch| {
+                const blk_diff: u8 = @min(8, blk_val[ch] -| next_blk[ch]);
+                blk_val[ch] -|= blk_diff * 5 / 2;
+            }
+        }
+
+        sky_sum += @as(u32, sky_val) * w;
+        blk_sum[0] += @as(u32, blk_val[0]) * w;
+        blk_sum[1] += @as(u32, blk_val[1]) * w;
+        blk_sum[2] += @as(u32, blk_val[2]) * w;
+    }
+
+    // If all samples were opaque, fall back to face neighbor light
+    if (total_weight == 0) {
+        const face_idx: usize = @intCast(base + face_delta);
+        return .{
+            .sky = padded_sky[face_idx],
+            .block = padded_block_light[face_idx],
+        };
+    }
+
+    return .{
+        .sky = @intCast(sky_sum / total_weight),
+        .block = .{
+            @intCast(blk_sum[0] / total_weight),
+            @intCast(blk_sum[1] / total_weight),
+            @intCast(blk_sum[2] / total_weight),
+        },
+    };
+}
+
 /// Returns true if this chunk will produce zero mesh faces:
 /// all blocks are opaque AND all 6 neighbor boundary faces are opaque.
 pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
@@ -745,8 +883,6 @@ pub fn generateChunkMesh(
                         .oak_leaves => 26,
                     };
 
-                    // Sample light from the padded light volume at the face neighbor position
-                    const face_neighbor_idx: usize = @intCast(base + padded_face_deltas[face]);
                     var corner_packed: [4]u32 = undefined;
                     var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
 
@@ -758,63 +894,13 @@ pub fn generateChunkMesh(
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                         corner_block_brightness = .{ 255, 255, 255, 255 };
                     } else {
-                        // Normal-direction shadow (Cubyz getLightSampleAligned technique):
-                        // Compare light at face neighbor with one step further in normal
-                        // direction. If darker ahead, face is facing away from light → shadow.
-                        var sky_shadow: u8 = 0;
-                        var blk_shadow: [3]u8 = .{ 0, 0, 0 };
-                        const can_shadow: bool = switch (face) {
-                            0 => bz <= CHUNK_SIZE - 2, // +Z
-                            1 => bz >= 1, // -Z
-                            2 => bx >= 1, // -X
-                            3 => bx <= CHUNK_SIZE - 2, // +X
-                            4 => by <= CHUNK_SIZE - 2, // +Y
-                            5 => by >= 1, // -Y
-                            else => unreachable,
-                        };
-                        if (can_shadow) {
-                            const next_idx: usize = @intCast(@as(i32, @intCast(face_neighbor_idx)) + padded_face_deltas[face]);
-                            const sky_diff: u8 = @min(@as(u8, 8), padded_sky[face_neighbor_idx] -| padded_sky[next_idx]);
-                            sky_shadow = sky_diff * 5 / 2;
-                            const fn_blk = padded_block_light[face_neighbor_idx];
-                            const nx_blk = padded_block_light[next_idx];
-                            for (0..3) |ch| {
-                                const blk_diff: u8 = @min(@as(u8, 8), fn_blk[ch] -| nx_blk[ch]);
-                                blk_shadow[ch] = blk_diff * 5 / 2;
-                            }
-                        }
-
-                        // Sample light at each AO corner position for smooth per-corner light
+                        // Trilinear light sampling (Cubyz-style): sample 4 surrounding
+                        // blocks per corner with precomputed weights. Opaque blocks
+                        // contribute their (zero) light, naturally darkening edges.
                         for (0..4) |corner| {
-                            const deltas = padded_ao_deltas[face][corner];
-                            // Average the face neighbor + 3 AO neighbor light values
-                            var sky_sum: u32 = @as(u32, padded_sky[face_neighbor_idx]);
-                            var blk_sum: [3]u32 = .{
-                                @as(u32, padded_block_light[face_neighbor_idx][0]),
-                                @as(u32, padded_block_light[face_neighbor_idx][1]),
-                                @as(u32, padded_block_light[face_neighbor_idx][2]),
-                            };
-                            var count: u32 = 1;
-
-                            for (0..3) |s| {
-                                const sample_idx: usize = @intCast(base + deltas[s]);
-                                if (!block_properties.isOpaque(padded[sample_idx])) {
-                                    sky_sum += @as(u32, padded_sky[sample_idx]);
-                                    blk_sum[0] += @as(u32, padded_block_light[sample_idx][0]);
-                                    blk_sum[1] += @as(u32, padded_block_light[sample_idx][1]);
-                                    blk_sum[2] += @as(u32, padded_block_light[sample_idx][2]);
-                                    count += 1;
-                                }
-                            }
-
-                            const avg_sky: u8 = @as(u8, @intCast(sky_sum / count)) -| sky_shadow;
-                            const avg_blk: [3]u8 = .{
-                                @as(u8, @intCast(blk_sum[0] / count)) -| blk_shadow[0],
-                                @as(u8, @intCast(blk_sum[1] / count)) -| blk_shadow[1],
-                                @as(u8, @intCast(blk_sum[2] / count)) -| blk_shadow[2],
-                            };
-                            corner_packed[corner] = packLight(avg_sky, avg_blk);
-                            corner_block_brightness[corner] = @intCast(@max(blk_sum[0] / count, @max(blk_sum[1] / count, blk_sum[2] / count)));
+                            const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
+                            corner_packed[corner] = packLight(result.sky, result.block);
+                            corner_block_brightness[corner] = @max(result.block[0], @max(result.block[1], result.block[2]));
                         }
                     }
 
@@ -936,7 +1022,6 @@ pub fn generateChunkLightOnly(
                     if (block_properties.isOpaque(neighbor_block)) continue;
                     if (neighbor_block == block and block_properties.cullsSelf(block)) continue;
 
-                    const face_neighbor_idx2: usize = @intCast(base + padded_face_deltas[face]);
                     var corner_packed: [4]u32 = undefined;
 
                     if (is_emitter) {
@@ -946,33 +1031,10 @@ pub fn generateChunkLightOnly(
                         const emit_packed: u32 = (31 << 0) | (31 << 5) | (31 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                     } else {
-                        // Sample light at the face neighbor position
-                        var face_sky = padded_sky[face_neighbor_idx2];
-                        var face_blk = padded_block_light[face_neighbor_idx2];
-
-                        // Normal-direction shadow (same technique as generateChunkMesh)
-                        const can_shadow: bool = switch (face) {
-                            0 => bz <= CHUNK_SIZE - 2,
-                            1 => bz >= 1,
-                            2 => bx >= 1,
-                            3 => bx <= CHUNK_SIZE - 2,
-                            4 => by <= CHUNK_SIZE - 2,
-                            5 => by >= 1,
-                            else => unreachable,
-                        };
-                        if (can_shadow) {
-                            const next_idx: usize = @intCast(@as(i32, @intCast(face_neighbor_idx2)) + padded_face_deltas[face]);
-                            const sky_diff: u8 = @min(@as(u8, 8), face_sky -| padded_sky[next_idx]);
-                            face_sky = face_sky -| (sky_diff * 5 / 2);
-                            const nx_blk = padded_block_light[next_idx];
-                            for (0..3) |ch| {
-                                const blk_diff: u8 = @min(@as(u8, 8), face_blk[ch] -| nx_blk[ch]);
-                                face_blk[ch] = face_blk[ch] -| (blk_diff * 5 / 2);
-                            }
+                        for (0..4) |corner| {
+                            const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
+                            corner_packed[corner] = packLight(result.sky, result.block);
                         }
-
-                        const lp = packLight(face_sky, face_blk);
-                        corner_packed = .{ lp, lp, lp, lp };
                     }
 
                     const layer = @intFromEnum(block_properties.renderLayer(block));
