@@ -778,7 +778,7 @@ pub const WorldRenderer = struct {
             self.light_alloc = try gpu_alloc.createBuffer(lb_capacity, transfer_usage, .device_local);
         }
 
-        const model_size: vk.VkDeviceSize = 6 * @sizeOf(QuadModel);
+        const model_size: vk.VkDeviceSize = WorldState.TOTAL_MODEL_COUNT * @sizeOf(QuadModel);
         self.model_alloc = try gpu_alloc.createBuffer(
             model_size,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -815,7 +815,9 @@ pub const WorldRenderer = struct {
     }
 
     fn uploadModelBuffer(self: *WorldRenderer, ctx: *const VulkanContext, model_size: vk.VkDeviceSize) !void {
-        var models: [6]QuadModel = undefined;
+        var models: [WorldState.TOTAL_MODEL_COUNT]QuadModel = undefined;
+
+        // Standard full-cube face models (0-5)
         for (0..6) |face| {
             var corners: [12]f32 = undefined;
             var uvs: [8]f32 = undefined;
@@ -839,6 +841,25 @@ pub const WorldRenderer = struct {
             };
         }
 
+        // Extra quad models for shaped blocks (6+)
+        for (0..WorldState.EXTRA_MODEL_COUNT) |i| {
+            const em = WorldState.extra_quad_models[i];
+            var corners: [12]f32 = undefined;
+            var uvs: [8]f32 = undefined;
+            for (0..4) |v| {
+                corners[v * 3 + 0] = em.corners[v][0];
+                corners[v * 3 + 1] = em.corners[v][1];
+                corners[v * 3 + 2] = em.corners[v][2];
+                uvs[v * 2 + 0] = em.uvs[v][0];
+                uvs[v * 2 + 1] = em.uvs[v][1];
+            }
+            models[6 + i] = .{
+                .corners = corners,
+                .uvs = uvs,
+                .normal = em.normal,
+            };
+        }
+
         var staging_buffer: vk.VkBuffer = undefined;
         var staging_memory: vk.VkDeviceMemory = undefined;
         try vk_utils.createBuffer(
@@ -857,7 +878,7 @@ pub const WorldRenderer = struct {
         var data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, staging_memory, 0, model_size, 0, &data);
         const dst: [*]QuadModel = @ptrCast(@alignCast(data));
-        @memcpy(dst[0..6], &models);
+        @memcpy(dst[0..WorldState.TOTAL_MODEL_COUNT], &models);
         vk.unmapMemory(ctx.device, staging_memory);
 
         try vk_utils.copyBuffer(ctx, staging_buffer, self.model_alloc.buffer, model_size);

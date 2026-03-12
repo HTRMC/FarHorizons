@@ -61,6 +61,218 @@ pub const face_neighbor_offsets = [6][3]i32{
     .{ 0, -1, 0 },
 };
 
+// --- Extra quad models for shaped blocks (slabs, stairs) ---
+// Models 0-5 are standard full-cube faces from face_vertices.
+// Models 6+ are partial quads for shaped blocks.
+pub const ExtraQuadModel = struct {
+    corners: [4][3]f32,
+    uvs: [4][2]f32,
+    normal: [3]f32,
+};
+
+/// Face definition for shaped blocks: which model to use and which face bucket it belongs to.
+pub const ShapeFace = struct {
+    model_index: u9, // index into combined model array (0-5 = standard, 6+ = extra)
+    face_bucket: u3, // which direction bucket (0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y)
+    always_emit: bool, // true for internal faces (slab top at y=0.5, step risers)
+};
+
+// Helper to build a quad with 4 corners, UVs, and a normal
+fn quad(c0: [3]f32, c1: [3]f32, c2: [3]f32, c3: [3]f32, uv0: [2]f32, uv1: [2]f32, uv2: [2]f32, uv3: [2]f32, normal: [3]f32) ExtraQuadModel {
+    return .{ .corners = .{ c0, c1, c2, c3 }, .uvs = .{ uv0, uv1, uv2, uv3 }, .normal = normal };
+}
+
+pub const EXTRA_MODEL_COUNT = 30;
+
+// Bottom slab: models 6-10
+// 6: slab top (+Y at y=0.5)
+// 7: slab +Z side (y: 0→0.5)
+// 8: slab -Z side (y: 0→0.5)
+// 9: slab -X side (y: 0→0.5)
+// 10: slab +X side (y: 0→0.5)
+//
+// Top slab: models 11-15
+// 11: slab bottom (-Y at y=0.5)
+// 12: slab +Z side (y: 0.5→1)
+// 13: slab -Z side (y: 0.5→1)
+// 14: slab -X side (y: 0.5→1)
+// 15: slab +X side (y: 0.5→1)
+//
+// Stairs south (step toward +Z, back at -Z): models 16-20
+// 16: top back (+Y at y=1, z: 0→0.5)
+// 17: step top (+Y at y=0.5, z: 0.5→1)
+// 18: step riser (+Z at z=0.5, y: 0.5→1)
+// 19: left upper back (-X, z: 0→0.5, y: 0.5→1)
+// 20: right upper back (+X, z: 0→0.5, y: 0.5→1)
+//
+// Stairs north (step toward -Z, back at +Z): models 21-25
+// Stairs east (step toward +X, back at -X): models 26-30
+// Stairs west (step toward -X, back at +X): models 31-35
+
+pub const extra_quad_models = [EXTRA_MODEL_COUNT]ExtraQuadModel{
+    // --- Bottom slab models (6-10) ---
+    // 6: slab top (+Y at y=0.5)
+    quad(.{ 0, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 1, 0 }),
+    // 7: slab +Z side half-height (y: 0→0.5)
+    quad(.{ 0, 0, 1 }, .{ 1, 0, 1 }, .{ 1, 0.5, 1 }, .{ 0, 0.5, 1 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, 1 }),
+    // 8: slab -Z side half-height (y: 0→0.5)
+    quad(.{ 1, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0.5, 0 }, .{ 1, 0.5, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, -1 }),
+    // 9: slab -X side half-height (y: 0→0.5)
+    quad(.{ 0, 0, 0 }, .{ 0, 0, 1 }, .{ 0, 0.5, 1 }, .{ 0, 0.5, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ -1, 0, 0 }),
+    // 10: slab +X side half-height (y: 0→0.5)
+    quad(.{ 1, 0, 1 }, .{ 1, 0, 0 }, .{ 1, 0.5, 0 }, .{ 1, 0.5, 1 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 1, 0, 0 }),
+
+    // --- Top slab models (11-15) ---
+    // 11: slab bottom (-Y at y=0.5)
+    quad(.{ 0, 0.5, 0 }, .{ 1, 0.5, 0 }, .{ 1, 0.5, 1 }, .{ 0, 0.5, 1 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0, 0 }, .{ 0, -1, 0 }),
+    // 12: slab +Z side upper half (y: 0.5→1)
+    quad(.{ 0, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 1, 1 }, .{ 0, 1, 1 }, .{ 0, 0.5 }, .{ 1, 0.5 }, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 0, 1 }),
+    // 13: slab -Z side upper half (y: 0.5→1)
+    quad(.{ 1, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1, 0 }, .{ 1, 1, 0 }, .{ 0, 0.5 }, .{ 1, 0.5 }, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 0, -1 }),
+    // 14: slab -X side upper half (y: 0.5→1)
+    quad(.{ 0, 0.5, 0 }, .{ 0, 0.5, 1 }, .{ 0, 1, 1 }, .{ 0, 1, 0 }, .{ 0, 0.5 }, .{ 1, 0.5 }, .{ 1, 0 }, .{ 0, 0 }, .{ -1, 0, 0 }),
+    // 15: slab +X side upper half (y: 0.5→1)
+    quad(.{ 1, 0.5, 1 }, .{ 1, 0.5, 0 }, .{ 1, 1, 0 }, .{ 1, 1, 1 }, .{ 0, 0.5 }, .{ 1, 0.5 }, .{ 1, 0 }, .{ 0, 0 }, .{ 1, 0, 0 }),
+
+    // --- Stairs south models (step toward +Z, back at -Z) (16-20) ---
+    // 16: top back (+Y at y=1, z: 0→0.5) — half-depth top
+    quad(.{ 0, 1, 0.5 }, .{ 1, 1, 0.5 }, .{ 1, 1, 0 }, .{ 0, 1, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 1, 0 }),
+    // 17: step top (+Y at y=0.5, z: 0.5→1) — half-depth step
+    quad(.{ 0, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 0.5, 0.5 }, .{ 0, 0.5, 0.5 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 1, 0 }),
+    // 18: step riser (+Z at z=0.5, y: 0.5→1) — inner vertical face
+    quad(.{ 0, 0.5, 0.5 }, .{ 1, 0.5, 0.5 }, .{ 1, 1, 0.5 }, .{ 0, 1, 0.5 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, 1 }),
+    // 19: left upper back (-X, z: 0→0.5, y: 0.5→1)
+    quad(.{ 0, 0.5, 0 }, .{ 0, 0.5, 0.5 }, .{ 0, 1, 0.5 }, .{ 0, 1, 0 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 }, .{ 0, 0.5 }, .{ -1, 0, 0 }),
+    // 20: right upper back (+X, z: 0→0.5, y: 0.5→1)
+    quad(.{ 1, 0.5, 0.5 }, .{ 1, 0.5, 0 }, .{ 1, 1, 0 }, .{ 1, 1, 0.5 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 }, .{ 0, 0.5 }, .{ 1, 0, 0 }),
+
+    // --- Stairs north models (step toward -Z, back at +Z) (21-25) ---
+    // 21: top back (+Y at y=1, z: 0.5→1)
+    quad(.{ 0, 1, 1 }, .{ 1, 1, 1 }, .{ 1, 1, 0.5 }, .{ 0, 1, 0.5 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 1, 0 }),
+    // 22: step top (+Y at y=0.5, z: 0→0.5)
+    quad(.{ 0, 0.5, 0.5 }, .{ 1, 0.5, 0.5 }, .{ 1, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 1, 0 }),
+    // 23: step riser (-Z at z=0.5, y: 0.5→1)
+    quad(.{ 1, 0.5, 0.5 }, .{ 0, 0.5, 0.5 }, .{ 0, 1, 0.5 }, .{ 1, 1, 0.5 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, -1 }),
+    // 24: left upper back (-X, z: 0.5→1, y: 0.5→1)
+    quad(.{ 0, 0.5, 0.5 }, .{ 0, 0.5, 1 }, .{ 0, 1, 1 }, .{ 0, 1, 0.5 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0.5, 0.5 }, .{ -1, 0, 0 }),
+    // 25: right upper back (+X, z: 0.5→1, y: 0.5→1)
+    quad(.{ 1, 0.5, 1 }, .{ 1, 0.5, 0.5 }, .{ 1, 1, 0.5 }, .{ 1, 1, 1 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0.5, 0.5 }, .{ 1, 0, 0 }),
+
+    // --- Stairs east models (step toward +X, back at -X) (26-30) ---
+    // 26: top back (+Y at y=1, x: 0→0.5)
+    quad(.{ 0, 1, 1 }, .{ 0.5, 1, 1 }, .{ 0.5, 1, 0 }, .{ 0, 1, 0 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0 }, .{ 0, 0 }, .{ 0, 1, 0 }),
+    // 27: step top (+Y at y=0.5, x: 0.5→1)
+    quad(.{ 0.5, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 0.5, 0 }, .{ 0.5, 0.5, 0 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0.5, 0 }, .{ 0, 1, 0 }),
+    // 28: step riser (+X at x=0.5, y: 0.5→1)
+    quad(.{ 0.5, 0.5, 1 }, .{ 0.5, 0.5, 0 }, .{ 0.5, 1, 0 }, .{ 0.5, 1, 1 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 1, 0, 0 }),
+    // 29: front upper back (-Z, x: 0→0.5, y: 0.5→1)
+    quad(.{ 0.5, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1, 0 }, .{ 0.5, 1, 0 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, -1 }),
+    // 30: back upper back (+Z, x: 0→0.5, y: 0.5→1)
+    quad(.{ 0, 0.5, 1 }, .{ 0.5, 0.5, 1 }, .{ 0.5, 1, 1 }, .{ 0, 1, 1 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, 1 }),
+
+    // --- Stairs west models (step toward -X, back at +X) (31-35) ---
+    // 31: top back (+Y at y=1, x: 0.5→1)
+    quad(.{ 0.5, 1, 1 }, .{ 1, 1, 1 }, .{ 1, 1, 0 }, .{ 0.5, 1, 0 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0.5, 0 }, .{ 0, 1, 0 }),
+    // 32: step top (+Y at y=0.5, x: 0→0.5)
+    quad(.{ 0, 0.5, 1 }, .{ 0.5, 0.5, 1 }, .{ 0.5, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0 }, .{ 0, 0 }, .{ 0, 1, 0 }),
+    // 33: step riser (-X at x=0.5, y: 0.5→1)
+    quad(.{ 0.5, 0.5, 0 }, .{ 0.5, 0.5, 1 }, .{ 0.5, 1, 1 }, .{ 0.5, 1, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ -1, 0, 0 }),
+    // 34: front upper back (-Z, x: 0.5→1, y: 0.5→1)
+    quad(.{ 1, 0.5, 0 }, .{ 0.5, 0.5, 0 }, .{ 0.5, 1, 0 }, .{ 1, 1, 0 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0.5, 0.5 }, .{ 0, 0, -1 }),
+    // 35: back upper back (+Z, x: 0.5→1, y: 0.5→1)
+    quad(.{ 0.5, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 1, 1 }, .{ 0.5, 1, 1 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0.5, 0.5 }, .{ 0, 0, 1 }),
+};
+
+pub const TOTAL_MODEL_COUNT = 6 + EXTRA_MODEL_COUNT;
+
+/// Get the face list for a shaped block.
+/// Returns slice of ShapeFace describing all quads to emit.
+pub fn getShapeFaces(block: BlockType) []const ShapeFace {
+    return switch (block) {
+        .oak_slab_bottom => &bottom_slab_faces,
+        .oak_slab_top => &top_slab_faces,
+        .oak_stairs_south => &stairs_south_faces,
+        .oak_stairs_north => &stairs_north_faces,
+        .oak_stairs_east => &stairs_east_faces,
+        .oak_stairs_west => &stairs_west_faces,
+        else => &.{},
+    };
+}
+
+const bottom_slab_faces = [_]ShapeFace{
+    .{ .model_index = 6, .face_bucket = 4, .always_emit = true }, // top at y=0.5 (always visible)
+    .{ .model_index = 5, .face_bucket = 5, .always_emit = false }, // bottom (standard -Y)
+    .{ .model_index = 7, .face_bucket = 0, .always_emit = false }, // +Z half-height
+    .{ .model_index = 8, .face_bucket = 1, .always_emit = false }, // -Z half-height
+    .{ .model_index = 9, .face_bucket = 2, .always_emit = false }, // -X half-height
+    .{ .model_index = 10, .face_bucket = 3, .always_emit = false }, // +X half-height
+};
+
+const top_slab_faces = [_]ShapeFace{
+    .{ .model_index = 4, .face_bucket = 4, .always_emit = false }, // top (standard +Y)
+    .{ .model_index = 11, .face_bucket = 5, .always_emit = true }, // bottom at y=0.5 (always visible)
+    .{ .model_index = 12, .face_bucket = 0, .always_emit = false }, // +Z upper half
+    .{ .model_index = 13, .face_bucket = 1, .always_emit = false }, // -Z upper half
+    .{ .model_index = 14, .face_bucket = 2, .always_emit = false }, // -X upper half
+    .{ .model_index = 15, .face_bucket = 3, .always_emit = false }, // +X upper half
+};
+
+// South stair: step faces +Z, back wall at -Z
+// Lower half = full slab, upper half = back portion (z: 0→0.5)
+const stairs_south_faces = [_]ShapeFace{
+    // Bottom slab portion
+    .{ .model_index = 5, .face_bucket = 5, .always_emit = false }, // bottom -Y
+    .{ .model_index = 7, .face_bucket = 0, .always_emit = false }, // +Z front half-height
+    .{ .model_index = 9, .face_bucket = 2, .always_emit = false }, // -X lower half
+    .{ .model_index = 10, .face_bucket = 3, .always_emit = false }, // +X lower half
+    // Upper back portion
+    .{ .model_index = 1, .face_bucket = 1, .always_emit = false }, // -Z back full-height
+    .{ .model_index = 16, .face_bucket = 4, .always_emit = false }, // top back at y=1
+    .{ .model_index = 17, .face_bucket = 4, .always_emit = true }, // step top at y=0.5 (internal)
+    .{ .model_index = 18, .face_bucket = 0, .always_emit = true }, // step riser (internal)
+    .{ .model_index = 19, .face_bucket = 2, .always_emit = false }, // -X upper back
+    .{ .model_index = 20, .face_bucket = 3, .always_emit = false }, // +X upper back
+};
+
+const stairs_north_faces = [_]ShapeFace{
+    .{ .model_index = 5, .face_bucket = 5, .always_emit = false },
+    .{ .model_index = 8, .face_bucket = 1, .always_emit = false }, // -Z front half-height
+    .{ .model_index = 9, .face_bucket = 2, .always_emit = false },
+    .{ .model_index = 10, .face_bucket = 3, .always_emit = false },
+    .{ .model_index = 0, .face_bucket = 0, .always_emit = false }, // +Z back full-height
+    .{ .model_index = 21, .face_bucket = 4, .always_emit = false },
+    .{ .model_index = 22, .face_bucket = 4, .always_emit = true },
+    .{ .model_index = 23, .face_bucket = 1, .always_emit = true },
+    .{ .model_index = 24, .face_bucket = 2, .always_emit = false },
+    .{ .model_index = 25, .face_bucket = 3, .always_emit = false },
+};
+
+const stairs_east_faces = [_]ShapeFace{
+    .{ .model_index = 5, .face_bucket = 5, .always_emit = false },
+    .{ .model_index = 10, .face_bucket = 3, .always_emit = false }, // +X front half-height
+    .{ .model_index = 7, .face_bucket = 0, .always_emit = false }, // +Z lower half
+    .{ .model_index = 8, .face_bucket = 1, .always_emit = false }, // -Z lower half
+    .{ .model_index = 2, .face_bucket = 2, .always_emit = false }, // -X back full-height
+    .{ .model_index = 26, .face_bucket = 4, .always_emit = false },
+    .{ .model_index = 27, .face_bucket = 4, .always_emit = true },
+    .{ .model_index = 28, .face_bucket = 3, .always_emit = true },
+    .{ .model_index = 29, .face_bucket = 1, .always_emit = false },
+    .{ .model_index = 30, .face_bucket = 0, .always_emit = false },
+};
+
+const stairs_west_faces = [_]ShapeFace{
+    .{ .model_index = 5, .face_bucket = 5, .always_emit = false },
+    .{ .model_index = 9, .face_bucket = 2, .always_emit = false }, // -X front half-height
+    .{ .model_index = 7, .face_bucket = 0, .always_emit = false }, // +Z lower half
+    .{ .model_index = 8, .face_bucket = 1, .always_emit = false }, // -Z lower half
+    .{ .model_index = 3, .face_bucket = 3, .always_emit = false }, // +X back full-height
+    .{ .model_index = 31, .face_bucket = 4, .always_emit = false },
+    .{ .model_index = 32, .face_bucket = 4, .always_emit = true },
+    .{ .model_index = 33, .face_bucket = 2, .always_emit = true },
+    .{ .model_index = 34, .face_bucket = 1, .always_emit = false },
+    .{ .model_index = 35, .face_bucket = 0, .always_emit = false },
+};
+
 pub const WorldType = enum(u8) {
     normal,
     debug,
@@ -98,12 +310,30 @@ pub const BlockType = enum(u8) {
     bookshelf,
     obsidian,
     oak_leaves,
+    oak_slab_bottom,
+    oak_slab_top,
+    oak_stairs_south,
+    oak_stairs_north,
+    oak_stairs_east,
+    oak_stairs_west,
+
+    pub fn isShapedBlock(self: BlockType) bool {
+        return switch (self) {
+            .oak_slab_bottom, .oak_slab_top,
+            .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
+            => true,
+            else => false,
+        };
+    }
 };
 
 pub const block_properties = struct {
     pub fn isOpaque(block: BlockType) bool {
         return switch (block) {
-            .air, .glass, .water, .oak_leaves => false,
+            .air, .glass, .water, .oak_leaves,
+            .oak_slab_bottom, .oak_slab_top,
+            .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
+            => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
             .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
@@ -117,6 +347,9 @@ pub const block_properties = struct {
             .air => false,
             .glass, .water => true,
             .oak_leaves => false,
+            .oak_slab_bottom, .oak_slab_top,
+            .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
+            => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
             .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
@@ -843,6 +1076,52 @@ pub fn generateChunkMesh(
                 const block = padded[@intCast(base)];
                 if (block == .air) continue;
 
+                const layer = @intFromEnum(block_properties.renderLayer(block));
+
+                if (block.isShapedBlock()) {
+                    // Shaped block: emit partial quads
+                    const shape_faces = getShapeFaces(block);
+                    for (shape_faces) |sf| {
+                        if (!sf.always_emit) {
+                            const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
+                            if (block_properties.isOpaque(neighbor)) continue;
+                        }
+                        const face: usize = sf.face_bucket;
+                        // Light/AO uses the face bucket direction
+                        var corner_packed: [4]u32 = undefined;
+                        var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
+                        for (0..4) |corner| {
+                            const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
+                            corner_packed[corner] = packLight(result.sky, result.block);
+                            corner_block_brightness[corner] = @max(result.block[0], @max(result.block[1], result.block[2]));
+                        }
+                        var ao: [4]u2 = undefined;
+                        for (0..4) |corner| {
+                            const deltas = padded_ao_deltas[face][corner];
+                            const s1 = block_properties.isOpaque(padded[@intCast(base + deltas[0])]);
+                            const s2 = block_properties.isOpaque(padded[@intCast(base + deltas[1])]);
+                            const diag = if (s1 and s2)
+                                true
+                            else
+                                block_properties.isOpaque(padded[@intCast(base + deltas[2])]);
+                            const raw_ao: u3 = @as(u3, @intFromBool(s1)) + @intFromBool(s2) + @intFromBool(diag);
+                            const reduction: u3 = @intCast(@min(@as(u32, 3), @as(u32, corner_block_brightness[corner]) / 64));
+                            ao[corner] = @intCast(raw_ao -| reduction);
+                        }
+                        const face_data = types.packFaceData(
+                            @intCast(bx),
+                            @intCast(by),
+                            @intCast(bz),
+                            11, // oak_planks texture
+                            sf.model_index,
+                            ao,
+                        );
+                        try layer_faces[layer][face].append(allocator, face_data);
+                        try layer_lights[layer][face].append(allocator, .{ .corners = corner_packed });
+                    }
+                    continue;
+                }
+
                 const emits = block_properties.emittedLight(block);
                 const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
 
@@ -881,6 +1160,9 @@ pub fn generateChunkMesh(
                         .bookshelf => 24,
                         .obsidian => 25,
                         .oak_leaves => 26,
+                        .oak_slab_bottom, .oak_slab_top,
+                        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
+                        => unreachable, // handled above
                     };
 
                     var corner_packed: [4]u32 = undefined;
@@ -894,9 +1176,6 @@ pub fn generateChunkMesh(
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                         corner_block_brightness = .{ 255, 255, 255, 255 };
                     } else {
-                        // Trilinear light sampling (Cubyz-style): sample 4 surrounding
-                        // blocks per corner with precomputed weights. Opaque blocks
-                        // contribute their (zero) light, naturally darkening edges.
                         for (0..4) |corner| {
                             const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
                             corner_packed[corner] = packLight(result.sky, result.block);
@@ -929,11 +1208,9 @@ pub fn generateChunkMesh(
                         @intCast(bz),
                         tex_index,
                         @intCast(face),
-                        0,
                         ao,
                     );
 
-                    const layer = @intFromEnum(block_properties.renderLayer(block));
                     try layer_faces[layer][face].append(allocator, face_data);
                     try layer_lights[layer][face].append(allocator, .{ .corners = corner_packed });
                 }
@@ -1013,6 +1290,26 @@ pub fn generateChunkLightOnly(
                 const block = padded[@intCast(base)];
                 if (block == .air) continue;
 
+                const layer = @intFromEnum(block_properties.renderLayer(block));
+
+                if (block.isShapedBlock()) {
+                    const shape_faces = getShapeFaces(block);
+                    for (shape_faces) |sf| {
+                        if (!sf.always_emit) {
+                            const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
+                            if (block_properties.isOpaque(neighbor)) continue;
+                        }
+                        const face: usize = sf.face_bucket;
+                        var corner_packed: [4]u32 = undefined;
+                        for (0..4) |corner| {
+                            const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
+                            corner_packed[corner] = packLight(result.sky, result.block);
+                        }
+                        try layer_lights[layer][face].append(allocator, .{ .corners = corner_packed });
+                    }
+                    continue;
+                }
+
                 const emits = block_properties.emittedLight(block);
                 const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
 
@@ -1037,7 +1334,6 @@ pub fn generateChunkLightOnly(
                         }
                     }
 
-                    const layer = @intFromEnum(block_properties.renderLayer(block));
                     try layer_lights[layer][face].append(allocator, .{ .corners = corner_packed });
                 }
             }

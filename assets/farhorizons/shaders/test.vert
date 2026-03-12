@@ -35,9 +35,9 @@ void main() {
     uint y = (face.word0 >> 5) & 0x1F;
     uint z = (face.word0 >> 10) & 0x1F;
     uint texIdx = (face.word0 >> 15) & 0xFF;
-    uint normIdx = (face.word0 >> 23) & 0x7;
+    uint modelIdx = (face.word0 >> 23) & 0x1FF;
 
-    QuadModel model = models[normIdx];
+    QuadModel model = models[modelIdx];
     uint vs = chunk.voxelSize;
     vec3 block_pos = vec3(float(chunk.position[0]) + float(x) * float(vs),
                           float(chunk.position[1]) + float(y) * float(vs),

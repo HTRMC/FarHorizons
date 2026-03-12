@@ -126,6 +126,8 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .bookshelf => "Bookshelf",
         .obsidian => "Obsidian",
         .oak_leaves => "Oak Leaves",
+        .oak_slab_bottom, .oak_slab_top => "Oak Slab",
+        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => "Oak Stairs",
     };
 }
 
@@ -159,6 +161,8 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .bookshelf => .{ 0.55, 0.4, 0.25, 1.0 },
         .obsidian => .{ 0.15, 0.1, 0.2, 1.0 },
         .oak_leaves => .{ 0.2, 0.5, 0.15, 0.8 },
+        .oak_slab_bottom, .oak_slab_top => .{ 0.7, 0.55, 0.33, 1.0 },
+        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ 0.7, 0.55, 0.33, 1.0 },
     };
 }
 
@@ -193,6 +197,8 @@ pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16
         .bookshelf => .{ .top = 24, .side = 24 },
         .obsidian => .{ .top = 25, .side = 25 },
         .oak_leaves => .{ .top = 26, .side = 26 },
+        .oak_slab_bottom, .oak_slab_top => .{ .top = 11, .side = 11 },
+        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ .top = 11, .side = 11 },
     };
 }
 
@@ -222,9 +228,9 @@ selected_slot: u8 = 0,
 hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .sand, .snow, .gravel, .glass, .glowstone, .water },
 inventory: [INV_SIZE]WorldState.BlockType = .{
     .cobblestone, .oak_log,      .oak_planks,   .bricks,       .bedrock,       .gold_ore,      .iron_ore,      .coal_ore,      .diamond_ore,
-    .sponge,      .pumice,       .wool,         .gold_block,   .iron_block,    .diamond_block, .bookshelf,     .obsidian,      .oak_leaves,
-    .air,         .air,          .air,          .air,          .air,           .air,           .air,           .air,           .air,
-    .air,         .air,          .air,          .air,          .air,           .air,           .air,           .air,           .air,
+    .sponge,          .pumice,           .wool,             .gold_block,       .iron_block,        .diamond_block,     .bookshelf,         .obsidian,          .oak_leaves,
+    .oak_slab_bottom, .oak_stairs_south, .air,              .air,              .air,               .air,               .air,               .air,               .air,
+    .air,             .air,              .air,              .air,              .air,               .air,               .air,               .air,               .air,
 },
 armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
 equip: [EQUIP_SLOTS]WorldState.BlockType = .{.air} ** EQUIP_SLOTS,
@@ -726,8 +732,30 @@ pub fn breakBlock(self: *GameState) void {
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
+fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit_dir: Raycast.Direction) WorldState.BlockType {
+    // Orient stairs based on player's facing direction
+    switch (block_type) {
+        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => {
+            // Determine facing from yaw: yaw=0 faces -Z (north)
+            const pi = std.math.pi;
+            // Normalize yaw to [0, 2pi)
+            const norm_yaw = @mod(yaw, 2.0 * pi);
+            if (norm_yaw >= 0.25 * pi and norm_yaw < 0.75 * pi) return .oak_stairs_east;
+            if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi) return .oak_stairs_south;
+            if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi) return .oak_stairs_west;
+            return .oak_stairs_north;
+        },
+        .oak_slab_bottom, .oak_slab_top => {
+            // Place top slab when clicking on underside of block, bottom slab otherwise
+            if (hit_dir == .down) return .oak_slab_top;
+            return .oak_slab_bottom;
+        },
+        else => return block_type,
+    }
+}
+
 pub fn placeBlock(self: *GameState) void {
-    const block_type = self.hotbar[self.selected_slot];
+    var block_type = self.hotbar[self.selected_slot];
     if (block_type == .air) return;
     const hit = self.hit_result orelse return;
     const n = hit.direction.normal();
@@ -736,6 +764,10 @@ pub fn placeBlock(self: *GameState) void {
     const pz = hit.block_pos[2] + n[2];
     if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
     if (WorldState.block_properties.isSolid(block_type) and blockOverlapsPlayer(px, py, pz, self.entity_pos)) return;
+
+    // Orient stairs based on player yaw, and slabs based on hit face
+    block_type = resolveOrientation(block_type, self.camera.yaw, hit.direction);
+
     const old_block = self.chunk_map.getBlock(px, py, pz);
     self.chunk_map.setBlock(px, py, pz, block_type);
     // Update surface height if placing an opaque block
@@ -752,8 +784,15 @@ pub fn placeBlock(self: *GameState) void {
 
 pub fn pickBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
-    const block_type = self.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
-    if (block_type == .air) return;
+    const raw_type = self.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    if (raw_type == .air) return;
+
+    // Normalize oriented variants to their canonical form for inventory
+    const block_type: WorldState.BlockType = switch (raw_type) {
+        .oak_slab_top => .oak_slab_bottom,
+        .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .oak_stairs_south,
+        else => raw_type,
+    };
 
     // If already in hotbar, just select that slot
     for (self.hotbar, 0..) |slot_block, i| {

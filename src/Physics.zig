@@ -108,21 +108,33 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
                 if (!WorldState.block_properties.isSolid(block)) continue;
 
                 const coords = [3]i32{ bx, by, bz };
-                if (!overlapsOtherAxes(aabb_min, aabb_max, coords, axis)) continue;
+                const block_boxes = getBlockBoxes(block);
+                for (block_boxes.boxes[0..block_boxes.count]) |box| {
+                    const box_min = [3]f32{
+                        @as(f32, @floatFromInt(coords[0])) + box.min[0],
+                        @as(f32, @floatFromInt(coords[1])) + box.min[1],
+                        @as(f32, @floatFromInt(coords[2])) + box.min[2],
+                    };
+                    const box_max = [3]f32{
+                        @as(f32, @floatFromInt(coords[0])) + box.max[0],
+                        @as(f32, @floatFromInt(coords[1])) + box.max[1],
+                        @as(f32, @floatFromInt(coords[2])) + box.max[2],
+                    };
 
-                const block_coord = @as(f32, @floatFromInt(coords[axis]));
+                    if (!overlapsOtherAxesBox(aabb_min, aabb_max, box_min, box_max, axis)) continue;
 
-                if (movement > 0) {
-                    const gap = block_coord - aabb_max[axis];
-                    if (gap >= -EPSILON and gap < safe_dist) {
-                        safe_dist = @max(gap, 0.0);
-                        hit = true;
-                    }
-                } else {
-                    const gap = (block_coord + 1.0) - aabb_min[axis];
-                    if (gap <= EPSILON and gap > safe_dist) {
-                        safe_dist = @min(gap, 0.0);
-                        hit = true;
+                    if (movement > 0) {
+                        const gap = box_min[axis] - aabb_max[axis];
+                        if (gap >= -EPSILON and gap < safe_dist) {
+                            safe_dist = @max(gap, 0.0);
+                            hit = true;
+                        }
+                    } else {
+                        const gap = box_max[axis] - aabb_min[axis];
+                        if (gap <= EPSILON and gap > safe_dist) {
+                            safe_dist = @min(gap, 0.0);
+                            hit = true;
+                        }
                     }
                 }
             }
@@ -130,6 +142,79 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
     }
 
     return .{ .distance = safe_dist, .hit = hit };
+}
+
+const BlockBox = struct { min: [3]f32, max: [3]f32 };
+const BlockBoxes = struct { boxes: [2]BlockBox, count: u8 };
+
+fn getBlockBoxes(block: WorldState.BlockType) BlockBoxes {
+    return switch (block) {
+        .oak_slab_bottom => .{
+            .boxes = .{
+                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .oak_slab_top => .{
+            .boxes = .{
+                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 1 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .oak_stairs_south => .{ // back at -Z, step at +Z
+            .boxes = .{
+                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } }, // bottom slab
+                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 0.5 } }, // upper back
+            },
+            .count = 2,
+        },
+        .oak_stairs_north => .{ // back at +Z, step at -Z
+            .boxes = .{
+                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
+                .{ .min = .{ 0, 0.5, 0.5 }, .max = .{ 1, 1, 1 } },
+            },
+            .count = 2,
+        },
+        .oak_stairs_east => .{ // back at -X, step at +X
+            .boxes = .{
+                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
+                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 0.5, 1, 1 } },
+            },
+            .count = 2,
+        },
+        .oak_stairs_west => .{ // back at +X, step at -X
+            .boxes = .{
+                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
+                .{ .min = .{ 0.5, 0.5, 0 }, .max = .{ 1, 1, 1 } },
+            },
+            .count = 2,
+        },
+        else => .{
+            .boxes = .{
+                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } },
+                undefined,
+            },
+            .count = 1,
+        },
+    };
+}
+
+fn overlapsOtherAxesBox(aabb_min: [3]f32, aabb_max: [3]f32, box_min: [3]f32, box_max: [3]f32, skip_axis: usize) bool {
+    const axes_to_check: [2]usize = switch (skip_axis) {
+        0 => .{ 1, 2 },
+        1 => .{ 0, 2 },
+        2 => .{ 0, 1 },
+        else => unreachable,
+    };
+
+    for (axes_to_check) |a| {
+        if (aabb_max[a] <= box_min[a] + EPSILON or aabb_min[a] >= box_max[a] - EPSILON) {
+            return false;
+        }
+    }
+    return true;
 }
 
 fn overlapsOtherAxes(aabb_min: [3]f32, aabb_max: [3]f32, block: [3]i32, skip_axis: usize) bool {
