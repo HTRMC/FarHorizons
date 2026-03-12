@@ -32,8 +32,8 @@ pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 36
 pub const ARMOR_SLOTS: u8 = 4; // head, chest, legs, feet
 pub const EQUIP_SLOTS: u8 = 4;
 
-// Day/night cycle: 12000 ticks at 30Hz ≈ 6.7 minutes per full day
-pub const DAY_CYCLE: i64 = 12000;
+// Day/night cycle: 36000 ticks at 30Hz = 20 minutes per full day
+pub const DAY_CYCLE: i64 = 36000;
 
 pub const DayNightResult = struct {
     ambient_light: [3]f32,
@@ -351,6 +351,9 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         Storage.saveWorldType(allocator, world_name, world_type);
     }
 
+    // Load saved game time
+    const saved_game_time: i64 = if (storage_inst) |s| s.loadGameTime() else 0;
+
     // Load saved player position or find a valid spawn on land
     const player_data = if (storage_inst) |s| s.loadPlayerData(Storage.LOCAL_PLAYER_UUID) else null;
 
@@ -399,6 +402,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .streaming_initialized = false,
         .initial_load_ready = false,
         .initial_load_target = 75,
+        .game_time = saved_game_time,
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
@@ -421,6 +425,8 @@ pub fn save(self: *GameState) void {
         .yaw = self.camera.yaw,
         .pitch = self.camera.pitch,
     });
+
+    s.saveGameTime(self.game_time);
 
     const dirty_start = std.Io.Clock.now(.awake, io);
     s.saveAllDirty();

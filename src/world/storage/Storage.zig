@@ -413,6 +413,36 @@ fn loadOrCreateSeed(io: Io, allocator: std.mem.Allocator, world_dir: []const u8)
     return seed;
 }
 
+pub fn loadGameTime(self: *const Storage) i64 {
+    const sep = std.fs.path.sep_str;
+    const path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "game_time.dat", .{self.world_dir}, 0) catch return 0;
+    defer self.allocator.free(path);
+
+    const io = Io.Threaded.global_single_threaded.io();
+    if (Dir.openFileAbsolute(io, path, .{})) |file| {
+        defer file.close(io);
+        var buf: [8]u8 = undefined;
+        const n = file.readPositionalAll(io, &buf, 0) catch 0;
+        if (n == 8) {
+            return @bitCast(std.mem.readInt(u64, &buf, .little));
+        }
+    } else |_| {}
+    return 0;
+}
+
+pub fn saveGameTime(self: *const Storage, game_time: i64) void {
+    const sep = std.fs.path.sep_str;
+    const path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "game_time.dat", .{self.world_dir}, 0) catch return;
+    defer self.allocator.free(path);
+
+    const io = Io.Threaded.global_single_threaded.io();
+    if (Dir.createFileAbsolute(io, path, .{})) |file| {
+        defer file.close(io);
+        const buf = std.mem.toBytes(std.mem.nativeTo(u64, @bitCast(game_time), .little));
+        file.writePositionalAll(io, &buf, 0) catch {};
+    } else |_| {}
+}
+
 fn loadWorldType(io: Io, allocator: std.mem.Allocator, world_dir: []const u8) WorldState.WorldType {
     const sep = std.fs.path.sep_str;
     const path = std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "world_type.dat", .{world_dir}, 0) catch return .normal;
