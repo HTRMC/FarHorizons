@@ -84,6 +84,7 @@ pub const UiVertex = extern struct {
     clip_min_y: f32 = -1e9,
     clip_max_x: f32 = 1e9,
     clip_max_y: f32 = 1e9,
+    tex_index: f32 = -1.0,
 };
 
 

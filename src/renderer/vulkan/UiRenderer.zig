@@ -58,6 +58,8 @@ pub const UiRenderer = struct {
     atlas_image_memory: vk.VkDeviceMemory,
     atlas_image_view: vk.VkImageView,
     atlas_sampler: vk.VkSampler,
+    block_texture_view: vk.VkImageView,
+    block_texture_sampler: vk.VkSampler,
 
     crosshair_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     hotbar_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
@@ -78,6 +80,8 @@ pub const UiRenderer = struct {
         ctx: *const VulkanContext,
         swapchain_format: vk.VkFormat,
         gpu_alloc: *GpuAllocator,
+        block_texture_view: vk.VkImageView,
+        block_texture_sampler: vk.VkSampler,
     ) !UiRenderer {
         const tz = tracy.zone(@src(), "UiRenderer.init");
         defer tz.end();
@@ -99,6 +103,8 @@ pub const UiRenderer = struct {
             .atlas_image_memory = null,
             .atlas_image_view = null,
             .atlas_sampler = null,
+            .block_texture_view = block_texture_view,
+            .block_texture_sampler = block_texture_sampler,
         };
 
         try self.createVertexBuffer(gpu_alloc);
@@ -344,29 +350,46 @@ pub const UiRenderer = struct {
         self.vertex_count += 6;
     }
 
+    /// Draw a quad with per-vertex UV coordinates and a block texture array layer index.
+    /// Winding: p0-p1-p2, p0-p2-p3. tint is multiplied with the texture sample.
+    fn drawTexturedQuad(
+        self: *UiRenderer,
+        p0: [2]f32,
+        p1: [2]f32,
+        p2: [2]f32,
+        p3: [2]f32,
+        uv0: [2]f32,
+        uv1: [2]f32,
+        uv2: [2]f32,
+        uv3: [2]f32,
+        tex_idx: f32,
+        tint: [4]f32,
+    ) void {
+        const verts = self.mapped_vertices orelse return;
+        if (self.vertex_count + 6 > MAX_VERTICES) return;
+
+        const sc = self.clip_scale;
+        const cr = [4]f32{ self.clip_rect[0] * sc, self.clip_rect[1] * sc, self.clip_rect[2] * sc, self.clip_rect[3] * sc };
+        const pts = [4][2]f32{ p0, p1, p2, p3 };
+        const uvs = [4][2]f32{ uv0, uv1, uv2, uv3 };
+        const indices = [6]u8{ 0, 1, 2, 0, 2, 3 };
+        for (indices, 0..) |idx, i| {
+            verts[self.vertex_count + i] = .{
+                .px = pts[idx][0], .py = pts[idx][1],
+                .u = uvs[idx][0], .v = uvs[idx][1],
+                .r = tint[0], .g = tint[1], .b = tint[2], .a = tint[3],
+                .clip_min_x = cr[0], .clip_min_y = cr[1], .clip_max_x = cr[2], .clip_max_y = cr[3],
+                .tex_index = tex_idx,
+            };
+        }
+        self.vertex_count += 6;
+    }
+
     /// Draw an isometric block (3 visible faces) matching Minecraft's GUI display.
-    /// Minecraft applies rotationXYZ(30°, 225°, 0°) which is Ry(225) * Rx(30), then scale 0.625.
-    /// x, y, w, h define the slot bounding rect; color is the base block color.
-    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32) void {
+    /// tex_top/tex_side are block texture array layer indices (-1 = use solid color fallback).
+    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32, tex_top: i16, tex_side: i16) void {
         if (color[3] < 0.01) return;
 
-        // Pre-computed from R = Ry(225°) * Rx(30°) applied to unit cube ±0.5.
-        // Projected screen coords (x = proj_x, y = -proj_y for screen-down):
-        //
-        // Visible faces: TOP(+Y), WEST(-X), SOUTH(+Z). Center vertex: (-0.5,0.5,0.5)
-        //
-        // Hex outline vertices (normalized to [0,1]):
-        //   v1 (-0.5,0.5,-0.5) → (0.789, 0.0)    top-right
-        //   v2 (0.5,0.5,-0.5)  → (0.366, 0.0)    top-left
-        //   v3 (0.5,0.5,0.5)   → (0.0,   0.366)  left
-        //   v4 (0.5,-0.5,0.5)  → (0.212, 1.0)    bottom-left
-        //   v5 (-0.5,-0.5,0.5) → (0.634, 1.0)    bottom-right
-        //   v6 (-0.5,-0.5,-0.5)→ (1.0,   0.634)  right
-        //   ctr(-0.5,0.5,0.5)  → (0.423, 0.366)  center
-        //
-        // Bounding box: x=[−0.837,0.837] w=1.674, y=[−0.683,0.683] h=1.366
-
-        // Scale to fit within slot, maintaining correct aspect ratio.
         const proj_w: f32 = 1.674;
         const proj_h: f32 = 1.366;
         const fit = 0.85;
@@ -386,16 +409,25 @@ pub const UiRenderer = struct {
         const v6 = [2]f32{ ox + bw * 1.0, oy + bh * 0.634 };
         const ctr = [2]f32{ ox + bw * 0.423, oy + bh * 0.366 };
 
-        // TOP face (+Y): v2, v1, ctr, v3 — brightest (1.0)
-        self.drawQuad(v2, v1, ctr, v3, color);
+        if (tex_top >= 0) {
+            // TOP face (+Y): v2, v1, ctr, v3 — textured, brightest (1.0)
+            self.drawTexturedQuad(v2, v1, ctr, v3, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 1 }, .{ 1, 1 }, @floatFromInt(tex_top), .{ 1, 1, 1, 1 });
+        } else {
+            self.drawQuad(v2, v1, ctr, v3, color);
+        }
 
-        // WEST face (-X): v1, v6, v5, ctr — E/W shade (0.6)
-        const west_col = [4]f32{ color[0] * 0.6, color[1] * 0.6, color[2] * 0.6, color[3] };
-        self.drawQuad(v1, v6, v5, ctr, west_col);
-
-        // SOUTH face (+Z): v3, ctr, v5, v4 — N/S shade (0.8)
-        const south_col = [4]f32{ color[0] * 0.8, color[1] * 0.8, color[2] * 0.8, color[3] };
-        self.drawQuad(v3, ctr, v5, v4, south_col);
+        if (tex_side >= 0) {
+            const ti: f32 = @floatFromInt(tex_side);
+            // WEST face (-X): v1, v6, v5, ctr — shade 0.6
+            self.drawTexturedQuad(v1, v6, v5, ctr, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 }, .{ 0, 0 }, ti, .{ 0.6, 0.6, 0.6, 1 });
+            // SOUTH face (+Z): v3, ctr, v5, v4 — shade 0.8
+            self.drawTexturedQuad(v3, ctr, v5, v4, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 1 }, .{ 1, 1 }, ti, .{ 0.8, 0.8, 0.8, 1 });
+        } else {
+            const west_col = [4]f32{ color[0] * 0.6, color[1] * 0.6, color[2] * 0.6, color[3] };
+            self.drawQuad(v1, v6, v5, ctr, west_col);
+            const south_col = [4]f32{ color[0] * 0.8, color[1] * 0.8, color[2] * 0.8, color[3] };
+            self.drawQuad(v3, ctr, v5, v4, south_col);
+        }
     }
 
     pub fn drawRectOutline(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, thickness: f32, color: [4]f32) void {
@@ -932,6 +964,13 @@ pub const UiRenderer = struct {
                 .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
                 .pImmutableSamplers = null,
             },
+            .{
+                .binding = 2,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+                .pImmutableSamplers = null,
+            },
         };
 
         const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
@@ -946,7 +985,7 @@ pub const UiRenderer = struct {
 
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
             .{ .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1 },
-            .{ .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1 },
+            .{ .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2 },
         };
 
         const pool_info = vk.VkDescriptorPoolCreateInfo{
@@ -984,6 +1023,12 @@ pub const UiRenderer = struct {
             .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         };
 
+        const block_image_info = vk.VkDescriptorImageInfo{
+            .sampler = self.block_texture_sampler,
+            .imageView = self.block_texture_view,
+            .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+
         const writes = [_]vk.VkWriteDescriptorSet{
             .{
                 .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1006,6 +1051,18 @@ pub const UiRenderer = struct {
                 .descriptorCount = 1,
                 .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                 .pImageInfo = &image_info,
+                .pBufferInfo = null,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &block_image_info,
                 .pBufferInfo = null,
                 .pTexelBufferView = null,
             },

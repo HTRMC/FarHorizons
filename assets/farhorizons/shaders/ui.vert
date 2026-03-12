@@ -5,6 +5,7 @@ struct UiVertex {
     float u, v;
     float r, g, b, a;
     float clip_min_x, clip_min_y, clip_max_x, clip_max_y;
+    float tex_index;
 };
 
 layout(set = 0, binding = 0) readonly buffer VertexBuffer {
@@ -18,6 +19,7 @@ layout(push_constant) uniform PushConstants {
 layout(location = 0) out vec2 fragUV;
 layout(location = 1) out vec4 fragColor;
 layout(location = 2) flat out vec4 fragClipRect;
+layout(location = 3) flat out float fragTexIndex;
 
 void main() {
     UiVertex vert = vertices[gl_VertexIndex];
@@ -25,4 +27,5 @@ void main() {
     fragUV = vec2(vert.u, vert.v);
     fragColor = vec4(vert.r, vert.g, vert.b, vert.a);
     fragClipRect = vec4(vert.clip_min_x, vert.clip_min_y, vert.clip_max_x, vert.clip_max_y);
+    fragTexIndex = vert.tex_index;
 }

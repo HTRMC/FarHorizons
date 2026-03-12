@@ -162,6 +162,40 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
     };
 }
 
+/// Returns { tex_top, tex_side } indices into the block texture array for UI rendering.
+pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16 } {
+    return switch (block) {
+        .air => .{ .top = -1, .side = -1 },
+        .glass => .{ .top = 0, .side = 0 },
+        .grass_block => .{ .top = 1, .side = 1 },
+        .dirt => .{ .top = 2, .side = 2 },
+        .stone => .{ .top = 3, .side = 3 },
+        .glowstone => .{ .top = 4, .side = 4 },
+        .sand => .{ .top = 5, .side = 5 },
+        .snow => .{ .top = 6, .side = 6 },
+        .water => .{ .top = 7, .side = 7 },
+        .gravel => .{ .top = 8, .side = 8 },
+        .cobblestone => .{ .top = 9, .side = 9 },
+        .oak_log => .{ .top = 27, .side = 10 },
+        .oak_planks => .{ .top = 11, .side = 11 },
+        .bricks => .{ .top = 12, .side = 12 },
+        .bedrock => .{ .top = 13, .side = 13 },
+        .gold_ore => .{ .top = 14, .side = 14 },
+        .iron_ore => .{ .top = 15, .side = 15 },
+        .coal_ore => .{ .top = 16, .side = 16 },
+        .diamond_ore => .{ .top = 17, .side = 17 },
+        .sponge => .{ .top = 18, .side = 18 },
+        .pumice => .{ .top = 19, .side = 19 },
+        .wool => .{ .top = 20, .side = 20 },
+        .gold_block => .{ .top = 21, .side = 21 },
+        .iron_block => .{ .top = 22, .side = 22 },
+        .diamond_block => .{ .top = 23, .side = 23 },
+        .bookshelf => .{ .top = 24, .side = 24 },
+        .obsidian => .{ .top = 25, .side = 25 },
+        .oak_leaves => .{ .top = 26, .side = 26 },
+    };
+}
+
 allocator: std.mem.Allocator,
 camera: Camera,
 chunk_map: ChunkMap,

@@ -68,14 +68,24 @@ pub const HudBinder = struct {
         }
 
         for (0..HOTBAR_SIZE) |i| {
-            if (self.slot_ids[i] != NULL_WIDGET) {
-                if (tree.getWidget(self.slot_ids[i])) |w| {
+            const id = self.slot_ids[i];
+            if (id != NULL_WIDGET) {
+                if (tree.getWidget(id)) |w| {
                     const block = gs.hotbar[i];
                     if (block != .air) {
                         const c = GameState.blockColor(block);
                         w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+                        const tex = GameState.blockTexIndices(block);
+                        if (tree.getData(id)) |data| {
+                            data.panel.block_tex_top = tex.top;
+                            data.panel.block_tex_side = tex.side;
+                        }
                     } else {
                         w.background = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+                        if (tree.getData(id)) |data| {
+                            data.panel.block_tex_top = -1;
+                            data.panel.block_tex_side = -1;
+                        }
                     }
                 }
             }

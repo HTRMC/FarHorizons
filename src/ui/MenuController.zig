@@ -576,57 +576,64 @@ pub const MenuController = struct {
 
         // Update hotbar row
         for (0..GameState.HOTBAR_SIZE) |i| {
-            if (self.inv_slot_ids[i] != NULL_WIDGET) {
-                if (tree.getWidget(self.inv_slot_ids[i])) |w| {
-                    const block = gs.hotbar[i];
-                    updateSlotWidget(w, block);
+            const id = self.inv_slot_ids[i];
+            if (id != NULL_WIDGET) {
+                if (tree.getWidget(id)) |w| {
+                    updateSlotWidget(w, tree, id, gs.hotbar[i]);
                 }
             }
         }
 
         // Update main inventory
         for (0..GameState.INV_SIZE) |i| {
-            if (self.inv_main_ids[i] != NULL_WIDGET) {
-                if (tree.getWidget(self.inv_main_ids[i])) |w| {
-                    const block = gs.inventory[i];
-                    updateSlotWidget(w, block);
+            const id = self.inv_main_ids[i];
+            if (id != NULL_WIDGET) {
+                if (tree.getWidget(id)) |w| {
+                    updateSlotWidget(w, tree, id, gs.inventory[i]);
                 }
             }
         }
 
         // Update armor slots
         for (0..GameState.ARMOR_SLOTS) |i| {
-            if (self.inv_armor_ids[i] != NULL_WIDGET) {
-                if (tree.getWidget(self.inv_armor_ids[i])) |w| {
-                    const block = gs.armor[i];
-                    updateSlotWidget(w, block);
+            const id = self.inv_armor_ids[i];
+            if (id != NULL_WIDGET) {
+                if (tree.getWidget(id)) |w| {
+                    updateSlotWidget(w, tree, id, gs.armor[i]);
                 }
             }
         }
 
         // Update equip slots
         for (0..GameState.EQUIP_SLOTS) |i| {
-            if (self.inv_equip_ids[i] != NULL_WIDGET) {
-                if (tree.getWidget(self.inv_equip_ids[i])) |w| {
-                    const block = gs.equip[i];
-                    updateSlotWidget(w, block);
+            const id = self.inv_equip_ids[i];
+            if (id != NULL_WIDGET) {
+                if (tree.getWidget(id)) |w| {
+                    updateSlotWidget(w, tree, id, gs.equip[i]);
                 }
             }
         }
 
         // Update offhand
         if (self.inv_offhand_id != NULL_WIDGET) {
-            if (tree.getWidget(self.inv_offhand_id)) |w| {
-                updateSlotWidget(w, gs.offhand);
+            const id = self.inv_offhand_id;
+            if (tree.getWidget(id)) |w| {
+                updateSlotWidget(w, tree, id, gs.offhand);
             }
         }
 
         // Update cursor item (follows mouse when carrying)
         if (self.cursor_item_id != NULL_WIDGET) {
-            if (tree.getWidget(self.cursor_item_id)) |w| {
+            const cid = self.cursor_item_id;
+            if (tree.getWidget(cid)) |w| {
                 if (gs.carried_item != .air) {
                     const c = GameState.blockColor(gs.carried_item);
                     w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+                    const tex = GameState.blockTexIndices(gs.carried_item);
+                    if (tree.getData(cid)) |data| {
+                        data.panel.block_tex_top = tex.top;
+                        data.panel.block_tex_side = tex.side;
+                    }
                     w.visible = true;
                 } else {
                     w.visible = false;
@@ -1120,16 +1127,25 @@ pub const MenuController = struct {
 
     const WorldState = @import("../world/WorldState.zig");
 
-    fn updateSlotWidget(w: *Widget.Widget, block: WorldState.BlockType) void {
+    fn updateSlotWidget(w: *Widget.Widget, tree: *WidgetTree, id: WidgetId, block: WorldState.BlockType) void {
         if (block != .air) {
             const c = GameState.blockColor(block);
             w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+            const tex = GameState.blockTexIndices(block);
+            if (tree.getData(id)) |data| {
+                data.panel.block_tex_top = tex.top;
+                data.panel.block_tex_side = tex.side;
+            }
             const name = GameState.blockName(block);
             const len: u8 = @intCast(@min(name.len, 64));
             @memcpy(w.tooltip[0..len], name[0..len]);
             w.tooltip_len = len;
         } else {
             w.background = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+            if (tree.getData(id)) |data| {
+                data.panel.block_tex_top = -1;
+                data.panel.block_tex_side = -1;
+            }
             w.tooltip_len = 0;
         }
     }

@@ -41,7 +41,14 @@ pub const RenderState = struct {
         self.text_renderer = try TextRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
         errdefer self.text_renderer.deinit(ctx.device);
 
-        self.ui_renderer = try UiRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
+        self.ui_renderer = try UiRenderer.init(
+            &shader_compiler,
+            ctx,
+            swapchain_format,
+            gpu_alloc,
+            self.world_renderer.texture_manager.texture_image_view,
+            self.world_renderer.texture_manager.texture_sampler,
+        );
         errdefer self.ui_renderer.deinit(ctx.device);
 
         self.entity_renderer = try EntityRenderer.init(allocator, &shader_compiler, ctx, swapchain_format, gpu_alloc);
