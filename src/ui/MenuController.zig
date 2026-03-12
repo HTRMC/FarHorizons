@@ -295,6 +295,9 @@ pub const MenuController = struct {
             if (tree.getWidget(self.cursor_item_id)) |w| {
                 w.hit_transparent = true;
             }
+            if (tree.getData(self.cursor_item_id)) |data| {
+                data.panel.draw_isometric = true;
+            }
             self.ui_manager.cursor_follow_widget = self.cursor_item_id;
         }
 
