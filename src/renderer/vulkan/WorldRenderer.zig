@@ -302,7 +302,7 @@ pub const WorldRenderer = struct {
             @sizeOf(zlm.Mat4),
             mvp,
         );
-        const contrast: f32 = 0.4;
+        const contrast: f32 = 0.25;
         vk.cmdPushConstants(
             command_buffer,
             self.pipeline_layout,
