@@ -385,51 +385,150 @@ pub const UiRenderer = struct {
         self.vertex_count += 6;
     }
 
-    /// Draw an isometric block (3 visible faces) matching Minecraft's GUI display.
-    /// Rotation: Rx(30°) * Ry(225°) with Vulkan Y-down, giving a symmetric hexagonal silhouette.
-    /// Visible faces: TOP(+Y), EAST(+X) on left, NORTH(-Z) on right.
+    /// Draw an isometric block using the same geometry as the world chunk mesher.
+    /// Projects 3D face quads through Rx(30°) * Ry(225°) with back-face culling and painter's sort.
     /// tex_top/tex_side are block texture array layer indices (-1 = use solid color fallback).
-    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32, tex_top: i16, tex_side: i16) void {
+    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32, tex_top: i16, tex_side: i16, shape: @import("../../ui/WidgetData.zig").BlockShape) void {
         if (color[3] < 0.01) return;
 
-        const proj_w: f32 = 1.4142;
-        const proj_h: f32 = 1.5731;
-        const fit = 0.85;
-        const scale_x = w * fit / proj_w;
-        const scale_y = h * fit / proj_h;
-        const s = @min(scale_x, scale_y);
-        const bw = proj_w * s;
-        const bh = proj_h * s;
-        const ox = x + (w - bw) * 0.5;
-        const oy = y + (h - bh) * 0.5;
+        const WorldState = @import("../../world/WorldState.zig");
 
-        // Symmetric isometric vertices (normalized 0-1, then scaled by bw/bh)
-        const top = [2]f32{ ox + bw * 0.5, oy + bh * 0.0 }; // top center
-        const ul = [2]f32{ ox + bw * 0.0, oy + bh * 0.225 }; // upper left
-        const ur = [2]f32{ ox + bw * 1.0, oy + bh * 0.225 }; // upper right
-        const ctr = [2]f32{ ox + bw * 0.5, oy + bh * 0.450 }; // center junction
-        const ll = [2]f32{ ox + bw * 0.0, oy + bh * 0.775 }; // lower left
-        const lr = [2]f32{ ox + bw * 1.0, oy + bh * 0.775 }; // lower right
-        const bot = [2]f32{ ox + bw * 0.5, oy + bh * 1.0 }; // bottom center
+        // Isometric projection constants: Rx(30°) * Ry(225°)
+        const cos45: f32 = 0.70711;
+        const sin30_cos45: f32 = 0.35355; // sin(30°) * cos(45°)
+        const cos30: f32 = 0.86603;
 
-        if (tex_top >= 0) {
-            // TOP face (+Y): diamond at top — shade 1.0
-            self.drawTexturedQuad(top, ul, ctr, ur, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0, 0 }, @floatFromInt(tex_top), .{ 1, 1, 1, 1 });
+        // Full-cube bounding box in projected space (reference frame for all shapes)
+        const proj_w: f32 = 2.0 * cos45; // 1.4142
+        const proj_h: f32 = 2.0 * (sin30_cos45 + cos30 * 0.5); // 1.5731
+        const fit: f32 = 0.85;
+        const scale = @min(w * fit / proj_w, h * fit / proj_h);
+        const ox = x + (w - proj_w * scale) * 0.5;
+        const oy = y + (h - proj_h * scale) * 0.5;
+        const min_sx: f32 = -cos45; // -0.7071
+        const min_sy: f32 = -(sin30_cos45 + cos30 * 0.5); // -0.7866
+
+        // Camera-toward-object direction for back-face culling: row2 of rotation matrix negated
+        const view = [3]f32{ 0.61237, 0.5, -0.61237 };
+
+        const FaceInfo = struct {
+            corners: [4][3]f32,
+            uvs: [4][2]f32,
+            normal: [3]f32,
+        };
+
+        var faces: [16]FaceInfo = undefined;
+        var face_count: usize = 0;
+
+        if (shape == .full) {
+            // Standard 6 cube faces, back-face culled
+            for (0..6) |fi| {
+                const n = WorldState.face_neighbor_offsets[fi];
+                const nf = [3]f32{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
+                if (nf[0] * view[0] + nf[1] * view[1] + nf[2] * view[2] <= 0) continue;
+                var info: FaceInfo = undefined;
+                info.normal = nf;
+                for (0..4) |ci| {
+                    const fv = WorldState.face_vertices[fi][ci];
+                    info.corners[ci] = .{ fv.px, fv.py, fv.pz };
+                    info.uvs[ci] = .{ fv.u, fv.v };
+                }
+                faces[face_count] = info;
+                face_count += 1;
+            }
         } else {
-            self.drawQuad(top, ul, ctr, ur, color);
+            // Shaped block: use the same face lists as the chunk mesher
+            const shape_faces: []const WorldState.ShapeFace = switch (shape) {
+                .slab_bottom => WorldState.getShapeFaces(.oak_slab_bottom),
+                .slab_top => WorldState.getShapeFaces(.oak_slab_top),
+                .stairs => WorldState.getShapeFaces(.oak_stairs_east),
+                .full => unreachable,
+            };
+            for (shape_faces) |sf| {
+                const mi = sf.model_index;
+                var info: FaceInfo = undefined;
+                if (mi < 6) {
+                    const n = WorldState.face_neighbor_offsets[mi];
+                    info.normal = .{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
+                    for (0..4) |ci| {
+                        const fv = WorldState.face_vertices[mi][ci];
+                        info.corners[ci] = .{ fv.px, fv.py, fv.pz };
+                        info.uvs[ci] = .{ fv.u, fv.v };
+                    }
+                } else {
+                    const em = WorldState.extra_quad_models[mi - 6];
+                    info.corners = em.corners;
+                    info.uvs = em.uvs;
+                    info.normal = em.normal;
+                }
+                if (info.normal[0] * view[0] + info.normal[1] * view[1] + info.normal[2] * view[2] <= 0) continue;
+                faces[face_count] = info;
+                face_count += 1;
+            }
         }
 
-        if (tex_side >= 0) {
-            const ti: f32 = @floatFromInt(tex_side);
-            // EAST face (+X): left parallelogram — shade 0.6
-            self.drawTexturedQuad(ul, ll, bot, ctr, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 }, .{ 0, 0 }, ti, .{ 0.6, 0.6, 0.6, 1 });
-            // NORTH face (-Z): right parallelogram — shade 0.8
-            self.drawTexturedQuad(ur, ctr, bot, lr, .{ 0, 0 }, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 1 }, ti, .{ 0.8, 0.8, 0.8, 1 });
-        } else {
-            const east_col = [4]f32{ color[0] * 0.6, color[1] * 0.6, color[2] * 0.6, color[3] };
-            self.drawQuad(ul, ll, bot, ctr, east_col);
-            const north_col = [4]f32{ color[0] * 0.8, color[1] * 0.8, color[2] * 0.8, color[3] };
-            self.drawQuad(ur, ctr, bot, lr, north_col);
+        // Sort by camera-space depth (painter's algorithm, back-to-front)
+        var depths: [16]f32 = undefined;
+        for (0..face_count) |i| {
+            var d: f32 = 0;
+            for (0..4) |ci| {
+                d += 0.61237 * faces[i].corners[ci][0] + 0.5 * faces[i].corners[ci][1] - 0.61237 * faces[i].corners[ci][2];
+            }
+            depths[i] = d;
+        }
+        // Insertion sort descending (draw far faces first)
+        for (1..face_count) |i| {
+            const kd = depths[i];
+            const kf = faces[i];
+            var j = i;
+            while (j > 0 and depths[j - 1] < kd) {
+                depths[j] = depths[j - 1];
+                faces[j] = faces[j - 1];
+                j -= 1;
+            }
+            depths[j] = kd;
+            faces[j] = kf;
+        }
+
+        // Project and emit quads
+        for (0..face_count) |i| {
+            const face = faces[i];
+            var proj: [4][2]f32 = undefined;
+            for (0..4) |ci| {
+                const px = face.corners[ci][0] - 0.5;
+                const py = face.corners[ci][1] - 0.5;
+                const pz = face.corners[ci][2] - 0.5;
+                proj[ci] = .{
+                    ox + (-cos45 * px - cos45 * pz - min_sx) * scale,
+                    oy + (sin30_cos45 * px - cos30 * py - sin30_cos45 * pz - min_sy) * scale,
+                };
+            }
+
+            // Directional shading from face normal
+            const shade: f32 = if (face.normal[1] > 0.5) 1.0 // +Y top
+            else if (face.normal[2] < -0.5) 0.8 // -Z north
+            else 0.6; // +X east, +Z south, etc.
+
+            const is_top = face.normal[1] > 0.5;
+            const tex = if (is_top) tex_top else tex_side;
+
+            if (tex >= 0) {
+                self.drawTexturedQuad(
+                    proj[0],
+                    proj[1],
+                    proj[2],
+                    proj[3],
+                    face.uvs[0],
+                    face.uvs[1],
+                    face.uvs[2],
+                    face.uvs[3],
+                    @floatFromInt(tex),
+                    .{ shade, shade, shade, 1 },
+                );
+            } else {
+                const c = [4]f32{ color[0] * shade, color[1] * shade, color[2] * shade, color[3] };
+                self.drawQuad(proj[0], proj[1], proj[2], proj[3], c);
+            }
         }
     }
 

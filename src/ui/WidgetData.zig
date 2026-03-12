@@ -19,6 +19,8 @@ pub const WidgetData = union(Widget.WidgetKind) {
     dropdown: DropdownData,
 };
 
+pub const BlockShape = enum(u8) { full, slab_bottom, slab_top, stairs };
+
 pub const PanelData = struct {
     on_click_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,
     on_click_action_len: u8 = 0,
@@ -26,6 +28,7 @@ pub const PanelData = struct {
     draw_isometric: bool = false,
     block_tex_top: i16 = -1,
     block_tex_side: i16 = -1,
+    block_shape: BlockShape = .full,
 
     pub fn setAction(self: *PanelData, str: []const u8) void {
         const len: u8 = @intCast(@min(str.len, MAX_ACTION_LEN));

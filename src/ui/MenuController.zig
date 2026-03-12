@@ -633,6 +633,7 @@ pub const MenuController = struct {
                     if (tree.getData(cid)) |data| {
                         data.panel.block_tex_top = tex.top;
                         data.panel.block_tex_side = tex.side;
+                        data.panel.block_shape = GameState.blockShape(gs.carried_item);
                     }
                     w.visible = true;
                 } else {
@@ -1135,6 +1136,7 @@ pub const MenuController = struct {
             if (tree.getData(id)) |data| {
                 data.panel.block_tex_top = tex.top;
                 data.panel.block_tex_side = tex.side;
+                data.panel.block_shape = GameState.blockShape(block);
             }
             const name = GameState.blockName(block);
             const len: u8 = @intCast(@min(name.len, 64));
@@ -1145,6 +1147,7 @@ pub const MenuController = struct {
             if (tree.getData(id)) |data| {
                 data.panel.block_tex_top = -1;
                 data.panel.block_tex_side = -1;
+                data.panel.block_shape = .full;
             }
             w.tooltip_len = 0;
         }

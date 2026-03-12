@@ -79,12 +79,14 @@ pub const HudBinder = struct {
                         if (tree.getData(id)) |data| {
                             data.panel.block_tex_top = tex.top;
                             data.panel.block_tex_side = tex.side;
+                            data.panel.block_shape = GameState.blockShape(block);
                         }
                     } else {
                         w.background = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
                         if (tree.getData(id)) |data| {
                             data.panel.block_tex_top = -1;
                             data.panel.block_tex_side = -1;
+                            data.panel.block_shape = .full;
                         }
                     }
                 }

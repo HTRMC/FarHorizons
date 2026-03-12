@@ -202,6 +202,17 @@ pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16
     };
 }
 
+const WidgetData = @import("ui/WidgetData.zig");
+
+pub fn blockShape(block: WorldState.BlockType) WidgetData.BlockShape {
+    return switch (block) {
+        .oak_slab_bottom => .slab_bottom,
+        .oak_slab_top => .slab_top,
+        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .stairs,
+        else => .full,
+    };
+}
+
 allocator: std.mem.Allocator,
 camera: Camera,
 chunk_map: ChunkMap,
@@ -741,9 +752,9 @@ fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit_dir: Rayca
             // Normalize yaw to [0, 2pi)
             const norm_yaw = @mod(yaw, 2.0 * pi);
             if (norm_yaw >= 0.25 * pi and norm_yaw < 0.75 * pi) return .oak_stairs_east;
-            if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi) return .oak_stairs_south;
+            if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi) return .oak_stairs_north;
             if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi) return .oak_stairs_west;
-            return .oak_stairs_north;
+            return .oak_stairs_south;
         },
         .oak_slab_bottom, .oak_slab_top => {
             // Place top slab when clicking on underside of block, bottom slab otherwise
