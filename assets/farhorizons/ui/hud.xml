@@ -5,36 +5,36 @@
     <image id="crosshair" src="hud:crosshair" blend="inverted"
            width="30" height="30" anchor_x="center" anchor_y="center"/>
 
-    <!-- Hotbar container: bottom-center, flush at bottom (182x22 at 2x = 364x44) -->
-    <panel width="364" height="44" layout="anchor"
+    <!-- Hotbar container: bottom-center, flush at bottom (182x22 at 2.5x = 455x55) -->
+    <panel width="455" height="55" layout="anchor"
            anchor_x="center" anchor_y="end">
 
       <!-- Hotbar background image -->
-      <image id="hotbar_bg" src="hud:hotbar" width="364" height="44"/>
+      <image id="hotbar_bg" src="hud:hotbar" width="455" height="55"/>
 
-      <!-- Selection highlight (24x23 at 2x = 48x46), offset_x set by binder -->
-      <image id="selection" src="hud:selection" width="48" height="46"
+      <!-- Selection highlight (24x23 at 2.5x = 60x58), offset_x set by binder -->
+      <image id="selection" src="hud:selection" width="60" height="58"
              offset_x="-2" offset_y="-2"/>
 
-      <!-- 9 slot color panels: each 24x24, at slot pitch 40px, inset 6px -->
-      <panel id="slot_0" width="24" height="24" offset_x="6"   offset_y="6"/>
-      <panel id="slot_1" width="24" height="24" offset_x="46"  offset_y="6"/>
-      <panel id="slot_2" width="24" height="24" offset_x="86"  offset_y="6"/>
-      <panel id="slot_3" width="24" height="24" offset_x="126" offset_y="6"/>
-      <panel id="slot_4" width="24" height="24" offset_x="166" offset_y="6"/>
-      <panel id="slot_5" width="24" height="24" offset_x="206" offset_y="6"/>
-      <panel id="slot_6" width="24" height="24" offset_x="246" offset_y="6"/>
-      <panel id="slot_7" width="24" height="24" offset_x="286" offset_y="6"/>
-      <panel id="slot_8" width="24" height="24" offset_x="326" offset_y="6"/>
+      <!-- 9 slot color panels: each 45x45, at slot pitch 50px, centered in 55px height -->
+      <panel id="slot_0" width="45" height="45" offset_x="5"   offset_y="5"/>
+      <panel id="slot_1" width="45" height="45" offset_x="55"  offset_y="5"/>
+      <panel id="slot_2" width="45" height="45" offset_x="105" offset_y="5"/>
+      <panel id="slot_3" width="45" height="45" offset_x="155" offset_y="5"/>
+      <panel id="slot_4" width="45" height="45" offset_x="205" offset_y="5"/>
+      <panel id="slot_5" width="45" height="45" offset_x="255" offset_y="5"/>
+      <panel id="slot_6" width="45" height="45" offset_x="305" offset_y="5"/>
+      <panel id="slot_7" width="45" height="45" offset_x="355" offset_y="5"/>
+      <panel id="slot_8" width="45" height="45" offset_x="405" offset_y="5"/>
 
-      <!-- Offhand slot (29x24 at 2x = 58x48), left of hotbar -->
-      <image id="offhand" src="hud:offhand" width="58" height="48"
-             offset_x="-58" offset_y="-2"/>
+      <!-- Offhand slot (29x24 at 2.5x = 73x60), left of hotbar -->
+      <image id="offhand" src="hud:offhand" width="73" height="60"
+             offset_x="-73" offset_y="-2"/>
     </panel>
 
     <!-- Block name label: centered, above hotbar -->
     <label id="block_name" text="" color="#FFFFFFE6"
-           anchor_x="center" anchor_y="end" offset_y="-54" visible="false"
+           anchor_x="center" anchor_y="end" offset_y="-66" visible="false"
            shadow="true" shadow_color="#000000AA"/>
 
   </panel>

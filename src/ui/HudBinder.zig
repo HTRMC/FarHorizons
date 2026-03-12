@@ -62,7 +62,7 @@ pub const HudBinder = struct {
 
         if (self.selection_id != NULL_WIDGET) {
             if (tree.getWidget(self.selection_id)) |w| {
-                const slot_pitch: f32 = 40.0;
+                const slot_pitch: f32 = 50.0;
                 w.offset_x = @as(f32, @floatFromInt(gs.selected_slot)) * slot_pitch - 2.0;
             }
         }
