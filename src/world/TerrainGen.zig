@@ -652,3 +652,120 @@ fn trilerp8(lo: [4]f32, hi: [4]f32, fx: f32, fy: f32, fz: f32) f32 {
     const c1 = c10 + (c11 - c10) * fz;
     return c0 + (c1 - c0) * fy;
 }
+
+// ============================================================
+// Tests
+// ============================================================
+
+const testing = std.testing;
+
+test "generateChunk: deterministic output (same seed same blocks)" {
+    const alloc = testing.allocator;
+    const chunk1 = try alloc.create(Chunk);
+    defer alloc.destroy(chunk1);
+    const chunk2 = try alloc.create(Chunk);
+    defer alloc.destroy(chunk2);
+
+    const key = ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
+    const seed: u64 = 12345;
+
+    generateChunk(chunk1, key, seed);
+    generateChunk(chunk2, key, seed);
+
+    try testing.expectEqualSlices(BlockType, &chunk1.blocks, &chunk2.blocks);
+}
+
+test "generateChunk: different seeds produce different chunks" {
+    const alloc = testing.allocator;
+    const chunk1 = try alloc.create(Chunk);
+    defer alloc.destroy(chunk1);
+    const chunk2 = try alloc.create(Chunk);
+    defer alloc.destroy(chunk2);
+
+    const key = ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
+
+    generateChunk(chunk1, key, 111);
+    generateChunk(chunk2, key, 222);
+
+    // At least some blocks should differ
+    var diffs: u32 = 0;
+    for (&chunk1.blocks, &chunk2.blocks) |a, b| {
+        if (a != b) diffs += 1;
+    }
+    try testing.expect(diffs > 0);
+}
+
+test "generateChunk: surface chunks have stone and air" {
+    const alloc = testing.allocator;
+    const chunk = try alloc.create(Chunk);
+    defer alloc.destroy(chunk);
+
+    // Surface-level chunk (cy=0 straddles sea level)
+    generateChunk(chunk, .{ .cx = 0, .cy = 0, .cz = 0 }, 42);
+
+    var has_stone = false;
+    var has_air = false;
+    for (&chunk.blocks) |b| {
+        if (b == .stone) has_stone = true;
+        if (b == .air) has_air = true;
+    }
+    try testing.expect(has_stone);
+    try testing.expect(has_air);
+}
+
+test "generateChunk: deep underground is mostly solid" {
+    const alloc = testing.allocator;
+    const chunk = try alloc.create(Chunk);
+    defer alloc.destroy(chunk);
+
+    // Very deep chunk (cy=-4 → y=-128 to -97)
+    generateChunk(chunk, .{ .cx = 0, .cy = -4, .cz = 0 }, 42);
+
+    var solid: u32 = 0;
+    for (&chunk.blocks) |b| {
+        if (b != .air and b != .water) solid += 1;
+    }
+    // Should be mostly solid (bedrock + stone), at least 90%
+    try testing.expect(solid > WorldState.BLOCKS_PER_CHUNK * 9 / 10);
+}
+
+test "sampleHeight: deterministic for same seed" {
+    const h1 = sampleHeight(0, 0, 42);
+    const h2 = sampleHeight(0, 0, 42);
+    try testing.expectEqual(h1, h2);
+}
+
+test "sampleHeight: surface near sea level" {
+    const h = sampleHeight(0, 0, 42);
+    // Surface should be within reasonable range of sea level (0)
+    try testing.expect(h > -40 and h < 40);
+}
+
+test "CaveRng: deterministic" {
+    var rng1 = CaveRng.init(42);
+    var rng2 = CaveRng.init(42);
+
+    for (0..100) |_| {
+        try testing.expectEqual(rng1.next(), rng2.next());
+    }
+}
+
+test "CaveRng.float: values in [0, 1)" {
+    var rng = CaveRng.init(12345);
+    for (0..1000) |_| {
+        const f = rng.float();
+        try testing.expect(f >= 0.0 and f < 1.0);
+    }
+}
+
+test "selectBlock: surface blocks" {
+    // At sea level, depth 0 = grass
+    try testing.expectEqual(BlockType.grass_block, selectBlock(0, SEA_LEVEL, 0));
+    // Below sea level, depth 0 = dirt (underwater)
+    try testing.expectEqual(BlockType.dirt, selectBlock(0, SEA_LEVEL - 1, 0));
+    // Depth 1-3 = dirt
+    try testing.expectEqual(BlockType.dirt, selectBlock(1, SEA_LEVEL, 0));
+    try testing.expectEqual(BlockType.dirt, selectBlock(3, SEA_LEVEL, 0));
+    // Depth 4+ = stone
+    try testing.expectEqual(BlockType.stone, selectBlock(4, SEA_LEVEL, 0));
+}
