@@ -175,6 +175,7 @@ pub const BlockModelRegistry = struct {
         self.extra_models = try allocator.dupe(ExtraQuadModel, extra_models_list.items);
         std.log.info("BlockModelLoader: loaded {} extra models for {} block types", .{ self.extra_models.len, block_model_table.len });
 
+
         return self;
     }
 
@@ -277,6 +278,7 @@ fn loadModel(
                         .model_index = model_idx,
                         .face_bucket = bucket,
                         .always_emit = true,
+                        .face_bitmap = 0,
                     });
                     try tex_indices.append(allocator, tex_idx);
                 }
@@ -285,11 +287,13 @@ fn loadModel(
 
             const bucket = face_bucket_map.get(face_name) orelse continue;
 
-            // Accumulate 4×4 bitmap for boundary faces (cullface present)
+            // Compute per-quad bitmap and accumulate block-level bitmap
+            const transformed_bucket = transformBucket(bucket, transform);
+            var quad_bitmap: u16 = 0;
             if (has_cullface) {
                 const tb = transformBox(from, to, transform);
-                const dst_bucket = transformBucket(bucket, transform);
-                face_bitmaps[dst_bucket] |= elementFaceBitmap(tb[0], tb[1], dst_bucket);
+                quad_bitmap = elementFaceBitmap(tb[0], tb[1], transformed_bucket);
+                face_bitmaps[transformed_bucket] |= quad_bitmap;
             }
 
             // Build the quad from element box + face direction
@@ -297,7 +301,6 @@ fn loadModel(
 
             // Apply transform
             quad_model = applyTransform(quad_model, transform, bucket);
-            const transformed_bucket = transformBucket(bucket, transform);
             const always_emit = !has_cullface;
 
             const model_idx: u9 = @intCast(6 + extra_models.items.len);
@@ -306,6 +309,7 @@ fn loadModel(
                 .model_index = model_idx,
                 .face_bucket = transformed_bucket,
                 .always_emit = always_emit,
+                .face_bitmap = quad_bitmap,
             });
             try tex_indices.append(allocator, tex_idx);
         }

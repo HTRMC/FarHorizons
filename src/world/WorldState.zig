@@ -77,6 +77,7 @@ pub const ShapeFace = struct {
     model_index: u9, // index into combined model array (0-5 = standard, 6+ = extra)
     face_bucket: u3, // which direction bucket (0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y)
     always_emit: bool, // true for internal faces (slab top at y=0.5, step risers)
+    face_bitmap: u16, // 4×4 bitmap of THIS quad's coverage area on the face boundary
 };
 
 // --- Model registry (loaded at runtime from JSON) ---
@@ -127,10 +128,25 @@ pub fn getOcclusionBitmap(block: BlockType, face: usize) u16 {
 pub fn shouldCullFace(block: BlockType, face: usize, neighbor: BlockType) bool {
     const neighbor_bmp = getOcclusionBitmap(neighbor, oppositeFace(face));
     if (neighbor_bmp == 0) return false;
+    // Fast path: neighbor fully covers the face → always cull (matches Minecraft's
+    // `occluder == Shapes.block()` check that fires before the shape comparison)
+    if (neighbor_bmp == 0xFFFF) return true;
+    // If this block has no occlusion bitmap, it doesn't participate in partial
+    // face culling — always render. Matches Minecraft's `shape == Shapes.empty() → true`.
     const this_bmp = getOcclusionBitmap(block, face);
-    // For full blocks (0xFFFF): only cull if neighbor is also full (0xFFFF)
-    // For shaped blocks: cull if neighbor covers all cells this block exposes
+    if (this_bmp == 0) return false;
+    // Partial check: cull if neighbor covers all cells this block exposes
     return (this_bmp & ~neighbor_bmp) == 0;
+}
+
+/// Per-quad face culling for shaped blocks: checks if the neighbor covers
+/// this individual quad's area (using the quad's own face_bitmap).
+pub fn shouldCullShapeFace(sf: ShapeFace, neighbor: BlockType) bool {
+    const neighbor_bmp = getOcclusionBitmap(neighbor, oppositeFace(sf.face_bucket));
+    if (neighbor_bmp == 0) return false;
+    if (neighbor_bmp == 0xFFFF) return true;
+    if (sf.face_bitmap == 0) return false;
+    return (sf.face_bitmap & ~neighbor_bmp) == 0;
 }
 
 /// Opposite face direction: 0↔1, 2↔3, 4↔5
@@ -980,7 +996,7 @@ pub fn generateChunkMesh(
                     for (shape_faces, 0..) |sf, sf_idx| {
                         if (!sf.always_emit) {
                             const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
-                            if (shouldCullFace(block, sf.face_bucket, neighbor)) continue;
+                            if (shouldCullShapeFace(sf, neighbor)) continue;
                         }
                         const face: usize = sf.face_bucket;
                         // Light/AO uses the face bucket direction
@@ -1328,7 +1344,7 @@ pub fn generateChunkLightOnly(
                     for (shape_faces) |sf| {
                         if (!sf.always_emit) {
                             const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
-                            if (shouldCullFace(block, sf.face_bucket, neighbor)) continue;
+                            if (shouldCullShapeFace(sf, neighbor)) continue;
                         }
                         const face: usize = sf.face_bucket;
                         var corner_packed: [4]u32 = undefined;
@@ -1869,6 +1885,17 @@ test "shouldCullFace: opaque next to opaque hides face" {
 
 test "shouldCullFace: opaque next to glass shows face" {
     try testing.expect(!shouldCullFace(.stone, 0, .glass));
+}
+
+test "shouldCullFace: glass next to opaque hides face" {
+    // Glass bitmap = 0, but neighbor is full → cull (Minecraft: occluder == block())
+    try testing.expect(shouldCullFace(.glass, 0, .stone));
+}
+
+test "shouldCullFace: glass next to partial shows face" {
+    // Glass bitmap = 0, neighbor is partial (slab, no registry) → render
+    // Matches Minecraft: shape == empty → return true (render)
+    try testing.expect(!shouldCullFace(.glass, 0, .oak_slab_bottom));
 }
 
 test "shouldCullFace: opaque next to slab shows face (no registry)" {
