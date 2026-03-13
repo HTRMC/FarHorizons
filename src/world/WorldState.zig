@@ -328,45 +328,119 @@ pub const BlockType = enum(u8) {
 };
 
 pub const block_properties = struct {
-    pub fn isOpaque(block: BlockType) bool {
-        return switch (block) {
-            .air, .glass, .water, .oak_leaves,
-            .oak_slab_bottom, .oak_slab_top,
-            .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-            => false,
-            .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
-            .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
-            .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
-            .sponge, .pumice, .wool, .gold_block, .iron_block,
-            .diamond_block, .bookshelf, .obsidian,
-            => true,
-        };
+    // Comptime lookup tables — single array index instead of switch branch table.
+    const BLOCK_COUNT = std.meta.fields(BlockType).len;
+
+    const opaque_lut = blk: {
+        var lut: [BLOCK_COUNT]bool = undefined;
+        for (0..BLOCK_COUNT) |i| {
+            const b: BlockType = @enumFromInt(i);
+            lut[i] = switch (b) {
+                .air, .glass, .water, .oak_leaves,
+                .oak_slab_bottom, .oak_slab_top,
+                .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
+                => false,
+                .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
+                .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
+                .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
+                .sponge, .pumice, .wool, .gold_block, .iron_block,
+                .diamond_block, .bookshelf, .obsidian,
+                => true,
+            };
+        }
+        break :blk lut;
+    };
+
+    const culls_self_lut = blk: {
+        var lut: [BLOCK_COUNT]bool = undefined;
+        for (0..BLOCK_COUNT) |i| {
+            const b: BlockType = @enumFromInt(i);
+            lut[i] = switch (b) {
+                .air => false,
+                .glass, .water => true,
+                .oak_leaves => false,
+                .oak_slab_bottom, .oak_slab_top,
+                .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
+                => false,
+                .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
+                .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
+                .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
+                .sponge, .pumice, .wool, .gold_block, .iron_block,
+                .diamond_block, .bookshelf, .obsidian,
+                => true,
+            };
+        }
+        break :blk lut;
+    };
+
+    const render_layer_lut = blk: {
+        var lut: [BLOCK_COUNT]RenderLayer = undefined;
+        for (0..BLOCK_COUNT) |i| {
+            const b: BlockType = @enumFromInt(i);
+            lut[i] = switch (b) {
+                .glass, .water => .translucent,
+                .oak_leaves => .cutout,
+                else => .solid,
+            };
+        }
+        break :blk lut;
+    };
+
+    const tex_index_lut = blk: {
+        var lut: [BLOCK_COUNT]u8 = undefined;
+        for (0..BLOCK_COUNT) |i| {
+            const b: BlockType = @enumFromInt(i);
+            lut[i] = switch (b) {
+                .air => 0,
+                .glass => 0,
+                .grass_block => 1,
+                .dirt => 2,
+                .stone => 3,
+                .glowstone => 4,
+                .sand => 5,
+                .snow => 6,
+                .water => 7,
+                .gravel => 8,
+                .cobblestone => 9,
+                .oak_log => 10,
+                .oak_planks => 11,
+                .bricks => 12,
+                .bedrock => 13,
+                .gold_ore => 14,
+                .iron_ore => 15,
+                .coal_ore => 16,
+                .diamond_ore => 17,
+                .sponge => 18,
+                .pumice => 19,
+                .wool => 20,
+                .gold_block => 21,
+                .iron_block => 22,
+                .diamond_block => 23,
+                .bookshelf => 24,
+                .obsidian => 25,
+                .oak_leaves => 26,
+                .oak_slab_bottom, .oak_slab_top,
+                .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
+                => 11,
+            };
+        }
+        break :blk lut;
+    };
+
+    pub inline fn isOpaque(block: BlockType) bool {
+        return opaque_lut[@intFromEnum(block)];
     }
-    pub fn cullsSelf(block: BlockType) bool {
-        return switch (block) {
-            .air => false,
-            .glass, .water => true,
-            .oak_leaves => false,
-            .oak_slab_bottom, .oak_slab_top,
-            .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-            => false,
-            .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
-            .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
-            .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
-            .sponge, .pumice, .wool, .gold_block, .iron_block,
-            .diamond_block, .bookshelf, .obsidian,
-            => true,
-        };
+    pub inline fn cullsSelf(block: BlockType) bool {
+        return culls_self_lut[@intFromEnum(block)];
     }
     pub fn isSolid(block: BlockType) bool {
         return block != .air and block != .water;
     }
-    pub fn renderLayer(block: BlockType) RenderLayer {
-        return switch (block) {
-            .glass, .water => .translucent,
-            .oak_leaves => .cutout,
-            else => .solid,
-        };
+    pub inline fn renderLayer(block: BlockType) RenderLayer {
+        return render_layer_lut[@intFromEnum(block)];
+    }
+    pub inline fn texIndex(block: BlockType) u8 {
+        return tex_index_lut[@intFromEnum(block)];
     }
     pub fn emittedLight(block: BlockType) [3]u8 {
         return switch (block) {
@@ -1131,39 +1205,7 @@ pub fn generateChunkMesh(
                     if (block_properties.isOpaque(neighbor)) continue;
                     if (neighbor == block and block_properties.cullsSelf(block)) continue;
 
-                    const tex_index: u8 = switch (block) {
-                        .air => unreachable,
-                        .glass => 0,
-                        .grass_block => 1,
-                        .dirt => 2,
-                        .stone => 3,
-                        .glowstone => 4,
-                        .sand => 5,
-                        .snow => 6,
-                        .water => 7,
-                        .gravel => 8,
-                        .cobblestone => 9,
-                        .oak_log => if (face == 4 or face == 5) @as(u8, 27) else 10,
-                        .oak_planks => 11,
-                        .bricks => 12,
-                        .bedrock => 13,
-                        .gold_ore => 14,
-                        .iron_ore => 15,
-                        .coal_ore => 16,
-                        .diamond_ore => 17,
-                        .sponge => 18,
-                        .pumice => 19,
-                        .wool => 20,
-                        .gold_block => 21,
-                        .iron_block => 22,
-                        .diamond_block => 23,
-                        .bookshelf => 24,
-                        .obsidian => 25,
-                        .oak_leaves => 26,
-                        .oak_slab_bottom, .oak_slab_top,
-                        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-                        => unreachable, // handled above
-                    };
+                    const tex_index: u8 = if (block == .oak_log and (face == 4 or face == 5)) 27 else block_properties.texIndex(block);
 
                     var corner_packed: [4]u32 = undefined;
                     var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
@@ -1911,4 +1953,129 @@ test "generateFlatChunk: grass at wy=0" {
     try testing.expectEqual(BlockType.grass_block, chunk.blocks[chunkIndex(0, 0, 0)]);
     // wy=1 should be air
     try testing.expectEqual(BlockType.air, chunk.blocks[chunkIndex(0, 1, 0)]);
+}
+
+// ============================================================
+// Benchmarks
+// ============================================================
+
+fn printBenchResult(comptime name: []const u8, samples: []const u64, face_count: ?u32) void {
+    var min_ns: u64 = std.math.maxInt(u64);
+    var max_ns: u64 = 0;
+    var total_ns: u64 = 0;
+    for (samples) |s| {
+        total_ns += s;
+        if (s < min_ns) min_ns = s;
+        if (s > max_ns) max_ns = s;
+    }
+    const avg = total_ns / samples.len;
+    if (face_count) |fc| {
+        std.debug.print("\n  {s}: min={d}us avg={d}us max={d}us (n={d}) faces={d}\n", .{ name, min_ns / 1000, avg / 1000, max_ns / 1000, samples.len, fc });
+    } else {
+        std.debug.print("\n  {s}: min={d}us avg={d}us max={d}us (n={d})\n", .{ name, min_ns / 1000, avg / 1000, max_ns / 1000, samples.len });
+    }
+}
+
+/// Bottom 16 layers stone, layer 16 dirt, layer 17 grass, rest air.
+fn makeSurfaceChunk() Chunk {
+    var chunk: Chunk = .{ .blocks = .{.air} ** BLOCKS_PER_CHUNK };
+    for (0..CHUNK_SIZE) |x| {
+        for (0..CHUNK_SIZE) |z| {
+            for (0..16) |y| {
+                chunk.blocks[chunkIndex(x, y, z)] = .stone;
+            }
+            chunk.blocks[chunkIndex(x, 16, z)] = .dirt;
+            chunk.blocks[chunkIndex(x, 17, z)] = .grass_block;
+        }
+    }
+    return chunk;
+}
+
+/// Alternating stone/air — worst-case face count.
+fn makeCheckerboardChunk() Chunk {
+    var chunk: Chunk = .{ .blocks = .{.air} ** BLOCKS_PER_CHUNK };
+    for (0..CHUNK_SIZE) |x| {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                if ((x + y + z) % 2 == 0) {
+                    chunk.blocks[chunkIndex(x, y, z)] = .stone;
+                }
+            }
+        }
+    }
+    return chunk;
+}
+
+test "bench: generateChunkMesh surface (with AO)" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ITERS = 10;
+    var samples: [ITERS]u64 = undefined;
+    const chunk = makeSurfaceChunk();
+    var face_count: u32 = 0;
+
+    for (&samples) |*sample| {
+        const start = std.Io.Clock.now(.awake, io);
+        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+        sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+        face_count = result.total_face_count;
+        testing.allocator.free(result.faces);
+        testing.allocator.free(result.lights);
+    }
+
+    printBenchResult("generateChunkMesh surface (with AO)", &samples, face_count);
+}
+
+test "bench: generateLodChunkMesh surface (no AO)" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ITERS = 10;
+    var samples: [ITERS]u64 = undefined;
+    const chunk = makeSurfaceChunk();
+    var face_count: u32 = 0;
+
+    for (&samples) |*sample| {
+        const start = std.Io.Clock.now(.awake, io);
+        const result = try generateLodChunkMesh(testing.allocator, &chunk, no_neighbors);
+        sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+        face_count = result.total_face_count;
+        testing.allocator.free(result.faces);
+        testing.allocator.free(result.lights);
+    }
+
+    printBenchResult("generateLodChunkMesh surface (no AO)", &samples, face_count);
+}
+
+test "bench: generateChunkMesh checkerboard (worst case)" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ITERS = 10;
+    var samples: [ITERS]u64 = undefined;
+    const chunk = makeCheckerboardChunk();
+    var face_count: u32 = 0;
+
+    for (&samples) |*sample| {
+        const start = std.Io.Clock.now(.awake, io);
+        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+        sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+        face_count = result.total_face_count;
+        testing.allocator.free(result.faces);
+        testing.allocator.free(result.lights);
+    }
+
+    printBenchResult("generateChunkMesh checkerboard (worst case)", &samples, face_count);
+}
+
+test "bench: generateChunkMesh empty (baseline)" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ITERS = 10;
+    var samples: [ITERS]u64 = undefined;
+    const chunk = makeEmptyChunk();
+
+    for (&samples) |*sample| {
+        const start = std.Io.Clock.now(.awake, io);
+        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+        sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+        testing.allocator.free(result.faces);
+        testing.allocator.free(result.lights);
+    }
+
+    printBenchResult("generateChunkMesh empty (baseline)", &samples, 0);
 }
