@@ -80,7 +80,6 @@ pub const HandRenderer = struct {
         if (self.arm_vertex_count == 0) return;
 
         const has_block = self.block_tex_side >= 0;
-        if (!has_block) return; // only render when holding a block
 
         // Clear depth in full viewport so hand renders on top of world
         const full_scissor = vk.VkRect2D{
