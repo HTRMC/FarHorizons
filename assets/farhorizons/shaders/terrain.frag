@@ -7,10 +7,14 @@ layout(location=1) flat in uint fragTexIndex;
 layout(location=2) flat in uvec4 fragLightPacked;
 layout(location=3) flat in uint fragAoData;
 layout(location=4) flat in vec3 fragNormal;
+layout(location=5) in float fragDist;
 
 layout(push_constant) uniform PC {
     layout(offset=64) float contrast;
     layout(offset=80) vec3 ambientLight;
+    layout(offset=96) vec3 fogColor;
+    layout(offset=108) float fogStart;
+    layout(offset=112) float fogEnd;
 } pc;
 
 layout(location=0) out vec4 outColor;
@@ -71,4 +75,8 @@ void main() {
     vec4 texColor = texture(tex, vec3(fragUV, float(fragTexIndex)));
     if (texColor.a == 0.0) discard;
     outColor = texColor * vec4(light * effective_ao, 1.0);
+
+    // Underwater fog
+    float fogFactor = smoothstep(pc.fogStart, pc.fogEnd, fragDist);
+    outColor.rgb = mix(outColor.rgb, pc.fogColor, fogFactor);
 }

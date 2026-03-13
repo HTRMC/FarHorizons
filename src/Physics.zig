@@ -12,6 +12,14 @@ const FRICTION: f32 = 20.0;
 const AIR_CONTROL: f32 = 0.3;
 const EPSILON: f32 = 1.0e-7;
 
+// Water physics (matched to Minecraft constants)
+const WATER_GRAVITY: f32 = 2.0; // GRAVITY / 16
+const WATER_SPEED: f32 = 2.0; // terminal horizontal velocity in water
+const WATER_SWIM_SPEED: f32 = 3.0; // vertical swim speed
+const WATER_FRICTION: f32 = 12.0; // approach rate for velocity
+const WATER_XZ_DRAG: f32 = 0.86; // per-tick horizontal drag (MC 0.8 @20Hz → 0.86 @30Hz)
+const WATER_Y_DRAG: f32 = 0.86; // per-tick vertical drag
+
 pub fn updateEntity(state: *GameState, dt: f32) void {
     if (state.mode == .flying) return;
 
@@ -30,13 +38,27 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         wish_z *= inv_len;
     }
 
-    const target_vx = wish_x * WALK_SPEED;
-    const target_vz = wish_z * WALK_SPEED;
+    if (state.entity_in_water) {
+        // Water horizontal movement
+        const target_vx = wish_x * WATER_SPEED;
+        const target_vz = wish_z * WATER_SPEED;
+        const water_control = WATER_FRICTION * dt;
+        state.entity_vel[0] = approach(state.entity_vel[0], target_vx, water_control);
+        state.entity_vel[2] = approach(state.entity_vel[2], target_vz, water_control);
 
-    const control = if (state.entity_on_ground) FRICTION else FRICTION * AIR_CONTROL;
-    const max_delta = control * dt;
-    state.entity_vel[0] = approach(state.entity_vel[0], target_vx, max_delta);
-    state.entity_vel[2] = approach(state.entity_vel[2], target_vz, max_delta);
+        // Vertical swimming (input_move[1]: +1 jump, -1 sneak)
+        const up_input = state.input_move[1];
+        const target_vy = up_input * WATER_SWIM_SPEED;
+        state.entity_vel[1] = approach(state.entity_vel[1], target_vy, water_control);
+    } else {
+        // Land horizontal movement
+        const target_vx = wish_x * WALK_SPEED;
+        const target_vz = wish_z * WALK_SPEED;
+        const control = if (state.entity_on_ground) FRICTION else FRICTION * AIR_CONTROL;
+        const max_delta = control * dt;
+        state.entity_vel[0] = approach(state.entity_vel[0], target_vx, max_delta);
+        state.entity_vel[2] = approach(state.entity_vel[2], target_vz, max_delta);
+    }
 
     state.entity_on_ground = false;
 
@@ -72,8 +94,15 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         }
     }
 
-    state.entity_vel[1] -= GRAVITY * dt;
-    state.entity_vel[1] *= Y_DRAG;
+    if (state.entity_in_water) {
+        state.entity_vel[1] -= WATER_GRAVITY * dt;
+        state.entity_vel[0] *= WATER_XZ_DRAG;
+        state.entity_vel[1] *= WATER_Y_DRAG;
+        state.entity_vel[2] *= WATER_XZ_DRAG;
+    } else {
+        state.entity_vel[1] -= GRAVITY * dt;
+        state.entity_vel[1] *= Y_DRAG;
+    }
 }
 
 fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usize) struct { distance: f32, hit: bool } {
@@ -235,7 +264,7 @@ fn overlapsOtherAxes(aabb_min: [3]f32, aabb_max: [3]f32, block: [3]i32, skip_axi
     return true;
 }
 
-fn floori(v: f32) i32 {
+pub fn floori(v: f32) i32 {
     return @intFromFloat(@floor(v));
 }
 

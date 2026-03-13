@@ -888,10 +888,25 @@ pub const VulkanRenderer = struct {
             .sky_color = .{ 0.224, 0.643, 0.918 },
         };
 
+        // Underwater fog parameters
+        const eyes_in_water = if (self.game_state) |gs| gs.eyes_in_water else false;
+        const fog_color: [3]f32 = .{ 0.05, 0.1, 0.3 };
+        var fog_start: f32 = 10000.0;
+        var fog_end: f32 = 10000.0;
+        if (eyes_in_water) {
+            if (self.game_state) |gs| {
+                const vision = gs.waterVision();
+                fog_start = 0.0;
+                fog_end = 15.0 + vision * 45.0; // 15 to 60 blocks
+            }
+        }
+
         const clear_color: [4]f32 = if (!has_game)
             .{ 0.05, 0.05, 0.1, 1.0 }
         else if (overdraw)
             .{ 0.0, 0.0, 0.0, 1.0 }
+        else if (eyes_in_water)
+            .{ fog_color[0], fog_color[1], fog_color[2], 1.0 }
         else
             .{ day_night.sky_color[0], day_night.sky_color[1], day_night.sky_color[2], 1.0 };
 
@@ -970,10 +985,10 @@ pub const VulkanRenderer = struct {
             const proj = gs.camera.getProjectionMatrix();
             const mvp = zlm.Mat4.mul(proj, view);
 
-            self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw, day_night.ambient_light);
+            self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw, day_night.ambient_light, fog_color, fog_start, fog_end);
 
             // Sun/moon celestial bodies (rendered on sky background via depth test)
-            if (!overdraw) {
+            if (!overdraw and !eyes_in_water) {
                 const pi = std.math.pi;
                 const angle: f32 = @as(f32, @floatFromInt(@mod(gs.game_time, GameState.DAY_CYCLE))) / @as(f32, @floatFromInt(GameState.DAY_CYCLE)) * 2.0 * pi;
                 const sun_dir = [3]f32{ 0.0, @cos(angle), @sin(angle) };

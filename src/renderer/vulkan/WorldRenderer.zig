@@ -331,7 +331,7 @@ pub const WorldRenderer = struct {
         self.draw_counts = layer_counts;
     }
 
-    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool, ambient_light: [3]f32) void {
+    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool, ambient_light: [3]f32, fog_color: [3]f32, fog_start: f32, fog_end: f32) void {
         var total_draws: u32 = 0;
         for (self.draw_counts) |dc| total_draws += dc;
         if (total_draws == 0) return;
@@ -374,6 +374,18 @@ pub const WorldRenderer = struct {
             80,
             @sizeOf([3]f32),
             @ptrCast(&ambient_light),
+        );
+
+        // Fog parameters (offset 96: vec3 fogColor, 108: fogStart, 112: fogEnd)
+        const FogPC = extern struct { color: [3]f32, start: f32, end: f32 };
+        const fog_pc = FogPC{ .color = fog_color, .start = fog_start, .end = fog_end };
+        vk.cmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+            96,
+            @sizeOf(FogPC),
+            @ptrCast(&fog_pc),
         );
 
         const cmd_stride: u32 = @sizeOf(vk.VkDrawIndexedIndirectCommand);
@@ -569,7 +581,7 @@ pub const WorldRenderer = struct {
         const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
-            .size = 92,
+            .size = 116,
         };
 
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{

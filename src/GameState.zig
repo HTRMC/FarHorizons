@@ -224,6 +224,9 @@ surface_height_map: SurfaceHeightMap,
 entity_pos: [3]f32,
 entity_vel: [3]f32,
 entity_on_ground: bool,
+entity_in_water: bool,
+eyes_in_water: bool,
+water_vision_time: u16,
 mode: MovementMode,
 input_move: [3]f32,
 jump_requested: bool,
@@ -440,6 +443,9 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .entity_pos = .{ spawn_x, spawn_y, spawn_z },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
+        .entity_in_water = false,
+        .eyes_in_water = false,
+        .water_vision_time = 0,
         .mode = .walking,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .jump_requested = false,
@@ -524,6 +530,35 @@ pub fn toggleDebugCamera(self: *GameState) void {
     }
 }
 
+fn updateWaterState(self: *GameState) void {
+    const floori = Physics.floori;
+
+    // In flying mode, use camera position; in walking mode, use entity position
+    const pos_x: f32 = if (self.mode == .flying) self.camera.position.x else self.entity_pos[0];
+    const pos_y: f32 = if (self.mode == .flying) self.camera.position.y - EYE_OFFSET else self.entity_pos[1];
+    const pos_z: f32 = if (self.mode == .flying) self.camera.position.z else self.entity_pos[2];
+    const px = floori(pos_x);
+    const pz = floori(pos_z);
+
+    self.entity_in_water = self.chunk_map.getBlock(px, floori(pos_y), pz) == .water;
+    self.eyes_in_water = self.chunk_map.getBlock(px, floori(pos_y + EYE_OFFSET), pz) == .water;
+
+    // Water vision time: MC 0-600 ticks @20Hz → 0-900 @30Hz
+    if (self.eyes_in_water) {
+        if (self.water_vision_time < 900) self.water_vision_time += 1;
+    } else {
+        self.water_vision_time = 0;
+    }
+}
+
+/// Returns 0.0 to 1.0 water vision factor (MC two-phase curve).
+pub fn waterVision(self: *const GameState) f32 {
+    const t: f32 = @floatFromInt(self.water_vision_time);
+    const a = std.math.clamp(t / 150.0, 0.0, 1.0);
+    const b = std.math.clamp((t - 150.0) / 750.0, 0.0, 1.0);
+    return a * 0.6 + b * 0.4;
+}
+
 pub fn toggleMode(self: *GameState) void {
     switch (self.mode) {
         .flying => {
@@ -556,6 +591,9 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.prev_entity_pos = self.entity_pos;
     self.prev_camera_pos = self.camera.position;
 
+    // Detect water state before physics (both modes need it for fog)
+    self.updateWaterState();
+
     switch (self.mode) {
         .flying => {
             const forward_input = self.input_move[0];
@@ -568,9 +606,10 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
             }
         },
         .walking => {
+
             if (self.jump_cooldown > 0) {
                 self.jump_cooldown -= 1;
-            } else if (self.jump_requested and self.entity_on_ground) {
+            } else if (self.jump_requested and !self.entity_in_water and self.entity_on_ground) {
                 self.entity_vel[1] = 8.7;
             }
             self.jump_requested = false;
