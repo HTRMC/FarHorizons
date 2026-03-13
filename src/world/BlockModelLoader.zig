@@ -99,6 +99,12 @@ pub const BlockModelRegistry = struct {
     extra_models: []ExtraQuadModel,
     block_shape_faces: [NUM_BLOCKS][]ShapeFace,
     block_face_tex_indices: [NUM_BLOCKS][]u8,
+    /// Per-block, per-face: 4×4 bitmap of which cells this block covers on the face boundary.
+    /// Bit layout: bit = row * 4 + col, where row/col are 0..3 subdivisions of the face plane.
+    /// For vertical faces (S/N/E/W): col = horizontal axis, row = Y (0=bottom, 3=top).
+    /// For horizontal faces (up/down): col = X, row = Z.
+    /// 0xFFFF = full face coverage. Used for Minecraft-style VoxelShape occlusion culling.
+    block_face_bitmaps: [NUM_BLOCKS][6]u16,
 
     pub fn init(allocator: std.mem.Allocator) !*BlockModelRegistry {
         const self = try allocator.create(BlockModelRegistry);
@@ -107,6 +113,7 @@ pub const BlockModelRegistry = struct {
         self.allocator = allocator;
         self.block_shape_faces = .{&.{}} ** NUM_BLOCKS;
         self.block_face_tex_indices = .{&.{}} ** NUM_BLOCKS;
+        self.block_face_bitmaps = .{.{0} ** 6} ** NUM_BLOCKS;
 
         var extra_models_list: std.ArrayList(ExtraQuadModel) = .empty;
         defer extra_models_list.deinit(allocator);
@@ -215,6 +222,9 @@ fn loadModel(
     var tex_indices: std.ArrayList(u8) = .empty;
     defer tex_indices.deinit(allocator);
 
+    // Track 4×4 bitmaps per face direction (accumulated after transform)
+    var face_bitmaps: [6]u16 = .{0} ** 6;
+
     for (elements) |element| {
         const elem_obj = element.object;
         const from_arr = (elem_obj.get("from") orelse continue).array.items;
@@ -275,6 +285,13 @@ fn loadModel(
 
             const bucket = face_bucket_map.get(face_name) orelse continue;
 
+            // Accumulate 4×4 bitmap for boundary faces (cullface present)
+            if (has_cullface) {
+                const tb = transformBox(from, to, transform);
+                const dst_bucket = transformBucket(bucket, transform);
+                face_bitmaps[dst_bucket] |= elementFaceBitmap(tb[0], tb[1], dst_bucket);
+            }
+
             // Build the quad from element box + face direction
             var quad_model = buildBoxFaceQuad(from, to, bucket, uv);
 
@@ -297,6 +314,101 @@ fn loadModel(
     const bi = @intFromEnum(block);
     registry.block_shape_faces[bi] = try allocator.dupe(ShapeFace, shape_faces.items);
     registry.block_face_tex_indices[bi] = try allocator.dupe(u8, tex_indices.items);
+
+    // Store accumulated bitmaps (already in transformed space)
+    registry.block_face_bitmaps[bi] = face_bitmaps;
+}
+
+/// Compute a 4×4 bitmap of which cells this element covers on the given block boundary face.
+/// Returns 0 if the element doesn't touch that boundary.
+/// Bit layout: bit = row * 4 + col (row 0 = min of second axis, col 0 = min of first axis).
+pub fn elementFaceBitmap(from: [3]f32, to: [3]f32, face: u3) u16 {
+    const eps = 0.001;
+
+    // Determine the two axes that form the face plane and check boundary condition
+    var axis_a_min: f32 = undefined;
+    var axis_a_max: f32 = undefined;
+    var axis_b_min: f32 = undefined;
+    var axis_b_max: f32 = undefined;
+    var on_boundary = false;
+
+    switch (face) {
+        0 => { // south +Z: boundary at z=1, face plane = XY
+            on_boundary = @abs(to[2] - 1.0) < eps;
+            axis_a_min = from[0]; axis_a_max = to[0]; // X → col
+            axis_b_min = from[1]; axis_b_max = to[1]; // Y → row
+        },
+        1 => { // north -Z: boundary at z=0, face plane = XY
+            on_boundary = @abs(from[2]) < eps;
+            axis_a_min = from[0]; axis_a_max = to[0];
+            axis_b_min = from[1]; axis_b_max = to[1];
+        },
+        2 => { // west -X: boundary at x=0, face plane = ZY
+            on_boundary = @abs(from[0]) < eps;
+            axis_a_min = from[2]; axis_a_max = to[2]; // Z → col
+            axis_b_min = from[1]; axis_b_max = to[1]; // Y → row
+        },
+        3 => { // east +X: boundary at x=1, face plane = ZY
+            on_boundary = @abs(to[0] - 1.0) < eps;
+            axis_a_min = from[2]; axis_a_max = to[2];
+            axis_b_min = from[1]; axis_b_max = to[1];
+        },
+        4 => { // up +Y: boundary at y=1, face plane = XZ
+            on_boundary = @abs(to[1] - 1.0) < eps;
+            axis_a_min = from[0]; axis_a_max = to[0]; // X → col
+            axis_b_min = from[2]; axis_b_max = to[2]; // Z → row
+        },
+        5 => { // down -Y: boundary at y=0, face plane = XZ
+            on_boundary = @abs(from[1]) < eps;
+            axis_a_min = from[0]; axis_a_max = to[0];
+            axis_b_min = from[2]; axis_b_max = to[2];
+        },
+        else => return 0,
+    }
+
+    if (!on_boundary) return 0;
+
+    // Compute which 4×4 cells are covered
+    var bitmap: u16 = 0;
+    for (0..4) |row| {
+        const row_min: f32 = @as(f32, @floatFromInt(row)) / 4.0;
+        const row_max: f32 = @as(f32, @floatFromInt(row + 1)) / 4.0;
+        if (axis_b_max <= row_min + eps or axis_b_min >= row_max - eps) continue;
+
+        for (0..4) |col| {
+            const col_min: f32 = @as(f32, @floatFromInt(col)) / 4.0;
+            const col_max: f32 = @as(f32, @floatFromInt(col + 1)) / 4.0;
+            if (axis_a_max <= col_min + eps or axis_a_min >= col_max - eps) continue;
+
+            bitmap |= @as(u16, 1) << @intCast(row * 4 + col);
+        }
+    }
+
+    return bitmap;
+}
+
+/// Transform element box coordinates according to a Y-axis rotation/flip.
+/// Returns { transformed_from, transformed_to } with from < to guaranteed.
+fn transformBox(from: [3]f32, to: [3]f32, transform: Transform) struct { [3]f32, [3]f32 } {
+    return switch (transform) {
+        .none => .{ from, to },
+        .flip_y => .{
+            .{ from[0], 1.0 - to[1], from[2] },
+            .{ to[0], 1.0 - from[1], to[2] },
+        },
+        .rotate_90 => .{ // (x,z) → (z, 1-x)
+            .{ from[2], from[1], 1.0 - to[0] },
+            .{ to[2], to[1], 1.0 - from[0] },
+        },
+        .rotate_180 => .{ // (x,z) → (1-x, 1-z)
+            .{ 1.0 - to[0], from[1], 1.0 - to[2] },
+            .{ 1.0 - from[0], to[1], 1.0 - from[2] },
+        },
+        .rotate_270 => .{ // (x,z) → (1-z, x)
+            .{ 1.0 - to[2], from[1], from[0] },
+            .{ 1.0 - from[2], to[1], to[0] },
+        },
+    };
 }
 
 fn jsonFloat(val: std.json.Value) f32 {
@@ -505,4 +617,208 @@ fn transformBucket(bucket: u3, transform: Transform) u3 {
             else => bucket,
         },
     };
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+test "elementFaceBitmap: full block face" {
+    // Element spanning entire block: [0,0,0]→[1,1,1]
+    const from = [3]f32{ 0, 0, 0 };
+    const to = [3]f32{ 1, 1, 1 };
+    // Every face should have full coverage = 0xFFFF
+    for (0..6) |f| {
+        try std.testing.expectEqual(@as(u16, 0xFFFF), elementFaceBitmap(from, to, @intCast(f)));
+    }
+}
+
+test "elementFaceBitmap: bottom slab" {
+    // Bottom slab: [0,0,0]→[1,0.5,1]
+    const from = [3]f32{ 0, 0, 0 };
+    const to = [3]f32{ 1, 0.5, 1 };
+
+    // down (y=0): full XZ coverage → 0xFFFF
+    try std.testing.expectEqual(@as(u16, 0xFFFF), elementFaceBitmap(from, to, 5));
+    // south (+Z, z=1): bottom 2 rows of XY (y 0→0.5) → rows 0-1 set, rows 2-3 clear
+    // Row 0 (y 0..0.25): bits 0-3, Row 1 (y 0.25..0.5): bits 4-7
+    try std.testing.expectEqual(@as(u16, 0x00FF), elementFaceBitmap(from, to, 0));
+    // north: same pattern
+    try std.testing.expectEqual(@as(u16, 0x00FF), elementFaceBitmap(from, to, 1));
+    // west: same pattern (col=Z, row=Y)
+    try std.testing.expectEqual(@as(u16, 0x00FF), elementFaceBitmap(from, to, 2));
+    // east: same pattern
+    try std.testing.expectEqual(@as(u16, 0x00FF), elementFaceBitmap(from, to, 3));
+    // up (+Y, y=1): element doesn't reach y=1 → 0
+    try std.testing.expectEqual(@as(u16, 0), elementFaceBitmap(from, to, 4));
+}
+
+test "elementFaceBitmap: stairs upper back" {
+    // Upper back of stairs: [0,0.5,0]→[1,1,0.5]
+    const from = [3]f32{ 0, 0.5, 0 };
+    const to = [3]f32{ 1, 1, 0.5 };
+
+    // north (-Z, z=0): top 2 rows of XY (y 0.5→1) → rows 2-3 set
+    try std.testing.expectEqual(@as(u16, 0xFF00), elementFaceBitmap(from, to, 1));
+    // up (+Y, y=1): X spans 0→1 (all cols), Z spans 0→0.5 (rows 0-1)
+    // Row 0 (z 0..0.25): bits 0-3, Row 1 (z 0.25..0.5): bits 4-7 = 0x00FF
+    try std.testing.expectEqual(@as(u16, 0x00FF), elementFaceBitmap(from, to, 4));
+    // west (-X, x=0): z 0→0.5 = cols 0-1, y 0.5→1 = rows 2-3
+    // Row 2: bits 8,9; Row 3: bits 12,13 = 0x3300
+    try std.testing.expectEqual(@as(u16, 0x3300), elementFaceBitmap(from, to, 2));
+    // south (+Z): element doesn't reach z=1 → 0
+    try std.testing.expectEqual(@as(u16, 0), elementFaceBitmap(from, to, 0));
+    // down (-Y): element doesn't reach y=0 → 0
+    try std.testing.expectEqual(@as(u16, 0), elementFaceBitmap(from, to, 5));
+}
+
+test "elementFaceBitmap: ladder thin panel" {
+    // Ladder panel: [0,0,0]→[1,1,1/16]
+    const from = [3]f32{ 0, 0, 0 };
+    const to = [3]f32{ 1, 1, 1.0 / 16.0 };
+
+    // north (-Z, z=0): full XY → 0xFFFF
+    try std.testing.expectEqual(@as(u16, 0xFFFF), elementFaceBitmap(from, to, 1));
+    // south (+Z): element doesn't reach z=1 → 0
+    try std.testing.expectEqual(@as(u16, 0), elementFaceBitmap(from, to, 0));
+}
+
+test "elementFaceBitmap: combined stair bitmaps" {
+    // Bottom slab [0,0,0]→[1,0.5,1] + upper back [0,0.5,0]→[1,1,0.5]
+    // On north face (-Z): bottom gives 0x00FF, upper back gives 0xFF00 → OR = 0xFFFF
+    const bottom = elementFaceBitmap(.{ 0, 0, 0 }, .{ 1, 0.5, 1 }, 1);
+    const upper = elementFaceBitmap(.{ 0, 0.5, 0 }, .{ 1, 1, 0.5 }, 1);
+    try std.testing.expectEqual(@as(u16, 0xFFFF), bottom | upper);
+
+    // On south face (+Z): bottom gives 0x00FF, upper doesn't reach z=1 → 0x00FF
+    const bottom_s = elementFaceBitmap(.{ 0, 0, 0 }, .{ 1, 0.5, 1 }, 0);
+    const upper_s = elementFaceBitmap(.{ 0, 0.5, 0 }, .{ 1, 1, 0.5 }, 0);
+    try std.testing.expectEqual(@as(u16, 0x00FF), bottom_s | upper_s);
+
+    // On west face (-X): bottom gives 0x00FF (y 0→0.5), upper gives 0x3300 (z 0→0.5, y 0.5→1)
+    // OR = 0x33FF
+    const bottom_w = elementFaceBitmap(.{ 0, 0, 0 }, .{ 1, 0.5, 1 }, 2);
+    const upper_w = elementFaceBitmap(.{ 0, 0.5, 0 }, .{ 1, 1, 0.5 }, 2);
+    try std.testing.expectEqual(@as(u16, 0x33FF), bottom_w | upper_w);
+}
+
+test "transformBox: identity" {
+    const result = transformBox(.{ 0, 0, 0 }, .{ 1, 0.5, 1 }, .none);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), result[1][1], 0.001);
+}
+
+test "transformBox: flip_y" {
+    // [0,0,0]→[1,0.5,1] flip → [0,0.5,0]→[1,1,1]
+    const result = transformBox(.{ 0, 0, 0 }, .{ 1, 0.5, 1 }, .flip_y);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), result[0][1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), result[1][1], 0.001);
+}
+
+test "transformBox: rotate_90" {
+    // [0,0,0]→[1,0.5,0.5] rot90 → (x,z)→(z,1-x) → [0,0,0]→[0.5,0.5,1]
+    const result = transformBox(.{ 0, 0, 0 }, .{ 1, 0.5, 0.5 }, .rotate_90);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), result[0][0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), result[1][0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), result[0][2], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), result[1][2], 0.001);
+}
+
+test "transformBucket: identity" {
+    for (0..6) |f| {
+        try std.testing.expectEqual(@as(u3, @intCast(f)), transformBucket(@intCast(f), .none));
+    }
+}
+
+test "transformBucket: flip_y swaps up/down" {
+    try std.testing.expectEqual(@as(u3, 5), transformBucket(4, .flip_y)); // up → down
+    try std.testing.expectEqual(@as(u3, 4), transformBucket(5, .flip_y)); // down → up
+    try std.testing.expectEqual(@as(u3, 0), transformBucket(0, .flip_y)); // south unchanged
+    try std.testing.expectEqual(@as(u3, 1), transformBucket(1, .flip_y)); // north unchanged
+}
+
+test "transformBucket: rotate_90 CW" {
+    try std.testing.expectEqual(@as(u3, 3), transformBucket(0, .rotate_90)); // south → east
+    try std.testing.expectEqual(@as(u3, 2), transformBucket(1, .rotate_90)); // north → west
+    try std.testing.expectEqual(@as(u3, 0), transformBucket(2, .rotate_90)); // west → south
+    try std.testing.expectEqual(@as(u3, 1), transformBucket(3, .rotate_90)); // east → north
+    try std.testing.expectEqual(@as(u3, 4), transformBucket(4, .rotate_90)); // up unchanged
+    try std.testing.expectEqual(@as(u3, 5), transformBucket(5, .rotate_90)); // down unchanged
+}
+
+test "transformBucket: rotate_180" {
+    try std.testing.expectEqual(@as(u3, 1), transformBucket(0, .rotate_180)); // south → north
+    try std.testing.expectEqual(@as(u3, 0), transformBucket(1, .rotate_180)); // north → south
+    try std.testing.expectEqual(@as(u3, 3), transformBucket(2, .rotate_180)); // west → east
+    try std.testing.expectEqual(@as(u3, 2), transformBucket(3, .rotate_180)); // east → west
+}
+
+test "transformBucket: full rotation cycle" {
+    // Rotating 4 times by 90° should return to original
+    var b: u3 = 0; // south
+    b = transformBucket(b, .rotate_90); // → east
+    b = transformBucket(b, .rotate_90); // → north
+    b = transformBucket(b, .rotate_90); // → west
+    b = transformBucket(b, .rotate_90); // → south
+    try std.testing.expectEqual(@as(u3, 0), b);
+}
+
+test "buildBoxFaceQuad: south face corners" {
+    const from = [3]f32{ 0, 0, 0 };
+    const to = [3]f32{ 1, 0.5, 1 };
+    const uv = [4]f32{ 0, 0.5, 1, 1 };
+    const q = buildBoxFaceQuad(from, to, 0, uv); // south (+Z)
+
+    // South face at z=to[2]=1, corners CCW from bottom-left
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), q.corners[0][2], 0.001); // z = 1
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), q.corners[0][1], 0.001); // y = 0 (bottom)
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), q.corners[2][1], 0.001); // y = 0.5 (top)
+    // Normal should be +Z
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), q.normal[2], 0.001);
+}
+
+test "buildBoxFaceQuad: up face corners" {
+    const from = [3]f32{ 0, 0, 0 };
+    const to = [3]f32{ 1, 1, 1 };
+    const uv = [4]f32{ 0, 0, 1, 1 };
+    const q = buildBoxFaceQuad(from, to, 4, uv); // up (+Y)
+
+    // All 4 corners should be at y=1
+    for (0..4) |i| {
+        try std.testing.expectApproxEqAbs(@as(f32, 1.0), q.corners[i][1], 0.001);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), q.normal[1], 0.001);
+}
+
+test "applyTransform: flip_y inverts Y coordinates" {
+    const model = ExtraQuadModel{
+        .corners = .{ .{ 0, 0, 0 }, .{ 1, 0, 0 }, .{ 1, 0.5, 0 }, .{ 0, 0.5, 0 } },
+        .uvs = .{ .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 } },
+        .normal = .{ 0, 0, -1 },
+    };
+    const flipped = applyTransform(model, .flip_y, 1);
+
+    // Y coords should be 1-original, winding reversed
+    // Original: 0, 0, 0.5, 0.5 → Flipped: 1, 1, 0.5, 0.5 → Reversed: 0.5, 0.5, 1, 1
+    try std.testing.expectApproxEqAbs(@as(f32, 0.5), flipped.corners[0][1], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), flipped.corners[2][1], 0.001);
+    // Normal Z should be unchanged (flip_y only affects Y)
+    try std.testing.expectApproxEqAbs(@as(f32, -1.0), flipped.normal[2], 0.001);
+}
+
+test "applyTransform: rotate_90 swaps X and Z" {
+    const model = ExtraQuadModel{
+        .corners = .{ .{ 0, 0, 1 }, .{ 1, 0, 1 }, .{ 1, 0.5, 1 }, .{ 0, 0.5, 1 } },
+        .uvs = .{ .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 } },
+        .normal = .{ 0, 0, 1 }, // +Z
+    };
+    const rotated = applyTransform(model, .rotate_90, 0);
+
+    // 90° CW: (x,z) → (z, 1-x)
+    // Corner 0: (0,0,1) → (1,0,1)
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), rotated.corners[0][0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), rotated.corners[0][2], 0.001);
+    // Corner 1: (1,0,1) → (1,0,0)
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), rotated.corners[1][0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), rotated.corners[1][2], 0.001);
+    // Normal: (0,0,1) → (1,0,0)
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0), rotated.normal[0], 0.001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.0), rotated.normal[2], 0.001);
 }

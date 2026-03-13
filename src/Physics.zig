@@ -20,6 +20,10 @@ const WATER_FRICTION: f32 = 12.0; // approach rate for velocity
 const WATER_XZ_DRAG: f32 = 0.86; // per-tick horizontal drag (MC 0.8 @20Hz → 0.86 @30Hz)
 const WATER_Y_DRAG: f32 = 0.86; // per-tick vertical drag
 
+// Ladder physics (matched to Minecraft)
+pub const LADDER_CLIMB_SPEED: f32 = 3.0; // climb speed when holding jump
+const LADDER_MAX_FALL: f32 = -2.4; // max fall speed on ladder (MC: -0.15/tick @20Hz)
+
 pub fn updateEntity(state: *GameState, dt: f32) void {
     if (state.mode == .flying) return;
 
@@ -102,6 +106,17 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         state.entity_vel[0] *= WATER_XZ_DRAG;
         state.entity_vel[1] *= WATER_Y_DRAG;
         state.entity_vel[2] *= WATER_XZ_DRAG;
+    } else if (state.entity_on_ladder) {
+        state.entity_vel[1] -= GRAVITY * dt;
+        state.entity_vel[1] *= Y_DRAG;
+        // Cap fall speed on ladder
+        if (state.entity_vel[1] < LADDER_MAX_FALL) {
+            state.entity_vel[1] = LADDER_MAX_FALL;
+        }
+        // Sneak to hold position on ladder
+        if (state.input_move[1] < 0.0 and state.entity_vel[1] < 0.0) {
+            state.entity_vel[1] = 0.0;
+        }
     } else {
         state.entity_vel[1] -= GRAVITY * dt;
         state.entity_vel[1] *= Y_DRAG;

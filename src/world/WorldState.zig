@@ -105,6 +105,39 @@ pub fn getShapedTexIndices(block: BlockType) []const u8 {
     return getRegistry().block_face_tex_indices[@intFromEnum(block)];
 }
 
+/// Get the 4×4 occlusion bitmap for a block on the given face.
+/// Full opaque blocks = 0xFFFF. Solid shaped blocks use registry bitmaps.
+/// Transparent/non-solid blocks = 0 (don't occlude).
+pub fn getOcclusionBitmap(block: BlockType, face: usize) u16 {
+    if (block == .air) return 0;
+    if (block_properties.isOpaque(block)) return 0xFFFF;
+    if (block_properties.isSolidShaped(block)) {
+        if (registry) |reg| {
+            return reg.block_face_bitmaps[@intFromEnum(block)][face];
+        }
+        return 0;
+    }
+    return 0;
+}
+
+/// Minecraft-style VoxelShape face culling: should this block's face be culled
+/// given the neighbor block on that side?
+/// Compares 4×4 bitmaps: cull if the neighbor covers every cell this block exposes.
+/// face: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
+pub fn shouldCullFace(block: BlockType, face: usize, neighbor: BlockType) bool {
+    const neighbor_bmp = getOcclusionBitmap(neighbor, oppositeFace(face));
+    if (neighbor_bmp == 0) return false;
+    const this_bmp = getOcclusionBitmap(block, face);
+    // For full blocks (0xFFFF): only cull if neighbor is also full (0xFFFF)
+    // For shaped blocks: cull if neighbor covers all cells this block exposes
+    return (this_bmp & ~neighbor_bmp) == 0;
+}
+
+/// Opposite face direction: 0↔1, 2↔3, 4↔5
+pub fn oppositeFace(face: usize) usize {
+    return face ^ 1;
+}
+
 pub const WorldType = enum(u8) {
     normal,
     debug,
@@ -181,6 +214,17 @@ pub const block_properties = struct {
             .sponge, .pumice, .wool, .gold_block, .iron_block,
             .diamond_block, .bookshelf, .obsidian,
             => true,
+        };
+    }
+    /// Whether this shaped block has solid (opaque material) faces that can participate
+    /// in VoxelShape occlusion culling. Slabs and stairs are solid wood — their faces
+    /// occlude where they exist. Torches and ladders are too thin/transparent.
+    pub fn isSolidShaped(block: BlockType) bool {
+        return switch (block) {
+            .oak_slab_bottom, .oak_slab_top,
+            .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
+            => true,
+            else => false,
         };
     }
     pub fn cullsSelf(block: BlockType) bool {
@@ -936,7 +980,7 @@ pub fn generateChunkMesh(
                     for (shape_faces, 0..) |sf, sf_idx| {
                         if (!sf.always_emit) {
                             const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
-                            if (block_properties.isOpaque(neighbor)) continue;
+                            if (shouldCullFace(block, sf.face_bucket, neighbor)) continue;
                         }
                         const face: usize = sf.face_bucket;
                         // Light/AO uses the face bucket direction
@@ -981,7 +1025,7 @@ pub fn generateChunkMesh(
                 for (0..6) |face| {
                     const neighbor = padded[@intCast(base + padded_face_deltas[face])];
 
-                    if (block_properties.isOpaque(neighbor)) continue;
+                    if (shouldCullFace(block, face, neighbor)) continue;
                     if (neighbor == block and block_properties.cullsSelf(block)) continue;
 
                     const tex_index: u8 = switch (block) {
@@ -1151,7 +1195,7 @@ pub fn generateLodChunkMesh(
                 for (0..6) |face| {
                     const neighbor = padded[@intCast(base + padded_face_deltas[face])];
 
-                    if (block_properties.isOpaque(neighbor)) continue;
+                    if (shouldCullFace(block, face, neighbor)) continue;
                     if (neighbor == block and block_properties.cullsSelf(block)) continue;
 
                     const tex_index: u8 = switch (block) {
@@ -1284,7 +1328,7 @@ pub fn generateChunkLightOnly(
                     for (shape_faces) |sf| {
                         if (!sf.always_emit) {
                             const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
-                            if (block_properties.isOpaque(neighbor)) continue;
+                            if (shouldCullFace(block, sf.face_bucket, neighbor)) continue;
                         }
                         const face: usize = sf.face_bucket;
                         var corner_packed: [4]u32 = undefined;
@@ -1303,7 +1347,7 @@ pub fn generateChunkLightOnly(
                 for (0..6) |face| {
                     const neighbor_block = padded[@intCast(base + padded_face_deltas[face])];
 
-                    if (block_properties.isOpaque(neighbor_block)) continue;
+                    if (shouldCullFace(block, face, neighbor_block)) continue;
                     if (neighbor_block == block and block_properties.cullsSelf(block)) continue;
 
                     var corner_packed: [4]u32 = undefined;
@@ -1768,4 +1812,105 @@ test "generateFlatChunk: grass at wy=0" {
     try testing.expectEqual(BlockType.grass_block, chunk.blocks[chunkIndex(0, 0, 0)]);
     // wy=1 should be air
     try testing.expectEqual(BlockType.air, chunk.blocks[chunkIndex(0, 1, 0)]);
+}
+
+// ── Face culling tests ─────────────────────────────────────────────────────
+
+test "oppositeFace: correct pairs" {
+    try testing.expectEqual(@as(usize, 1), oppositeFace(0)); // +Z ↔ -Z
+    try testing.expectEqual(@as(usize, 0), oppositeFace(1));
+    try testing.expectEqual(@as(usize, 3), oppositeFace(2)); // -X ↔ +X
+    try testing.expectEqual(@as(usize, 2), oppositeFace(3));
+    try testing.expectEqual(@as(usize, 5), oppositeFace(4)); // +Y ↔ -Y
+    try testing.expectEqual(@as(usize, 4), oppositeFace(5));
+}
+
+test "oppositeFace: double opposite is identity" {
+    for (0..6) |f| {
+        try testing.expectEqual(f, oppositeFace(oppositeFace(f)));
+    }
+}
+
+test "getOcclusionBitmap: air is zero" {
+    for (0..6) |f| {
+        try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(.air, f));
+    }
+}
+
+test "getOcclusionBitmap: opaque blocks are full" {
+    const opaque_blocks = [_]BlockType{ .stone, .dirt, .grass_block, .cobblestone, .oak_planks, .bedrock };
+    for (opaque_blocks) |block| {
+        for (0..6) |f| {
+            try testing.expectEqual(@as(u16, 0xFFFF), getOcclusionBitmap(block, f));
+        }
+    }
+}
+
+test "getOcclusionBitmap: transparent blocks are zero" {
+    // Glass, water, leaves have full faces but are transparent — bitmap 0
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(.glass, 0));
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(.water, 0));
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(.oak_leaves, 0));
+}
+
+test "getOcclusionBitmap: non-solid shaped blocks are zero" {
+    // Torch and ladder are not solid shaped — no occlusion
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(.torch, 0));
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(.ladder_south, 0));
+}
+
+test "shouldCullFace: opaque next to air shows face" {
+    try testing.expect(!shouldCullFace(.stone, 0, .air));
+}
+
+test "shouldCullFace: opaque next to opaque hides face" {
+    try testing.expect(shouldCullFace(.stone, 0, .stone));
+}
+
+test "shouldCullFace: opaque next to glass shows face" {
+    try testing.expect(!shouldCullFace(.stone, 0, .glass));
+}
+
+test "shouldCullFace: opaque next to slab shows face (no registry)" {
+    // Without registry, slab bitmap = 0, so it can't occlude anything
+    try testing.expect(!shouldCullFace(.stone, 0, .oak_slab_bottom));
+}
+
+test "shouldCullFace: slab next to torch shows face" {
+    try testing.expect(!shouldCullFace(.oak_slab_bottom, 0, .torch));
+}
+
+test "shouldCullFace: slab top face next to air shows" {
+    try testing.expect(!shouldCullFace(.oak_slab_bottom, 4, .air));
+}
+
+test "bitmap culling logic: slab-vs-slab covers shared area" {
+    // Direct bitmap test (no registry needed): bottom slab side = 0x00FF
+    const slab_side: u16 = 0x00FF; // bottom 2 rows
+    const full_face: u16 = 0xFFFF;
+
+    // Slab vs full block: full covers slab → cull
+    try testing.expect((slab_side & ~full_face) == 0);
+    // Full block vs slab: slab doesn't cover full → don't cull
+    try testing.expect((full_face & ~slab_side) != 0);
+    // Slab vs slab: identical bitmaps → cull
+    try testing.expect((slab_side & ~slab_side) == 0);
+    // Slab vs empty: empty doesn't cover → don't cull
+    try testing.expect((slab_side & ~@as(u16, 0)) != 0);
+}
+
+test "bitmap culling logic: stairs partial faces" {
+    // Stairs west face: bottom slab 0x00FF | upper back 0x3300 = 0x33FF
+    const stairs_west: u16 = 0x33FF;
+    const full_face: u16 = 0xFFFF;
+    const slab_side: u16 = 0x00FF;
+
+    // Full block covers stairs → cull
+    try testing.expect((stairs_west & ~full_face) == 0);
+    // Stairs don't cover full block → don't cull
+    try testing.expect((full_face & ~stairs_west) != 0);
+    // Slab doesn't cover stairs (stairs has 0x3300 that slab lacks) → don't cull
+    try testing.expect((stairs_west & ~slab_side) != 0);
+    // Stairs cover slab (slab is 0x00FF, stairs has 0x00FF subset) → cull
+    try testing.expect((slab_side & ~stairs_west) == 0);
 }

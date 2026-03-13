@@ -129,6 +129,8 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .oak_leaves => "Oak Leaves",
         .oak_slab_bottom, .oak_slab_top => "Oak Slab",
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => "Oak Stairs",
+        .torch => "Torch",
+        .ladder_south, .ladder_north, .ladder_east, .ladder_west => "Ladder",
     };
 }
 
@@ -164,6 +166,8 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .oak_leaves => .{ 0.2, 0.5, 0.15, 0.8 },
         .oak_slab_bottom, .oak_slab_top => .{ 0.7, 0.55, 0.33, 1.0 },
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ 0.7, 0.55, 0.33, 1.0 },
+        .torch => .{ 0.9, 0.7, 0.2, 1.0 },
+        .ladder_south, .ladder_north, .ladder_east, .ladder_west => .{ 0.6, 0.45, 0.25, 1.0 },
     };
 }
 
@@ -200,6 +204,8 @@ pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16
         .oak_leaves => .{ .top = 26, .side = 26 },
         .oak_slab_bottom, .oak_slab_top => .{ .top = 11, .side = 11 },
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ .top = 11, .side = 11 },
+        .torch => .{ .top = 28, .side = 28 },
+        .ladder_south, .ladder_north, .ladder_east, .ladder_west => .{ .top = 29, .side = 29 },
     };
 }
 
@@ -210,6 +216,7 @@ pub fn blockShape(block: WorldState.BlockType) WidgetData.BlockShape {
         .oak_slab_bottom => .slab_bottom,
         .oak_slab_top => .slab_top,
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .stairs,
+        .torch, .ladder_south, .ladder_north, .ladder_east, .ladder_west => .full,
         else => .full,
     };
 }
@@ -227,6 +234,7 @@ entity_on_ground: bool,
 entity_in_water: bool,
 eyes_in_water: bool,
 water_vision_time: u16,
+entity_on_ladder: bool,
 mode: MovementMode,
 input_move: [3]f32,
 jump_requested: bool,
@@ -244,7 +252,7 @@ hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .san
 inventory: [INV_SIZE]WorldState.BlockType = .{
     .cobblestone, .oak_log,      .oak_planks,   .bricks,       .bedrock,       .gold_ore,      .iron_ore,      .coal_ore,      .diamond_ore,
     .sponge,          .pumice,           .wool,             .gold_block,       .iron_block,        .diamond_block,     .bookshelf,         .obsidian,          .oak_leaves,
-    .oak_slab_bottom, .oak_stairs_south, .air,              .air,              .air,               .air,               .air,               .air,               .air,
+    .oak_slab_bottom, .oak_stairs_south, .torch,            .ladder_south,     .air,               .air,               .air,               .air,               .air,
     .air,             .air,              .air,              .air,              .air,               .air,               .air,               .air,               .air,
 },
 armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
@@ -446,6 +454,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .entity_in_water = false,
         .eyes_in_water = false,
         .water_vision_time = 0,
+        .entity_on_ladder = false,
         .mode = .walking,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .jump_requested = false,
@@ -540,8 +549,15 @@ fn updateWaterState(self: *GameState) void {
     const px = floori(pos_x);
     const pz = floori(pos_z);
 
-    self.entity_in_water = self.chunk_map.getBlock(px, floori(pos_y), pz) == .water;
-    self.eyes_in_water = self.chunk_map.getBlock(px, floori(pos_y + EYE_OFFSET), pz) == .water;
+    const feet_block = self.chunk_map.getBlock(px, floori(pos_y), pz);
+    const eye_block = self.chunk_map.getBlock(px, floori(pos_y + EYE_OFFSET), pz);
+
+    self.entity_in_water = (feet_block == .water);
+    self.eyes_in_water = (eye_block == .water);
+
+    // Ladder detection: check feet and mid-body
+    self.entity_on_ladder = isLadder(feet_block) or
+        isLadder(self.chunk_map.getBlock(px, floori(pos_y + 0.9), pz));
 
     // Water vision time: MC 0-600 ticks @20Hz → 0-900 @30Hz
     if (self.eyes_in_water) {
@@ -549,6 +565,13 @@ fn updateWaterState(self: *GameState) void {
     } else {
         self.water_vision_time = 0;
     }
+}
+
+fn isLadder(block: WorldState.BlockType) bool {
+    return switch (block) {
+        .ladder_south, .ladder_north, .ladder_east, .ladder_west => true,
+        else => false,
+    };
 }
 
 /// Returns 0.0 to 1.0 water vision factor (MC two-phase curve).
@@ -609,6 +632,9 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
 
             if (self.jump_cooldown > 0) {
                 self.jump_cooldown -= 1;
+            } else if (self.jump_requested and self.entity_on_ladder) {
+                // Climb up ladder
+                self.entity_vel[1] = Physics.LADDER_CLIMB_SPEED;
             } else if (self.jump_requested and !self.entity_in_water and self.entity_on_ground) {
                 self.entity_vel[1] = 8.7;
             }

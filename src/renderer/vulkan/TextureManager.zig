@@ -6,7 +6,7 @@ const vk_utils = @import("vk_utils.zig");
 const app_config = @import("../../app_config.zig");
 const tracy = @import("../../platform/tracy.zig");
 
-const BLOCK_TEXTURE_COUNT = 28;
+const BLOCK_TEXTURE_COUNT = 30;
 const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "glass.png",      "grass_block.png", "dirt.png",       "stone.png",
     "glowstone.png",  "sand.png",        "snow.png",       "water.png",
@@ -15,6 +15,7 @@ const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "coal_ore.png",   "diamond_ore.png", "sponge.png",     "pumice.png",
     "wool.png",       "gold_block.png",  "iron_block.png", "diamond_block.png",
     "bookshelf.png",  "obsidian.png",    "oak_leaves.png", "oak_log_top.png",
+    "torch.png",      "ladder.png",
 };
 
 pub const TextureManager = struct {
