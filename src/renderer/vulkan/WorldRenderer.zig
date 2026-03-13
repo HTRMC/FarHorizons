@@ -366,10 +366,10 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "createGraphicsPipeline");
         defer tz.end();
 
-        const vert_spirv = try shader_compiler.compile("test.vert", .vertex);
+        const vert_spirv = try shader_compiler.compile("terrain.vert", .vertex);
         defer shader_compiler.allocator.free(vert_spirv);
 
-        const frag_spirv = try shader_compiler.compile("test.frag", .fragment);
+        const frag_spirv = try shader_compiler.compile("terrain.frag", .fragment);
         defer shader_compiler.allocator.free(frag_spirv);
 
         const vert_module_info = vk.VkShaderModuleCreateInfo{
