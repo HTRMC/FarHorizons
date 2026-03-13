@@ -386,56 +386,7 @@ fn computeBlockLight(
     }
 
     // Phase 3: BFS propagation within chunk
-    while (head < tail) {
-        const e = queue[head];
-        head += 1;
-
-        for (0..6) |dir| {
-            if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
-
-            const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
-            const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
-            const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
-
-            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) continue;
-
-            const ux: usize = @intCast(nx);
-            const uy: usize = @intCast(ny);
-            const uz: usize = @intCast(nz);
-
-            if (block_properties.isOpaque(chunk.blocks[chunkIndex(ux, uy, uz)])) continue;
-
-            const nr = e.r -| ATTENUATION;
-            const ng = e.g -| ATTENUATION;
-            const nb = e.b -| ATTENUATION;
-
-            if (nr == 0 and ng == 0 and nb == 0) continue;
-
-            const idx = chunkIndex(ux, uy, uz);
-            const existing = light_map.block_light.get(idx);
-            if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
-
-            const updated = [3]u8{
-                @max(existing[0], nr),
-                @max(existing[1], ng),
-                @max(existing[2], nb),
-            };
-            light_map.block_light.set(idx, updated);
-
-            if (tail < MAX_QUEUE) {
-                queue[tail] = .{
-                    .x = @intCast(nx),
-                    .y = @intCast(ny),
-                    .z = @intCast(nz),
-                    .dir = @intCast(dir),
-                    .r = updated[0],
-                    .g = updated[1],
-                    .b = updated[2],
-                };
-                tail += 1;
-            }
-        }
-    }
+    propagateBlockLightBFS(&queue, &head, &tail, chunk, light_map, false);
 }
 
 fn seedBoundarySkyLight(
@@ -512,6 +463,76 @@ fn seedBoundaryBlockLight(
         };
         tail.* += 1;
     }
+}
+
+/// Shared block light BFS propagation. Drains queue entries, attenuating and
+/// spreading light to non-opaque neighbors within chunk bounds.
+/// When `track_boundary` is true, returns a 6-bit mask of faces reached.
+fn propagateBlockLightBFS(
+    queue: []QueueEntry,
+    head: *u32,
+    tail: *u32,
+    chunk: *const WorldState.Chunk,
+    light_map: *LightMap,
+    comptime track_boundary: bool,
+) if (track_boundary) u6 else void {
+    var boundary_mask: u6 = 0;
+
+    while (head.* < tail.*) {
+        const e = queue[head.*];
+        head.* += 1;
+
+        for (0..6) |dir| {
+            if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
+
+            const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
+            const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
+            const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
+
+            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
+                if (track_boundary) boundary_mask |= @as(u6, 1) << faceBit(dir);
+                continue;
+            }
+
+            const ux: usize = @intCast(nx);
+            const uy: usize = @intCast(ny);
+            const uz: usize = @intCast(nz);
+
+            if (block_properties.isOpaque(chunk.blocks[chunkIndex(ux, uy, uz)])) continue;
+
+            const nr = e.r -| ATTENUATION;
+            const ng = e.g -| ATTENUATION;
+            const nb = e.b -| ATTENUATION;
+
+            if (nr == 0 and ng == 0 and nb == 0) continue;
+
+            const idx = chunkIndex(ux, uy, uz);
+            const existing = light_map.block_light.get(idx);
+            if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
+
+            const updated = [3]u8{
+                @max(existing[0], nr),
+                @max(existing[1], ng),
+                @max(existing[2], nb),
+            };
+            light_map.block_light.set(idx, updated);
+
+            if (tail.* < queue.len) {
+                queue[tail.*] = .{
+                    .x = @intCast(nx),
+                    .y = @intCast(ny),
+                    .z = @intCast(nz),
+                    .dir = @intCast(dir),
+                    .r = updated[0],
+                    .g = updated[1],
+                    .b = updated[2],
+                };
+                tail.* += 1;
+            }
+        }
+    }
+
+    if (track_boundary) return boundary_mask;
 }
 
 // ─── Incremental updates ───
@@ -787,7 +808,6 @@ fn reseedBlockLight(
     var queue: [MAX_QUEUE]QueueEntry = undefined;
     var head: u32 = 0;
     var tail: u32 = 0;
-    var boundary_mask: u6 = 0;
 
     for (reseeds) |rs| {
         const rs_idx = chunkIndex(@intCast(rs.x), @intCast(rs.y), @intCast(rs.z));
@@ -800,8 +820,7 @@ fn reseedBlockLight(
         };
         if (val[0] == 0 and val[1] == 0 and val[2] == 0) continue;
 
-        // Zero then re-propagate so additive BFS can set the correct value.
-        light_map.block_light.set(rs_idx, .{ 0, 0, 0 });
+        light_map.block_light.set(rs_idx, val);
         if (tail < MAX_QUEUE) {
             queue[tail] = .{
                 .x = rs.x,
@@ -816,66 +835,7 @@ fn reseedBlockLight(
         }
     }
 
-    // Standard additive BFS (same logic as computeBlockLight phase 3).
-    while (head < tail) {
-        const e = queue[head];
-        head += 1;
-
-        const e_idx = chunkIndex(@intCast(e.x), @intCast(e.y), @intCast(e.z));
-        const old = light_map.block_light.get(e_idx);
-        const updated = [3]u8{
-            @max(old[0], e.r),
-            @max(old[1], e.g),
-            @max(old[2], e.b),
-        };
-        if (updated[0] == old[0] and updated[1] == old[1] and updated[2] == old[2]) continue;
-        light_map.block_light.set(e_idx, updated);
-
-        for (0..6) |dir| {
-            if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
-
-            const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
-            const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
-            const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
-
-            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
-                boundary_mask |= @as(u6, 1) << faceBit(dir);
-                continue;
-            }
-
-            const ux: usize = @intCast(nx);
-            const uy: usize = @intCast(ny);
-            const uz: usize = @intCast(nz);
-
-            if (block_properties.isOpaque(chunk.blocks[chunkIndex(ux, uy, uz)])) continue;
-
-            const nr = updated[0] -| ATTENUATION;
-            const ng = updated[1] -| ATTENUATION;
-            const nb = updated[2] -| ATTENUATION;
-
-            if (nr == 0 and ng == 0 and nb == 0) continue;
-
-            // Skip if neighbor already has equal or better light.
-            const n_idx = chunkIndex(ux, uy, uz);
-            const existing = light_map.block_light.get(n_idx);
-            if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
-
-            if (tail < MAX_QUEUE) {
-                queue[tail] = .{
-                    .x = @intCast(nx),
-                    .y = @intCast(ny),
-                    .z = @intCast(nz),
-                    .dir = @intCast(dir),
-                    .r = nr,
-                    .g = ng,
-                    .b = nb,
-                };
-                tail += 1;
-            }
-        }
-    }
-
-    return boundary_mask;
+    return propagateBlockLightBFS(&queue, &head, &tail, chunk, light_map, true);
 }
 
 /// Additive block light BFS: propagates light outward from a single position.
@@ -890,7 +850,6 @@ fn additiveBlockLight(
     var queue: [BLOCKS_PER_CHUNK]QueueEntry = undefined;
     var head: u32 = 0;
     var tail: u32 = 0;
-    var boundary_mask: u6 = 0;
 
     queue[0] = .{
         .x = sx,
@@ -903,61 +862,7 @@ fn additiveBlockLight(
     };
     tail = 1;
 
-    while (head < tail) {
-        const e = queue[head];
-        head += 1;
-
-        for (0..6) |dir| {
-            if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
-
-            const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
-            const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
-            const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
-
-            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
-                boundary_mask |= @as(u6, 1) << faceBit(dir);
-                continue;
-            }
-
-            const ux: usize = @intCast(nx);
-            const uy: usize = @intCast(ny);
-            const uz: usize = @intCast(nz);
-
-            if (block_properties.isOpaque(chunk.blocks[chunkIndex(ux, uy, uz)])) continue;
-
-            const nr = e.r -| ATTENUATION;
-            const ng = e.g -| ATTENUATION;
-            const nb = e.b -| ATTENUATION;
-
-            if (nr == 0 and ng == 0 and nb == 0) continue;
-
-            const n_idx = chunkIndex(ux, uy, uz);
-            const existing = light_map.block_light.get(n_idx);
-            if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
-
-            const upd = [3]u8{
-                @max(existing[0], nr),
-                @max(existing[1], ng),
-                @max(existing[2], nb),
-            };
-            light_map.block_light.set(n_idx, upd);
-
-            if (tail < BLOCKS_PER_CHUNK) {
-                queue[tail] = .{
-                    .x = @intCast(nx),
-                    .y = @intCast(ny),
-                    .z = @intCast(nz),
-                    .dir = @intCast(dir),
-                    .r = upd[0],
-                    .g = upd[1],
-                    .b = upd[2],
-                };
-                tail += 1;
-            }
-        }
-    }
-
-    return boundary_mask;
+    return propagateBlockLightBFS(&queue, &head, &tail, chunk, light_map, true);
 }
 
 // ─── Tests ───
