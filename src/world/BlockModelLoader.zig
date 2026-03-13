@@ -207,7 +207,7 @@ pub const BlockModelRegistry = struct {
     }
 
     pub fn totalModelCount(self: *const BlockModelRegistry) u32 {
-        return 6 + @as(u32, @intCast(self.extra_models.len));
+        return WorldState.EXTRA_MODEL_BASE + @as(u32, @intCast(self.extra_models.len));
     }
 };
 
@@ -302,7 +302,7 @@ fn loadModel(
             if (std.mem.startsWith(u8, face_name, "__cross_")) {
                 const quad_model = buildCrossQuad(face_name, uv, transform);
                 if (quad_model) |qm| {
-                    const model_idx: u9 = @intCast(6 + extra_models.items.len);
+                    const model_idx: u9 = @intCast(WorldState.EXTRA_MODEL_BASE + extra_models.items.len);
                     try extra_models.append(allocator, qm);
                     // Cross faces get face_bucket based on which cross
                     const bucket: u3 = getCrossFaceBucket(face_name);
@@ -340,7 +340,7 @@ fn loadModel(
             quad_model = applyTransform(quad_model, transform, bucket);
             const always_emit = !has_cullface;
 
-            const model_idx: u9 = @intCast(6 + extra_models.items.len);
+            const model_idx: u9 = @intCast(WorldState.EXTRA_MODEL_BASE + extra_models.items.len);
             try extra_models.append(allocator, quad_model);
             try shape_faces.append(allocator, .{
                 .model_index = model_idx,

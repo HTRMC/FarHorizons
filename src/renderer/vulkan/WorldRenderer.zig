@@ -912,7 +912,31 @@ pub const WorldRenderer = struct {
             };
         }
 
-        // Extra quad models for shaped blocks (6+)
+        // Water face models (6-11): same as standard but top at 14/16
+        for (0..6) |face| {
+            var corners: [12]f32 = undefined;
+            var uvs: [8]f32 = undefined;
+            for (0..4) |v| {
+                const fv = WorldState.water_face_vertices[face][v];
+                corners[v * 3 + 0] = fv.px;
+                corners[v * 3 + 1] = fv.py;
+                corners[v * 3 + 2] = fv.pz;
+                uvs[v * 2 + 0] = fv.u;
+                uvs[v * 2 + 1] = fv.v;
+            }
+            const fno = WorldState.face_neighbor_offsets[face];
+            models[WorldState.WATER_MODEL_BASE + face] = .{
+                .corners = corners,
+                .uvs = uvs,
+                .normal = .{
+                    @floatFromInt(fno[0]),
+                    @floatFromInt(fno[1]),
+                    @floatFromInt(fno[2]),
+                },
+            };
+        }
+
+        // Extra quad models for shaped blocks (12+)
         for (reg.extra_models, 0..) |em, i| {
             var corners: [12]f32 = undefined;
             var uvs: [8]f32 = undefined;
@@ -923,7 +947,7 @@ pub const WorldRenderer = struct {
                 uvs[v * 2 + 0] = em.uvs[v][0];
                 uvs[v * 2 + 1] = em.uvs[v][1];
             }
-            models[6 + i] = .{
+            models[WorldState.EXTRA_MODEL_BASE + i] = .{
                 .corners = corners,
                 .uvs = uvs,
                 .normal = em.normal,

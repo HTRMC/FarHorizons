@@ -13,7 +13,8 @@ pub const CHUNK_SIZE = 32;
 pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 pub const MAX_FACES_PER_CHUNK = BLOCKS_PER_CHUNK * 6;
 
-pub const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }{
+pub const FaceVertex = struct { px: f32, py: f32, pz: f32, u: f32, v: f32 };
+pub const face_vertices = [6][4]FaceVertex{
     .{
         .{ .px = 0.0, .py = 0.0, .pz = 1.0, .u = 0.0, .v = 1.0 },
         .{ .px = 1.0, .py = 0.0, .pz = 1.0, .u = 1.0, .v = 1.0 },
@@ -63,8 +64,24 @@ pub const face_neighbor_offsets = [6][3]i32{
     .{ 0, -1, 0 },
 };
 
+// --- Water face models (same as cube faces but top at 14/16) ---
+// Models 6-11 mirror faces 0-5 with py clamped to WATER_HEIGHT.
+pub const WATER_HEIGHT: f32 = 14.0 / 16.0;
+pub const water_face_vertices: [6][4]FaceVertex = blk: {
+    var result = face_vertices;
+    for (&result) |*face| {
+        for (face) |*vert| {
+            if (vert.py == 1.0) vert.py = WATER_HEIGHT;
+        }
+    }
+    break :blk result;
+};
+
 // --- Extra quad models for shaped blocks (slabs, stairs) ---
 // Models 0-5 are standard full-cube faces from face_vertices.
+// Models 6-11 are water faces from water_face_vertices.
+pub const WATER_MODEL_BASE: u9 = 6;
+pub const EXTRA_MODEL_BASE: u32 = 12;
 // Models 6+ are partial quads for shaped blocks.
 pub const ExtraQuadModel = struct {
     corners: [4][3]f32,
@@ -1068,6 +1085,10 @@ pub fn generateChunkMesh(
                 const emits = block_properties.emittedLight(block);
                 const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
 
+                // Water uses lowered models unless water is above
+                const water_lowered = block == .water and
+                    padded[@intCast(base + padded_face_deltas[4])] != .water;
+
                 for (0..6) |face| {
                     const neighbor = padded[@intCast(base + padded_face_deltas[face])];
 
@@ -1147,12 +1168,16 @@ pub fn generateChunkMesh(
                         }
                     }
 
+                    const model_index: u9 = if (water_lowered)
+                        WATER_MODEL_BASE + @as(u9, @intCast(face))
+                    else
+                        @intCast(face);
                     const face_data = types.packFaceData(
                         @intCast(bx),
                         @intCast(by),
                         @intCast(bz),
                         tex_index,
-                        @intCast(face),
+                        model_index,
                         ao,
                     );
 
@@ -1238,6 +1263,10 @@ pub fn generateLodChunkMesh(
 
                 const layer = @intFromEnum(block_properties.renderLayer(block));
 
+                // Water uses lowered models unless water is above
+                const water_lowered = block == .water and
+                    padded[@intCast(base + padded_face_deltas[4])] != .water;
+
                 for (0..6) |face| {
                     const neighbor = padded[@intCast(base + padded_face_deltas[face])];
 
@@ -1279,12 +1308,16 @@ pub fn generateLodChunkMesh(
                         .ladder_south, .ladder_north, .ladder_east, .ladder_west => 29,
                     };
 
+                    const model_index: u9 = if (water_lowered)
+                        WATER_MODEL_BASE + @as(u9, @intCast(face))
+                    else
+                        @intCast(face);
                     const face_data = types.packFaceData(
                         @intCast(bx),
                         @intCast(by),
                         @intCast(bz),
                         tex_index,
-                        @intCast(face),
+                        model_index,
                         lod_ao,
                     );
 
