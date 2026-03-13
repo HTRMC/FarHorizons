@@ -944,9 +944,7 @@ pub fn main() !void {
                     gs.input_move = .{ forward_input, up_input, right_input };
 
                     const space_held = options.isKeyHeld(window.handle, .jump) or input_state.gamepad.held(.a);
-                    if (space_held and !input_state.space_was_held) {
-                        gs.jump_requested = true;
-                    }
+                    gs.jump_requested = space_held;
                     input_state.space_was_held = space_held;
 
                     tick_accumulator += delta_time;
