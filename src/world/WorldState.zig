@@ -273,6 +273,9 @@ pub const block_properties = struct {
             else => true,
         };
     }
+    pub fn isTargetable(block: BlockType) bool {
+        return block != .air and block != .water;
+    }
     pub fn renderLayer(block: BlockType) RenderLayer {
         return switch (block) {
             .glass, .water => .translucent,

@@ -36,7 +36,7 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
     var block_y: i32 = @intFromFloat(@floor(origin.y));
     var block_z: i32 = @intFromFloat(@floor(origin.z));
 
-    if (WorldState.block_properties.isSolid(chunk_map.getBlock(block_x, block_y, block_z))) {
+    if (WorldState.block_properties.isTargetable(chunk_map.getBlock(block_x, block_y, block_z))) {
         return .{
             .block_pos = .{ block_x, block_y, block_z },
             .direction = .up,
@@ -99,7 +99,7 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
             face = if (step_z > 0) .north else .south;
         }
 
-        if (WorldState.block_properties.isSolid(chunk_map.getBlock(block_x, block_y, block_z))) {
+        if (WorldState.block_properties.isTargetable(chunk_map.getBlock(block_x, block_y, block_z))) {
             return .{
                 .block_pos = .{ block_x, block_y, block_z },
                 .direction = face,
