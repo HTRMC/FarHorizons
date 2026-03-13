@@ -403,83 +403,106 @@ pub const DebugRenderer = struct {
 
         if (game_state.hit_result) |hit| {
             const Physics = @import("../../Physics.zig");
+            const WorldState = @import("../../world/WorldState.zig");
             const block = game_state.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
             const bx: f32 = @floatFromInt(hit.block_pos[0]);
             const by: f32 = @floatFromInt(hit.block_pos[1]);
             const bz: f32 = @floatFromInt(hit.block_pos[2]);
             const outline_color = [4]f32{ 0.1, 0.1, 0.1, 1.0 };
 
-            // Build 2x2x2 occupancy grid (each cell is 0.5³) from collision boxes
-            var grid: [2][2][2]bool = .{
-                .{ .{ false, false }, .{ false, false } },
-                .{ .{ false, false }, .{ false, false } },
-            };
-            const boxes = Physics.getBlockBoxes(block);
-            for (boxes.boxes[0..boxes.count]) |box| {
-                for (0..2) |xi| {
-                    for (0..2) |yi| {
-                        for (0..2) |zi| {
-                            const cx: f32 = @as(f32, @floatFromInt(xi)) * 0.5;
-                            const cy: f32 = @as(f32, @floatFromInt(yi)) * 0.5;
-                            const cz: f32 = @as(f32, @floatFromInt(zi)) * 0.5;
-                            if (box.max[0] > cx and box.min[0] < cx + 0.5 and
-                                box.max[1] > cy and box.min[1] < cy + 0.5 and
-                                box.max[2] > cz and box.min[2] < cz + 0.5)
-                            {
-                                grid[xi][yi][zi] = true;
+            // For blocks with custom hitboxes, draw AABB edges directly
+            if (WorldState.block_properties.getHitbox(block)) |hb| {
+                const x0 = bx + hb.min[0];
+                const y0 = by + hb.min[1];
+                const z0 = bz + hb.min[2];
+                const x1 = bx + hb.max[0];
+                const y1 = by + hb.max[1];
+                const z1 = bz + hb.max[2];
+                // 4 edges along X
+                count = addLine(vertices, count, x0, y0, z0, x1, y0, z0, outline_color);
+                count = addLine(vertices, count, x0, y1, z0, x1, y1, z0, outline_color);
+                count = addLine(vertices, count, x0, y0, z1, x1, y0, z1, outline_color);
+                count = addLine(vertices, count, x0, y1, z1, x1, y1, z1, outline_color);
+                // 4 edges along Y
+                count = addLine(vertices, count, x0, y0, z0, x0, y1, z0, outline_color);
+                count = addLine(vertices, count, x1, y0, z0, x1, y1, z0, outline_color);
+                count = addLine(vertices, count, x0, y0, z1, x0, y1, z1, outline_color);
+                count = addLine(vertices, count, x1, y0, z1, x1, y1, z1, outline_color);
+                // 4 edges along Z
+                count = addLine(vertices, count, x0, y0, z0, x0, y0, z1, outline_color);
+                count = addLine(vertices, count, x1, y0, z0, x1, y0, z1, outline_color);
+                count = addLine(vertices, count, x0, y1, z0, x0, y1, z1, outline_color);
+                count = addLine(vertices, count, x1, y1, z0, x1, y1, z1, outline_color);
+            } else {
+                // Build 2x2x2 occupancy grid (each cell is 0.5³) from collision boxes
+                var grid: [2][2][2]bool = .{
+                    .{ .{ false, false }, .{ false, false } },
+                    .{ .{ false, false }, .{ false, false } },
+                };
+                const boxes = Physics.getBlockBoxes(block);
+                for (boxes.boxes[0..boxes.count]) |box| {
+                    for (0..2) |xi| {
+                        for (0..2) |yi| {
+                            for (0..2) |zi| {
+                                const cx: f32 = @as(f32, @floatFromInt(xi)) * 0.5;
+                                const cy: f32 = @as(f32, @floatFromInt(yi)) * 0.5;
+                                const cz: f32 = @as(f32, @floatFromInt(zi)) * 0.5;
+                                if (box.max[0] > cx and box.min[0] < cx + 0.5 and
+                                    box.max[1] > cy and box.min[1] < cy + 0.5 and
+                                    box.max[2] > cz and box.min[2] < cz + 0.5)
+                                {
+                                    grid[xi][yi][zi] = true;
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // Edge detection using 2x2 neighborhood (like Minecraft's VoxelShape)
-            // For each axis direction, find edges and merge collinear runs
-            for (0..3) |axis| {
-                const b_ax = (axis + 1) % 3;
-                const c_ax = (axis + 2) % 3;
-                for (0..3) |bv_u| {
-                    for (0..3) |cv_u| {
-                        const bv: i32 = @intCast(bv_u);
-                        const cv: i32 = @intCast(cv_u);
-                        var run_start: i32 = -1;
-                        for (0..3) |ac_u| {
-                            const ac: i32 = @intCast(ac_u);
-                            // Check 2x2 neighborhood perpendicular to scan axis
-                            var filled: u8 = 0;
-                            var odd: u8 = 0;
-                            for (0..2) |db| {
-                                for (0..2) |dc| {
-                                    const bi = bv + @as(i32, @intCast(db)) - 1;
-                                    const ci = cv + @as(i32, @intCast(dc)) - 1;
-                                    if (bi >= 0 and bi < 2 and ci >= 0 and ci < 2 and ac >= 0 and ac < 2) {
-                                        var idx: [3]usize = undefined;
-                                        idx[axis] = @intCast(ac);
-                                        idx[b_ax] = @intCast(bi);
-                                        idx[c_ax] = @intCast(ci);
-                                        if (grid[idx[0]][idx[1]][idx[2]]) {
-                                            filled += 1;
-                                            odd ^= @as(u8, @intCast(db ^ dc));
+                // Edge detection using 2x2 neighborhood (like Minecraft's VoxelShape)
+                for (0..3) |axis| {
+                    const b_ax = (axis + 1) % 3;
+                    const c_ax = (axis + 2) % 3;
+                    for (0..3) |bv_u| {
+                        for (0..3) |cv_u| {
+                            const bv: i32 = @intCast(bv_u);
+                            const cv: i32 = @intCast(cv_u);
+                            var run_start: i32 = -1;
+                            for (0..3) |ac_u| {
+                                const ac: i32 = @intCast(ac_u);
+                                var filled: u8 = 0;
+                                var odd: u8 = 0;
+                                for (0..2) |db| {
+                                    for (0..2) |dc| {
+                                        const bi = bv + @as(i32, @intCast(db)) - 1;
+                                        const ci = cv + @as(i32, @intCast(dc)) - 1;
+                                        if (bi >= 0 and bi < 2 and ci >= 0 and ci < 2 and ac >= 0 and ac < 2) {
+                                            var idx: [3]usize = undefined;
+                                            idx[axis] = @intCast(ac);
+                                            idx[b_ax] = @intCast(bi);
+                                            idx[c_ax] = @intCast(ci);
+                                            if (grid[idx[0]][idx[1]][idx[2]]) {
+                                                filled += 1;
+                                                odd ^= @as(u8, @intCast(db ^ dc));
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            // Edge exists at 1 or 3 filled sectors, or 2 diagonal
-                            const has_edge = (filled == 1 or filled == 3 or (filled == 2 and (odd & 1) == 0));
-                            if (has_edge) {
-                                if (run_start < 0) run_start = ac;
-                            } else {
-                                if (run_start >= 0) {
-                                    var p0: [3]f32 = undefined;
-                                    var p1: [3]f32 = undefined;
-                                    p0[axis] = @as(f32, @floatFromInt(run_start)) * 0.5;
-                                    p1[axis] = @as(f32, @floatFromInt(ac)) * 0.5;
-                                    p0[b_ax] = @as(f32, @floatFromInt(bv)) * 0.5;
-                                    p1[b_ax] = p0[b_ax];
-                                    p0[c_ax] = @as(f32, @floatFromInt(cv)) * 0.5;
-                                    p1[c_ax] = p0[c_ax];
-                                    count = addLine(vertices, count, bx + p0[0], by + p0[1], bz + p0[2], bx + p1[0], by + p1[1], bz + p1[2], outline_color);
-                                    run_start = -1;
+                                const has_edge = (filled == 1 or filled == 3 or (filled == 2 and (odd & 1) == 0));
+                                if (has_edge) {
+                                    if (run_start < 0) run_start = ac;
+                                } else {
+                                    if (run_start >= 0) {
+                                        var p0: [3]f32 = undefined;
+                                        var p1: [3]f32 = undefined;
+                                        p0[axis] = @as(f32, @floatFromInt(run_start)) * 0.5;
+                                        p1[axis] = @as(f32, @floatFromInt(ac)) * 0.5;
+                                        p0[b_ax] = @as(f32, @floatFromInt(bv)) * 0.5;
+                                        p1[b_ax] = p0[b_ax];
+                                        p0[c_ax] = @as(f32, @floatFromInt(cv)) * 0.5;
+                                        p1[c_ax] = p0[c_ax];
+                                        count = addLine(vertices, count, bx + p0[0], by + p0[1], bz + p0[2], bx + p1[0], by + p1[1], bz + p1[2], outline_color);
+                                        run_start = -1;
+                                    }
                                 }
                             }
                         }

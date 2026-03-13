@@ -238,6 +238,69 @@ pub fn getBlockBoxes(block: WorldState.BlockType) BlockBoxes {
             },
             .count = 2,
         },
+        .torch => .{
+            .boxes = .{
+                .{ .min = .{ 7.0 / 16.0, 0.0, 7.0 / 16.0 }, .max = .{ 9.0 / 16.0, 10.0 / 16.0, 9.0 / 16.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .torch_wall_west => .{
+            .boxes = .{
+                .{ .min = .{ 0.0, 3.0 / 16.0, 6.0 / 16.0 }, .max = .{ 7.0 / 16.0, 14.0 / 16.0, 10.0 / 16.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .torch_wall_east => .{
+            .boxes = .{
+                .{ .min = .{ 9.0 / 16.0, 3.0 / 16.0, 6.0 / 16.0 }, .max = .{ 1.0, 14.0 / 16.0, 10.0 / 16.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .torch_wall_south => .{
+            .boxes = .{
+                .{ .min = .{ 6.0 / 16.0, 3.0 / 16.0, 9.0 / 16.0 }, .max = .{ 10.0 / 16.0, 14.0 / 16.0, 1.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .torch_wall_north => .{
+            .boxes = .{
+                .{ .min = .{ 6.0 / 16.0, 3.0 / 16.0, 0.0 }, .max = .{ 10.0 / 16.0, 14.0 / 16.0, 7.0 / 16.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .ladder_south => .{
+            .boxes = .{
+                .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 3.0 / 16.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .ladder_north => .{
+            .boxes = .{
+                .{ .min = .{ 0.0, 0.0, 13.0 / 16.0 }, .max = .{ 1.0, 1.0, 1.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .ladder_east => .{
+            .boxes = .{
+                .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 3.0 / 16.0, 1.0, 1.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
+        .ladder_west => .{
+            .boxes = .{
+                .{ .min = .{ 13.0 / 16.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 1.0 } },
+                undefined,
+            },
+            .count = 1,
+        },
         else => .{
             .boxes = .{
                 .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } },

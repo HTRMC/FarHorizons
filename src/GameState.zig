@@ -846,6 +846,16 @@ fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit: Raycast.B
                 .down => .torch, // fallback: standing torch
             };
         },
+        .ladder_south, .ladder_north, .ladder_east, .ladder_west => {
+            // Ladder faces the direction of the clicked face (away from the wall).
+            return switch (hit.direction) {
+                .south => .ladder_south,
+                .north => .ladder_north,
+                .east => .ladder_east,
+                .west => .ladder_west,
+                else => block_type,
+            };
+        },
         else => return block_type,
     }
 }
