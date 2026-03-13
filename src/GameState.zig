@@ -629,6 +629,12 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
                 const speed = move_speed * TICK_INTERVAL;
                 self.camera.move(forward_input * speed, right_input * speed, up_input * speed);
             }
+
+            self.entity_pos = .{
+                self.camera.position.x,
+                self.camera.position.y - EYE_OFFSET,
+                self.camera.position.z,
+            };
         },
         .walking => {
 
