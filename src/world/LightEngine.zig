@@ -228,102 +228,42 @@ fn computeSkyLight(
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
             const nl = getNeighborSkyLight(neighbor_borders, 3, y * CHUNK_SIZE + z);
-            if (nl > ATTENUATION) {
-                const new_level = nl - ATTENUATION;
-                const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
-                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light.set(idx, new_level);
-                    if (tail < MAX_QUEUE) {
-                        queue[tail] = .{ .x = @intCast(CHUNK_SIZE - 1), .y = @intCast(y), .z = @intCast(z), .dir = 1, .level = new_level };
-                        tail += 1;
-                    }
-                }
-            }
+            seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(CHUNK_SIZE - 1), @intCast(y), @intCast(z), 1, nl);
         }
     }
     // -X boundary: neighbor[2], their x=31 face → light travels +X (dir=0)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
             const nl = getNeighborSkyLight(neighbor_borders, 2, y * CHUNK_SIZE + z);
-            if (nl > ATTENUATION) {
-                const new_level = nl - ATTENUATION;
-                const idx = chunkIndex(0, y, z);
-                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light.set(idx, new_level);
-                    if (tail < MAX_QUEUE) {
-                        queue[tail] = .{ .x = 0, .y = @intCast(y), .z = @intCast(z), .dir = 0, .level = new_level };
-                        tail += 1;
-                    }
-                }
-            }
+            seedBoundarySkyLight(&queue, &tail, chunk, light_map, 0, @intCast(y), @intCast(z), 0, nl);
         }
     }
     // +Z boundary: neighbor[0], their z=0 face → light travels -Z (dir=5)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |x| {
             const nl = getNeighborSkyLight(neighbor_borders, 0, y * CHUNK_SIZE + x);
-            if (nl > ATTENUATION) {
-                const new_level = nl - ATTENUATION;
-                const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
-                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light.set(idx, new_level);
-                    if (tail < MAX_QUEUE) {
-                        queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = @intCast(CHUNK_SIZE - 1), .dir = 5, .level = new_level };
-                        tail += 1;
-                    }
-                }
-            }
+            seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), @intCast(CHUNK_SIZE - 1), 5, nl);
         }
     }
     // -Z boundary: neighbor[1], their z=31 face → light travels +Z (dir=4)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |x| {
             const nl = getNeighborSkyLight(neighbor_borders, 1, y * CHUNK_SIZE + x);
-            if (nl > ATTENUATION) {
-                const new_level = nl - ATTENUATION;
-                const idx = chunkIndex(x, y, 0);
-                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light.set(idx, new_level);
-                    if (tail < MAX_QUEUE) {
-                        queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = 0, .dir = 4, .level = new_level };
-                        tail += 1;
-                    }
-                }
-            }
+            seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), 0, 4, nl);
         }
     }
     // +Y boundary: neighbor[4], their y=0 face → light travels -Y (dir=3)
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
             const nl = getNeighborSkyLight(neighbor_borders, 4, z * CHUNK_SIZE + x);
-            if (nl > ATTENUATION) {
-                const new_level = nl - ATTENUATION;
-                const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
-                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light.set(idx, new_level);
-                    if (tail < MAX_QUEUE) {
-                        queue[tail] = .{ .x = @intCast(x), .y = @intCast(CHUNK_SIZE - 1), .z = @intCast(z), .dir = 3, .level = new_level };
-                        tail += 1;
-                    }
-                }
-            }
+            seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(CHUNK_SIZE - 1), @intCast(z), 3, nl);
         }
     }
     // -Y boundary: neighbor[5], their y=31 face → light travels +Y (dir=2)
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
             const nl = getNeighborSkyLight(neighbor_borders, 5, z * CHUNK_SIZE + x);
-            if (nl > ATTENUATION) {
-                const new_level = nl - ATTENUATION;
-                const idx = chunkIndex(x, 0, z);
-                if (new_level > light_map.sky_light.get(idx) and !block_properties.isOpaque(chunk.blocks[idx])) {
-                    light_map.sky_light.set(idx, new_level);
-                    if (tail < MAX_QUEUE) {
-                        queue[tail] = .{ .x = @intCast(x), .y = 0, .z = @intCast(z), .dir = 2, .level = new_level };
-                        tail += 1;
-                    }
-                }
-            }
+            seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(x), 0, @intCast(z), 2, nl);
         }
     }
 
@@ -495,6 +435,35 @@ fn computeBlockLight(
                 tail += 1;
             }
         }
+    }
+}
+
+fn seedBoundarySkyLight(
+    queue: *[MAX_QUEUE]SkyQueueEntry,
+    tail: *u32,
+    chunk: *const WorldState.Chunk,
+    light_map: *LightMap,
+    x: i8,
+    y: i8,
+    z: i8,
+    dir: u3,
+    nl: u8,
+) void {
+    if (nl <= ATTENUATION) return;
+    const new_level = nl - ATTENUATION;
+
+    const ux: usize = @intCast(x);
+    const uy: usize = @intCast(y);
+    const uz: usize = @intCast(z);
+    const idx = chunkIndex(ux, uy, uz);
+
+    if (new_level <= light_map.sky_light.get(idx)) return;
+    if (block_properties.isOpaque(chunk.blocks[idx])) return;
+
+    light_map.sky_light.set(idx, new_level);
+    if (tail.* < MAX_QUEUE) {
+        queue[tail.*] = .{ .x = x, .y = y, .z = z, .dir = dir, .level = new_level };
+        tail.* += 1;
     }
 }
 
