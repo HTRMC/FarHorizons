@@ -47,9 +47,12 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         state.entity_vel[2] = approach(state.entity_vel[2], target_vz, water_control);
 
         // Vertical swimming (input_move[1]: +1 jump, -1 sneak)
+        // Only apply when input is active — otherwise let gravity/drag handle sinking
         const up_input = state.input_move[1];
-        const target_vy = up_input * WATER_SWIM_SPEED;
-        state.entity_vel[1] = approach(state.entity_vel[1], target_vy, water_control);
+        if (up_input != 0.0) {
+            const target_vy = up_input * WATER_SWIM_SPEED;
+            state.entity_vel[1] = approach(state.entity_vel[1], target_vy, water_control);
+        }
     } else {
         // Land horizontal movement
         const target_vx = wish_x * WALK_SPEED;
