@@ -456,7 +456,7 @@ pub const UiRenderer = struct {
                         info.uvs[ci] = .{ fv.u, fv.v };
                     }
                 } else {
-                    const em = WorldState.extra_quad_models[mi - 6];
+                    const em = WorldState.getRegistry().extra_models[mi - 6];
                     info.corners = em.corners;
                     info.uvs = em.uvs;
                     info.normal = em.normal;

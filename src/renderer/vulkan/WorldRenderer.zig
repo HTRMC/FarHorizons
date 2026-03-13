@@ -120,7 +120,7 @@ pub const WorldRenderer = struct {
         }
 
         try self.createIndirectBuffer(ctx, gpu_alloc);
-        try self.createPersistentBuffers(ctx, gpu_alloc);
+        try self.createPersistentBuffers(allocator, ctx, gpu_alloc);
     }
 
     pub fn deinit(self: *WorldRenderer, device: vk.VkDevice) void {
@@ -829,7 +829,7 @@ pub const WorldRenderer = struct {
         std.log.info("Indirect draw buffers created (max {} draw commands per layer, {} layers)", .{ MAX_INDIRECT_COMMANDS, LAYER_COUNT });
     }
 
-    fn createPersistentBuffers(self: *WorldRenderer, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {
+    fn createPersistentBuffers(self: *WorldRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {
         const tz = tracy.zone(@src(), "createPersistentBuffers");
         defer tz.end();
 
@@ -846,13 +846,13 @@ pub const WorldRenderer = struct {
             self.light_alloc = try gpu_alloc.createBuffer(lb_capacity, transfer_usage, .device_local);
         }
 
-        const model_size: vk.VkDeviceSize = WorldState.TOTAL_MODEL_COUNT * @sizeOf(QuadModel);
+        const model_size: vk.VkDeviceSize = @as(u64, WorldState.totalModelCount()) * @sizeOf(QuadModel);
         self.model_alloc = try gpu_alloc.createBuffer(
             model_size,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             .device_local,
         );
-        try self.uploadModelBuffer(ctx, model_size);
+        try self.uploadModelBuffer(allocator, ctx, model_size);
 
         const index_count: u64 = @as(u64, MAX_FACES_PER_DRAW) * 6;
         const ib_capacity: vk.VkDeviceSize = index_count * @sizeOf(u16);
@@ -882,8 +882,11 @@ pub const WorldRenderer = struct {
         });
     }
 
-    fn uploadModelBuffer(self: *WorldRenderer, ctx: *const VulkanContext, model_size: vk.VkDeviceSize) !void {
-        var models: [WorldState.TOTAL_MODEL_COUNT]QuadModel = undefined;
+    fn uploadModelBuffer(self: *WorldRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext, model_size: vk.VkDeviceSize) !void {
+        const total_count = WorldState.totalModelCount();
+        const reg = WorldState.getRegistry();
+        const models = try allocator.alloc(QuadModel, total_count);
+        defer allocator.free(models);
 
         // Standard full-cube face models (0-5)
         for (0..6) |face| {
@@ -910,8 +913,7 @@ pub const WorldRenderer = struct {
         }
 
         // Extra quad models for shaped blocks (6+)
-        for (0..WorldState.EXTRA_MODEL_COUNT) |i| {
-            const em = WorldState.extra_quad_models[i];
+        for (reg.extra_models, 0..) |em, i| {
             var corners: [12]f32 = undefined;
             var uvs: [8]f32 = undefined;
             for (0..4) |v| {
@@ -946,7 +948,7 @@ pub const WorldRenderer = struct {
         var data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, staging_memory, 0, model_size, 0, &data);
         const dst: [*]QuadModel = @ptrCast(@alignCast(data));
-        @memcpy(dst[0..WorldState.TOTAL_MODEL_COUNT], &models);
+        @memcpy(dst[0..total_count], models);
         vk.unmapMemory(ctx.device, staging_memory);
 
         try vk_utils.copyBuffer(ctx, staging_buffer, self.model_alloc.buffer, model_size);

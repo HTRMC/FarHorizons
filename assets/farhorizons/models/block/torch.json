@@ -1,0 +1,39 @@
+{
+    "textures": {
+        "torch": "torch"
+    },
+    "elements": [
+        {
+            "comment": "Cross quad NW-SE front",
+            "from": [0, 0, 0],
+            "to": [16, 16, 16],
+            "faces": {
+                "__cross_nwse_front": { "uv": [0, 0, 16, 16], "texture": "#torch" }
+            }
+        },
+        {
+            "comment": "Cross quad NW-SE back",
+            "from": [0, 0, 0],
+            "to": [16, 16, 16],
+            "faces": {
+                "__cross_nwse_back": { "uv": [0, 0, 16, 16], "texture": "#torch" }
+            }
+        },
+        {
+            "comment": "Cross quad NE-SW front",
+            "from": [0, 0, 0],
+            "to": [16, 16, 16],
+            "faces": {
+                "__cross_nesw_front": { "uv": [0, 0, 16, 16], "texture": "#torch" }
+            }
+        },
+        {
+            "comment": "Cross quad NE-SW back",
+            "from": [0, 0, 0],
+            "to": [16, 16, 16],
+            "faces": {
+                "__cross_nesw_back": { "uv": [0, 0, 16, 16], "texture": "#torch" }
+            }
+        }
+    ]
+}

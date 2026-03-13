@@ -4,6 +4,8 @@ const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const tracy = @import("../../platform/tracy.zig");
 const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
+const WorldState = @import("../../world/WorldState.zig");
+const BlockModelRegistry = WorldState.BlockModelRegistry;
 pub const WorldRenderer = @import("WorldRenderer.zig").WorldRenderer;
 pub const DebugRenderer = @import("DebugRenderer.zig").DebugRenderer;
 pub const TextRenderer = @import("TextRenderer.zig").TextRenderer;
@@ -26,10 +28,15 @@ pub const RenderState = struct {
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
     in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.VkFence,
     current_frame: u32,
+    model_registry: *BlockModelRegistry,
 
     pub fn initInPlace(self: *RenderState, allocator: std.mem.Allocator, ctx: *const VulkanContext, swapchain_format: vk.VkFormat, gpu_alloc: *GpuAllocator) !void {
         const create_zone = tracy.zone(@src(), "RenderState.create");
         defer create_zone.end();
+
+        // Load block models from JSON before initializing the world renderer
+        self.model_registry = try BlockModelRegistry.init(allocator);
+        WorldState.setRegistry(self.model_registry);
 
         var shader_compiler = try ShaderCompiler.init(allocator);
         defer shader_compiler.deinit();
@@ -97,6 +104,7 @@ pub const RenderState = struct {
         self.hand_renderer.deinit(device);
         self.ui_renderer.deinit(device);
         self.sky_renderer.deinit(device);
+        self.model_registry.deinit();
     }
 
     fn createCommandBuffers(self: *RenderState, ctx: *const VulkanContext) !void {
