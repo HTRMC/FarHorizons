@@ -580,3 +580,85 @@ fn fmtLine(buf: *[8192]u8, pos: usize, comptime fmt: []const u8, args: anytype) 
     const result = std.fmt.bufPrint(buf[pos..], fmt, args) catch return 0;
     return result.len;
 }
+
+// ============================================================
+// Tests
+// ============================================================
+
+const testing = std.testing;
+
+test "parseKeyName: letters a-z" {
+    const code = parseKeyName("key.keyboard.w").?;
+    try testing.expectEqual(@as(c_int, glfw.GLFW_KEY_W), code.code);
+    try testing.expect(!code.is_mouse);
+}
+
+test "parseKeyName: digits 0-9" {
+    const code = parseKeyName("key.keyboard.1").?;
+    try testing.expectEqual(@as(c_int, glfw.GLFW_KEY_1), code.code);
+    try testing.expect(!code.is_mouse);
+}
+
+test "parseKeyName: named keys" {
+    const space = parseKeyName("key.keyboard.space").?;
+    try testing.expectEqual(@as(c_int, glfw.GLFW_KEY_SPACE), space.code);
+
+    const escape = parseKeyName("key.keyboard.escape").?;
+    try testing.expectEqual(@as(c_int, glfw.GLFW_KEY_ESCAPE), escape.code);
+
+    const f3 = parseKeyName("key.keyboard.f3").?;
+    try testing.expectEqual(@as(c_int, glfw.GLFW_KEY_F3), f3.code);
+}
+
+test "parseKeyName: mouse buttons" {
+    const left = parseKeyName("key.mouse.left").?;
+    try testing.expectEqual(@as(c_int, glfw.GLFW_MOUSE_BUTTON_LEFT), left.code);
+    try testing.expect(left.is_mouse);
+
+    const right = parseKeyName("key.mouse.right").?;
+    try testing.expect(right.is_mouse);
+}
+
+test "parseKeyName: invalid returns null" {
+    try testing.expect(parseKeyName("key.keyboard.nonexistent") == null);
+    try testing.expect(parseKeyName("invalid") == null);
+    try testing.expect(parseKeyName("key.keyboard.") == null);
+}
+
+test "keyCodeToName: round-trip for all default bindings" {
+    for (&defaults) |code| {
+        const name_str = keyCodeToName(code);
+        const parsed = parseKeyName(name_str);
+        try testing.expect(parsed != null);
+        try testing.expectEqual(code.code, parsed.?.code);
+        try testing.expectEqual(code.is_mouse, parsed.?.is_mouse);
+    }
+}
+
+test "Action.hotbarSlot: hotbar actions return 0-8" {
+    try testing.expectEqual(@as(?u8, 0), Action.hotbar_1.hotbarSlot());
+    try testing.expectEqual(@as(?u8, 8), Action.hotbar_9.hotbarSlot());
+    try testing.expect(Action.forward.hotbarSlot() == null);
+}
+
+test "Action.fromHotbarSlot: round-trip" {
+    for (0..9) |i| {
+        const slot: u8 = @intCast(i);
+        const action = Action.fromHotbarSlot(slot).?;
+        try testing.expectEqual(slot, action.hotbarSlot().?);
+    }
+    try testing.expect(Action.fromHotbarSlot(9) == null);
+}
+
+test "defaults: all actions have bindings" {
+    for (&defaults) |code| {
+        // Every default should have a non-zero code (GLFW_KEY_UNKNOWN = -1)
+        try testing.expect(code.code >= 0);
+    }
+}
+
+test "inputDisplayName: known keys return readable names" {
+    try testing.expect(!eql(inputDisplayName(.{ .code = glfw.GLFW_KEY_SPACE }), "???"));
+    try testing.expect(!eql(inputDisplayName(.{ .code = glfw.GLFW_KEY_W }), "???"));
+    try testing.expect(eql(inputDisplayName(.{ .code = glfw.GLFW_MOUSE_BUTTON_LEFT, .is_mouse = true }), "Left Mouse"));
+}
