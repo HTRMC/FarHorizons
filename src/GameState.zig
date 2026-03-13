@@ -568,11 +568,10 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
         .walking => {
             if (self.jump_cooldown > 0) {
                 self.jump_cooldown -= 1;
-                self.jump_requested = false;
             } else if (self.jump_requested and self.entity_on_ground) {
                 self.entity_vel[1] = 8.7;
-                self.jump_requested = false;
             }
+            self.jump_requested = false;
 
             Physics.updateEntity(self, TICK_INTERVAL);
 
