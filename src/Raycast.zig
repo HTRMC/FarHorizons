@@ -303,3 +303,64 @@ test "raycast: water is not solid and ray passes through" {
 
     try testing.expect(result == null);
 }
+
+test "raycast: ray with negative direction -z" {
+    var state = try makeRaycastTestMap(testing.allocator);
+    defer state.map.deinit();
+
+    state.chunk.blocks[WorldState.chunkIndex(5, 5, 2)] = .stone;
+
+    const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
+    const dir = zlm.Vec3.new(0.0, 0.0, -1.0);
+    const result = raycast(&state.map, origin, dir);
+
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(i32, 2), result.?.block_pos[2]);
+    try testing.expectEqual(Direction.south, result.?.direction);
+}
+
+test "raycast: ray along -y hits block below" {
+    var state = try makeRaycastTestMap(testing.allocator);
+    defer state.map.deinit();
+
+    state.chunk.blocks[WorldState.chunkIndex(5, 2, 5)] = .stone;
+
+    const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
+    const dir = zlm.Vec3.new(0.0, -1.0, 0.0);
+    const result = raycast(&state.map, origin, dir);
+
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(i32, 2), result.?.block_pos[1]);
+    try testing.expectEqual(Direction.up, result.?.direction);
+}
+
+test "raycast: block at exact MAX_RANGE boundary" {
+    var state = try makeRaycastTestMap(testing.allocator);
+    defer state.map.deinit();
+
+    // Place block exactly 5 blocks away (at MAX_RANGE boundary)
+    state.chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .stone;
+
+    const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
+    const dir = zlm.Vec3.new(1.0, 0.0, 0.0);
+    const result = raycast(&state.map, origin, dir);
+
+    // 10 - 5.5 = 4.5 blocks away, within range
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(i32, 10), result.?.block_pos[0]);
+}
+
+test "raycast: origin on block boundary" {
+    var state = try makeRaycastTestMap(testing.allocator);
+    defer state.map.deinit();
+
+    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = .stone;
+
+    // Origin exactly on block boundary (integer coordinate)
+    const origin = zlm.Vec3.new(5.0, 5.5, 5.5);
+    const dir = zlm.Vec3.new(1.0, 0.0, 0.0);
+    const result = raycast(&state.map, origin, dir);
+
+    try testing.expect(result != null);
+    try testing.expectEqual(@as(i32, 8), result.?.block_pos[0]);
+}
