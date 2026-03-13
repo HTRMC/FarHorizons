@@ -109,23 +109,70 @@ pub const HandRenderer = struct {
         const proj = zlm.Mat4.perspective(std.math.degreesToRadians(70.0), aspect, 0.05, 100.0);
 
         // --- Draw arm ---
+        //
+        // Exact replica of MC's renderPlayerArm (ItemInHandRenderer.java:233-260)
+        // + ModelPart.translateAndRotate (offset + zRot from renderHand).
+        //
+        // MC's transform chain operates in world units (model pixels / 16).
+        // Our arm vertices are in our own coordinate space (centered at origin,
+        // scaled by TARGET_HEIGHT/model_height = 1.8/32). We apply a pre-transform
+        // to convert our vertex space to MC's post-ModelPart space:
+        //   1. Scale by 10/9 + flip Y (our arm: 0.675 tall, hand at -Y;
+        //      MC: 0.75 tall, hand at +Y in model space)
+        //   2. Translate to match MC's cube centering (-0.0625, -0.125, 0)
+        //   3. Apply ModelPart offset (-5/16, 2/16, 0) = (-0.3125, 0.125, 0)
+        //   4. Apply arm.zRot = 0.1 rad (set by renderHand)
         {
-            // Position arm in lower-right of screen, Minecraft-style
-            // Model = Translate * Scale * RotX * RotZ (column-major)
-            const s: f32 = 0.75;
-            const rx = std.math.degreesToRadians(-10.0);
-            const rz = std.math.degreesToRadians(5.0);
-            const cx = @cos(rx);
-            const sx = @sin(rx);
-            const cz = @cos(rz);
-            const sz = @sin(rz);
-            // RotX * RotZ combined, then scaled and translated
-            const arm_model = zlm.Mat4{ .m = .{
-                s * cz,         s * (cx * sz),         s * (sx * sz),         0,
-                s * (-sz),      s * (cx * cz),         s * (sx * cz),         0,
-                0,              s * (-sx),             s * cx,                0,
-                0.56,           -0.52,                -0.72,                 1,
-            } };
+            const invert: f32 = 1.0; // right arm
+            const attack_value: f32 = 0.0; // no swing for now
+            const inverse_arm_height: f32 = 0.0; // fully equipped
+
+            const sqrt_attack = @sqrt(attack_value);
+            const x_swing_pos = -0.3 * @sin(sqrt_attack * std.math.pi);
+            const y_swing_pos = 0.4 * @sin(sqrt_attack * (std.math.pi * 2.0));
+            const z_swing_pos = -0.4 * @sin(attack_value * std.math.pi);
+
+            // Pre-transform: convert our vertex space → MC's ModelPart space
+            const mc_scale: f32 = 10.0 / 9.0; // ratio of MC's /16 to our 1.8/32 scale
+            const s_pre = mat4Scale(mc_scale, -mc_scale, mc_scale); // flip Y + scale
+            const t_cube = mat4Translate(-0.0625, -0.125, 0); // cube centering offset
+            const t_part = mat4Translate(-0.3125, 0.125, 0); // MC ModelPart offset
+            const r_part = mat4RotZ(0.1); // arm.zRot from renderHand
+            // Chain: t_part * r_part * t_cube * s_pre
+            var pre = zlm.Mat4.mul(t_cube, s_pre);
+            pre = zlm.Mat4.mul(r_part, pre);
+            pre = zlm.Mat4.mul(t_part, pre);
+
+            // MC renderPlayerArm transforms (lines 240-251)
+            const t1 = mat4Translate(
+                invert * (x_swing_pos + 0.64000005),
+                y_swing_pos + -0.6 + inverse_arm_height * -0.6,
+                z_swing_pos + -0.71999997,
+            );
+            const r1 = mat4RotY(std.math.degreesToRadians(invert * 45.0));
+
+            const z_swing_rot = @sin(attack_value * attack_value * std.math.pi);
+            const y_swing_rot = @sin(sqrt_attack * std.math.pi);
+            const r2 = mat4RotY(std.math.degreesToRadians(invert * y_swing_rot * 70.0));
+            const r3 = mat4RotZ(std.math.degreesToRadians(invert * z_swing_rot * -20.0));
+
+            const t2 = mat4Translate(invert * -1.0, 3.6, 3.5);
+            const r4 = mat4RotZ(std.math.degreesToRadians(invert * 120.0));
+            const r5 = mat4RotX(std.math.degreesToRadians(200.0));
+            const r6 = mat4RotY(std.math.degreesToRadians(invert * -135.0));
+            const t3 = mat4Translate(invert * 5.6, 0.0, 0.0);
+
+            // Chain: t1 * r1 * r2 * r3 * t2 * r4 * r5 * r6 * t3 * pre
+            var m = t1;
+            m = zlm.Mat4.mul(m, r1);
+            m = zlm.Mat4.mul(m, r2);
+            m = zlm.Mat4.mul(m, r3);
+            m = zlm.Mat4.mul(m, t2);
+            m = zlm.Mat4.mul(m, r4);
+            m = zlm.Mat4.mul(m, r5);
+            m = zlm.Mat4.mul(m, r6);
+            m = zlm.Mat4.mul(m, t3);
+            const arm_model = zlm.Mat4.mul(m, pre);
             const mvp = zlm.Mat4.mul(proj, arm_model);
 
             const pc = PushConstants{
@@ -139,17 +186,24 @@ pub const HandRenderer = struct {
 
         // --- Draw held block ---
         if (has_block) {
-            // Block held in the hand: Translate * Scale * RotY
+            // MC's applyItemArmTransform (line 316):
+            //   poseStack.translate(invert * 0.56F, -0.52F + inverseArmHeight * -0.6F, -0.72F);
+            // Then swingArm applies attack transforms (0 at rest).
+            // MC block items get additional display transform from the item model.
+            // For a simple block, MC's FIRST_PERSON_RIGHT_HAND display applies
+            // rotation(0, 45, 0) + translation(0, 0, 0) + scale(0.4, 0.4, 0.4).
+            const invert: f32 = 1.0;
+            const inverse_arm_height: f32 = 0.0;
+
+            const t1 = mat4Translate(
+                invert * 0.56,
+                -0.52 + inverse_arm_height * -0.6,
+                -0.72,
+            );
             const bs: f32 = 0.4;
-            const ry = std.math.degreesToRadians(25.0);
-            const cy = @cos(ry);
-            const sy = @sin(ry);
-            const block_model = zlm.Mat4{ .m = .{
-                bs * cy,   0,    bs * (-sy),  0,
-                0,         bs,   0,           0,
-                bs * sy,   0,    bs * cy,     0,
-                0.36,     -0.52, -0.72,       1,
-            } };
+            const block_rot = mat4RotY(std.math.degreesToRadians(45.0));
+            const block_scale = mat4Scale(bs, bs, bs);
+            const block_model = zlm.Mat4.mul(t1, zlm.Mat4.mul(block_rot, block_scale));
             const mvp = zlm.Mat4.mul(proj, block_model);
 
             // Draw 4 side faces (24 verts) with side texture
@@ -375,6 +429,61 @@ pub const HandRenderer = struct {
             .float => |f| f,
             else => 0,
         };
+    }
+
+    // ============================================================
+    // Matrix helpers (column-major for Vulkan/GLSL)
+    // ============================================================
+
+    fn mat4RotX(angle: f32) zlm.Mat4 {
+        const c = @cos(angle);
+        const s = @sin(angle);
+        return zlm.Mat4{ .m = .{
+            1, 0,  0, 0,
+            0, c,  s, 0,
+            0, -s, c, 0,
+            0, 0,  0, 1,
+        } };
+    }
+
+    fn mat4RotY(angle: f32) zlm.Mat4 {
+        const c = @cos(angle);
+        const s = @sin(angle);
+        return zlm.Mat4{ .m = .{
+            c,  0, -s, 0,
+            0,  1,  0, 0,
+            s,  0,  c, 0,
+            0,  0,  0, 1,
+        } };
+    }
+
+    fn mat4RotZ(angle: f32) zlm.Mat4 {
+        const c = @cos(angle);
+        const s = @sin(angle);
+        return zlm.Mat4{ .m = .{
+            c,  s, 0, 0,
+            -s, c, 0, 0,
+            0,  0, 1, 0,
+            0,  0, 0, 1,
+        } };
+    }
+
+    fn mat4Translate(tx: f32, ty: f32, tz: f32) zlm.Mat4 {
+        return zlm.Mat4{ .m = .{
+            1,  0,  0,  0,
+            0,  1,  0,  0,
+            0,  0,  1,  0,
+            tx, ty, tz, 1,
+        } };
+    }
+
+    fn mat4Scale(sx: f32, sy: f32, sz: f32) zlm.Mat4 {
+        return zlm.Mat4{ .m = .{
+            sx, 0,  0,  0,
+            0,  sy, 0,  0,
+            0,  0,  sz, 0,
+            0,  0,  0,  1,
+        } };
     }
 
     // ============================================================
