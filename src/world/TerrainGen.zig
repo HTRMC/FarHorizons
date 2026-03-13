@@ -94,15 +94,48 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
             // Surface level in coarse grid units (Infdev's 8-block vertical step)
             const surface_grid = 8.5 + var67 * 4.0;
 
+            // Precompute bilinear XZ-interpolated values at each Y grid level.
+            // Reduces per-block trilerp to a single Y-axis lerp.
+            const sx = bx / Noise.STEP;
+            const sz = bz / Noise.STEP;
+            const fx: f32 = @as(f32, @floatFromInt(bx % Noise.STEP)) / Noise.STEP;
+            const fz: f32 = @as(f32, @floatFromInt(bz % Noise.STEP)) / Noise.STEP;
+
+            var da_col: [Noise.SC]f32 = undefined;
+            var db_col: [Noise.SC]f32 = undefined;
+            var sel_col: [Noise.SC]f32 = undefined;
+            for (0..Noise.SC) |sy| {
+                const base = sy * Noise.SC2 + sz * Noise.SC + sx;
+                const v00 = density_a[base];
+                const v10 = density_a[base + 1];
+                const v01 = density_a[base + Noise.SC];
+                const v11 = density_a[base + Noise.SC + 1];
+                da_col[sy] = (v00 + (v10 - v00) * fx) + ((v01 + (v11 - v01) * fx) - (v00 + (v10 - v00) * fx)) * fz;
+
+                const b00 = density_b[base];
+                const b10 = density_b[base + 1];
+                const b01 = density_b[base + Noise.SC];
+                const b11 = density_b[base + Noise.SC + 1];
+                db_col[sy] = (b00 + (b10 - b00) * fx) + ((b01 + (b11 - b01) * fx) - (b00 + (b10 - b00) * fx)) * fz;
+
+                const s00 = selector[base];
+                const s10 = selector[base + 1];
+                const s01 = selector[base + Noise.SC];
+                const s11 = selector[base + Noise.SC + 1];
+                sel_col[sy] = (s00 + (s10 - s00) * fx) + ((s01 + (s11 - s01) * fx) - (s00 + (s10 - s00) * fx)) * fz;
+            }
+
             for (0..CS) |by| {
                 const wy = oy_i32 + @as(i32, @intCast(by));
                 const wy_f: f32 = @floatFromInt(wy);
                 const idx = WorldState.chunkIndex(bx, by, bz);
 
-                // Trilinear interpolation of 3D noise (exact Infdev formulas, no scaling needed)
-                const da = Noise.trilerp3D(&density_a, bx, by, bz) / 512.0;
-                const db = Noise.trilerp3D(&density_b, bx, by, bz) / 512.0;
-                const sel_raw = Noise.trilerp3D(&selector, bx, by, bz);
+                // Y-axis lerp from precomputed column values
+                const sy = by / Noise.STEP;
+                const fy: f32 = @as(f32, @floatFromInt(by % Noise.STEP)) / Noise.STEP;
+                const da = (da_col[sy] + (da_col[sy + 1] - da_col[sy]) * fy) / 512.0;
+                const db = (db_col[sy] + (db_col[sy + 1] - db_col[sy]) * fy) / 512.0;
+                const sel_raw = sel_col[sy] + (sel_col[sy + 1] - sel_col[sy]) * fy;
 
                 // Selector: Infdev line 111 — (sel/10 + 1) / 2
                 const sel = std.math.clamp((sel_raw / 10.0 + 1.0) / 2.0, 0.0, 1.0);
@@ -827,4 +860,78 @@ test "selectBlock: surface blocks" {
     try testing.expectEqual(BlockType.dirt, selectBlock(3, SEA_LEVEL, 0));
     // Depth 4+ = stone
     try testing.expectEqual(BlockType.stone, selectBlock(4, SEA_LEVEL, 0));
+}
+
+// ============================================================
+// Benchmarks
+// ============================================================
+
+fn printBenchResult(comptime name: []const u8, samples: []const u64, face_count: ?u32) void {
+    var min_ns: u64 = std.math.maxInt(u64);
+    var max_ns: u64 = 0;
+    var total_ns: u64 = 0;
+    for (samples) |s| {
+        total_ns += s;
+        if (s < min_ns) min_ns = s;
+        if (s > max_ns) max_ns = s;
+    }
+    const avg = total_ns / samples.len;
+    if (face_count) |fc| {
+        std.debug.print("\n  {s}: min={d}us avg={d}us max={d}us (n={d}) faces={d}\n", .{ name, min_ns / 1000, avg / 1000, max_ns / 1000, samples.len, fc });
+    } else {
+        std.debug.print("\n  {s}: min={d}us avg={d}us max={d}us (n={d})\n", .{ name, min_ns / 1000, avg / 1000, max_ns / 1000, samples.len });
+    }
+}
+
+test "bench: generateChunk" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ITERS = 10;
+    var samples: [ITERS]u64 = undefined;
+    var chunk: Chunk = undefined;
+
+    for (&samples, 0..) |*sample, i| {
+        const start = std.Io.Clock.now(.awake, io);
+        generateChunk(&chunk, .{ .cx = @intCast(i), .cy = 0, .cz = 0 }, 42);
+        sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+    }
+
+    printBenchResult("generateChunk", &samples, null);
+}
+
+test "bench: generateLodChunk" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ITERS = 10;
+    var samples: [ITERS]u64 = undefined;
+    var chunk: Chunk = undefined;
+
+    for (&samples, 0..) |*sample, i| {
+        const start = std.Io.Clock.now(.awake, io);
+        generateLodChunk(&chunk, .{ .cx = @intCast(i), .cy = 0, .cz = 0 }, 42, 2);
+        sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+    }
+
+    printBenchResult("generateLodChunk (voxel_size=2)", &samples, null);
+}
+
+test "bench: full pipeline (terrain + mesh)" {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ITERS = 10;
+    var samples: [ITERS]u64 = undefined;
+    var chunk: Chunk = undefined;
+    var face_count: u32 = 0;
+    const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
+    const LightBorderSnapshot = @import("LightMap.zig").LightBorderSnapshot;
+    const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
+
+    for (&samples, 0..) |*sample, i| {
+        const start = std.Io.Clock.now(.awake, io);
+        generateChunk(&chunk, .{ .cx = @intCast(i), .cy = 0, .cz = 0 }, 42);
+        const result = WorldState.generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders) catch unreachable;
+        sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+        face_count = result.total_face_count;
+        testing.allocator.free(result.faces);
+        testing.allocator.free(result.lights);
+    }
+
+    printBenchResult("full pipeline (terrain + mesh)", &samples, face_count);
 }
