@@ -283,14 +283,13 @@ pub const block_properties = struct {
     /// Returns null for full 1x1x1 blocks (use the implicit full cube).
     pub fn getHitbox(block: BlockType) ?AABB {
         return switch (block) {
-            // Standing torch: 2px wide stick + flame = [7,0,7]→[9,10,9] in 16ths
-            .torch => .{ .min = .{ 7.0 / 16.0, 0.0, 7.0 / 16.0 }, .max = .{ 9.0 / 16.0, 10.0 / 16.0, 9.0 / 16.0 } },
-            // Wall torches: bracket + tilted stick. Use generous AABB.
-            // Base model (west wall): extends from x=-0.75 to x~6, y=3..13, z=6.375..9.625
-            .torch_wall_west => .{ .min = .{ 0.0, 3.0 / 16.0, 6.0 / 16.0 }, .max = .{ 7.0 / 16.0, 14.0 / 16.0, 10.0 / 16.0 } },
-            .torch_wall_east => .{ .min = .{ 9.0 / 16.0, 3.0 / 16.0, 6.0 / 16.0 }, .max = .{ 1.0, 14.0 / 16.0, 10.0 / 16.0 } },
-            .torch_wall_south => .{ .min = .{ 6.0 / 16.0, 3.0 / 16.0, 9.0 / 16.0 }, .max = .{ 10.0 / 16.0, 14.0 / 16.0, 1.0 } },
-            .torch_wall_north => .{ .min = .{ 6.0 / 16.0, 3.0 / 16.0, 0.0 }, .max = .{ 10.0 / 16.0, 14.0 / 16.0, 7.0 / 16.0 } },
+            // Standing torch: box(6,0,6,10,10,10) — matches Minecraft
+            .torch => .{ .min = .{ 6.0 / 16.0, 0.0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 10.0 / 16.0, 10.0 / 16.0 } },
+            // Wall torches: MC base is box(5.5,3,11,10.5,16,16) on south face, rotated per direction
+            .torch_wall_south => .{ .min = .{ 5.5 / 16.0, 3.0 / 16.0, 11.0 / 16.0 }, .max = .{ 10.5 / 16.0, 1.0, 1.0 } },
+            .torch_wall_north => .{ .min = .{ 5.5 / 16.0, 3.0 / 16.0, 0.0 }, .max = .{ 10.5 / 16.0, 1.0, 5.0 / 16.0 } },
+            .torch_wall_east => .{ .min = .{ 11.0 / 16.0, 3.0 / 16.0, 5.5 / 16.0 }, .max = .{ 1.0, 1.0, 10.5 / 16.0 } },
+            .torch_wall_west => .{ .min = .{ 0.0, 3.0 / 16.0, 5.5 / 16.0 }, .max = .{ 5.0 / 16.0, 1.0, 10.5 / 16.0 } },
             // Ladders: thin panel on wall face (3px thick)
             // ladder_south = facing south, panel on north wall (low Z)
             .ladder_south => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 3.0 / 16.0 } },
