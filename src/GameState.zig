@@ -1162,3 +1162,156 @@ fn lerpArray3(a: [3]f32, b: [3]f32, t: f32) [3]f32 {
         a[2] + (b[2] - a[2]) * t,
     };
 }
+
+// ============================================================
+// Tests
+// ============================================================
+
+const testing = std.testing;
+
+fn makeTestGameState() GameState {
+    var gs: GameState = undefined;
+    gs.hotbar = .{.grass_block} ** HOTBAR_SIZE;
+    gs.inventory = .{.air} ** INV_SIZE;
+    gs.armor = .{.air} ** ARMOR_SLOTS;
+    gs.equip = .{.air} ** EQUIP_SLOTS;
+    gs.offhand = .air;
+    gs.carried_item = .air;
+    gs.selected_slot = 0;
+    return gs;
+}
+
+test "slotPtr: hotbar slots 0-8" {
+    var gs = makeTestGameState();
+    for (0..HOTBAR_SIZE) |i| {
+        const ptr = gs.slotPtr(@intCast(i));
+        try testing.expectEqual(&gs.hotbar[i], ptr);
+    }
+}
+
+test "slotPtr: inventory slots 9-44" {
+    var gs = makeTestGameState();
+    for (0..INV_SIZE) |i| {
+        const slot: u8 = @intCast(HOTBAR_SIZE + i);
+        const ptr = gs.slotPtr(slot);
+        try testing.expectEqual(&gs.inventory[i], ptr);
+    }
+}
+
+test "slotPtr: armor slots 45-48" {
+    var gs = makeTestGameState();
+    for (0..ARMOR_SLOTS) |i| {
+        const slot: u8 = @intCast(HOTBAR_SIZE + INV_SIZE + i);
+        const ptr = gs.slotPtr(slot);
+        try testing.expectEqual(&gs.armor[i], ptr);
+    }
+}
+
+test "slotPtr: equip slots 49-52" {
+    var gs = makeTestGameState();
+    for (0..EQUIP_SLOTS) |i| {
+        const slot: u8 = @intCast(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + i);
+        const ptr = gs.slotPtr(slot);
+        try testing.expectEqual(&gs.equip[i], ptr);
+    }
+}
+
+test "slotPtr: offhand slot 53" {
+    var gs = makeTestGameState();
+    const ptr = gs.slotPtr(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS);
+    try testing.expectEqual(&gs.offhand, ptr);
+}
+
+test "clickSlot: pick up item from hotbar" {
+    var gs = makeTestGameState();
+    gs.hotbar[0] = .stone;
+    gs.carried_item = .air;
+
+    gs.clickSlot(0);
+
+    try testing.expectEqual(WorldState.BlockType.air, gs.hotbar[0]);
+    try testing.expectEqual(WorldState.BlockType.stone, gs.carried_item);
+}
+
+test "clickSlot: swap carried with slot" {
+    var gs = makeTestGameState();
+    gs.hotbar[0] = .stone;
+    gs.carried_item = .dirt;
+
+    gs.clickSlot(0);
+
+    try testing.expectEqual(WorldState.BlockType.dirt, gs.hotbar[0]);
+    try testing.expectEqual(WorldState.BlockType.stone, gs.carried_item);
+}
+
+test "clickSlot: both empty does nothing" {
+    var gs = makeTestGameState();
+    gs.hotbar[0] = .air;
+    gs.carried_item = .air;
+
+    gs.clickSlot(0);
+
+    try testing.expectEqual(WorldState.BlockType.air, gs.hotbar[0]);
+    try testing.expectEqual(WorldState.BlockType.air, gs.carried_item);
+}
+
+test "quickMove: hotbar to inventory" {
+    var gs = makeTestGameState();
+    gs.hotbar[0] = .stone;
+    gs.inventory[0] = .air;
+
+    gs.quickMove(0);
+
+    try testing.expectEqual(WorldState.BlockType.air, gs.hotbar[0]);
+    try testing.expectEqual(WorldState.BlockType.stone, gs.inventory[0]);
+}
+
+test "quickMove: inventory to hotbar" {
+    var gs = makeTestGameState();
+    gs.hotbar = .{.dirt} ** HOTBAR_SIZE; // fill hotbar except slot 2
+    gs.hotbar[2] = .air;
+    gs.inventory[0] = .stone;
+
+    gs.quickMove(HOTBAR_SIZE); // slot 9 = first inventory slot
+
+    try testing.expectEqual(WorldState.BlockType.stone, gs.hotbar[2]);
+    try testing.expectEqual(WorldState.BlockType.air, gs.inventory[0]);
+}
+
+test "quickMove: no empty target does nothing" {
+    var gs = makeTestGameState();
+    gs.hotbar[0] = .stone;
+    gs.inventory = .{.dirt} ** INV_SIZE; // all full
+
+    gs.quickMove(0);
+
+    // Item stays in place
+    try testing.expectEqual(WorldState.BlockType.stone, gs.hotbar[0]);
+}
+
+test "blockTexIndices: air returns -1" {
+    const tex = blockTexIndices(.air);
+    try testing.expectEqual(@as(i16, -1), tex.top);
+    try testing.expectEqual(@as(i16, -1), tex.side);
+}
+
+test "blockTexIndices: oak_log has different top and side" {
+    const tex = blockTexIndices(.oak_log);
+    try testing.expect(tex.top != tex.side);
+}
+
+test "blockShape: slabs and stairs" {
+    try testing.expectEqual(WidgetData.BlockShape.slab_bottom, blockShape(.oak_slab_bottom));
+    try testing.expectEqual(WidgetData.BlockShape.slab_top, blockShape(.oak_slab_top));
+    try testing.expectEqual(WidgetData.BlockShape.stairs, blockShape(.oak_stairs_south));
+    try testing.expectEqual(WidgetData.BlockShape.full, blockShape(.stone));
+}
+
+test "slot boundary constants" {
+    // Verify slot layout: hotbar(9) + inventory(36) + armor(4) + equip(4) + offhand(1) = 54
+    try testing.expectEqual(@as(u8, 9), HOTBAR_SIZE);
+    try testing.expectEqual(@as(u8, 36), INV_SIZE);
+    try testing.expectEqual(@as(u8, 4), ARMOR_SLOTS);
+    try testing.expectEqual(@as(u8, 4), EQUIP_SLOTS);
+    try testing.expectEqual(@as(u8, 54), HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS + 1);
+}
