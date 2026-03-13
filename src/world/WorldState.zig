@@ -1254,6 +1254,136 @@ pub fn generateChunkMesh(
     };
 }
 
+pub fn generateLodChunkMesh(
+    allocator: std.mem.Allocator,
+    chunk: *const Chunk,
+    neighbors: [6]?*const Chunk,
+) !ChunkMeshResult {
+    const tz = tracy.zone(@src(), "generateLodChunkMesh");
+    defer tz.end();
+
+    var padded: [PADDED_BLOCKS]BlockType = undefined;
+    buildPaddedBlocks(&padded, chunk, neighbors);
+
+    const max_sky_packed = packLight(255, .{ 0, 0, 0 });
+    const lod_light = LightEntry{ .corners = .{ max_sky_packed, max_sky_packed, max_sky_packed, max_sky_packed } };
+    const lod_ao: [4]u2 = .{ 0, 0, 0, 0 };
+
+    var layer_faces: [LAYER_COUNT][6]std.ArrayList(FaceData) = undefined;
+    var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_faces[l][n] = .empty;
+            layer_lights[l][n] = .empty;
+        }
+    }
+    errdefer for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_faces[l][n].deinit(allocator);
+            layer_lights[l][n].deinit(allocator);
+        }
+    };
+
+    for (0..CHUNK_SIZE) |by| {
+        for (0..CHUNK_SIZE) |bz| {
+            for (0..CHUNK_SIZE) |bx| {
+                const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
+                const block = padded[@intCast(base)];
+                if (block == .air) continue;
+
+                const layer = @intFromEnum(block_properties.renderLayer(block));
+
+                for (0..6) |face| {
+                    const neighbor = padded[@intCast(base + padded_face_deltas[face])];
+
+                    if (block_properties.isOpaque(neighbor)) continue;
+                    if (neighbor == block and block_properties.cullsSelf(block)) continue;
+
+                    const tex_index: u8 = switch (block) {
+                        .air => unreachable,
+                        .glass => 0,
+                        .grass_block => 1,
+                        .dirt => 2,
+                        .stone => 3,
+                        .glowstone => 4,
+                        .sand => 5,
+                        .snow => 6,
+                        .water => 7,
+                        .gravel => 8,
+                        .cobblestone => 9,
+                        .oak_log => if (face == 4 or face == 5) @as(u8, 27) else 10,
+                        .oak_planks => 11,
+                        .bricks => 12,
+                        .bedrock => 13,
+                        .gold_ore => 14,
+                        .iron_ore => 15,
+                        .coal_ore => 16,
+                        .diamond_ore => 17,
+                        .sponge => 18,
+                        .pumice => 19,
+                        .wool => 20,
+                        .gold_block => 21,
+                        .iron_block => 22,
+                        .diamond_block => 23,
+                        .bookshelf => 24,
+                        .obsidian => 25,
+                        .oak_leaves => 26,
+                        .oak_slab_bottom, .oak_slab_top => 11,
+                        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => 11,
+                    };
+
+                    const face_data = types.packFaceData(
+                        @intCast(bx),
+                        @intCast(by),
+                        @intCast(bz),
+                        tex_index,
+                        @intCast(face),
+                        lod_ao,
+                    );
+
+                    try layer_faces[layer][face].append(allocator, face_data);
+                    try layer_lights[layer][face].append(allocator, lod_light);
+                }
+            }
+        }
+    }
+
+    var layer_face_counts: [LAYER_COUNT][6]u32 = undefined;
+    var total_face_count: u32 = 0;
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            layer_face_counts[l][n] = @intCast(layer_faces[l][n].items.len);
+            total_face_count += layer_face_counts[l][n];
+        }
+    }
+
+    const faces = try allocator.alloc(FaceData, total_face_count);
+    errdefer allocator.free(faces);
+    const lights = try allocator.alloc(LightEntry, total_face_count);
+    errdefer allocator.free(lights);
+
+    var write_offset: usize = 0;
+    for (0..LAYER_COUNT) |l| {
+        for (0..6) |n| {
+            const fitems = layer_faces[l][n].items;
+            const litems = layer_lights[l][n].items;
+            @memcpy(faces[write_offset..][0..fitems.len], fitems);
+            @memcpy(lights[write_offset..][0..litems.len], litems);
+            write_offset += fitems.len;
+            layer_faces[l][n].deinit(allocator);
+            layer_lights[l][n].deinit(allocator);
+        }
+    }
+
+    return .{
+        .faces = faces,
+        .layer_face_counts = layer_face_counts,
+        .total_face_count = total_face_count,
+        .lights = lights,
+        .light_count = total_face_count,
+    };
+}
+
 pub fn generateChunkLightOnly(
     allocator: std.mem.Allocator,
     chunk: *const Chunk,

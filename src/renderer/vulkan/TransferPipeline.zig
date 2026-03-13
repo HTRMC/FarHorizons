@@ -355,11 +355,11 @@ pub const TransferPipeline = struct {
                         self.pushCommitted(.{
                             .key = key,
                             .chunk_data = .{
-                                .position = key.position(),
+                                .position = key.positionScaled(result.voxel_size),
                                 .light_start = 0,
                                 .face_start = 0,
                                 .face_counts = totalFaceCounts(result.layer_face_counts),
-                                .voxel_size = 1,
+                                .voxel_size = result.voxel_size,
                             },
                             .face_alloc = null,
                             .light_alloc = null,
@@ -410,11 +410,11 @@ pub const TransferPipeline = struct {
                     self.pushCommitted(.{
                         .key = key,
                         .chunk_data = .{
-                            .position = key.position(),
+                            .position = key.positionScaled(result.voxel_size),
                             .light_start = la.offset,
                             .face_start = 0,
                             .face_counts = totalFaceCounts(result.layer_face_counts),
-                            .voxel_size = 1,
+                            .voxel_size = result.voxel_size,
                         },
                         .face_alloc = null,
                         .light_alloc = light_alloc,
@@ -433,11 +433,11 @@ pub const TransferPipeline = struct {
                     self.pushCommitted(.{
                         .key = key,
                         .chunk_data = .{
-                            .position = key.position(),
+                            .position = key.positionScaled(result.voxel_size),
                             .light_start = 0,
                             .face_start = 0,
                             .face_counts = .{ 0, 0, 0, 0, 0, 0 },
-                            .voxel_size = 1,
+                            .voxel_size = result.voxel_size,
                         },
                         .face_alloc = null,
                         .light_alloc = null,
@@ -510,11 +510,11 @@ pub const TransferPipeline = struct {
                         self.pushCommitted(.{
                             .key = key,
                             .chunk_data = .{
-                                .position = key.position(),
+                                .position = key.positionScaled(result.voxel_size),
                                 .light_start = 0,
                                 .face_start = fa.offset,
                                 .face_counts = totalFaceCounts(result.layer_face_counts),
-                                .voxel_size = 1,
+                                .voxel_size = result.voxel_size,
                             },
                             .face_alloc = fa,
                             .light_alloc = null,
@@ -541,11 +541,11 @@ pub const TransferPipeline = struct {
                 self.pushCommitted(.{
                     .key = key,
                     .chunk_data = .{
-                        .position = key.position(),
+                        .position = key.positionScaled(result.voxel_size),
                         .light_start = la.offset,
                         .face_start = fa.offset,
                         .face_counts = totalFaceCounts(result.layer_face_counts),
-                        .voxel_size = 1,
+                        .voxel_size = result.voxel_size,
                     },
                     .face_alloc = fa,
                     .light_alloc = if (result.light_count > 0) light_alloc else null,

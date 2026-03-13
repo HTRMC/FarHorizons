@@ -12,6 +12,7 @@ const vk_utils = @import("vk_utils.zig");
 const TransferPipeline = @import("TransferPipeline.zig").TransferPipeline;
 const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
+const LodWorker = @import("../../world/LodWorker.zig").LodWorker;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const GameState = @import("../../GameState.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
@@ -70,6 +71,7 @@ pub const VulkanRenderer = struct {
     initial_cache_hash: u64,
     transfer_pipeline: TransferPipeline,
     mesh_worker: ?*MeshWorker,
+    lod_worker: ?*LodWorker,
     game_state: ?*GameState,
     ui_manager: ?*UiManager,
     framebuffer_resized: bool,
@@ -156,6 +158,7 @@ pub const VulkanRenderer = struct {
             .render_state = undefined,
             .transfer_pipeline = undefined,
             .mesh_worker = null,
+            .lod_worker = null,
             .game_state = game_state,
             .ui_manager = null,
             .framebuffer_resized = false,
@@ -273,7 +276,20 @@ pub const VulkanRenderer = struct {
         mw.start();
         self.transfer_pipeline.start();
 
-        // 6. Request initial load batch if async loading
+        // 7. Create + start LodWorker
+        if (gs.world_type == .normal) {
+            const lw = self.allocator.create(LodWorker) catch |err| {
+                std.log.err("Failed to allocate LodWorker: {}", .{err});
+                return;
+            };
+            lw.initInPlace(self.allocator, gs.world_seed, mw);
+            lw.syncPlayerChunk(gs.player_chunk);
+            lw.start();
+            self.lod_worker = lw;
+            gs.lod_worker = lw;
+        }
+
+        // 8. Request initial load batch if async loading
         if (!gs.initial_load_ready) {
             const WorldState = @import("../../world/WorldState.zig");
             const rd: i32 = 3; // spawn radius for initial load
@@ -309,11 +325,17 @@ pub const VulkanRenderer = struct {
     }
 
     fn stopWorkerPipeline(self: *VulkanRenderer) void {
+        // Stop LOD worker first (it injects into mesh worker output queue)
+        if (self.lod_worker) |lw| {
+            lw.stop();
+        }
+
         // Stop streamer first (produces chunks for main thread)
         if (self.game_state) |gs| {
             gs.streamer.stop();
             gs.mesh_worker = null;
             gs.transfer_pipeline = null;
+            gs.lod_worker = null;
         }
 
         // Stop threads in dependency order: transfer (consumes mesh) → mesh (produces)
@@ -338,6 +360,10 @@ pub const VulkanRenderer = struct {
 
         // Clear references and destroy
         self.transfer_pipeline.mesh_worker = null;
+        if (self.lod_worker) |lw| {
+            self.allocator.destroy(lw);
+            self.lod_worker = null;
+        }
         if (self.mesh_worker) |mw| {
             self.allocator.destroy(mw);
             self.mesh_worker = null;
@@ -391,6 +417,38 @@ pub const VulkanRenderer = struct {
                             gs.dirty_chunks.clear();
                         }
                     }
+
+                    // Drain LOD unloads
+                    if (self.lod_worker) |lw| {
+                        const WorldState = @import("../../world/WorldState.zig");
+                        var lod_unloads: [256]WorldState.ChunkKey = undefined;
+                        const lod_count = lw.drainUnloads(&lod_unloads);
+                        for (lod_unloads[0..lod_count]) |lod_key| {
+                            const wr2 = &self.render_state.world_renderer;
+                            // Defer-free TLSF allocs for the LOD slot
+                            if (wr2.lod_slot_map.get(lod_key)) |lod_slot| {
+                                if (wr2.chunk_face_alloc[lod_slot]) |fa| {
+                                    if (fa.handle != TlsfAllocator.null_handle) {
+                                        const idx = self.deferred_face_free_counts[cf];
+                                        if (idx < 2048) {
+                                            self.deferred_face_frees[cf][idx] = fa.handle;
+                                            self.deferred_face_free_counts[cf] = idx + 1;
+                                        }
+                                    }
+                                }
+                                if (wr2.chunk_light_alloc[lod_slot]) |la| {
+                                    if (la.handle != TlsfAllocator.null_handle) {
+                                        const idx = self.deferred_light_free_counts[cf];
+                                        if (idx < 2048) {
+                                            self.deferred_light_frees[cf][idx] = la.handle;
+                                            self.deferred_light_free_counts[cf] = idx + 1;
+                                        }
+                                    }
+                                }
+                            }
+                            wr2.releaseLodSlot(lod_key);
+                        }
+                    }
                 }
 
                 // Always: rebuild draw commands for this frame
@@ -435,8 +493,10 @@ pub const VulkanRenderer = struct {
         const wr = &self.render_state.world_renderer;
 
         for (buf[0..count]) |entry| {
+            const is_lod = entry.chunk_data.voxel_size > 1;
+
             // Resolve ChunkKey → GPU slot (allocate if new)
-            const slot: u16 = wr.getOrAllocateSlot(entry.key) orelse {
+            const slot: u16 = (if (is_lod) wr.getOrAllocateLodSlot(entry.key) else wr.getOrAllocateSlot(entry.key)) orelse {
                 // No slot available — free TLSF allocs to prevent leak
                 const io_val = Io.Threaded.global_single_threaded.io();
                 self.transfer_pipeline.tlsf_mutex.lockUncancelable(io_val);

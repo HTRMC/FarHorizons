@@ -15,6 +15,7 @@ const Storage = @import("world/storage/Storage.zig");
 const WorldRenderer = @import("renderer/vulkan/WorldRenderer.zig").WorldRenderer;
 const TlsfAllocator = @import("allocators/TlsfAllocator.zig").TlsfAllocator;
 const MeshWorker = @import("world/MeshWorker.zig").MeshWorker;
+const LodWorker = @import("world/LodWorker.zig").LodWorker;
 const SurfaceHeightMap = @import("world/SurfaceHeightMap.zig").SurfaceHeightMap;
 const TransferPipeline = @import("renderer/vulkan/TransferPipeline.zig").TransferPipeline;
 const Io = std.Io;
@@ -271,6 +272,7 @@ initial_load_ready: bool = true,
 
 // Pipeline references for stats reporting (set by renderer)
 mesh_worker: ?*MeshWorker = null,
+lod_worker: ?*LodWorker = null,
 transfer_pipeline: ?*TransferPipeline = null,
 stats_last_time: ?Io.Timestamp = null,
 
@@ -885,8 +887,11 @@ pub fn worldTick(self: *GameState) void {
     // Scan for chunks to unload (incremental cursor)
     self.scanUnloads();
 
-    // Sync streamer player position + tick storage
+    // Sync streamer + LOD worker player position + tick storage
     self.streamer.syncPlayerChunk(self.player_chunk);
+    if (self.lod_worker) |lw| {
+        lw.syncPlayerChunk(self.player_chunk);
+    }
     if (self.storage) |s| {
         s.tick();
     }

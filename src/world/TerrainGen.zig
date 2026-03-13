@@ -654,6 +654,65 @@ fn trilerp8(lo: [4]f32, hi: [4]f32, fx: f32, fy: f32, fz: f32) f32 {
 }
 
 // ============================================================
+// LOD chunk generation (2D heightmap only, no caves/trees/bedrock)
+// ============================================================
+
+pub fn generateLodChunk(chunk: *Chunk, key: ChunkKey, seed: u64, voxel_size: u32) void {
+    const ng = Noise.NoiseGen.init(seed);
+    const vs: i32 = @intCast(voxel_size);
+    const step_f: f64 = @floatFromInt(Noise.STEP);
+
+    // Clear chunk to air
+    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+
+    for (0..CS) |bz| {
+        for (0..CS) |bx| {
+            // World position at voxel center
+            const wx: i32 = key.cx * @as(i32, CS) * vs + @as(i32, @intCast(bx)) * vs + @divTrunc(vs, 2);
+            const wz: i32 = key.cz * @as(i32, CS) * vs + @as(i32, @intCast(bz)) * vs + @divTrunc(vs, 2);
+
+            // Convert to grid-space
+            const gx: f64 = @as(f64, @floatFromInt(wx)) / step_f;
+            const gz: f64 = @as(f64, @floatFromInt(wz)) / step_f;
+
+            // Sample 2D roughness noise
+            const rough_raw: f32 = @floatCast(ng.roughness.sample3D(gx * 100.0, 0, gz * 100.0));
+
+            // Compute surface_y (same 2D formula as generateChunk lines 73-95)
+            // Note: height_mod / var65 are omitted — they only affect the 3D density bias
+            var var67 = @abs(rough_raw / 8000.0) * 3.0 - 3.0;
+            if (var67 < 0.0) {
+                var67 = @max(var67 / 2.0, -1.0);
+                var67 = var67 / 1.4 / 2.0;
+            } else {
+                var67 = @min(var67, 1.0) / 6.0;
+            }
+            var67 = var67 * 17.0 / 16.0;
+
+            const surface_grid = 8.5 + var67 * 4.0;
+            const surface_y = surface_grid * INFDEV_Y_STEP - INFDEV_SEA_LEVEL;
+
+            for (0..CS) |by| {
+                const wy: i32 = key.cy * @as(i32, CS) * vs + @as(i32, @intCast(by)) * vs;
+                const depth: i32 = @as(i32, @intFromFloat(@floor(surface_y))) - wy;
+                const idx = WorldState.chunkIndex(bx, by, bz);
+
+                if (depth >= 4 * vs) {
+                    chunk.blocks[idx] = .stone;
+                } else if (depth >= 1 * vs) {
+                    chunk.blocks[idx] = .dirt;
+                } else if (depth >= 0) {
+                    chunk.blocks[idx] = if (wy < SEA_LEVEL) .sand else .grass_block;
+                } else if (wy <= SEA_LEVEL) {
+                    chunk.blocks[idx] = .water;
+                }
+                // else: already air
+            }
+        }
+    }
+}
+
+// ============================================================
 // Tests
 // ============================================================
 

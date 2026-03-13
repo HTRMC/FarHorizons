@@ -56,6 +56,7 @@ pub const WorldRenderer = struct {
     // Slot pool: maps ChunkKey → GPU slot index
     allocator: std.mem.Allocator,
     chunk_slot_map: std.AutoHashMap(WorldState.ChunkKey, u16),
+    lod_slot_map: std.AutoHashMap(WorldState.ChunkKey, u16),
     free_slots: [TOTAL_RENDER_CHUNKS]u16,
     free_slot_count: u32,
 
@@ -101,6 +102,7 @@ pub const WorldRenderer = struct {
         });
         self.allocator = allocator;
         self.chunk_slot_map = std.AutoHashMap(WorldState.ChunkKey, u16).init(allocator);
+        self.lod_slot_map = std.AutoHashMap(WorldState.ChunkKey, u16).init(allocator);
         // Initialize free slot stack (all slots available, highest first so lowest pops first)
         for (0..TOTAL_RENDER_CHUNKS) |i| {
             self.free_slots[i] = @intCast(TOTAL_RENDER_CHUNKS - 1 - i);
@@ -128,6 +130,7 @@ pub const WorldRenderer = struct {
         self.face_tlsf.deinit();
         self.light_tlsf.deinit();
         self.chunk_slot_map.deinit();
+        self.lod_slot_map.deinit();
         self.gpu_alloc.destroyBuffer(self.indirect_alloc);
         self.gpu_alloc.destroyBuffer(self.indirect_count_alloc);
         vk.destroyPipeline(device, self.overdraw_pipeline, null);
@@ -184,6 +187,17 @@ pub const WorldRenderer = struct {
 
         self.chunk_slot_map.clearRetainingCapacity();
 
+        // Also clear LOD slots
+        var lod_it = self.lod_slot_map.iterator();
+        while (lod_it.next()) |lod_entry| {
+            const lod_slot = lod_entry.value_ptr.*;
+            self.chunk_data[lod_slot] = empty_chunk;
+            self.writeChunkData(lod_slot);
+            self.chunk_face_alloc[lod_slot] = null;
+            self.chunk_light_alloc[lod_slot] = null;
+        }
+        self.lod_slot_map.clearRetainingCapacity();
+
         // Reset free slot stack (all slots available, highest first so lowest pops first)
         for (0..TOTAL_RENDER_CHUNKS) |i| {
             self.free_slots[i] = @intCast(TOTAL_RENDER_CHUNKS - 1 - i);
@@ -215,6 +229,41 @@ pub const WorldRenderer = struct {
         _ = self.chunk_slot_map.remove(key);
     }
 
+    /// Get or allocate a GPU slot for a LOD chunk key (LOD-space coords).
+    pub fn getOrAllocateLodSlot(self: *WorldRenderer, key: WorldState.ChunkKey) ?u16 {
+        if (self.lod_slot_map.get(key)) |slot| return slot;
+        if (self.free_slot_count == 0) {
+            std.log.warn("WorldRenderer: no free GPU slots for LOD chunk ({},{},{})", .{ key.cx, key.cy, key.cz });
+            return null;
+        }
+        self.free_slot_count -= 1;
+        const slot = self.free_slots[self.free_slot_count];
+        self.lod_slot_map.put(key, slot) catch {
+            self.free_slots[self.free_slot_count] = slot;
+            self.free_slot_count += 1;
+            return null;
+        };
+        return slot;
+    }
+
+    /// Release a GPU slot for a LOD chunk key.
+    pub fn releaseLodSlot(self: *WorldRenderer, key: WorldState.ChunkKey) void {
+        const slot = self.lod_slot_map.get(key) orelse return;
+        self.chunk_data[slot] = .{
+            .position = .{ 0, 0, 0 },
+            .light_start = 0,
+            .face_start = 0,
+            .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+            .voxel_size = 1,
+        };
+        self.writeChunkData(slot);
+        self.chunk_face_alloc[slot] = null;
+        self.chunk_light_alloc[slot] = null;
+        self.free_slots[self.free_slot_count] = slot;
+        self.free_slot_count += 1;
+        _ = self.lod_slot_map.remove(key);
+    }
+
     pub fn writeChunkData(self: *WorldRenderer, slot: usize) void {
         const base_ptr = self.chunk_data_alloc.mapped_ptr orelse return;
         const offset = slot * @sizeOf(ChunkData);
@@ -231,39 +280,46 @@ pub const WorldRenderer = struct {
 
         var layer_counts: [LAYER_COUNT]u32 = .{ 0, 0, 0 };
 
-        var it = self.chunk_slot_map.iterator();
-        while (it.next()) |entry| {
-            const slot = entry.value_ptr.*;
-            const cd = self.chunk_data[slot];
+        // Iterate both LOD0 and LOD slot maps
+        const slot_maps = [_]*const std.AutoHashMap(WorldState.ChunkKey, u16){
+            &self.chunk_slot_map,
+            &self.lod_slot_map,
+        };
+        for (slot_maps) |slot_map| {
+            var it = slot_map.iterator();
+            while (it.next()) |entry| {
+                const slot = entry.value_ptr.*;
+                const cd = self.chunk_data[slot];
 
-            var total: u32 = 0;
-            for (cd.face_counts) |fc| total += fc;
-            if (total == 0) continue;
+                var total: u32 = 0;
+                for (cd.face_counts) |fc| total += fc;
+                if (total == 0) continue;
 
-            const cs: i32 = @as(i32, WorldState.CHUNK_SIZE) * @as(i32, @intCast(@max(1, cd.voxel_size)));
-            const pd = aabbSignedDist(camera_pos.x, camera_pos.y, camera_pos.z, cd.position, cs);
-            const lfc = self.chunk_layer_counts[slot];
+                const cs: i32 = @as(i32, WorldState.CHUNK_SIZE) * @as(i32, @intCast(@max(1, cd.voxel_size)));
+                const pd = aabbSignedDist(camera_pos.x, camera_pos.y, camera_pos.z, cd.position, cs);
+                const lfc = self.chunk_layer_counts[slot];
 
-            // Faces are stored: [layer0_n0..n5][layer1_n0..n5][layer2_n0..n5]
-            var layer_offset: u32 = 0;
-            for (0..LAYER_COUNT) |layer| {
-                var normal_offset: u32 = 0;
-                for (0..6) |normal_idx| {
-                    const fc = lfc[layer][normal_idx];
-                    if (fc > 0 and isNormalVisible(normal_idx, pd)) {
-                        const cmd_idx = layer * MAX_INDIRECT_COMMANDS + layer_counts[layer];
-                        commands[cmd_idx] = .{
-                            .index_count = fc * 6,
-                            .instance_count = 1,
-                            .first_index = 0,
-                            .vertex_offset = @intCast((cd.face_start + layer_offset + normal_offset) * 4),
-                            .first_instance = @intCast(slot),
-                        };
-                        layer_counts[layer] += 1;
+                // Faces are stored: [layer0_n0..n5][layer1_n0..n5][layer2_n0..n5]
+                var layer_offset: u32 = 0;
+                for (0..LAYER_COUNT) |layer| {
+                    var normal_offset: u32 = 0;
+                    for (0..6) |normal_idx| {
+                        const fc = lfc[layer][normal_idx];
+                        if (fc > 0 and isNormalVisible(normal_idx, pd)) {
+                            const cmd_idx = layer * MAX_INDIRECT_COMMANDS + layer_counts[layer];
+                            commands[cmd_idx] = .{
+                                .index_count = fc * 6,
+                                .instance_count = 1,
+                                .first_index = 0,
+                                .vertex_offset = @intCast((cd.face_start + layer_offset + normal_offset) * 4),
+                                .first_instance = @intCast(slot),
+                            };
+                            layer_counts[layer] += 1;
+                        }
+                        normal_offset += fc;
                     }
-                    normal_offset += fc;
+                    layer_offset += normal_offset;
                 }
-                layer_offset += normal_offset;
             }
         }
 
