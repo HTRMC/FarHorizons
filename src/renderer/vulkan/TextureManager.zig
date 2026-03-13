@@ -6,7 +6,10 @@ const vk_utils = @import("vk_utils.zig");
 const app_config = @import("../../app_config.zig");
 const tracy = @import("../../platform/tracy.zig");
 
-const BLOCK_TEXTURE_COUNT = 30;
+const Io = std.Io;
+const Dir = Io.Dir;
+
+const BLOCK_TEXTURE_COUNT = 32;
 const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "glass.png",      "grass_block.png", "dirt.png",       "stone.png",
     "glowstone.png",  "sand.png",        "snow.png",       "water.png",
@@ -15,7 +18,25 @@ const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "coal_ore.png",   "diamond_ore.png", "sponge.png",     "pumice.png",
     "wool.png",       "gold_block.png",  "iron_block.png", "diamond_block.png",
     "bookshelf.png",  "obsidian.png",    "oak_leaves.png", "oak_log_top.png",
-    "torch.png",      "ladder.png",
+    "torch.png",      "ladder.png",      "torch_fire.png", "torch_fire_particle.png",
+};
+
+const TEX_W = 16;
+const TEX_H = 16;
+const FRAME_SIZE: usize = TEX_W * TEX_H * 4; // 1024 bytes per frame
+const MAX_ANIMATED_TEXTURES = 8;
+const TICK_RATE: f32 = 20.0; // Minecraft ticks per second
+const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
+
+const AnimatedTexture = struct {
+    layer_index: u32,
+    frame_count: u32,
+    frametime: u32, // ticks per frame
+    interpolate: bool,
+    frame_data: []const u8, // all frames: frame_count * FRAME_SIZE
+    current_frame: u32,
+    sub_frame: u32,
+    dirty: bool,
 };
 
 pub const TextureManager = struct {
@@ -26,6 +47,15 @@ pub const TextureManager = struct {
     bindless_descriptor_set_layout: vk.VkDescriptorSetLayout,
     bindless_descriptor_pool: vk.VkDescriptorPool,
     bindless_descriptor_set: vk.VkDescriptorSet,
+
+    // Animation state
+    animations: [MAX_ANIMATED_TEXTURES]AnimatedTexture,
+    animation_count: u32,
+    anim_staging_buffer: vk.VkBuffer,
+    anim_staging_memory: vk.VkDeviceMemory,
+    anim_staging_ptr: [*]u8,
+    tick_accumulator: f32,
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, ctx: *const VulkanContext) !TextureManager {
         const tz = tracy.zone(@src(), "TextureManager.init");
@@ -39,21 +69,192 @@ pub const TextureManager = struct {
             .bindless_descriptor_set_layout = null,
             .bindless_descriptor_pool = null,
             .bindless_descriptor_set = null,
+            .animations = undefined,
+            .animation_count = 0,
+            .anim_staging_buffer = null,
+            .anim_staging_memory = null,
+            .anim_staging_ptr = undefined,
+            .tick_accumulator = 0,
+            .allocator = allocator,
         };
 
         try self.createTextureImage(allocator, ctx);
+        try self.createAnimationStagingBuffer(ctx);
         try self.createBindlessDescriptorSet(ctx);
 
         return self;
     }
 
     pub fn deinit(self: *TextureManager, device: vk.VkDevice) void {
+        for (0..self.animation_count) |i| {
+            self.allocator.free(self.animations[i].frame_data);
+        }
+        if (self.anim_staging_buffer != null) {
+            vk.destroyBuffer(device, self.anim_staging_buffer, null);
+            vk.freeMemory(device, self.anim_staging_memory, null);
+        }
         vk.destroyDescriptorPool(device, self.bindless_descriptor_pool, null);
         vk.destroyDescriptorSetLayout(device, self.bindless_descriptor_set_layout, null);
         vk.destroySampler(device, self.texture_sampler, null);
         vk.destroyImageView(device, self.texture_image_view, null);
         vk.destroyImage(device, self.texture_image, null);
         vk.freeMemory(device, self.texture_image_memory, null);
+    }
+
+    /// Advance animation timers. Call once per frame with frame delta time.
+    pub fn tickAnimations(self: *TextureManager, dt: f32) void {
+        self.tick_accumulator += dt;
+
+        // Process accumulated ticks at 20Hz (Minecraft tick rate)
+        while (self.tick_accumulator >= TICK_INTERVAL) {
+            self.tick_accumulator -= TICK_INTERVAL;
+            for (0..self.animation_count) |i| {
+                var anim = &self.animations[i];
+                anim.sub_frame += 1;
+                if (anim.sub_frame >= anim.frametime) {
+                    const old_frame = anim.current_frame;
+                    anim.current_frame = (anim.current_frame + 1) % anim.frame_count;
+                    anim.sub_frame = 0;
+                    if (old_frame != anim.current_frame) {
+                        anim.dirty = true;
+                    }
+                }
+                // Interpolated textures need upload every tick
+                if (anim.interpolate) {
+                    anim.dirty = true;
+                }
+            }
+        }
+    }
+
+    /// Record animation texture uploads into the given command buffer.
+    /// Call at the start of frame recording, before any draw commands.
+    pub fn recordAnimationUploads(self: *TextureManager, cmd: vk.VkCommandBuffer) void {
+        var any_dirty = false;
+        for (0..self.animation_count) |i| {
+            if (self.animations[i].dirty) {
+                any_dirty = true;
+                break;
+            }
+        }
+        if (!any_dirty) return;
+
+        // Write interpolated frame data to staging buffer
+        for (0..self.animation_count) |i| {
+            var anim = &self.animations[i];
+            if (!anim.dirty) continue;
+
+            const staging_offset = i * FRAME_SIZE;
+            const dst = self.anim_staging_ptr[staging_offset..][0..FRAME_SIZE];
+
+            const cur_offset = anim.current_frame * FRAME_SIZE;
+            const cur_pixels = anim.frame_data[cur_offset..][0..FRAME_SIZE];
+
+            if (anim.interpolate and anim.frame_count > 1) {
+                const next_frame = (anim.current_frame + 1) % anim.frame_count;
+                const next_offset = next_frame * FRAME_SIZE;
+                const next_pixels = anim.frame_data[next_offset..][0..FRAME_SIZE];
+                const progress: f32 = @as(f32, @floatFromInt(anim.sub_frame)) /
+                    @as(f32, @floatFromInt(anim.frametime));
+
+                // Linear interpolation per component (Minecraft's mix())
+                for (0..FRAME_SIZE) |p| {
+                    const a: f32 = @floatFromInt(cur_pixels[p]);
+                    const b: f32 = @floatFromInt(next_pixels[p]);
+                    dst[p] = @intFromFloat(@min(255.0, @max(0.0, a + (b - a) * progress)));
+                }
+            } else {
+                @memcpy(dst, cur_pixels);
+            }
+
+            anim.dirty = false;
+        }
+
+        // Barrier: SHADER_READ_ONLY → TRANSFER_DST for animated layers
+        var barriers: [MAX_ANIMATED_TEXTURES]vk.VkImageMemoryBarrier = undefined;
+        var barrier_count: u32 = 0;
+        for (0..self.animation_count) |i| {
+            barriers[barrier_count] = .{
+                .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                .pNext = null,
+                .srcAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+                .dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+                .oldLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                .newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+                .image = self.texture_image,
+                .subresourceRange = .{
+                    .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .baseMipLevel = 0,
+                    .levelCount = 1,
+                    .baseArrayLayer = self.animations[i].layer_index,
+                    .layerCount = 1,
+                },
+            };
+            barrier_count += 1;
+        }
+
+        vk.cmdPipelineBarrier(
+            cmd,
+            vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            barrier_count,
+            &barriers,
+        );
+
+        // Copy from staging buffer to image layers
+        var regions: [MAX_ANIMATED_TEXTURES]vk.VkBufferImageCopy = undefined;
+        for (0..self.animation_count) |i| {
+            regions[i] = .{
+                .bufferOffset = @intCast(i * FRAME_SIZE),
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource = .{
+                    .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = self.animations[i].layer_index,
+                    .layerCount = 1,
+                },
+                .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
+                .imageExtent = .{ .width = TEX_W, .height = TEX_H, .depth = 1 },
+            };
+        }
+
+        vk.cmdCopyBufferToImage(
+            cmd,
+            self.anim_staging_buffer,
+            self.texture_image,
+            vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            self.animation_count,
+            &regions,
+        );
+
+        // Barrier: TRANSFER_DST → SHADER_READ_ONLY
+        for (0..barrier_count) |i| {
+            barriers[i].srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT;
+            barriers[i].dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT;
+            barriers[i].oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barriers[i].newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        }
+
+        vk.cmdPipelineBarrier(
+            cmd,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+            vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0,
+            0,
+            null,
+            0,
+            null,
+            barrier_count,
+            &barriers,
+        );
     }
 
     pub fn updateFaceDescriptor(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
@@ -95,6 +296,24 @@ pub const TextureManager = struct {
         vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
     }
 
+    fn createAnimationStagingBuffer(self: *TextureManager, ctx: *const VulkanContext) !void {
+        if (self.animation_count == 0) return;
+
+        const staging_size: vk.VkDeviceSize = @intCast(self.animation_count * FRAME_SIZE);
+        try vk_utils.createBuffer(
+            ctx,
+            staging_size,
+            vk.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            vk.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | vk.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &self.anim_staging_buffer,
+            &self.anim_staging_memory,
+        );
+
+        var data: ?*anyopaque = null;
+        try vk.mapMemory(ctx.device, self.anim_staging_memory, 0, staging_size, 0, &data);
+        self.anim_staging_ptr = @ptrCast(data.?);
+    }
+
     fn createTextureImage(self: *TextureManager, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
         const tz = tracy.zone(@src(), "createTextureImage");
         defer tz.end();
@@ -104,9 +323,7 @@ pub const TextureManager = struct {
 
         const sep = std.fs.path.sep_str;
 
-        const tex_w = 16;
-        const tex_h = 16;
-        const layer_size: vk.VkDeviceSize = tex_w * tex_h * 4;
+        const layer_size: vk.VkDeviceSize = FRAME_SIZE;
         const total_size: vk.VkDeviceSize = layer_size * BLOCK_TEXTURE_COUNT;
 
         var staging_buffer: vk.VkBuffer = undefined;
@@ -126,6 +343,8 @@ pub const TextureManager = struct {
         try vk.mapMemory(ctx.device, staging_buffer_memory, 0, total_size, 0, &data);
         const dst: [*]u8 = @ptrCast(data.?);
 
+        self.animation_count = 0;
+
         for (0..BLOCK_TEXTURE_COUNT) |i| {
             const texture_path = try std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "textures" ++ sep ++ "block" ++ sep ++ "{s}", .{ assets_path, block_texture_names[i] }, 0);
             defer allocator.free(texture_path);
@@ -139,10 +358,25 @@ pub const TextureManager = struct {
             };
             defer stbi.free(pixels);
 
+            // Copy first frame (top 16x16) to staging buffer
             const offset = i * @as(usize, @intCast(layer_size));
             const src: [*]const u8 = @ptrCast(pixels);
-            @memcpy(dst[offset..][0..@intCast(layer_size)], src[0..@intCast(layer_size)]);
-            std.log.info("Texture loaded: {s} ({}x{})", .{ block_texture_names[i], tw, th });
+            @memcpy(dst[offset..][0..FRAME_SIZE], src[0..FRAME_SIZE]);
+
+            // Check for .mcmeta animation file
+            const mcmeta_path = try std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "textures" ++ sep ++ "block" ++ sep ++ "{s}.mcmeta", .{ assets_path, block_texture_names[i] }, 0);
+            defer allocator.free(mcmeta_path);
+
+            const frame_count: u32 = @intCast(@divTrunc(@as(u32, @intCast(th)), @as(u32, @intCast(tw))));
+            if (frame_count > 1) {
+                if (self.parseMcmeta(allocator, mcmeta_path, @intCast(i), frame_count, src, @intCast(tw), @intCast(th))) {
+                    std.log.info("Texture loaded: {s} ({}x{}, {} animation frames)", .{ block_texture_names[i], tw, th, frame_count });
+                } else {
+                    std.log.info("Texture loaded: {s} ({}x{})", .{ block_texture_names[i], tw, th });
+                }
+            } else {
+                std.log.info("Texture loaded: {s} ({}x{})", .{ block_texture_names[i], tw, th });
+            }
         }
 
         vk.unmapMemory(ctx.device, staging_buffer_memory);
@@ -153,7 +387,7 @@ pub const TextureManager = struct {
             .flags = 0,
             .imageType = vk.VK_IMAGE_TYPE_2D,
             .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
-            .extent = .{ .width = tex_w, .height = tex_h, .depth = 1 },
+            .extent = .{ .width = TEX_W, .height = TEX_H, .depth = 1 },
             .mipLevels = 1,
             .arrayLayers = BLOCK_TEXTURE_COUNT,
             .samples = vk.VK_SAMPLE_COUNT_1_BIT,
@@ -251,7 +485,7 @@ pub const TextureManager = struct {
                     .layerCount = 1,
                 },
                 .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
-                .imageExtent = .{ .width = tex_w, .height = tex_h, .depth = 1 },
+                .imageExtent = .{ .width = TEX_W, .height = TEX_H, .depth = 1 },
             };
         }
 
@@ -314,7 +548,6 @@ pub const TextureManager = struct {
         try vk.queueWaitIdle(ctx.graphics_queue);
         vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd_buffers);
 
-
         const view_info = vk.VkImageViewCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .pNext = null,
@@ -361,6 +594,90 @@ pub const TextureManager = struct {
         };
 
         self.texture_sampler = try vk.createSampler(ctx.device, &sampler_info, null);
+    }
+
+    /// Try to parse a .mcmeta file and register an animated texture.
+    /// Returns true if animation was registered.
+    fn parseMcmeta(
+        self: *TextureManager,
+        allocator: std.mem.Allocator,
+        mcmeta_path: [:0]const u8,
+        layer_index: u32,
+        frame_count: u32,
+        pixels: [*]const u8,
+        width: u32,
+        height: u32,
+    ) bool {
+        if (self.animation_count >= MAX_ANIMATED_TEXTURES) return false;
+
+        const io = Io.Threaded.global_single_threaded.io();
+        const file = Dir.openFileAbsolute(io, mcmeta_path, .{}) catch return false;
+        defer file.close(io);
+
+        const stat = file.stat(io) catch return false;
+        const mcmeta_data = allocator.alloc(u8, stat.size) catch return false;
+        defer allocator.free(mcmeta_data);
+        _ = file.readPositionalAll(io, mcmeta_data, 0) catch return false;
+
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, mcmeta_data, .{}) catch return false;
+        defer parsed.deinit();
+
+        const anim_obj = (parsed.value.object.get("animation") orelse return false).object;
+
+        var frametime: u32 = 1;
+        if (anim_obj.get("frametime")) |ft| {
+            frametime = @intCast(@max(1, switch (ft) {
+                .integer => |v| v,
+                else => 1,
+            }));
+        }
+
+        var interpolate = false;
+        if (anim_obj.get("interpolate")) |interp| {
+            interpolate = switch (interp) {
+                .bool => |v| v,
+                else => false,
+            };
+        }
+
+        // Store all frame pixel data (each frame is width x width x 4 bytes)
+        const total_pixels = frame_count * FRAME_SIZE;
+        const frame_data = allocator.alloc(u8, total_pixels) catch return false;
+
+        // Extract each frame from the vertical strip
+        const row_bytes = width * 4;
+        for (0..frame_count) |f| {
+            const frame_dst = frame_data[f * FRAME_SIZE ..][0..FRAME_SIZE];
+            const strip_y_start = f * width; // frame f starts at row f*width in the strip
+            for (0..width) |row| {
+                const src_offset = (strip_y_start + row) * row_bytes;
+                const dst_offset = row * row_bytes;
+                @memcpy(
+                    frame_dst[dst_offset..][0..row_bytes],
+                    pixels[src_offset..][0..row_bytes],
+                );
+            }
+        }
+
+        _ = height;
+
+        self.animations[self.animation_count] = .{
+            .layer_index = layer_index,
+            .frame_count = frame_count,
+            .frametime = frametime,
+            .interpolate = interpolate,
+            .frame_data = frame_data,
+            .current_frame = 0,
+            .sub_frame = 0,
+            .dirty = false,
+        };
+        self.animation_count += 1;
+
+        std.log.info("Animated texture registered: layer {}, {} frames, frametime={}, interpolate={}", .{
+            layer_index, frame_count, frametime, interpolate,
+        });
+
+        return true;
     }
 
     fn createBindlessDescriptorSet(self: *TextureManager, ctx: *const VulkanContext) !void {
@@ -484,6 +801,6 @@ pub const TextureManager = struct {
         };
 
         vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
-        std.log.info("Descriptor set created (texture array with {} layers)", .{BLOCK_TEXTURE_COUNT});
+        std.log.info("Descriptor set created (texture array with {} layers, {} animated)", .{ BLOCK_TEXTURE_COUNT, self.animation_count });
     }
 };

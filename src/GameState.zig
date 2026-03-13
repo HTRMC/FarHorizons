@@ -129,7 +129,7 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .oak_leaves => "Oak Leaves",
         .oak_slab_bottom, .oak_slab_top => "Oak Slab",
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => "Oak Stairs",
-        .torch => "Torch",
+        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => "Torch",
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => "Ladder",
     };
 }
@@ -166,7 +166,7 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .oak_leaves => .{ 0.2, 0.5, 0.15, 0.8 },
         .oak_slab_bottom, .oak_slab_top => .{ 0.7, 0.55, 0.33, 1.0 },
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ 0.7, 0.55, 0.33, 1.0 },
-        .torch => .{ 0.9, 0.7, 0.2, 1.0 },
+        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .{ 0.9, 0.7, 0.2, 1.0 },
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => .{ 0.6, 0.45, 0.25, 1.0 },
     };
 }
@@ -204,7 +204,7 @@ pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16
         .oak_leaves => .{ .top = 26, .side = 26 },
         .oak_slab_bottom, .oak_slab_top => .{ .top = 11, .side = 11 },
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ .top = 11, .side = 11 },
-        .torch => .{ .top = 28, .side = 28 },
+        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .{ .top = 28, .side = 28 },
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => .{ .top = 29, .side = 29 },
     };
 }
@@ -216,7 +216,9 @@ pub fn blockShape(block: WorldState.BlockType) WidgetData.BlockShape {
         .oak_slab_bottom => .slab_bottom,
         .oak_slab_top => .slab_top,
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .stairs,
-        .torch, .ladder_south, .ladder_north, .ladder_east, .ladder_west => .full,
+        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
+        .ladder_south, .ladder_north, .ladder_east, .ladder_west,
+        => .full,
         else => .full,
     };
 }
@@ -831,6 +833,19 @@ fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit: Raycast.B
             if (frac_y >= 0.5) return .oak_slab_top;
             return .oak_slab_bottom;
         },
+        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => {
+            // Torch on floor when placed on top face, wall torch when placed on a side face.
+            // hit.direction is the face of the existing block that was clicked, so the wall
+            // the torch attaches to is on the opposite side of the placed position.
+            return switch (hit.direction) {
+                .up => .torch,
+                .south => .torch_wall_north,
+                .north => .torch_wall_south,
+                .east => .torch_wall_west,
+                .west => .torch_wall_east,
+                .down => .torch, // fallback: standing torch
+            };
+        },
         else => return block_type,
     }
 }
@@ -872,6 +887,7 @@ pub fn pickBlock(self: *GameState) void {
     const block_type: WorldState.BlockType = switch (raw_type) {
         .oak_slab_top => .oak_slab_bottom,
         .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .oak_stairs_south,
+        .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .torch,
         else => raw_type,
     };
 

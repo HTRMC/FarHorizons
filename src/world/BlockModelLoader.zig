@@ -43,6 +43,8 @@ const texture_map = std.StaticStringMap(u8).initComptime(.{
     .{ "oak_log_top", 27 },
     .{ "torch", 28 },
     .{ "ladder", 29 },
+    .{ "torch_fire", 30 },
+    .{ "torch_fire_particle", 31 },
 });
 
 // Face name → face_bucket mapping (south=0/+Z, north=1/-Z, west=2/-X, east=3/+X, up=4/+Y, down=5/-Y)
@@ -73,6 +75,12 @@ const Transform = enum {
     rotate_270,
 };
 
+const ElementRotation = struct {
+    angle_deg: f32,
+    axis: u8, // 'x', 'y', or 'z'
+    origin: [3]f32,
+};
+
 const BlockModelEntry = struct {
     block: BlockType,
     json_file: []const u8,
@@ -87,7 +95,11 @@ const block_model_table = [_]BlockModelEntry{
     .{ .block = .oak_stairs_north, .json_file = "oak_stairs.json", .transform = .rotate_180 },
     .{ .block = .oak_stairs_east, .json_file = "oak_stairs.json", .transform = .rotate_90 },
     .{ .block = .oak_stairs_west, .json_file = "oak_stairs.json", .transform = .rotate_270 },
-    .{ .block = .torch, .json_file = "torch.json", .transform = .none },
+    .{ .block = .torch, .json_file = "torch_standing.json", .transform = .none },
+    .{ .block = .torch_wall_west, .json_file = "torch_wall.json", .transform = .none },
+    .{ .block = .torch_wall_east, .json_file = "torch_wall.json", .transform = .rotate_180 },
+    .{ .block = .torch_wall_south, .json_file = "torch_wall.json", .transform = .rotate_90 },
+    .{ .block = .torch_wall_north, .json_file = "torch_wall.json", .transform = .rotate_270 },
     .{ .block = .ladder_south, .json_file = "ladder.json", .transform = .none },
     .{ .block = .ladder_north, .json_file = "ladder.json", .transform = .rotate_180 },
     .{ .block = .ladder_east, .json_file = "ladder.json", .transform = .rotate_90 },
@@ -242,6 +254,26 @@ fn loadModel(
             jsonFloat(to_arr[2]) / 16.0,
         };
 
+        // Parse optional element rotation
+        const elem_rotation: ?ElementRotation = if (elem_obj.get("rotation")) |rot_val| blk: {
+            const rot = rot_val.object;
+            const angle_val = rot.get("angle") orelse break :blk null;
+            const axis_val = rot.get("axis") orelse break :blk null;
+            const origin_val = rot.get("origin") orelse break :blk null;
+            const angle = jsonFloat(angle_val);
+            const axis_str = axis_val.string;
+            const origin_arr = origin_val.array.items;
+            break :blk ElementRotation{
+                .angle_deg = angle,
+                .axis = axis_str[0],
+                .origin = .{
+                    jsonFloat(origin_arr[0]) / 16.0,
+                    jsonFloat(origin_arr[1]) / 16.0,
+                    jsonFloat(origin_arr[2]) / 16.0,
+                },
+            };
+        } else null;
+
         const faces_obj = (elem_obj.get("faces") orelse continue).object;
 
         var faces_iter = faces_obj.iterator();
@@ -298,6 +330,11 @@ fn loadModel(
 
             // Build the quad from element box + face direction
             var quad_model = buildBoxFaceQuad(from, to, bucket, uv);
+
+            // Apply element rotation (e.g. tilted wall torch)
+            if (elem_rotation) |rot| {
+                quad_model = applyElementRotation(quad_model, rot);
+            }
 
             // Apply transform
             quad_model = applyTransform(quad_model, transform, bucket);
@@ -424,13 +461,18 @@ fn jsonFloat(val: std.json.Value) f32 {
 }
 
 fn resolveTexture(tex_ref: []const u8, textures: std.json.ObjectMap) ?[]const u8 {
-    if (tex_ref.len > 0 and tex_ref[0] == '#') {
-        const key = tex_ref[1..];
+    var name = tex_ref;
+    if (name.len > 0 and name[0] == '#') {
+        const key = name[1..];
         if (textures.get(key)) |val| {
-            return val.string;
-        }
+            name = val.string;
+        } else return null;
     }
-    return tex_ref;
+    // Strip path prefix (e.g. "block/torch/torch_fire" → "torch_fire")
+    if (std.mem.lastIndexOfScalar(u8, name, '/')) |idx| {
+        name = name[idx + 1 ..];
+    }
+    return name;
 }
 
 /// Build a quad for one face of an axis-aligned box element.
@@ -526,6 +568,42 @@ fn getCrossFaceBucket(face_name: []const u8) u3 {
     if (std.mem.eql(u8, face_name, "__cross_nesw_front")) return 2;
     if (std.mem.eql(u8, face_name, "__cross_nesw_back")) return 3;
     return 0;
+}
+
+/// Rotate a point around an axis through origin by angle_rad.
+fn rotatePoint(point: [3]f32, origin: [3]f32, axis: u8, sin_a: f32, cos_a: f32) [3]f32 {
+    const p = [3]f32{ point[0] - origin[0], point[1] - origin[1], point[2] - origin[2] };
+    const r = switch (axis) {
+        'x' => [3]f32{ p[0], p[1] * cos_a - p[2] * sin_a, p[1] * sin_a + p[2] * cos_a },
+        'y' => [3]f32{ p[0] * cos_a + p[2] * sin_a, p[1], -p[0] * sin_a + p[2] * cos_a },
+        'z' => [3]f32{ p[0] * cos_a - p[1] * sin_a, p[0] * sin_a + p[1] * cos_a, p[2] },
+        else => p,
+    };
+    return .{ r[0] + origin[0], r[1] + origin[1], r[2] + origin[2] };
+}
+
+/// Rotate a normal vector (no translation) around an axis.
+fn rotateNormal(normal: [3]f32, axis: u8, sin_a: f32, cos_a: f32) [3]f32 {
+    return switch (axis) {
+        'x' => .{ normal[0], normal[1] * cos_a - normal[2] * sin_a, normal[1] * sin_a + normal[2] * cos_a },
+        'y' => .{ normal[0] * cos_a + normal[2] * sin_a, normal[1], -normal[0] * sin_a + normal[2] * cos_a },
+        'z' => .{ normal[0] * cos_a - normal[1] * sin_a, normal[0] * sin_a + normal[1] * cos_a, normal[2] },
+        else => normal,
+    };
+}
+
+/// Apply Blockbench element rotation (angle around axis through origin).
+fn applyElementRotation(model: ExtraQuadModel, rot: ElementRotation) ExtraQuadModel {
+    const angle_rad = rot.angle_deg * (std.math.pi / 180.0);
+    const sin_a = @sin(angle_rad);
+    const cos_a = @cos(angle_rad);
+
+    var result = model;
+    for (0..4) |i| {
+        result.corners[i] = rotatePoint(model.corners[i], rot.origin, rot.axis, sin_a, cos_a);
+    }
+    result.normal = rotateNormal(model.normal, rot.axis, sin_a, cos_a);
+    return result;
 }
 
 /// Apply a transform (rotation, flip) to a quad model's corners and normal.

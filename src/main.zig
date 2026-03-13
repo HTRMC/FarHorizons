@@ -1007,6 +1007,12 @@ pub fn main() !void {
             }
         }
 
+        // Tick animated textures (Minecraft-style 20Hz frame advancement)
+        {
+            const vk_impl: *VulkanRenderer = @ptrCast(@alignCast(renderer.impl));
+            vk_impl.render_state.world_renderer.texture_manager.tickAnimations(delta_time);
+        }
+
         ui_manager.tickCursorBlink(delta_time);
 
         if (menu_ctrl.app_state == .playing) {

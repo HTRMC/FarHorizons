@@ -814,6 +814,9 @@ pub const VulkanRenderer = struct {
 
         try vk.beginCommandBuffer(command_buffer, &begin_info);
 
+        // Upload animated texture frames before any draw calls
+        self.render_state.world_renderer.texture_manager.recordAnimationUploads(command_buffer);
+
         const has_game = self.game_state != null;
         const overdraw = if (self.game_state) |gs| gs.overdraw_mode else false;
 

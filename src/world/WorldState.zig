@@ -198,6 +198,10 @@ pub const BlockType = enum(u8) {
     oak_stairs_east,
     oak_stairs_west,
     torch,
+    torch_wall_south,
+    torch_wall_north,
+    torch_wall_east,
+    torch_wall_west,
     ladder_south,
     ladder_north,
     ladder_east,
@@ -207,7 +211,7 @@ pub const BlockType = enum(u8) {
         return switch (self) {
             .oak_slab_bottom, .oak_slab_top,
             .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-            .torch,
+            .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west,
             => true,
             else => false,
@@ -221,7 +225,7 @@ pub const block_properties = struct {
             .air, .glass, .water, .oak_leaves,
             .oak_slab_bottom, .oak_slab_top,
             .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-            .torch,
+            .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west,
             => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
@@ -251,7 +255,7 @@ pub const block_properties = struct {
             .oak_slab_bottom, .oak_slab_top,
             .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
             => false,
-            .torch => false,
+            .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => false,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
@@ -263,7 +267,7 @@ pub const block_properties = struct {
     }
     pub fn isSolid(block: BlockType) bool {
         return switch (block) {
-            .air, .water, .torch,
+            .air, .water, .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west,
             => false,
             else => true,
@@ -272,7 +276,7 @@ pub const block_properties = struct {
     pub fn renderLayer(block: BlockType) RenderLayer {
         return switch (block) {
             .glass, .water => .translucent,
-            .oak_leaves, .torch,
+            .oak_leaves, .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west,
             => .cutout,
             else => .solid,
@@ -281,7 +285,7 @@ pub const block_properties = struct {
     pub fn emittedLight(block: BlockType) [3]u8 {
         return switch (block) {
             .glowstone => .{ 255, 200, 100 },
-            .torch => .{ 200, 160, 80 },
+            .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .{ 200, 160, 80 },
             else => .{ 0, 0, 0 },
         };
     }
@@ -1075,7 +1079,7 @@ pub fn generateChunkMesh(
                         .oak_leaves => 26,
                         .oak_slab_bottom, .oak_slab_top,
                         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-                        .torch,
+                        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
                         .ladder_south, .ladder_north, .ladder_east, .ladder_west,
                         => unreachable, // handled above
                     };
@@ -1245,7 +1249,7 @@ pub fn generateLodChunkMesh(
                         .oak_leaves => 26,
                         .oak_slab_bottom, .oak_slab_top => 11,
                         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => 11,
-                        .torch => 28,
+                        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => 28,
                         .ladder_south, .ladder_north, .ladder_east, .ladder_west => 29,
                     };
 
