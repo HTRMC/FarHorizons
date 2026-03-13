@@ -133,7 +133,7 @@ pub const HandRenderer = struct {
 
             // Pre-transform: convert our vertex space → MC's ModelPart space
             const mc_scale: f32 = 10.0 / 9.0; // ratio of MC's /16 to our 1.8/32 scale
-            const s_pre = mat4Scale(mc_scale, -mc_scale, mc_scale); // flip Y + scale
+            const s_pre = mat4Scale(mc_scale, -mc_scale, mc_scale); // flip Y: our hand at -Y → MC's +Y
             const t_cube = mat4Translate(-0.0625, -0.125, 0); // cube centering offset
             const t_part = mat4Translate(-0.3125, 0.125, 0); // MC ModelPart offset
             const r_part = mat4RotZ(0.1); // arm.zRot from renderHand
@@ -308,8 +308,7 @@ pub const HandRenderer = struct {
             const uv_arr = switch (p.get("uv") orelse continue) { .array => |a| a.items, else => continue };
             if (min_arr.len < 3 or size_arr.len < 3 or uv_arr.len < 2) continue;
 
-            // Center the arm: offset so arm is roughly centered at origin
-            // right_arm min is [-8, 12, -2], we want it centered around x=0 and y going down from 0
+            // Center the arm: x/z centered, shoulder at y=0, hand extends to -Y
             const arm_center_x: f64 = jf(min_arr[0]) + jf(size_arr[0]) / 2.0;
             const arm_top_y: f64 = jf(min_arr[1]) + jf(size_arr[1]);
             const arm_center_z: f64 = jf(min_arr[2]) + jf(size_arr[2]) / 2.0;
@@ -327,7 +326,7 @@ pub const HandRenderer = struct {
             const tu: f32 = @floatCast(jf(uv_arr[0]));
             const tv: f32 = @floatCast(jf(uv_arr[1]));
 
-            count = addTexturedBox(vertices, count, bx, by, bz, bw, bh, bd, tu, tv, pw, ph, pd, tex_w, tex_h);
+            count = addTexturedBox(vertices, count, bx, by, bz, bw, bh, bd, tu, tv, pw, ph, pd, tex_w, tex_h, true);
             break;
         }
 
@@ -341,17 +340,17 @@ pub const HandRenderer = struct {
         const s: f32 = 0.5;
 
         // Front face (z+)
-        count = addQuad(vertices, count, -s, -s, s, s, -s, s, s, s, s, -s, s, s, 0, 0, 1, 0, 1, 1, 0);
+        count = addQuad(vertices, count, -s, -s, s, s, -s, s, s, s, s, -s, s, s, 0, 0, 1, 0, 1, 1, 0, false);
         // Back face (z-)
-        count = addQuad(vertices, count, s, -s, -s, -s, -s, -s, -s, s, -s, s, s, -s, 0, 0, -1, 0, 1, 1, 0);
+        count = addQuad(vertices, count, s, -s, -s, -s, -s, -s, -s, s, -s, s, s, -s, 0, 0, -1, 0, 1, 1, 0, false);
         // Right face (x+)
-        count = addQuad(vertices, count, s, -s, s, s, -s, -s, s, s, -s, s, s, s, 1, 0, 0, 0, 1, 1, 0);
+        count = addQuad(vertices, count, s, -s, s, s, -s, -s, s, s, -s, s, s, s, 1, 0, 0, 0, 1, 1, 0, false);
         // Left face (x-)
-        count = addQuad(vertices, count, -s, -s, -s, -s, -s, s, -s, s, s, -s, s, -s, -1, 0, 0, 0, 1, 1, 0);
+        count = addQuad(vertices, count, -s, -s, -s, -s, -s, s, -s, s, s, -s, s, -s, -1, 0, 0, 0, 1, 1, 0, false);
         // Top face (y+)
-        count = addQuad(vertices, count, -s, s, s, s, s, s, s, s, -s, -s, s, -s, 0, 1, 0, 0, 1, 1, 0);
+        count = addQuad(vertices, count, -s, s, s, s, s, s, s, s, -s, -s, s, -s, 0, 1, 0, 0, 1, 1, 0, false);
         // Bottom face (y-)
-        count = addQuad(vertices, count, -s, -s, -s, s, -s, -s, s, -s, s, -s, -s, s, 0, -1, 0, 0, 1, 1, 0);
+        count = addQuad(vertices, count, -s, -s, -s, s, -s, -s, s, -s, s, -s, -s, s, 0, -1, 0, 0, 1, 1, 0, false);
 
         return count;
     }
@@ -365,6 +364,7 @@ pub const HandRenderer = struct {
         tu: f32, tv: f32,
         pw: f32, ph: f32, pd: f32,
         tw: f32, th: f32,
+        reverse_winding: bool,
     ) u32 {
         var count = start;
         const x0 = x;
@@ -375,17 +375,17 @@ pub const HandRenderer = struct {
         const z1 = z + d;
 
         // Front face (z+)
-        count = addQuad(vertices, count, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1, 0, 0, 1, (tu + pd) / tw, (tv + pd + ph) / th, (tu + pd + pw) / tw, (tv + pd) / th);
+        count = addQuad(vertices, count, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1, 0, 0, 1, (tu + pd) / tw, (tv + pd + ph) / th, (tu + pd + pw) / tw, (tv + pd) / th, reverse_winding);
         // Back face (z-)
-        count = addQuad(vertices, count, x1, y0, z0, x0, y0, z0, x0, y1, z0, x1, y1, z0, 0, 0, -1, (tu + 2 * pd + pw) / tw, (tv + pd + ph) / th, (tu + 2 * pd + 2 * pw) / tw, (tv + pd) / th);
+        count = addQuad(vertices, count, x1, y0, z0, x0, y0, z0, x0, y1, z0, x1, y1, z0, 0, 0, -1, (tu + 2 * pd + pw) / tw, (tv + pd + ph) / th, (tu + 2 * pd + 2 * pw) / tw, (tv + pd) / th, reverse_winding);
         // Right face (x+)
-        count = addQuad(vertices, count, x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y1, z1, 1, 0, 0, (tu + pd + pw) / tw, (tv + pd + ph) / th, (tu + 2 * pd + pw) / tw, (tv + pd) / th);
+        count = addQuad(vertices, count, x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y1, z1, 1, 0, 0, (tu + pd + pw) / tw, (tv + pd + ph) / th, (tu + 2 * pd + pw) / tw, (tv + pd) / th, reverse_winding);
         // Left face (x-)
-        count = addQuad(vertices, count, x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0, -1, 0, 0, tu / tw, (tv + pd + ph) / th, (tu + pd) / tw, (tv + pd) / th);
+        count = addQuad(vertices, count, x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0, -1, 0, 0, tu / tw, (tv + pd + ph) / th, (tu + pd) / tw, (tv + pd) / th, reverse_winding);
         // Top face (y+)
-        count = addQuad(vertices, count, x0, y1, z1, x1, y1, z1, x1, y1, z0, x0, y1, z0, 0, 1, 0, (tu + pd) / tw, tv / th, (tu + pd + pw) / tw, (tv + pd) / th);
+        count = addQuad(vertices, count, x0, y1, z1, x1, y1, z1, x1, y1, z0, x0, y1, z0, 0, 1, 0, (tu + pd) / tw, tv / th, (tu + pd + pw) / tw, (tv + pd) / th, reverse_winding);
         // Bottom face (y-)
-        count = addQuad(vertices, count, x0, y0, z0, x1, y0, z0, x1, y0, z1, x0, y0, z1, 0, -1, 0, (tu + pd + pw) / tw, tv / th, (tu + pd + 2 * pw) / tw, (tv + pd) / th);
+        count = addQuad(vertices, count, x0, y0, z0, x1, y0, z0, x1, y0, z1, x0, y0, z1, 0, -1, 0, (tu + pd + pw) / tw, tv / th, (tu + pd + 2 * pw) / tw, (tv + pd) / th, reverse_winding);
 
         return count;
     }
@@ -399,6 +399,7 @@ pub const HandRenderer = struct {
         x3: f32, y3: f32, z3: f32,
         nx: f32, ny: f32, nz: f32,
         uv_u0: f32, uv_v0: f32, uv_u1: f32, uv_v1: f32,
+        reverse_winding: bool,
     ) u32 {
         const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = nx, .ny = ny, .nz = nz, .u = 0, .v = 0 };
 
@@ -411,12 +412,22 @@ pub const HandRenderer = struct {
         var vd = base;
         vd.px = x3; vd.py = y3; vd.pz = z3; vd.u = uv_u0; vd.v = uv_v1;
 
-        vertices[start] = va;
-        vertices[start + 1] = vb;
-        vertices[start + 2] = vc;
-        vertices[start + 3] = va;
-        vertices[start + 4] = vc;
-        vertices[start + 5] = vd;
+        if (reverse_winding) {
+            // Swap winding: CW instead of CCW (compensates for odd-axis matrix flip)
+            vertices[start] = va;
+            vertices[start + 1] = vc;
+            vertices[start + 2] = vb;
+            vertices[start + 3] = va;
+            vertices[start + 4] = vd;
+            vertices[start + 5] = vc;
+        } else {
+            vertices[start] = va;
+            vertices[start + 1] = vb;
+            vertices[start + 2] = vc;
+            vertices[start + 3] = va;
+            vertices[start + 4] = vc;
+            vertices[start + 5] = vd;
+        }
 
         return start + 6;
     }

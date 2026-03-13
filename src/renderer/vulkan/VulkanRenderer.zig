@@ -942,11 +942,10 @@ pub const VulkanRenderer = struct {
         }
 
         // First-person hand (after world + debug, before UI)
-        {
+        if (self.game_state) |gs_| {
             const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
             const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
-            const is_third_person = if (self.game_state) |gs_| gs_.third_person else false;
-            self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, is_third_person);
+            self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, gs_.third_person);
         }
 
         self.render_state.ui_renderer.recordDraw(command_buffer);
