@@ -216,9 +216,8 @@ pub fn blockShape(block: WorldState.BlockType) WidgetData.BlockShape {
         .oak_slab_bottom => .slab_bottom,
         .oak_slab_top => .slab_top,
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .stairs,
-        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
-        .ladder_south, .ladder_north, .ladder_east, .ladder_west,
-        => .full,
+        .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .torch,
+        .ladder_south, .ladder_north, .ladder_east, .ladder_west => .ladder,
         else => .full,
     };
 }
@@ -1405,6 +1404,8 @@ test "blockShape: slabs and stairs" {
     try testing.expectEqual(WidgetData.BlockShape.slab_bottom, blockShape(.oak_slab_bottom));
     try testing.expectEqual(WidgetData.BlockShape.slab_top, blockShape(.oak_slab_top));
     try testing.expectEqual(WidgetData.BlockShape.stairs, blockShape(.oak_stairs_south));
+    try testing.expectEqual(WidgetData.BlockShape.torch, blockShape(.torch));
+    try testing.expectEqual(WidgetData.BlockShape.ladder, blockShape(.ladder_south));
     try testing.expectEqual(WidgetData.BlockShape.full, blockShape(.stone));
 }
 
