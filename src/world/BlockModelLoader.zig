@@ -124,6 +124,23 @@ const block_model_table = [_]BlockModelEntry{
     .{ .block = .oak_door_top_west_open, .json_file = "oak_door_top.json", .transform = .rotate_270 },
     .{ .block = .oak_door_top_north, .json_file = "oak_door_top.json", .transform = .rotate_270 },
     .{ .block = .oak_door_top_north_open, .json_file = "oak_door_top.json", .transform = .none },
+    // Oak fence: 16 connection variants, each with its own model
+    .{ .block = .oak_fence_post, .json_file = "oak_fence_post.json", .transform = .none },
+    .{ .block = .oak_fence_n, .json_file = "oak_fence_n.json", .transform = .none },
+    .{ .block = .oak_fence_s, .json_file = "oak_fence_s.json", .transform = .none },
+    .{ .block = .oak_fence_e, .json_file = "oak_fence_e.json", .transform = .none },
+    .{ .block = .oak_fence_w, .json_file = "oak_fence_w.json", .transform = .none },
+    .{ .block = .oak_fence_ns, .json_file = "oak_fence_ns.json", .transform = .none },
+    .{ .block = .oak_fence_ne, .json_file = "oak_fence_ne.json", .transform = .none },
+    .{ .block = .oak_fence_nw, .json_file = "oak_fence_nw.json", .transform = .none },
+    .{ .block = .oak_fence_se, .json_file = "oak_fence_se.json", .transform = .none },
+    .{ .block = .oak_fence_sw, .json_file = "oak_fence_sw.json", .transform = .none },
+    .{ .block = .oak_fence_ew, .json_file = "oak_fence_ew.json", .transform = .none },
+    .{ .block = .oak_fence_nse, .json_file = "oak_fence_nse.json", .transform = .none },
+    .{ .block = .oak_fence_nsw, .json_file = "oak_fence_nsw.json", .transform = .none },
+    .{ .block = .oak_fence_new, .json_file = "oak_fence_new.json", .transform = .none },
+    .{ .block = .oak_fence_sew, .json_file = "oak_fence_sew.json", .transform = .none },
+    .{ .block = .oak_fence_nsew, .json_file = "oak_fence_nsew.json", .transform = .none },
 };
 
 pub const BlockModelRegistry = struct {

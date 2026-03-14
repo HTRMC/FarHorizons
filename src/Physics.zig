@@ -318,6 +318,71 @@ pub fn getBlockBoxes(block: WorldState.BlockType) BlockBoxes {
             .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 3.0 / 16.0 } }, undefined },
             .count = 1,
         },
+        // Fence collision: post (6-10 x/z) + connection bars, 1.5 blocks tall
+        .oak_fence_post => .{
+            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } }, undefined },
+            .count = 1,
+        },
+        .oak_fence_n => .{
+            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } }, undefined },
+            .count = 1,
+        },
+        .oak_fence_s => .{
+            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } }, undefined },
+            .count = 1,
+        },
+        .oak_fence_e => .{
+            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } }, undefined },
+            .count = 1,
+        },
+        .oak_fence_w => .{
+            .boxes = .{ .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } }, undefined },
+            .count = 1,
+        },
+        .oak_fence_ns => .{
+            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } }, undefined },
+            .count = 1,
+        },
+        .oak_fence_ew => .{
+            .boxes = .{ .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } }, undefined },
+            .count = 1,
+        },
+        .oak_fence_ne => .{
+            .boxes = .{
+                .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } },
+                .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } },
+            },
+            .count = 2,
+        },
+        .oak_fence_nw => .{
+            .boxes = .{
+                .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } },
+                .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } },
+            },
+            .count = 2,
+        },
+        .oak_fence_se => .{
+            .boxes = .{
+                .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } },
+                .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } },
+            },
+            .count = 2,
+        },
+        .oak_fence_sw => .{
+            .boxes = .{
+                .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } },
+                .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } },
+            },
+            .count = 2,
+        },
+        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew => .{
+            // For 3+ connections: use N-S bar + E-W bar (covers all cases)
+            .boxes = .{
+                .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } },
+                .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } },
+            },
+            .count = 2,
+        },
         else => .{
             .boxes = .{
                 .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } },

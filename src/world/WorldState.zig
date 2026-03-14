@@ -240,6 +240,23 @@ pub const BlockType = enum(u8) {
     oak_door_top_west_open,
     oak_door_top_north,
     oak_door_top_north_open,
+    // Oak fence: 16 variants for connection combinations (N/S/E/W bitmask)
+    oak_fence_post,
+    oak_fence_n,
+    oak_fence_s,
+    oak_fence_e,
+    oak_fence_w,
+    oak_fence_ns,
+    oak_fence_ne,
+    oak_fence_nw,
+    oak_fence_se,
+    oak_fence_sw,
+    oak_fence_ew,
+    oak_fence_nse,
+    oak_fence_nsw,
+    oak_fence_new,
+    oak_fence_sew,
+    oak_fence_nsew,
 
     pub fn isShapedBlock(self: BlockType) bool {
         return switch (self) {
@@ -255,10 +272,57 @@ pub const BlockType = enum(u8) {
             .oak_door_top_south, .oak_door_top_south_open,
             .oak_door_top_west, .oak_door_top_west_open,
             .oak_door_top_north, .oak_door_top_north_open,
+            .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+            .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+            .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
             => true,
             else => false,
         };
     }
+
+    pub fn isFence(self: BlockType) bool {
+        return switch (self) {
+            .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+            .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+            .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
+            => true,
+            else => false,
+        };
+    }
+
+    /// Whether a block can connect to a fence (fences + solid opaque blocks).
+    pub fn connectsToFence(self: BlockType) bool {
+        return self.isFence() or (block_properties.isSolid(self) and block_properties.isOpaque(self));
+    }
+
+    /// Calculate the correct fence variant based on which neighbors are connectable.
+    /// Flags: n=bit0, s=bit1, e=bit2, w=bit3.
+    pub fn fenceFromConnections(n: bool, s: bool, e: bool, w: bool) BlockType {
+        const idx: u4 = (@as(u4, @intFromBool(n))) |
+            (@as(u4, @intFromBool(s)) << 1) |
+            (@as(u4, @intFromBool(e)) << 2) |
+            (@as(u4, @intFromBool(w)) << 3);
+        return fence_variant_table[idx];
+    }
+
+    const fence_variant_table = [16]BlockType{
+        .oak_fence_post, // 0000
+        .oak_fence_n, // 0001
+        .oak_fence_s, // 0010
+        .oak_fence_ns, // 0011
+        .oak_fence_e, // 0100
+        .oak_fence_ne, // 0101
+        .oak_fence_se, // 0110
+        .oak_fence_nse, // 0111
+        .oak_fence_w, // 1000
+        .oak_fence_nw, // 1001
+        .oak_fence_sw, // 1010
+        .oak_fence_nsw, // 1011
+        .oak_fence_ew, // 1100
+        .oak_fence_new, // 1101
+        .oak_fence_sew, // 1110
+        .oak_fence_nsew, // 1111
+    };
 
     pub fn isDoor(self: BlockType) bool {
         return switch (self) {
@@ -352,6 +416,9 @@ pub const block_properties = struct {
             .oak_door_top_south, .oak_door_top_south_open,
             .oak_door_top_west, .oak_door_top_west_open,
             .oak_door_top_north, .oak_door_top_north_open,
+            .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+            .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+            .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
             => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
@@ -390,6 +457,10 @@ pub const block_properties = struct {
             .oak_door_top_south, .oak_door_top_south_open,
             .oak_door_top_west, .oak_door_top_west_open,
             .oak_door_top_north, .oak_door_top_north_open,
+            => false,
+            .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+            .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+            .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
             => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
@@ -453,6 +524,23 @@ pub const block_properties = struct {
             .oak_door_bottom_north, .oak_door_top_north,
             .oak_door_bottom_west_open, .oak_door_top_west_open,
             => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 3.0 / 16.0 } },
+            // Fence hitboxes: bounding box covering post + connections
+            .oak_fence_post => .{ .min = .{ 6.0 / 16.0, 0.0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.0, 10.0 / 16.0 } },
+            .oak_fence_n => .{ .min = .{ 6.0 / 16.0, 0.0, 0.0 }, .max = .{ 10.0 / 16.0, 1.0, 10.0 / 16.0 } },
+            .oak_fence_s => .{ .min = .{ 6.0 / 16.0, 0.0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.0, 1.0 } },
+            .oak_fence_e => .{ .min = .{ 6.0 / 16.0, 0.0, 6.0 / 16.0 }, .max = .{ 1.0, 1.0, 10.0 / 16.0 } },
+            .oak_fence_w => .{ .min = .{ 0.0, 0.0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.0, 10.0 / 16.0 } },
+            .oak_fence_ns => .{ .min = .{ 6.0 / 16.0, 0.0, 0.0 }, .max = .{ 10.0 / 16.0, 1.0, 1.0 } },
+            .oak_fence_ew => .{ .min = .{ 0.0, 0.0, 6.0 / 16.0 }, .max = .{ 1.0, 1.0, 10.0 / 16.0 } },
+            .oak_fence_ne => .{ .min = .{ 6.0 / 16.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 10.0 / 16.0 } },
+            .oak_fence_nw => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 10.0 / 16.0, 1.0, 10.0 / 16.0 } },
+            .oak_fence_se => .{ .min = .{ 6.0 / 16.0, 0.0, 6.0 / 16.0 }, .max = .{ 1.0, 1.0, 1.0 } },
+            .oak_fence_sw => .{ .min = .{ 0.0, 0.0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.0, 1.0 } },
+            .oak_fence_nse => .{ .min = .{ 6.0 / 16.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 1.0 } },
+            .oak_fence_nsw => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 10.0 / 16.0, 1.0, 1.0 } },
+            .oak_fence_new => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 10.0 / 16.0 } },
+            .oak_fence_sew => .{ .min = .{ 0.0, 0.0, 6.0 / 16.0 }, .max = .{ 1.0, 1.0, 1.0 } },
+            .oak_fence_nsew => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 1.0 } },
             else => null, // full cube
         };
     }
@@ -469,6 +557,9 @@ pub const block_properties = struct {
             .oak_door_top_south, .oak_door_top_south_open,
             .oak_door_top_west, .oak_door_top_west_open,
             .oak_door_top_north, .oak_door_top_north_open,
+            .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+            .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+            .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
             => .cutout,
             else => .solid,
         };
@@ -1284,6 +1375,9 @@ pub fn generateChunkMesh(
                         .oak_door_top_south, .oak_door_top_south_open,
                         .oak_door_top_west, .oak_door_top_west_open,
                         .oak_door_top_north, .oak_door_top_north_open,
+                        .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+                        .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+                        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
                         => unreachable, // handled above
                     };
 
@@ -1472,6 +1566,10 @@ pub fn generateLodChunkMesh(
                         .oak_door_top_west, .oak_door_top_west_open,
                         .oak_door_top_north, .oak_door_top_north_open,
                         => 33,
+                        .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+                        .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+                        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
+                        => 11, // oak_planks
                     };
 
                     const model_index: u9 = if (water_lowered)

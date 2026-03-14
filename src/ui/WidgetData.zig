@@ -19,7 +19,7 @@ pub const WidgetData = union(Widget.WidgetKind) {
     dropdown: DropdownData,
 };
 
-pub const BlockShape = enum(u8) { full, slab_bottom, slab_top, stairs, torch, ladder };
+pub const BlockShape = enum(u8) { full, slab_bottom, slab_top, stairs, torch, ladder, fence, door };
 
 pub const PanelData = struct {
     on_click_action: [MAX_ACTION_LEN]u8 = .{0} ** MAX_ACTION_LEN,

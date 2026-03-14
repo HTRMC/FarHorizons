@@ -140,6 +140,10 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .oak_door_top_west, .oak_door_top_west_open,
         .oak_door_top_north, .oak_door_top_north_open,
         => "Oak Door",
+        .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+        .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
+        => "Oak Fence",
     };
 }
 
@@ -185,6 +189,10 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .oak_door_top_south, .oak_door_top_south_open,
         .oak_door_top_west, .oak_door_top_west_open,
         .oak_door_top_north, .oak_door_top_north_open,
+        => .{ 0.7, 0.55, 0.33, 1.0 },
+        .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+        .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
         => .{ 0.7, 0.55, 0.33, 1.0 },
     };
 }
@@ -234,6 +242,10 @@ pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16
         .oak_door_top_west, .oak_door_top_west_open,
         .oak_door_top_north, .oak_door_top_north_open,
         => .{ .top = 33, .side = 33 },
+        .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+        .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
+        => .{ .top = 11, .side = 11 }, // oak_planks
     };
 }
 
@@ -246,6 +258,19 @@ pub fn blockShape(block: WorldState.BlockType) WidgetData.BlockShape {
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .stairs,
         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .torch,
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => .ladder,
+        .oak_door_bottom_east, .oak_door_bottom_east_open,
+        .oak_door_bottom_south, .oak_door_bottom_south_open,
+        .oak_door_bottom_west, .oak_door_bottom_west_open,
+        .oak_door_bottom_north, .oak_door_bottom_north_open,
+        .oak_door_top_east, .oak_door_top_east_open,
+        .oak_door_top_south, .oak_door_top_south_open,
+        .oak_door_top_west, .oak_door_top_west_open,
+        .oak_door_top_north, .oak_door_top_north_open,
+        => .door,
+        .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+        .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
+        => .fence,
         else => .full,
     };
 }
@@ -281,7 +306,7 @@ hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .san
 inventory: [INV_SIZE]WorldState.BlockType = .{
     .cobblestone, .oak_log,      .oak_planks,   .bricks,       .bedrock,       .gold_ore,      .iron_ore,      .coal_ore,      .diamond_ore,
     .sponge,          .pumice,           .wool,             .gold_block,       .iron_block,        .diamond_block,     .bookshelf,         .obsidian,          .oak_leaves,
-    .oak_slab_bottom, .oak_stairs_south, .torch,            .ladder_south,     .oak_door_bottom_south, .air,               .air,               .air,               .air,
+    .oak_slab_bottom, .oak_stairs_south, .torch,            .ladder_south,     .oak_door_bottom_south, .oak_fence_post,    .air,               .air,               .air,
     .air,             .air,              .air,              .air,              .air,               .air,               .air,               .air,               .air,
 },
 armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
@@ -858,6 +883,7 @@ pub fn breakBlock(self: *GameState) void {
         const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
         const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
         self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
+        self.updateFenceNeighbors(wx, wy, wz);
         self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
         return;
     }
@@ -870,6 +896,7 @@ pub fn breakBlock(self: *GameState) void {
     self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
     self.markDirtyIncremental(wx, wy, wz, old_block);
     self.queueChunkSave(wx, wy, wz);
+    self.updateFenceNeighbors(wx, wy, wz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
@@ -892,6 +919,29 @@ fn toggleDoor(self: *GameState, wx: i32, wy: i32, wz: i32, block: WorldState.Blo
     }
 
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+}
+
+/// Check 4 horizontal neighbors and update any fences to reflect new connections.
+fn updateFenceNeighbors(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    const deltas = [4][2]i32{ .{ 0, -1 }, .{ 0, 1 }, .{ 1, 0 }, .{ -1, 0 } };
+    for (deltas) |d| {
+        const nx = wx + d[0];
+        const nz = wz + d[1];
+        const neighbor = self.chunk_map.getBlock(nx, wy, nz);
+        if (!neighbor.isFence()) continue;
+
+        const new_variant = WorldState.BlockType.fenceFromConnections(
+            self.chunk_map.getBlock(nx, wy, nz - 1).connectsToFence(),
+            self.chunk_map.getBlock(nx, wy, nz + 1).connectsToFence(),
+            self.chunk_map.getBlock(nx + 1, wy, nz).connectsToFence(),
+            self.chunk_map.getBlock(nx - 1, wy, nz).connectsToFence(),
+        );
+        if (new_variant != neighbor) {
+            self.chunk_map.setBlock(nx, wy, nz, new_variant);
+            self.markDirtyIncremental(nx, wy, nz, neighbor);
+            self.queueChunkSave(nx, wy, nz);
+        }
+    }
 }
 
 fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit: Raycast.BlockHitResult) WorldState.BlockType {
@@ -956,6 +1006,12 @@ fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit: Raycast.B
             if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi) return .oak_door_bottom_west;
             return .oak_door_bottom_south;
         },
+        // Fences: orientation is determined by neighbors, not player facing.
+        // Return the post variant here; placeBlock will calculate connections.
+        .oak_fence_post, .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+        .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
+        => return .oak_fence_post,
         else => return block_type,
     }
 }
@@ -981,6 +1037,16 @@ pub fn placeBlock(self: *GameState) void {
 
     // Orient stairs based on player yaw, and slabs based on hit face/position
     block_type = resolveOrientation(block_type, self.camera.yaw, hit);
+
+    // Fence placement: calculate connections from neighbors
+    if (block_type.isFence()) {
+        block_type = WorldState.BlockType.fenceFromConnections(
+            self.chunk_map.getBlock(px, py, pz - 1).connectsToFence(),
+            self.chunk_map.getBlock(px, py, pz + 1).connectsToFence(),
+            self.chunk_map.getBlock(px + 1, py, pz).connectsToFence(),
+            self.chunk_map.getBlock(px - 1, py, pz).connectsToFence(),
+        );
+    }
 
     // Door placement: need space for both halves
     if (block_type.isDoor()) {
@@ -1017,6 +1083,10 @@ pub fn placeBlock(self: *GameState) void {
     }
     self.markDirtyIncremental(px, py, pz, old_block);
     self.queueChunkSave(px, py, pz);
+
+    // Update neighboring fences when placing any block
+    self.updateFenceNeighbors(px, py, pz);
+
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
@@ -1039,6 +1109,10 @@ pub fn pickBlock(self: *GameState) void {
         .oak_door_top_west, .oak_door_top_west_open,
         .oak_door_top_north, .oak_door_top_north_open,
         => .oak_door_bottom_south,
+        .oak_fence_n, .oak_fence_s, .oak_fence_e, .oak_fence_w,
+        .oak_fence_ns, .oak_fence_ne, .oak_fence_nw, .oak_fence_se, .oak_fence_sw, .oak_fence_ew,
+        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew,
+        => .oak_fence_post,
         else => raw_type,
     };
 

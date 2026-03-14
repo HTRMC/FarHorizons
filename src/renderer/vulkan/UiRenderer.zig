@@ -418,7 +418,7 @@ pub const UiRenderer = struct {
             tex_override: i16, // -1 = use top/side logic, >=0 = per-face texture
         };
 
-        var faces: [32]FaceInfo = undefined;
+        var faces: [64]FaceInfo = undefined;
         var face_count: usize = 0;
 
         if (shape == .full) {
@@ -446,46 +446,67 @@ pub const UiRenderer = struct {
                 .stairs => .oak_stairs_east,
                 .torch => .torch,
                 .ladder => .ladder_north, // north face visible from isometric view
+                .fence => .oak_fence_post,
+                .door => .oak_door_bottom_south,
                 .full => unreachable,
             };
-            const shape_faces = WorldState.getShapeFaces(ref_block);
-            const use_per_face_tex = (shape == .torch);
-            const per_face_tex = if (use_per_face_tex) WorldState.getShapedTexIndices(ref_block) else &[_]u8{};
-            // Ladder is a single thin panel — don't cull its face even if facing away
-            const skip_cull = (shape == .ladder);
-            for (shape_faces, 0..) |sf, sf_idx| {
-                const mi = sf.model_index;
-                var info: FaceInfo = undefined;
-                info.tex_override = if (use_per_face_tex and sf_idx < per_face_tex.len)
-                    @as(i16, @intCast(per_face_tex[sf_idx]))
-                else
-                    -1;
-                if (mi < 6) {
-                    const n = WorldState.face_neighbor_offsets[mi];
-                    info.normal = .{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
-                    for (0..4) |ci| {
-                        const fv = WorldState.face_vertices[mi][ci];
-                        info.corners[ci] = .{ fv.px, fv.py, fv.pz };
-                        info.uvs[ci] = .{ fv.u, fv.v };
+
+            // For doors, render both bottom and top halves
+            const door_parts: u8 = if (shape == .door) 2 else 1;
+            const door_blocks = [2]WorldState.BlockType{ ref_block, .oak_door_top_south };
+
+            for (0..door_parts) |part| {
+                const block_ref = door_blocks[part];
+                const part_shape_faces = WorldState.getShapeFaces(block_ref);
+                const use_per_face_tex = (shape == .torch);
+                const per_face_tex = if (use_per_face_tex) WorldState.getShapedTexIndices(block_ref) else &[_]u8{};
+                // For doors, use per-face texture so top half gets the top texture
+                const door_per_face_tex = if (shape == .door) WorldState.getShapedTexIndices(block_ref) else &[_]u8{};
+                const skip_cull = (shape == .ladder);
+
+                for (part_shape_faces, 0..) |sf, sf_idx| {
+                    const mi = sf.model_index;
+                    var info: FaceInfo = undefined;
+                    if (use_per_face_tex and sf_idx < per_face_tex.len) {
+                        info.tex_override = @intCast(per_face_tex[sf_idx]);
+                    } else if (shape == .door and sf_idx < door_per_face_tex.len) {
+                        info.tex_override = @intCast(door_per_face_tex[sf_idx]);
+                    } else {
+                        info.tex_override = -1;
                     }
-                } else {
-                    const em = WorldState.getRegistry().extra_models[@as(usize, mi) - WorldState.EXTRA_MODEL_BASE];
-                    info.corners = em.corners;
-                    info.uvs = em.uvs;
-                    info.normal = em.normal;
+                    if (mi < 6) {
+                        const n = WorldState.face_neighbor_offsets[mi];
+                        info.normal = .{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
+                        for (0..4) |ci| {
+                            const fv = WorldState.face_vertices[mi][ci];
+                            info.corners[ci] = .{ fv.px, fv.py, fv.pz };
+                            info.uvs[ci] = .{ fv.u, fv.v };
+                        }
+                    } else {
+                        const em = WorldState.getRegistry().extra_models[@as(usize, mi) - WorldState.EXTRA_MODEL_BASE];
+                        info.corners = em.corners;
+                        info.uvs = em.uvs;
+                        info.normal = em.normal;
+                    }
+                    // Skip cross quads for torch (diagonal normals look bad in inventory)
+                    if (shape == .torch) {
+                        if (@abs(info.normal[0]) > 0.1 and @abs(info.normal[2]) > 0.1) continue;
+                    }
+                    // Shift top door half up by 1 and scale both to half height
+                    if (shape == .door) {
+                        for (0..4) |ci| {
+                            info.corners[ci][1] = info.corners[ci][1] * 0.5 + @as(f32, @floatFromInt(part)) * 0.5;
+                        }
+                    }
+                    if (!skip_cull and info.normal[0] * view[0] + info.normal[1] * view[1] + info.normal[2] * view[2] <= 0) continue;
+                    faces[face_count] = info;
+                    face_count += 1;
                 }
-                // Skip cross quads for torch (diagonal normals look bad in inventory)
-                if (shape == .torch) {
-                    if (@abs(info.normal[0]) > 0.1 and @abs(info.normal[2]) > 0.1) continue;
-                }
-                if (!skip_cull and info.normal[0] * view[0] + info.normal[1] * view[1] + info.normal[2] * view[2] <= 0) continue;
-                faces[face_count] = info;
-                face_count += 1;
             }
         }
 
         // Sort by camera-space depth (painter's algorithm, back-to-front)
-        var depths: [32]f32 = undefined;
+        var depths: [64]f32 = undefined;
         for (0..face_count) |i| {
             var d: f32 = 0;
             for (0..4) |ci| {
