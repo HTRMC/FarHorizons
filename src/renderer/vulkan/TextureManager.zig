@@ -9,7 +9,7 @@ const tracy = @import("../../platform/tracy.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
-const BLOCK_TEXTURE_COUNT = 32;
+const BLOCK_TEXTURE_COUNT = 34;
 const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "glass.png",      "grass_block.png", "dirt.png",       "stone.png",
     "glowstone.png",  "sand.png",        "snow.png",       "water.png",
@@ -19,6 +19,7 @@ const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "wool.png",       "gold_block.png",  "iron_block.png", "diamond_block.png",
     "bookshelf.png",  "obsidian.png",    "oak_leaves.png", "oak_log_top.png",
     "torch.png",      "ladder.png",      "torch_fire.png", "torch_fire_particle.png",
+    "oak_door_bottom.png", "oak_door_top.png",
 };
 
 const TEX_W = 16;

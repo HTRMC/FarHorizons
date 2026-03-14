@@ -223,6 +223,23 @@ pub const BlockType = enum(u8) {
     ladder_north,
     ladder_east,
     ladder_west,
+    // Oak door: 16 variants = 4 facing × 2 halves × 2 open states (left hinge only)
+    oak_door_bottom_east,
+    oak_door_bottom_east_open,
+    oak_door_bottom_south,
+    oak_door_bottom_south_open,
+    oak_door_bottom_west,
+    oak_door_bottom_west_open,
+    oak_door_bottom_north,
+    oak_door_bottom_north_open,
+    oak_door_top_east,
+    oak_door_top_east_open,
+    oak_door_top_south,
+    oak_door_top_south_open,
+    oak_door_top_west,
+    oak_door_top_west_open,
+    oak_door_top_north,
+    oak_door_top_north_open,
 
     pub fn isShapedBlock(self: BlockType) bool {
         return switch (self) {
@@ -230,8 +247,91 @@ pub const BlockType = enum(u8) {
             .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
             .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west,
+            .oak_door_bottom_east, .oak_door_bottom_east_open,
+            .oak_door_bottom_south, .oak_door_bottom_south_open,
+            .oak_door_bottom_west, .oak_door_bottom_west_open,
+            .oak_door_bottom_north, .oak_door_bottom_north_open,
+            .oak_door_top_east, .oak_door_top_east_open,
+            .oak_door_top_south, .oak_door_top_south_open,
+            .oak_door_top_west, .oak_door_top_west_open,
+            .oak_door_top_north, .oak_door_top_north_open,
             => true,
             else => false,
+        };
+    }
+
+    pub fn isDoor(self: BlockType) bool {
+        return switch (self) {
+            .oak_door_bottom_east, .oak_door_bottom_east_open,
+            .oak_door_bottom_south, .oak_door_bottom_south_open,
+            .oak_door_bottom_west, .oak_door_bottom_west_open,
+            .oak_door_bottom_north, .oak_door_bottom_north_open,
+            .oak_door_top_east, .oak_door_top_east_open,
+            .oak_door_top_south, .oak_door_top_south_open,
+            .oak_door_top_west, .oak_door_top_west_open,
+            .oak_door_top_north, .oak_door_top_north_open,
+            => true,
+            else => false,
+        };
+    }
+
+    pub fn isDoorBottom(self: BlockType) bool {
+        return switch (self) {
+            .oak_door_bottom_east, .oak_door_bottom_east_open,
+            .oak_door_bottom_south, .oak_door_bottom_south_open,
+            .oak_door_bottom_west, .oak_door_bottom_west_open,
+            .oak_door_bottom_north, .oak_door_bottom_north_open,
+            => true,
+            else => false,
+        };
+    }
+
+    pub fn isDoorOpen(self: BlockType) bool {
+        return switch (self) {
+            .oak_door_bottom_east_open, .oak_door_bottom_south_open,
+            .oak_door_bottom_west_open, .oak_door_bottom_north_open,
+            .oak_door_top_east_open, .oak_door_top_south_open,
+            .oak_door_top_west_open, .oak_door_top_north_open,
+            => true,
+            else => false,
+        };
+    }
+
+    /// Toggle a door block between open and closed states.
+    pub fn toggleDoor(self: BlockType) BlockType {
+        return switch (self) {
+            .oak_door_bottom_east => .oak_door_bottom_east_open,
+            .oak_door_bottom_east_open => .oak_door_bottom_east,
+            .oak_door_bottom_south => .oak_door_bottom_south_open,
+            .oak_door_bottom_south_open => .oak_door_bottom_south,
+            .oak_door_bottom_west => .oak_door_bottom_west_open,
+            .oak_door_bottom_west_open => .oak_door_bottom_west,
+            .oak_door_bottom_north => .oak_door_bottom_north_open,
+            .oak_door_bottom_north_open => .oak_door_bottom_north,
+            .oak_door_top_east => .oak_door_top_east_open,
+            .oak_door_top_east_open => .oak_door_top_east,
+            .oak_door_top_south => .oak_door_top_south_open,
+            .oak_door_top_south_open => .oak_door_top_south,
+            .oak_door_top_west => .oak_door_top_west_open,
+            .oak_door_top_west_open => .oak_door_top_west,
+            .oak_door_top_north => .oak_door_top_north_open,
+            .oak_door_top_north_open => .oak_door_top_north,
+            else => self,
+        };
+    }
+
+    /// Get the corresponding top variant for a bottom door block.
+    pub fn doorBottomToTop(self: BlockType) BlockType {
+        return switch (self) {
+            .oak_door_bottom_east => .oak_door_top_east,
+            .oak_door_bottom_east_open => .oak_door_top_east_open,
+            .oak_door_bottom_south => .oak_door_top_south,
+            .oak_door_bottom_south_open => .oak_door_top_south_open,
+            .oak_door_bottom_west => .oak_door_top_west,
+            .oak_door_bottom_west_open => .oak_door_top_west_open,
+            .oak_door_bottom_north => .oak_door_top_north,
+            .oak_door_bottom_north_open => .oak_door_top_north_open,
+            else => self,
         };
     }
 };
@@ -244,6 +344,14 @@ pub const block_properties = struct {
             .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
             .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west,
+            .oak_door_bottom_east, .oak_door_bottom_east_open,
+            .oak_door_bottom_south, .oak_door_bottom_south_open,
+            .oak_door_bottom_west, .oak_door_bottom_west_open,
+            .oak_door_bottom_north, .oak_door_bottom_north_open,
+            .oak_door_top_east, .oak_door_top_east_open,
+            .oak_door_top_south, .oak_door_top_south_open,
+            .oak_door_top_west, .oak_door_top_west_open,
+            .oak_door_top_north, .oak_door_top_north_open,
             => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
@@ -274,6 +382,15 @@ pub const block_properties = struct {
             => false,
             .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => false,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west => false,
+            .oak_door_bottom_east, .oak_door_bottom_east_open,
+            .oak_door_bottom_south, .oak_door_bottom_south_open,
+            .oak_door_bottom_west, .oak_door_bottom_west_open,
+            .oak_door_bottom_north, .oak_door_bottom_north_open,
+            .oak_door_top_east, .oak_door_top_east_open,
+            .oak_door_top_south, .oak_door_top_south_open,
+            .oak_door_top_west, .oak_door_top_west_open,
+            .oak_door_top_north, .oak_door_top_north_open,
+            => false,
             .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
             .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
@@ -286,7 +403,13 @@ pub const block_properties = struct {
         return switch (block) {
             .air, .water, .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west,
+            // Open doors are not solid (walkthrough)
+            .oak_door_bottom_east_open, .oak_door_bottom_south_open,
+            .oak_door_bottom_west_open, .oak_door_bottom_north_open,
+            .oak_door_top_east_open, .oak_door_top_south_open,
+            .oak_door_top_west_open, .oak_door_top_north_open,
             => false,
+            // Closed door variants fall through to else => true
             else => true,
         };
     }
@@ -313,6 +436,23 @@ pub const block_properties = struct {
             .ladder_north => .{ .min = .{ 0.0, 0.0, 13.0 / 16.0 }, .max = .{ 1.0, 1.0, 1.0 } },
             .ladder_east => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 3.0 / 16.0, 1.0, 1.0 } },
             .ladder_west => .{ .min = .{ 13.0 / 16.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 1.0 } },
+            // Door hitboxes: 3px slab, position depends on facing + open state
+            // Closed east / Open north: slab on west edge (x=0..3/16)
+            .oak_door_bottom_east, .oak_door_top_east,
+            .oak_door_bottom_north_open, .oak_door_top_north_open,
+            => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 3.0 / 16.0, 1.0, 1.0 } },
+            // Closed south / Open east: slab on south edge (z=13/16..1)
+            .oak_door_bottom_south, .oak_door_top_south,
+            .oak_door_bottom_east_open, .oak_door_top_east_open,
+            => .{ .min = .{ 0.0, 0.0, 13.0 / 16.0 }, .max = .{ 1.0, 1.0, 1.0 } },
+            // Closed west / Open south: slab on east edge (x=13/16..1)
+            .oak_door_bottom_west, .oak_door_top_west,
+            .oak_door_bottom_south_open, .oak_door_top_south_open,
+            => .{ .min = .{ 13.0 / 16.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 1.0 } },
+            // Closed north / Open west: slab on north edge (z=0..3/16)
+            .oak_door_bottom_north, .oak_door_top_north,
+            .oak_door_bottom_west_open, .oak_door_top_west_open,
+            => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 3.0 / 16.0 } },
             else => null, // full cube
         };
     }
@@ -321,6 +461,14 @@ pub const block_properties = struct {
             .glass, .water => .translucent,
             .oak_leaves, .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
             .ladder_south, .ladder_north, .ladder_east, .ladder_west,
+            .oak_door_bottom_east, .oak_door_bottom_east_open,
+            .oak_door_bottom_south, .oak_door_bottom_south_open,
+            .oak_door_bottom_west, .oak_door_bottom_west_open,
+            .oak_door_bottom_north, .oak_door_bottom_north_open,
+            .oak_door_top_east, .oak_door_top_east_open,
+            .oak_door_top_south, .oak_door_top_south_open,
+            .oak_door_top_west, .oak_door_top_west_open,
+            .oak_door_top_north, .oak_door_top_north_open,
             => .cutout,
             else => .solid,
         };
@@ -1128,6 +1276,14 @@ pub fn generateChunkMesh(
                         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
                         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west,
                         .ladder_south, .ladder_north, .ladder_east, .ladder_west,
+                        .oak_door_bottom_east, .oak_door_bottom_east_open,
+                        .oak_door_bottom_south, .oak_door_bottom_south_open,
+                        .oak_door_bottom_west, .oak_door_bottom_west_open,
+                        .oak_door_bottom_north, .oak_door_bottom_north_open,
+                        .oak_door_top_east, .oak_door_top_east_open,
+                        .oak_door_top_south, .oak_door_top_south_open,
+                        .oak_door_top_west, .oak_door_top_west_open,
+                        .oak_door_top_north, .oak_door_top_north_open,
                         => unreachable, // handled above
                     };
 
@@ -1306,6 +1462,16 @@ pub fn generateLodChunkMesh(
                         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => 11,
                         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => 28,
                         .ladder_south, .ladder_north, .ladder_east, .ladder_west => 29,
+                        .oak_door_bottom_east, .oak_door_bottom_east_open,
+                        .oak_door_bottom_south, .oak_door_bottom_south_open,
+                        .oak_door_bottom_west, .oak_door_bottom_west_open,
+                        .oak_door_bottom_north, .oak_door_bottom_north_open,
+                        => 32,
+                        .oak_door_top_east, .oak_door_top_east_open,
+                        .oak_door_top_south, .oak_door_top_south_open,
+                        .oak_door_top_west, .oak_door_top_west_open,
+                        .oak_door_top_north, .oak_door_top_north_open,
+                        => 33,
                     };
 
                     const model_index: u9 = if (water_lowered)

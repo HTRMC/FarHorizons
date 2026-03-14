@@ -301,6 +301,23 @@ pub fn getBlockBoxes(block: WorldState.BlockType) BlockBoxes {
             },
             .count = 1,
         },
+        // Closed doors: 3px slab collision box (same positions as hitboxes)
+        .oak_door_bottom_east, .oak_door_top_east => .{
+            .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 3.0 / 16.0, 1, 1 } }, undefined },
+            .count = 1,
+        },
+        .oak_door_bottom_south, .oak_door_top_south => .{
+            .boxes = .{ .{ .min = .{ 0, 0, 13.0 / 16.0 }, .max = .{ 1, 1, 1 } }, undefined },
+            .count = 1,
+        },
+        .oak_door_bottom_west, .oak_door_top_west => .{
+            .boxes = .{ .{ .min = .{ 13.0 / 16.0, 0, 0 }, .max = .{ 1, 1, 1 } }, undefined },
+            .count = 1,
+        },
+        .oak_door_bottom_north, .oak_door_top_north => .{
+            .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 3.0 / 16.0 } }, undefined },
+            .count = 1,
+        },
         else => .{
             .boxes = .{
                 .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } },

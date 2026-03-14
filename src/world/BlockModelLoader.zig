@@ -45,6 +45,8 @@ const texture_map = std.StaticStringMap(u8).initComptime(.{
     .{ "ladder", 29 },
     .{ "torch_fire", 30 },
     .{ "torch_fire_particle", 31 },
+    .{ "oak_door_bottom", 32 },
+    .{ "oak_door_top", 33 },
 });
 
 // Face name → face_bucket mapping (south=0/+Z, north=1/-Z, west=2/-X, east=3/+X, up=4/+Y, down=5/-Y)
@@ -104,6 +106,24 @@ const block_model_table = [_]BlockModelEntry{
     .{ .block = .ladder_north, .json_file = "ladder.json", .transform = .rotate_180 },
     .{ .block = .ladder_east, .json_file = "ladder.json", .transform = .rotate_90 },
     .{ .block = .ladder_west, .json_file = "ladder.json", .transform = .rotate_270 },
+    // Oak door bottom half (left hinge): facing determines closed rotation, open adds 90°
+    .{ .block = .oak_door_bottom_east, .json_file = "oak_door_bottom.json", .transform = .none },
+    .{ .block = .oak_door_bottom_east_open, .json_file = "oak_door_bottom.json", .transform = .rotate_90 },
+    .{ .block = .oak_door_bottom_south, .json_file = "oak_door_bottom.json", .transform = .rotate_90 },
+    .{ .block = .oak_door_bottom_south_open, .json_file = "oak_door_bottom.json", .transform = .rotate_180 },
+    .{ .block = .oak_door_bottom_west, .json_file = "oak_door_bottom.json", .transform = .rotate_180 },
+    .{ .block = .oak_door_bottom_west_open, .json_file = "oak_door_bottom.json", .transform = .rotate_270 },
+    .{ .block = .oak_door_bottom_north, .json_file = "oak_door_bottom.json", .transform = .rotate_270 },
+    .{ .block = .oak_door_bottom_north_open, .json_file = "oak_door_bottom.json", .transform = .none },
+    // Oak door top half
+    .{ .block = .oak_door_top_east, .json_file = "oak_door_top.json", .transform = .none },
+    .{ .block = .oak_door_top_east_open, .json_file = "oak_door_top.json", .transform = .rotate_90 },
+    .{ .block = .oak_door_top_south, .json_file = "oak_door_top.json", .transform = .rotate_90 },
+    .{ .block = .oak_door_top_south_open, .json_file = "oak_door_top.json", .transform = .rotate_180 },
+    .{ .block = .oak_door_top_west, .json_file = "oak_door_top.json", .transform = .rotate_180 },
+    .{ .block = .oak_door_top_west_open, .json_file = "oak_door_top.json", .transform = .rotate_270 },
+    .{ .block = .oak_door_top_north, .json_file = "oak_door_top.json", .transform = .rotate_270 },
+    .{ .block = .oak_door_top_north_open, .json_file = "oak_door_top.json", .transform = .none },
 };
 
 pub const BlockModelRegistry = struct {

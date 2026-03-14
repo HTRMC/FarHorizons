@@ -131,6 +131,15 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => "Oak Stairs",
         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => "Torch",
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => "Ladder",
+        .oak_door_bottom_east, .oak_door_bottom_east_open,
+        .oak_door_bottom_south, .oak_door_bottom_south_open,
+        .oak_door_bottom_west, .oak_door_bottom_west_open,
+        .oak_door_bottom_north, .oak_door_bottom_north_open,
+        .oak_door_top_east, .oak_door_top_east_open,
+        .oak_door_top_south, .oak_door_top_south_open,
+        .oak_door_top_west, .oak_door_top_west_open,
+        .oak_door_top_north, .oak_door_top_north_open,
+        => "Oak Door",
     };
 }
 
@@ -168,6 +177,15 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ 0.7, 0.55, 0.33, 1.0 },
         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .{ 0.9, 0.7, 0.2, 1.0 },
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => .{ 0.6, 0.45, 0.25, 1.0 },
+        .oak_door_bottom_east, .oak_door_bottom_east_open,
+        .oak_door_bottom_south, .oak_door_bottom_south_open,
+        .oak_door_bottom_west, .oak_door_bottom_west_open,
+        .oak_door_bottom_north, .oak_door_bottom_north_open,
+        .oak_door_top_east, .oak_door_top_east_open,
+        .oak_door_top_south, .oak_door_top_south_open,
+        .oak_door_top_west, .oak_door_top_west_open,
+        .oak_door_top_north, .oak_door_top_north_open,
+        => .{ 0.7, 0.55, 0.33, 1.0 },
     };
 }
 
@@ -206,6 +224,16 @@ pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ .top = 11, .side = 11 },
         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .{ .top = 28, .side = 28 },
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => .{ .top = 29, .side = 29 },
+        .oak_door_bottom_east, .oak_door_bottom_east_open,
+        .oak_door_bottom_south, .oak_door_bottom_south_open,
+        .oak_door_bottom_west, .oak_door_bottom_west_open,
+        .oak_door_bottom_north, .oak_door_bottom_north_open,
+        => .{ .top = 32, .side = 32 },
+        .oak_door_top_east, .oak_door_top_east_open,
+        .oak_door_top_south, .oak_door_top_south_open,
+        .oak_door_top_west, .oak_door_top_west_open,
+        .oak_door_top_north, .oak_door_top_north_open,
+        => .{ .top = 33, .side = 33 },
     };
 }
 
@@ -253,7 +281,7 @@ hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .san
 inventory: [INV_SIZE]WorldState.BlockType = .{
     .cobblestone, .oak_log,      .oak_planks,   .bricks,       .bedrock,       .gold_ore,      .iron_ore,      .coal_ore,      .diamond_ore,
     .sponge,          .pumice,           .wool,             .gold_block,       .iron_block,        .diamond_block,     .bookshelf,         .obsidian,          .oak_leaves,
-    .oak_slab_bottom, .oak_stairs_south, .torch,            .ladder_south,     .air,               .air,               .air,               .air,               .air,
+    .oak_slab_bottom, .oak_stairs_south, .torch,            .ladder_south,     .oak_door_bottom_south, .air,               .air,               .air,               .air,
     .air,             .air,              .air,              .air,              .air,               .air,               .air,               .air,               .air,
 },
 armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
@@ -805,6 +833,35 @@ pub fn breakBlock(self: *GameState) void {
     const wy = hit.block_pos[1];
     const wz = hit.block_pos[2];
     const old_block = self.chunk_map.getBlock(wx, wy, wz);
+
+    // Door breaking: remove both halves
+    if (old_block.isDoor()) {
+        self.chunk_map.setBlock(wx, wy, wz, .air);
+        self.markDirtyIncremental(wx, wy, wz, old_block);
+        self.queueChunkSave(wx, wy, wz);
+
+        // Find and remove the other half
+        const other_y: i32 = if (old_block.isDoorBottom()) wy + 1 else wy - 1;
+        const other_block = self.chunk_map.getBlock(wx, other_y, wz);
+        if (other_block.isDoor()) {
+            self.chunk_map.setBlock(wx, other_y, wz, .air);
+            self.markDirtyIncremental(wx, other_y, wz, other_block);
+            self.queueChunkSave(wx, other_y, wz);
+
+            const key2 = WorldState.ChunkKey.fromWorldPos(wx, other_y, wz);
+            const lx2: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
+            const lz2: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
+            self.surface_height_map.rebuildColumnAt(key2.cx, key2.cz, lx2, lz2, &self.chunk_map);
+        }
+
+        const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+        const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
+        const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
+        self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
+        self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+        return;
+    }
+
     self.chunk_map.setBlock(wx, wy, wz, .air);
     // Rebuild surface height for this column (broken block may have been the surface)
     const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
@@ -813,6 +870,27 @@ pub fn breakBlock(self: *GameState) void {
     self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
     self.markDirtyIncremental(wx, wy, wz, old_block);
     self.queueChunkSave(wx, wy, wz);
+    self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+}
+
+fn toggleDoor(self: *GameState, wx: i32, wy: i32, wz: i32, block: WorldState.BlockType) void {
+    // Toggle this half
+    const new_block = block.toggleDoor();
+    const old_block = self.chunk_map.getBlock(wx, wy, wz);
+    self.chunk_map.setBlock(wx, wy, wz, new_block);
+    self.markDirtyIncremental(wx, wy, wz, old_block);
+    self.queueChunkSave(wx, wy, wz);
+
+    // Toggle the other half
+    const other_y: i32 = if (block.isDoorBottom()) wy + 1 else wy - 1;
+    const other_block = self.chunk_map.getBlock(wx, other_y, wz);
+    if (other_block.isDoor()) {
+        const new_other = other_block.toggleDoor();
+        self.chunk_map.setBlock(wx, other_y, wz, new_other);
+        self.markDirtyIncremental(wx, other_y, wz, other_block);
+        self.queueChunkSave(wx, other_y, wz);
+    }
+
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
@@ -861,14 +939,39 @@ fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit: Raycast.B
                 else => block_type,
             };
         },
+        .oak_door_bottom_east, .oak_door_bottom_east_open,
+        .oak_door_bottom_south, .oak_door_bottom_south_open,
+        .oak_door_bottom_west, .oak_door_bottom_west_open,
+        .oak_door_bottom_north, .oak_door_bottom_north_open,
+        .oak_door_top_east, .oak_door_top_east_open,
+        .oak_door_top_south, .oak_door_top_south_open,
+        .oak_door_top_west, .oak_door_top_west_open,
+        .oak_door_top_north, .oak_door_top_north_open,
+        => {
+            // Door facing from player yaw (same logic as stairs)
+            const pi = std.math.pi;
+            const norm_yaw = @mod(yaw, 2.0 * pi);
+            if (norm_yaw >= 0.25 * pi and norm_yaw < 0.75 * pi) return .oak_door_bottom_east;
+            if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi) return .oak_door_bottom_north;
+            if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi) return .oak_door_bottom_west;
+            return .oak_door_bottom_south;
+        },
         else => return block_type,
     }
 }
 
 pub fn placeBlock(self: *GameState) void {
+    const hit = self.hit_result orelse return;
+
+    // If clicking on a door, toggle it instead of placing
+    const clicked_block = self.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    if (clicked_block.isDoor()) {
+        self.toggleDoor(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], clicked_block);
+        return;
+    }
+
     var block_type = self.hotbar[self.selected_slot];
     if (block_type == .air) return;
-    const hit = self.hit_result orelse return;
     const n = hit.direction.normal();
     const px = hit.block_pos[0] + n[0];
     const py = hit.block_pos[1] + n[1];
@@ -878,6 +981,30 @@ pub fn placeBlock(self: *GameState) void {
 
     // Orient stairs based on player yaw, and slabs based on hit face/position
     block_type = resolveOrientation(block_type, self.camera.yaw, hit);
+
+    // Door placement: need space for both halves
+    if (block_type.isDoor()) {
+        // Check that the block above is free
+        const above = self.chunk_map.getBlock(px, py + 1, pz);
+        if (WorldState.block_properties.isSolid(above)) return;
+        if (above != .air and above != .water) return;
+
+        // Place bottom half
+        const old_bottom = self.chunk_map.getBlock(px, py, pz);
+        self.chunk_map.setBlock(px, py, pz, block_type);
+        self.markDirtyIncremental(px, py, pz, old_bottom);
+        self.queueChunkSave(px, py, pz);
+
+        // Place top half
+        const top_type = block_type.doorBottomToTop();
+        const old_top = self.chunk_map.getBlock(px, py + 1, pz);
+        self.chunk_map.setBlock(px, py + 1, pz, top_type);
+        self.markDirtyIncremental(px, py + 1, pz, old_top);
+        self.queueChunkSave(px, py + 1, pz);
+
+        self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+        return;
+    }
 
     const old_block = self.chunk_map.getBlock(px, py, pz);
     self.chunk_map.setBlock(px, py, pz, block_type);
@@ -903,6 +1030,15 @@ pub fn pickBlock(self: *GameState) void {
         .oak_slab_top => .oak_slab_bottom,
         .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .oak_stairs_south,
         .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .torch,
+        .oak_door_bottom_east, .oak_door_bottom_east_open,
+        .oak_door_bottom_south_open,
+        .oak_door_bottom_west, .oak_door_bottom_west_open,
+        .oak_door_bottom_north, .oak_door_bottom_north_open,
+        .oak_door_top_east, .oak_door_top_east_open,
+        .oak_door_top_south, .oak_door_top_south_open,
+        .oak_door_top_west, .oak_door_top_west_open,
+        .oak_door_top_north, .oak_door_top_north_open,
+        => .oak_door_bottom_south,
         else => raw_type,
     };
 
