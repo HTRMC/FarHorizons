@@ -999,7 +999,7 @@ pub fn main() !void {
             if (game_state) |*gs| {
                 hr.updateHeldBlock(gs.hotbar[gs.selected_slot]);
             } else {
-                hr.updateHeldBlock(.air);
+                hr.updateHeldBlock(WorldState.BlockState.defaultState(.air));
             }
         }
 

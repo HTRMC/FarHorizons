@@ -205,14 +205,14 @@ pub const RegionFile = struct {
     pub fn readChunk(
         self: *RegionFile,
         chunk_index: u9,
-        out_blocks: *[WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType,
+        out_blocks: *[WorldState.BLOCKS_PER_CHUNK]WorldState.StateId,
     ) !bool {
         const raw_result = try self.readChunkRawWithAlgo(chunk_index) orelse return false;
         defer self.mem_allocator.free(raw_result.data);
 
         const algo = raw_result.algo;
 
-        var decompressed_buf: [64 * 1024]u8 = undefined;
+        var decompressed_buf: [128 * 1024]u8 = undefined;
         if (algo == .none) {
             try chunk_codec.decode(raw_result.data, out_blocks);
         } else {
@@ -232,7 +232,7 @@ pub const RegionFile = struct {
     pub fn writeChunk(
         self: *RegionFile,
         chunk_index: u9,
-        blocks: *const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType,
+        blocks: *const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId,
         algo: CompressionAlgo,
     ) !void {
         var encoded = try chunk_codec.encode(self.mem_allocator, blocks);
@@ -283,7 +283,7 @@ pub const RegionFile = struct {
     pub fn writeChunkBatch(
         self: *RegionFile,
         chunk_indices: []const u9,
-        block_arrays: []const *const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType,
+        block_arrays: []const *const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId,
         algo: CompressionAlgo,
     ) !void {
         if (chunk_indices.len == 0) return;

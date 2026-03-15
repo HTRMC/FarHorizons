@@ -2,6 +2,7 @@ const std = @import("std");
 const GameState = @import("GameState.zig");
 const ChunkStreamer = GameState.ChunkStreamer;
 const WorldState = @import("world/WorldState.zig");
+const BlockState = WorldState.BlockState;
 const TextRenderer = @import("renderer/vulkan/TextRenderer.zig").TextRenderer;
 const Raycast = @import("Raycast.zig");
 const world_renderer_mod = @import("renderer/vulkan/WorldRenderer.zig");

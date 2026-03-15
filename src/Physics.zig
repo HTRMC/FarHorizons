@@ -1,6 +1,7 @@
 const std = @import("std");
 const GameState = @import("GameState.zig");
 const WorldState = @import("world/WorldState.zig");
+const BlockState = WorldState.BlockState;
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 
 const GRAVITY: f32 = 32.0;
@@ -154,7 +155,7 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
             var bx: i32 = bx0;
             while (bx <= bx1) : (bx += 1) {
                 const block = chunk_map.getBlock(bx, by, bz);
-                if (!WorldState.block_properties.isSolid(block)) continue;
+                if (!BlockState.isSolid(block)) continue;
 
                 const coords = [3]i32{ bx, by, bz };
                 const block_boxes = getBlockBoxes(block);
@@ -196,203 +197,65 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
 pub const BlockBox = struct { min: [3]f32, max: [3]f32 };
 pub const BlockBoxes = struct { boxes: [2]BlockBox, count: u8 };
 
-pub fn getBlockBoxes(block: WorldState.BlockType) BlockBoxes {
-    return switch (block) {
-        .oak_slab_bottom => .{
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
-                undefined,
-            },
-            .count = 1,
+pub fn getBlockBoxes(state: BlockState.StateId) BlockBoxes {
+    const blk = BlockState.getBlock(state);
+    return switch (blk) {
+        .oak_slab => {
+            const slab_type = BlockState.getSlabType(state).?;
+            return switch (slab_type) {
+                .bottom => .{ .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } }, undefined }, .count = 1 },
+                .top => .{ .boxes = .{ .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 1 } }, undefined }, .count = 1 },
+                .double => .{ .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } }, undefined }, .count = 1 },
+            };
         },
-        .oak_slab_top => .{
-            .boxes = .{
-                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 1 } },
-                undefined,
-            },
-            .count = 1,
+        .oak_stairs => {
+            const facing = BlockState.getFacing(state).?;
+            const base_box: BlockBox = .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } };
+            const step_box: BlockBox = switch (facing) {
+                .south => .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 0.5 } },
+                .north => .{ .min = .{ 0, 0.5, 0.5 }, .max = .{ 1, 1, 1 } },
+                .east => .{ .min = .{ 0, 0.5, 0 }, .max = .{ 0.5, 1, 1 } },
+                .west => .{ .min = .{ 0.5, 0.5, 0 }, .max = .{ 1, 1, 1 } },
+            };
+            return .{ .boxes = .{ base_box, step_box }, .count = 2 };
         },
-        .oak_stairs_south => .{ // back at -Z, step at +Z
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } }, // bottom slab
-                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 0.5 } }, // upper back
-            },
-            .count = 2,
+        .torch => {
+            const hitbox = BlockState.getHitbox(state) orelse return fullCubeBox();
+            return .{ .boxes = .{ .{ .min = hitbox.min, .max = hitbox.max }, undefined }, .count = 1 };
         },
-        .oak_stairs_north => .{ // back at +Z, step at -Z
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
-                .{ .min = .{ 0, 0.5, 0.5 }, .max = .{ 1, 1, 1 } },
-            },
-            .count = 2,
+        .ladder => {
+            const hitbox = BlockState.getHitbox(state) orelse return fullCubeBox();
+            return .{ .boxes = .{ .{ .min = hitbox.min, .max = hitbox.max }, undefined }, .count = 1 };
         },
-        .oak_stairs_east => .{ // back at -X, step at +X
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
-                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 0.5, 1, 1 } },
-            },
-            .count = 2,
+        .oak_door => {
+            const hitbox = BlockState.getHitbox(state) orelse return fullCubeBox();
+            return .{ .boxes = .{ .{ .min = hitbox.min, .max = hitbox.max }, undefined }, .count = 1 };
         },
-        .oak_stairs_west => .{ // back at +X, step at -X
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
-                .{ .min = .{ 0.5, 0.5, 0 }, .max = .{ 1, 1, 1 } },
-            },
-            .count = 2,
+        .oak_fence => {
+            const conns = BlockState.getFenceConnections(state).?;
+            const min_x: f32 = if (conns.w) 0.0 else 6.0 / 16.0;
+            const max_x: f32 = if (conns.e) 1.0 else 10.0 / 16.0;
+            const min_z: f32 = if (conns.n) 0.0 else 6.0 / 16.0;
+            const max_z: f32 = if (conns.s) 1.0 else 10.0 / 16.0;
+
+            const n_count = @as(u8, @intFromBool(conns.n)) + @intFromBool(conns.s) + @intFromBool(conns.e) + @intFromBool(conns.w);
+            if (n_count >= 2 and (conns.n or conns.s) and (conns.e or conns.w)) {
+                return .{
+                    .boxes = .{
+                        .{ .min = .{ 6.0 / 16.0, 0, min_z }, .max = .{ 10.0 / 16.0, 1.5, max_z } },
+                        .{ .min = .{ min_x, 0, 6.0 / 16.0 }, .max = .{ max_x, 1.5, 10.0 / 16.0 } },
+                    },
+                    .count = 2,
+                };
+            }
+            return .{ .boxes = .{ .{ .min = .{ min_x, 0, min_z }, .max = .{ max_x, 1.5, max_z } }, undefined }, .count = 1 };
         },
-        .torch => .{
-            .boxes = .{
-                .{ .min = .{ 6.0 / 16.0, 0.0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 10.0 / 16.0, 10.0 / 16.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .torch_wall_south => .{
-            .boxes = .{
-                .{ .min = .{ 5.5 / 16.0, 3.0 / 16.0, 11.0 / 16.0 }, .max = .{ 10.5 / 16.0, 1.0, 1.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .torch_wall_north => .{
-            .boxes = .{
-                .{ .min = .{ 5.5 / 16.0, 3.0 / 16.0, 0.0 }, .max = .{ 10.5 / 16.0, 1.0, 5.0 / 16.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .torch_wall_east => .{
-            .boxes = .{
-                .{ .min = .{ 11.0 / 16.0, 3.0 / 16.0, 5.5 / 16.0 }, .max = .{ 1.0, 1.0, 10.5 / 16.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .torch_wall_west => .{
-            .boxes = .{
-                .{ .min = .{ 0.0, 3.0 / 16.0, 5.5 / 16.0 }, .max = .{ 5.0 / 16.0, 1.0, 10.5 / 16.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .ladder_south => .{
-            .boxes = .{
-                .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 3.0 / 16.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .ladder_north => .{
-            .boxes = .{
-                .{ .min = .{ 0.0, 0.0, 13.0 / 16.0 }, .max = .{ 1.0, 1.0, 1.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .ladder_east => .{
-            .boxes = .{
-                .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 3.0 / 16.0, 1.0, 1.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .ladder_west => .{
-            .boxes = .{
-                .{ .min = .{ 13.0 / 16.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 1.0 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        // Closed doors: 3px slab collision box (same positions as hitboxes)
-        .oak_door_bottom_east, .oak_door_top_east => .{
-            .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 3.0 / 16.0, 1, 1 } }, undefined },
-            .count = 1,
-        },
-        .oak_door_bottom_south, .oak_door_top_south => .{
-            .boxes = .{ .{ .min = .{ 0, 0, 13.0 / 16.0 }, .max = .{ 1, 1, 1 } }, undefined },
-            .count = 1,
-        },
-        .oak_door_bottom_west, .oak_door_top_west => .{
-            .boxes = .{ .{ .min = .{ 13.0 / 16.0, 0, 0 }, .max = .{ 1, 1, 1 } }, undefined },
-            .count = 1,
-        },
-        .oak_door_bottom_north, .oak_door_top_north => .{
-            .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 3.0 / 16.0 } }, undefined },
-            .count = 1,
-        },
-        // Fence collision: post (6-10 x/z) + connection bars, 1.5 blocks tall
-        .oak_fence_post => .{
-            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } }, undefined },
-            .count = 1,
-        },
-        .oak_fence_n => .{
-            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } }, undefined },
-            .count = 1,
-        },
-        .oak_fence_s => .{
-            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } }, undefined },
-            .count = 1,
-        },
-        .oak_fence_e => .{
-            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } }, undefined },
-            .count = 1,
-        },
-        .oak_fence_w => .{
-            .boxes = .{ .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } }, undefined },
-            .count = 1,
-        },
-        .oak_fence_ns => .{
-            .boxes = .{ .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } }, undefined },
-            .count = 1,
-        },
-        .oak_fence_ew => .{
-            .boxes = .{ .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } }, undefined },
-            .count = 1,
-        },
-        .oak_fence_ne => .{
-            .boxes = .{
-                .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } },
-                .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } },
-            },
-            .count = 2,
-        },
-        .oak_fence_nw => .{
-            .boxes = .{
-                .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } },
-                .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } },
-            },
-            .count = 2,
-        },
-        .oak_fence_se => .{
-            .boxes = .{
-                .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } },
-                .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } },
-            },
-            .count = 2,
-        },
-        .oak_fence_sw => .{
-            .boxes = .{
-                .{ .min = .{ 6.0 / 16.0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } },
-                .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.5, 10.0 / 16.0 } },
-            },
-            .count = 2,
-        },
-        .oak_fence_nse, .oak_fence_nsw, .oak_fence_new, .oak_fence_sew, .oak_fence_nsew => .{
-            // For 3+ connections: use N-S bar + E-W bar (covers all cases)
-            .boxes = .{
-                .{ .min = .{ 6.0 / 16.0, 0, 0 }, .max = .{ 10.0 / 16.0, 1.5, 1 } },
-                .{ .min = .{ 0, 0, 6.0 / 16.0 }, .max = .{ 1, 1.5, 10.0 / 16.0 } },
-            },
-            .count = 2,
-        },
-        else => .{
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } },
-                undefined,
-            },
-            .count = 1,
-        },
+        else => return fullCubeBox(),
     };
+}
+
+fn fullCubeBox() BlockBoxes {
+    return .{ .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } }, undefined }, .count = 1 };
 }
 
 fn overlapsOtherAxesBox(aabb_min: [3]f32, aabb_max: [3]f32, box_min: [3]f32, box_max: [3]f32, skip_axis: usize) bool {
@@ -515,7 +378,7 @@ test "collideAxis: no collision in empty chunk" {
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
     defer testing.allocator.destroy(chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     const pos = [3]f32{ 5.0, 5.0, 5.0 };
@@ -530,10 +393,10 @@ test "collideAxis: collision with solid block" {
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
     defer testing.allocator.destroy(chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
 
     // Place stone at (10, 5, 5)
-    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .stone;
+    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = BlockState.defaultState(.stone);
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     // Entity at x=8.0 (HALF_W=0.4, so right edge at 8.4), moving +x toward block at x=10
@@ -552,10 +415,10 @@ test "collideAxis: negative movement collision" {
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
     defer testing.allocator.destroy(chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
 
     // Place stone at (3, 5, 5) — block spans x=[3,4)
-    chunk.blocks[WorldState.chunkIndex(3, 5, 5)] = .stone;
+    chunk.blocks[WorldState.chunkIndex(3, 5, 5)] = BlockState.defaultState(.stone);
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     // Entity at x=5.0 (left edge at 4.6), moving -x toward block ending at x=4
@@ -573,10 +436,10 @@ test "collideAxis: water is not solid" {
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
     defer testing.allocator.destroy(chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
 
     // Place water at (10, 5, 5)
-    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .water;
+    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = BlockState.defaultState(.water);
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     const pos = [3]f32{ 8.0, 5.0, 5.5 };

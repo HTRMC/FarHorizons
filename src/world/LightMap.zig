@@ -1,6 +1,5 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
-const BlockType = WorldState.BlockType;
 const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
 const PaletteStorage = @import("../allocators/PaletteStorage.zig").PaletteStorage;
 const Io = std.Io;
@@ -10,7 +9,7 @@ pub const IncrementalUpdate = struct {
     lx: u8,
     ly: u8,
     lz: u8,
-    old_block: BlockType,
+    old_block: WorldState.StateId,
 };
 
 pub const BlockLightStorage = PaletteStorage([3]u8, BLOCKS_PER_CHUNK);

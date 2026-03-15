@@ -8,6 +8,7 @@ const ActionRegistry = @import("ActionRegistry.zig").ActionRegistry;
 const HudBinder = @import("HudBinder.zig").HudBinder;
 const UiRenderer = @import("../renderer/vulkan/UiRenderer.zig").UiRenderer;
 const GameState = @import("../GameState.zig");
+const BlockState = @import("../world/WorldState.zig").BlockState;
 const app_config = @import("../app_config.zig");
 const Options = @import("../Options.zig");
 const glfw = @import("../platform/glfw.zig");
@@ -533,26 +534,26 @@ pub const MenuController = struct {
     pub fn hideInventory(self: *MenuController, gs: ?*GameState) void {
         // Return carried item to inventory when closing
         if (gs) |g| {
-            if (g.carried_item != .air) {
+            if (g.carried_item != BlockState.defaultState(.air)) {
                 // Find first empty slot to place carried item
                 for (&g.hotbar) |*slot| {
-                    if (slot.* == .air) {
+                    if (slot.* == BlockState.defaultState(.air)) {
                         slot.* = g.carried_item;
-                        g.carried_item = .air;
+                        g.carried_item = BlockState.defaultState(.air);
                         break;
                     }
                 }
-                if (g.carried_item != .air) {
+                if (g.carried_item != BlockState.defaultState(.air)) {
                     for (&g.inventory) |*slot| {
-                        if (slot.* == .air) {
+                        if (slot.* == BlockState.defaultState(.air)) {
                             slot.* = g.carried_item;
-                            g.carried_item = .air;
+                            g.carried_item = BlockState.defaultState(.air);
                             break;
                         }
                     }
                 }
                 // If still not placed, just drop it (clear it)
-                g.carried_item = .air;
+                g.carried_item = BlockState.defaultState(.air);
             }
         }
         self.game_state = null;
@@ -629,7 +630,7 @@ pub const MenuController = struct {
         if (self.cursor_item_id != NULL_WIDGET) {
             const cid = self.cursor_item_id;
             if (tree.getWidget(cid)) |w| {
-                if (gs.carried_item != .air) {
+                if (gs.carried_item != BlockState.defaultState(.air)) {
                     const c = GameState.blockColor(gs.carried_item);
                     w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                     const tex = GameState.blockTexIndices(gs.carried_item);
@@ -672,7 +673,7 @@ pub const MenuController = struct {
         if (self.app_state == .inventory) {
             // Return carried item before closing
             if (self.game_state) |gs| {
-                gs.carried_item = .air;
+                gs.carried_item = BlockState.defaultState(.air);
             }
             self.game_state = null;
             self.unloadScreen(.inventory);
@@ -1131,8 +1132,8 @@ pub const MenuController = struct {
 
     const WorldState = @import("../world/WorldState.zig");
 
-    fn updateSlotWidget(w: *Widget.Widget, tree: *WidgetTree, id: WidgetId, block: WorldState.BlockType) void {
-        if (block != .air) {
+    fn updateSlotWidget(w: *Widget.Widget, tree: *WidgetTree, id: WidgetId, block: BlockState.StateId) void {
+        if (BlockState.getBlock(block) != .air) {
             const c = GameState.blockColor(block);
             w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
             const tex = GameState.blockTexIndices(block);

@@ -11,6 +11,7 @@ const app_config = @import("../../app_config.zig");
 const EntityVertex = @import("EntityRenderer.zig").EntityVertex;
 const GameState = @import("../../GameState.zig");
 const WorldState = @import("../../world/WorldState.zig");
+const BlockState = WorldState.BlockState;
 const Io = std.Io;
 const Dir = Io.Dir;
 
@@ -36,7 +37,7 @@ pub const HandRenderer = struct {
     visible: bool = true,
     block_tex_top: i16 = -1,
     block_tex_side: i16 = -1,
-    held_block: WorldState.BlockType = .air,
+    held_block: BlockState.StateId = BlockState.defaultState(.air),
     is_shaped: bool = false,
     tex_groups: [8]TexGroup = undefined,
     tex_group_count: u8 = 0,
@@ -264,15 +265,16 @@ pub const HandRenderer = struct {
     }
 
     /// Update the held block, rebuilding geometry if the shape changes.
-    pub fn updateHeldBlock(self: *HandRenderer, block: WorldState.BlockType) void {
-        if (block == self.held_block) return;
-        self.held_block = block;
+    pub fn updateHeldBlock(self: *HandRenderer, state: BlockState.StateId) void {
+        if (state == self.held_block) return;
+        self.held_block = state;
 
-        const tex = GameState.blockTexIndices(block);
+        const legacy = BlockState.toLegacy(state);
+        const tex = GameState.blockTexIndices(state);
         self.block_tex_top = tex.top;
         self.block_tex_side = tex.side;
 
-        if (block == .air) {
+        if (BlockState.getBlock(state) == .air) {
             self.is_shaped = false;
             return;
         }
@@ -280,9 +282,9 @@ pub const HandRenderer = struct {
         const vertices: [*]EntityVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
         var count = self.block_vertex_start;
 
-        if (block.isShapedBlock()) {
+        if (BlockState.isShaped(state)) {
             self.is_shaped = true;
-            count = self.buildShapedBlock(vertices, count, block);
+            count = self.buildShapedBlock(vertices, count, legacy);
         } else {
             self.is_shaped = false;
             count = buildUnitBlock(vertices, count);

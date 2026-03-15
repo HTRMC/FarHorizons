@@ -8,6 +8,7 @@ const LightBorderSnapshot = LightMapMod.LightBorderSnapshot;
 const tracy = @import("../platform/tracy.zig");
 pub const BlockModelLoader = @import("BlockModelLoader.zig");
 pub const BlockModelRegistry = BlockModelLoader.BlockModelRegistry;
+pub const BlockState = @import("BlockState.zig");
 
 pub const CHUNK_SIZE = 32;
 pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
@@ -579,8 +580,10 @@ pub const block_properties = struct {
 
 // --- Core types ---
 
+pub const StateId = BlockState.StateId;
+
 pub const Chunk = struct {
-    blocks: [BLOCKS_PER_CHUNK]BlockType,
+    blocks: [BLOCKS_PER_CHUNK]StateId,
 };
 
 pub const ChunkKey = struct {
@@ -660,25 +663,25 @@ pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
 /// Generate flat terrain into a chunk based on its key.
 /// Grass at wy=0, dirt at wy=-1..-2, stone at wy=-3..-7, air elsewhere.
 pub fn generateFlatChunk(chunk: *Chunk, key: ChunkKey) void {
-    chunk.blocks = .{.air} ** BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, BlockState.defaultState(.air));
 
     for (0..CHUNK_SIZE) |by| {
         const wy: i32 = key.cy * CHUNK_SIZE + @as(i32, @intCast(by));
 
-        const block_type: BlockType = if (wy == 0)
-            .grass_block
+        const state: StateId = if (wy == 0)
+            BlockState.defaultState(.grass_block)
         else if (wy >= -2 and wy <= -1)
-            .dirt
+            BlockState.defaultState(.dirt)
         else if (wy >= -7 and wy <= -3)
-            .stone
+            BlockState.defaultState(.stone)
         else
-            .air;
+            BlockState.defaultState(.air);
 
-        if (block_type == .air) continue;
+        if (state == BlockState.defaultState(.air)) continue;
 
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                chunk.blocks[chunkIndex(bx, by, bz)] = block_type;
+                chunk.blocks[chunkIndex(bx, by, bz)] = state;
             }
         }
     }
@@ -686,7 +689,7 @@ pub fn generateFlatChunk(chunk: *Chunk, key: ChunkKey) void {
 
 /// Debug world: places one of each block type in a grid at y=0, stone floor at y=-1.
 pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
-    chunk.blocks = .{.air} ** BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, BlockState.defaultState(.air));
 
     const COLS = 6;
     const SPACING = 2;
@@ -695,7 +698,7 @@ pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
     if (key.cy == -1) {
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                chunk.blocks[chunkIndex(bx, CHUNK_SIZE - 1, bz)] = .stone;
+                chunk.blocks[chunkIndex(bx, CHUNK_SIZE - 1, bz)] = BlockState.defaultState(.stone);
             }
         }
         return;
@@ -703,26 +706,21 @@ pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
 
     if (key.cy != 0) return;
 
-    // Enumerate all non-air block types
-    const fields = @typeInfo(BlockType).@"enum".fields;
-    inline for (fields, 0..) |field, i| {
-        const bt: BlockType = @enumFromInt(field.value);
-        if (bt == .air) continue;
-
-        const idx = i - 1; // skip air
+    // Enumerate all states (place one per grid cell)
+    for (0..BlockState.TOTAL_STATES) |si| {
+        if (si == 0) continue; // skip air
+        const idx = si - 1;
         const col = idx % COLS;
         const row = idx / COLS;
 
-        // World position of this block
         const wx: i32 = @intCast(col * SPACING);
         const wz: i32 = @intCast(row * SPACING);
 
-        // Check if this block falls within this chunk
         const lx = wx - key.cx * CHUNK_SIZE;
         const lz = wz - key.cz * CHUNK_SIZE;
 
         if (lx >= 0 and lx < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE) {
-            chunk.blocks[chunkIndex(@intCast(lx), 0, @intCast(lz))] = bt;
+            chunk.blocks[chunkIndex(@intCast(lx), 0, @intCast(lz))] = @intCast(si);
         }
     }
 }
@@ -742,6 +740,19 @@ fn getNeighborBlock(
     ly: i32,
     lz: i32,
 ) BlockType {
+    const state = getNeighborState(chunk, neighbors, lx, ly, lz);
+    return BlockState.toLegacy(state);
+}
+
+fn getNeighborState(
+    chunk: *const Chunk,
+    neighbors: [6]?*const Chunk,
+    lx: i32,
+    ly: i32,
+    lz: i32,
+) StateId {
+    const air = BlockState.defaultState(.air);
+
     // Fast path: within current chunk
     if (lx >= 0 and lx < CHUNK_SIZE and ly >= 0 and ly < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE) {
         return chunk.blocks[chunkIndex(@intCast(lx), @intCast(ly), @intCast(lz))];
@@ -753,23 +764,22 @@ fn getNeighborBlock(
     const z_out = lz < 0 or lz >= CHUNK_SIZE;
 
     const out_count = @as(u32, @intFromBool(x_out)) + @intFromBool(y_out) + @intFromBool(z_out);
-    if (out_count != 1) return .air;
+    if (out_count != 1) return air;
 
-    // Determine which face neighbor to use
     const face_idx: usize = if (lx < 0)
-        2 // -X
+        2
     else if (lx >= CHUNK_SIZE)
-        3 // +X
+        3
     else if (ly < 0)
-        5 // -Y
+        5
     else if (ly >= CHUNK_SIZE)
-        4 // +Y
+        4
     else if (lz < 0)
-        1 // -Z
+        1
     else
-        0; // +Z
+        0;
 
-    const neighbor = neighbors[face_idx] orelse return .air;
+    const neighbor = neighbors[face_idx] orelse return air;
 
     const nlx: usize = @intCast(@mod(lx, @as(i32, CHUNK_SIZE)));
     const nly: usize = @intCast(@mod(ly, @as(i32, CHUNK_SIZE)));
@@ -935,42 +945,42 @@ fn computeTrilinearLightSamples() [6][4][4]TrilinearSample {
 }
 
 /// Build a 34³ padded block array: center 32³ from chunk, 1-block border from neighbors, .air elsewhere.
+/// Converts StateId → legacy BlockType for compatibility with existing meshing code.
 fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, neighbors: [6]?*const Chunk) void {
     @memset(padded, .air);
 
-    // Copy center 32³ — row by row (x-axis contiguous in memory)
+    // Copy center 32³ — convert StateId → BlockType row by row
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
-            @memcpy(
-                padded[paddedIndex(1, y + 1, z + 1)..][0..CHUNK_SIZE],
-                chunk.blocks[chunkIndex(0, y, z)..][0..CHUNK_SIZE],
-            );
+            const src = chunk.blocks[chunkIndex(0, y, z)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, y + 1, z + 1)..][0..CHUNK_SIZE];
+            for (src, dst) |state, *out| {
+                out.* = BlockState.toLegacy(state);
+            }
         }
     }
 
     // +Z face (0): neighbor's z=0 slice → padded z=PADDED_SIZE-1
     if (neighbors[0]) |n| {
         for (0..CHUNK_SIZE) |y| {
-            @memcpy(
-                padded[paddedIndex(1, y + 1, PADDED_SIZE - 1)..][0..CHUNK_SIZE],
-                n.blocks[chunkIndex(0, y, 0)..][0..CHUNK_SIZE],
-            );
+            const src = n.blocks[chunkIndex(0, y, 0)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, y + 1, PADDED_SIZE - 1)..][0..CHUNK_SIZE];
+            for (src, dst) |state, *out| out.* = BlockState.toLegacy(state);
         }
     }
     // -Z face (1): neighbor's z=31 slice → padded z=0
     if (neighbors[1]) |n| {
         for (0..CHUNK_SIZE) |y| {
-            @memcpy(
-                padded[paddedIndex(1, y + 1, 0)..][0..CHUNK_SIZE],
-                n.blocks[chunkIndex(0, y, CHUNK_SIZE - 1)..][0..CHUNK_SIZE],
-            );
+            const src = n.blocks[chunkIndex(0, y, CHUNK_SIZE - 1)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, y + 1, 0)..][0..CHUNK_SIZE];
+            for (src, dst) |state, *out| out.* = BlockState.toLegacy(state);
         }
     }
     // -X face (2): neighbor's x=31 → padded x=0
     if (neighbors[2]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
-                padded[paddedIndex(0, y + 1, z + 1)] = n.blocks[chunkIndex(CHUNK_SIZE - 1, y, z)];
+                padded[paddedIndex(0, y + 1, z + 1)] = BlockState.toLegacy(n.blocks[chunkIndex(CHUNK_SIZE - 1, y, z)]);
             }
         }
     }
@@ -978,26 +988,24 @@ fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, nei
     if (neighbors[3]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
-                padded[paddedIndex(PADDED_SIZE - 1, y + 1, z + 1)] = n.blocks[chunkIndex(0, y, z)];
+                padded[paddedIndex(PADDED_SIZE - 1, y + 1, z + 1)] = BlockState.toLegacy(n.blocks[chunkIndex(0, y, z)]);
             }
         }
     }
     // +Y face (4): neighbor's y=0 → padded y=PADDED_SIZE-1
     if (neighbors[4]) |n| {
         for (0..CHUNK_SIZE) |z| {
-            @memcpy(
-                padded[paddedIndex(1, PADDED_SIZE - 1, z + 1)..][0..CHUNK_SIZE],
-                n.blocks[chunkIndex(0, 0, z)..][0..CHUNK_SIZE],
-            );
+            const src = n.blocks[chunkIndex(0, 0, z)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, PADDED_SIZE - 1, z + 1)..][0..CHUNK_SIZE];
+            for (src, dst) |state, *out| out.* = BlockState.toLegacy(state);
         }
     }
     // -Y face (5): neighbor's y=31 → padded y=0
     if (neighbors[5]) |n| {
         for (0..CHUNK_SIZE) |z| {
-            @memcpy(
-                padded[paddedIndex(1, 0, z + 1)..][0..CHUNK_SIZE],
-                n.blocks[chunkIndex(0, CHUNK_SIZE - 1, z)..][0..CHUNK_SIZE],
-            );
+            const src = n.blocks[chunkIndex(0, CHUNK_SIZE - 1, z)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, 0, z + 1)..][0..CHUNK_SIZE];
+            for (src, dst) |state, *out| out.* = BlockState.toLegacy(state);
         }
     }
 }
@@ -1177,8 +1185,8 @@ fn sampleTrilinearLight(
 /// all blocks are opaque AND all 6 neighbor boundary faces are opaque.
 pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
     // 1. Check all blocks in the chunk are opaque
-    for (&chunk.blocks) |b| {
-        if (!block_properties.isOpaque(b)) return false;
+    for (&chunk.blocks) |s| {
+        if (!BlockState.isOpaque(s)) return false;
     }
 
     // 2. Check each neighbor's boundary face is fully opaque
@@ -1187,45 +1195,45 @@ pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
         const nb = &n.blocks;
 
         switch (face) {
-            0 => { // +Z: neighbor z=0
+            0 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(x, y, 0)])) return false;
+                        if (!BlockState.isOpaque(nb[chunkIndex(x, y, 0)])) return false;
                     }
                 }
             },
-            1 => { // -Z: neighbor z=31
+            1 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(x, y, CHUNK_SIZE - 1)])) return false;
+                        if (!BlockState.isOpaque(nb[chunkIndex(x, y, CHUNK_SIZE - 1)])) return false;
                     }
                 }
             },
-            2 => { // -X: neighbor x=31
-                for (0..CHUNK_SIZE) |y| {
-                    for (0..CHUNK_SIZE) |z| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(CHUNK_SIZE - 1, y, z)])) return false;
-                    }
-                }
-            },
-            3 => { // +X: neighbor x=0
+            2 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |z| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(0, y, z)])) return false;
+                        if (!BlockState.isOpaque(nb[chunkIndex(CHUNK_SIZE - 1, y, z)])) return false;
                     }
                 }
             },
-            4 => { // +Y: neighbor y=0
-                for (0..CHUNK_SIZE) |z| {
-                    for (0..CHUNK_SIZE) |x| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(x, 0, z)])) return false;
+            3 => {
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |z| {
+                        if (!BlockState.isOpaque(nb[chunkIndex(0, y, z)])) return false;
                     }
                 }
             },
-            5 => { // -Y: neighbor y=31
+            4 => {
                 for (0..CHUNK_SIZE) |z| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(x, CHUNK_SIZE - 1, z)])) return false;
+                        if (!BlockState.isOpaque(nb[chunkIndex(x, 0, z)])) return false;
+                    }
+                }
+            },
+            5 => {
+                for (0..CHUNK_SIZE) |z| {
+                    for (0..CHUNK_SIZE) |x| {
+                        if (!BlockState.isOpaque(nb[chunkIndex(x, CHUNK_SIZE - 1, z)])) return false;
                     }
                 }
             },
@@ -1817,7 +1825,7 @@ fn unpackFace(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, normal_
 }
 
 fn makeEmptyChunk() Chunk {
-    return .{ .blocks = .{.air} ** BLOCKS_PER_CHUNK };
+    return .{ .blocks = .{BlockState.defaultState(.air)} ** BLOCKS_PER_CHUNK };
 }
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
@@ -1826,7 +1834,7 @@ const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
 test "single block in air produces 6 faces" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.fromLegacy(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1850,8 +1858,8 @@ test "single block in air produces 6 faces" {
 
 test "two adjacent blocks share face - culled" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
-    chunk.blocks[chunkIndex(6, 5, 5)] = .stone;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.fromLegacy(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1872,7 +1880,7 @@ test "face_counts sum equals total_face_count" {
     var chunk = makeEmptyChunk();
     for (3..7) |x| {
         for (3..6) |y| {
-            chunk.blocks[chunkIndex(x, y, 4)] = .dirt;
+            chunk.blocks[chunkIndex(x, y, 4)] = BlockState.fromLegacy(.dirt);
         }
     }
 
@@ -1889,7 +1897,7 @@ test "face_counts sum equals total_face_count" {
 
 test "normal indices in faces match their group" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(10, 10, 10)] = .grass_block;
+    chunk.blocks[chunkIndex(10, 10, 10)] = BlockState.fromLegacy(.grass_block);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1910,8 +1918,8 @@ test "normal indices in faces match their group" {
 test "cross-chunk boundary face culling" {
     var chunk0 = makeEmptyChunk();
     var chunk1 = makeEmptyChunk();
-    chunk0.blocks[chunkIndex(CHUNK_SIZE - 1, 5, 5)] = .stone;
-    chunk1.blocks[chunkIndex(0, 5, 5)] = .stone;
+    chunk0.blocks[chunkIndex(CHUNK_SIZE - 1, 5, 5)] = BlockState.fromLegacy(.stone);
+    chunk1.blocks[chunkIndex(0, 5, 5)] = BlockState.fromLegacy(.stone);
 
     // chunk0 has chunk1 as its +X neighbor (face 3)
     var neighbors0 = no_neighbors;
@@ -1949,8 +1957,8 @@ test "empty chunk produces no faces" {
 
 test "glass does not cull adjacent non-glass" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
-    chunk.blocks[chunkIndex(6, 5, 5)] = .glass;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.fromLegacy(.glass);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1961,8 +1969,8 @@ test "glass does not cull adjacent non-glass" {
 
 test "glass-glass adjacency culls shared face" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .glass;
-    chunk.blocks[chunkIndex(6, 5, 5)] = .glass;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.fromLegacy(.glass);
+    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.fromLegacy(.glass);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1974,7 +1982,7 @@ test "glass-glass adjacency culls shared face" {
 test "light count equals face count (1:1 mapping)" {
     var chunk = makeEmptyChunk();
     for (0..4) |x| {
-        chunk.blocks[chunkIndex(x, 5, 5)] = .stone;
+        chunk.blocks[chunkIndex(x, 5, 5)] = BlockState.fromLegacy(.stone);
     }
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
@@ -2016,7 +2024,7 @@ test "ChunkKey.fromWorldPos handles negative coords" {
 
 test "world boundary blocks have all outer faces" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(0, 0, 0)] = .stone;
+    chunk.blocks[chunkIndex(0, 0, 0)] = BlockState.fromLegacy(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -2050,7 +2058,7 @@ fn findFaceByNormal(result: ChunkMeshResult, normal: u3) ?FaceData {
 
 test "AO: single block in air has no occlusion" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.fromLegacy(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -2065,7 +2073,7 @@ test "AO: block on flat surface has correct top face AO" {
     var chunk = makeEmptyChunk();
     for (4..7) |x| {
         for (4..7) |z| {
-            chunk.blocks[chunkIndex(x, 5, z)] = .stone;
+            chunk.blocks[chunkIndex(x, 5, z)] = BlockState.fromLegacy(.stone);
         }
     }
 
@@ -2096,10 +2104,10 @@ test "AO: block on flat surface has correct top face AO" {
 
 test "AO: block in corner has maximum occlusion on enclosed corner" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
-    chunk.blocks[chunkIndex(6, 5, 5)] = .stone;
-    chunk.blocks[chunkIndex(5, 6, 5)] = .stone;
-    chunk.blocks[chunkIndex(5, 5, 6)] = .stone;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(5, 6, 5)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(5, 5, 6)] = BlockState.fromLegacy(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -2156,9 +2164,9 @@ test "generateFlatChunk: grass at wy=0" {
     var chunk: Chunk = undefined;
     generateFlatChunk(&chunk, .{ .cx = 0, .cy = 0, .cz = 0 });
     // wy=0 is at by=0 in chunk cy=0
-    try testing.expectEqual(BlockType.grass_block, chunk.blocks[chunkIndex(0, 0, 0)]);
+    try testing.expectEqual(BlockState.fromLegacy(.grass_block), chunk.blocks[chunkIndex(0, 0, 0)]);
     // wy=1 should be air
-    try testing.expectEqual(BlockType.air, chunk.blocks[chunkIndex(0, 1, 0)]);
+    try testing.expectEqual(BlockState.defaultState(.air), chunk.blocks[chunkIndex(0, 1, 0)]);
 }
 
 // ── Face culling tests ─────────────────────────────────────────────────────

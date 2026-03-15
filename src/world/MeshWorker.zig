@@ -12,6 +12,7 @@ const FaceData = types.FaceData;
 const LightEntry = types.LightEntry;
 const tracy = @import("../platform/tracy.zig");
 const Io = std.Io;
+const BlockState = WorldState.BlockState;
 
 const LightMaps = std.AutoHashMap(WorldState.ChunkKey, *LightMap);
 
@@ -297,9 +298,9 @@ pub const MeshWorker = struct {
                 const chunk = local_chunk_map.get(key) orelse continue;
 
                 // Skip all-air chunks immediately (no geometry possible)
-                if (!light_only and chunk.blocks[0] == .air) blk: {
+                if (!light_only and chunk.blocks[0] == BlockState.defaultState(.air)) blk: {
                     for (&chunk.blocks) |b| {
-                        if (b != .air) break :blk;
+                        if (b != BlockState.defaultState(.air)) break :blk;
                     }
                     _ = self.stats_hidden.fetchAdd(1, .monotonic);
                     continue;
