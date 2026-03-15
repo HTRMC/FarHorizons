@@ -127,7 +127,7 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .bookshelf => "Bookshelf",
         .obsidian => "Obsidian",
         .oak_leaves => "Oak Leaves",
-        .oak_slab_bottom, .oak_slab_top => "Oak Slab",
+        .oak_slab_bottom, .oak_slab_top, .oak_slab_double => "Oak Slab",
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => "Oak Stairs",
         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => "Torch",
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => "Ladder",
@@ -177,7 +177,7 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .bookshelf => .{ 0.55, 0.4, 0.25, 1.0 },
         .obsidian => .{ 0.15, 0.1, 0.2, 1.0 },
         .oak_leaves => .{ 0.2, 0.5, 0.15, 0.8 },
-        .oak_slab_bottom, .oak_slab_top => .{ 0.7, 0.55, 0.33, 1.0 },
+        .oak_slab_bottom, .oak_slab_top, .oak_slab_double => .{ 0.7, 0.55, 0.33, 1.0 },
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ 0.7, 0.55, 0.33, 1.0 },
         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .{ 0.9, 0.7, 0.2, 1.0 },
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => .{ 0.6, 0.45, 0.25, 1.0 },
@@ -228,7 +228,7 @@ pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16
         .bookshelf => .{ .top = 24, .side = 24 },
         .obsidian => .{ .top = 25, .side = 25 },
         .oak_leaves => .{ .top = 26, .side = 26 },
-        .oak_slab_bottom, .oak_slab_top => .{ .top = 11, .side = 11 },
+        .oak_slab_bottom, .oak_slab_top, .oak_slab_double => .{ .top = 11, .side = 11 },
         .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ .top = 11, .side = 11 },
         .torch, .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .{ .top = 28, .side = 28 },
         .ladder_south, .ladder_north, .ladder_east, .ladder_west => .{ .top = 29, .side = 29 },
@@ -944,6 +944,20 @@ fn updateFenceNeighbors(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     }
 }
 
+/// Minecraft-style slab replacement: determines if placing a slab on an existing slab
+/// should merge into a double slab. A bottom slab can be replaced when clicking its top
+/// face or the upper half of a side face; a top slab when clicking its bottom face or
+/// the lower half of a side face.
+fn slabCanBeReplaced(existing: WorldState.BlockType, hit: Raycast.BlockHitResult) bool {
+    const above = hit.hit_pos[1] - @floor(hit.hit_pos[1]) > 0.5;
+    if (existing == .oak_slab_bottom) {
+        return hit.direction == .up or (above and hit.direction != .down);
+    } else if (existing == .oak_slab_top) {
+        return hit.direction == .down or (!above and hit.direction != .up);
+    }
+    return false;
+}
+
 fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit: Raycast.BlockHitResult) WorldState.BlockType {
     // Orient stairs based on player's facing direction
     switch (block_type) {
@@ -1028,6 +1042,28 @@ pub fn placeBlock(self: *GameState) void {
 
     var block_type = self.hotbar[self.selected_slot];
     if (block_type == .air) return;
+
+    // Double slab: placing a slab on a compatible existing slab merges into a full block
+    if (block_type == .oak_slab_bottom or block_type == .oak_slab_top) {
+        if (slabCanBeReplaced(clicked_block, hit)) {
+            const bx = hit.block_pos[0];
+            const by = hit.block_pos[1];
+            const bz = hit.block_pos[2];
+            self.chunk_map.setBlock(bx, by, bz, .oak_slab_double);
+            if (WorldState.block_properties.isOpaque(.oak_slab_double)) {
+                const key = WorldState.ChunkKey.fromWorldPos(bx, by, bz);
+                const local_x: usize = @intCast(@mod(bx, @as(i32, WorldState.CHUNK_SIZE)));
+                const local_z: usize = @intCast(@mod(bz, @as(i32, WorldState.CHUNK_SIZE)));
+                self.surface_height_map.updateBlockPlaced(key.cx, key.cz, local_x, local_z, by);
+            }
+            self.markDirtyIncremental(bx, by, bz, clicked_block);
+            self.queueChunkSave(bx, by, bz);
+            self.updateFenceNeighbors(bx, by, bz);
+            self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+            return;
+        }
+    }
+
     const n = hit.direction.normal();
     const px = hit.block_pos[0] + n[0];
     const py = hit.block_pos[1] + n[1];
@@ -1097,7 +1133,7 @@ pub fn pickBlock(self: *GameState) void {
 
     // Normalize oriented variants to their canonical form for inventory
     const block_type: WorldState.BlockType = switch (raw_type) {
-        .oak_slab_top => .oak_slab_bottom,
+        .oak_slab_top, .oak_slab_double => .oak_slab_bottom,
         .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .oak_stairs_south,
         .torch_wall_south, .torch_wall_north, .torch_wall_east, .torch_wall_west => .torch,
         .oak_door_bottom_east, .oak_door_bottom_east_open,

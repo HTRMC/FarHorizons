@@ -210,6 +210,7 @@ pub const BlockType = enum(u8) {
     oak_leaves,
     oak_slab_bottom,
     oak_slab_top,
+    oak_slab_double,
     oak_stairs_south,
     oak_stairs_north,
     oak_stairs_east,
@@ -424,7 +425,7 @@ pub const block_properties = struct {
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
             .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
             .sponge, .pumice, .wool, .gold_block, .iron_block,
-            .diamond_block, .bookshelf, .obsidian,
+            .diamond_block, .bookshelf, .obsidian, .oak_slab_double,
             => true,
         };
     }
@@ -466,7 +467,7 @@ pub const block_properties = struct {
             .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
             .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
             .sponge, .pumice, .wool, .gold_block, .iron_block,
-            .diamond_block, .bookshelf, .obsidian,
+            .diamond_block, .bookshelf, .obsidian, .oak_slab_double,
             => true,
         };
     }
@@ -1347,7 +1348,7 @@ pub fn generateChunkMesh(
                         .gravel => 8,
                         .cobblestone => 9,
                         .oak_log => if (face == 4 or face == 5) @as(u8, 27) else 10,
-                        .oak_planks => 11,
+                        .oak_planks, .oak_slab_double => 11,
                         .bricks => 12,
                         .bedrock => 13,
                         .gold_ore => 14,
@@ -1536,7 +1537,7 @@ pub fn generateLodChunkMesh(
                         .gravel => 8,
                         .cobblestone => 9,
                         .oak_log => if (face == 4 or face == 5) @as(u8, 27) else 10,
-                        .oak_planks => 11,
+                        .oak_planks, .oak_slab_double => 11,
                         .bricks => 12,
                         .bedrock => 13,
                         .gold_ore => 14,
