@@ -2,6 +2,7 @@ const std = @import("std");
 const zlm = @import("zlm");
 const WorldState = @import("world/WorldState.zig");
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
+const Physics = @import("Physics.zig");
 
 const BlockState = WorldState.BlockState;
 const AABB = BlockState.AABB;
@@ -100,8 +101,8 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
     return null;
 }
 
-/// Test if a ray hits the block's hitbox AABB. Returns hit result with correct
-/// face direction and hit position, or null if the ray misses the hitbox.
+/// Test if a ray hits any of the block's hitboxes. Returns the closest hit result
+/// with correct face direction and hit position, or null if the ray misses all boxes.
 fn testBlockHitbox(
     chunk_map: *const ChunkMap,
     origin: zlm.Vec3,
@@ -111,105 +112,69 @@ fn testBlockHitbox(
     bz: i32,
 ) ?BlockHitResult {
     const state = chunk_map.getBlock(bx, by, bz);
-    const hitbox = BlockState.getHitbox(state) orelse {
-        // Full cube — use slab intersection to find exact face
-        return fullCubeHit(origin, dir, bx, by, bz);
-    };
+    const block_boxes = Physics.getBlockBoxes(state);
 
-    // Transform hitbox to world space
-    const fx: f32 = @floatFromInt(bx);
-    const fy: f32 = @floatFromInt(by);
-    const fz: f32 = @floatFromInt(bz);
-    const box_min = [3]f32{ fx + hitbox.min[0], fy + hitbox.min[1], fz + hitbox.min[2] };
-    const box_max = [3]f32{ fx + hitbox.max[0], fy + hitbox.max[1], fz + hitbox.max[2] };
-
-    // Ray-AABB intersection (slab method)
-    const o = [3]f32{ origin.x, origin.y, origin.z };
-    const d = [3]f32{ dir.x, dir.y, dir.z };
-
-    var t_near: f32 = -std.math.inf(f32);
-    var t_far: f32 = std.math.inf(f32);
-    var near_axis: u2 = 0;
-
-    for (0..3) |axis| {
-        if (@abs(d[axis]) < 1e-9) {
-            // Ray parallel to slab — miss if origin outside
-            if (o[axis] < box_min[axis] or o[axis] > box_max[axis]) return null;
-        } else {
-            var t1 = (box_min[axis] - o[axis]) / d[axis];
-            var t2 = (box_max[axis] - o[axis]) / d[axis];
-            if (t1 > t2) {
-                const tmp = t1;
-                t1 = t2;
-                t2 = tmp;
-            }
-            if (t1 > t_near) {
-                t_near = t1;
-                near_axis = @intCast(axis);
-            }
-            if (t2 < t_far) t_far = t2;
-            if (t_near > t_far or t_far < 0) return null;
-        }
-    }
-
-    // Hit t is t_near if we're outside the box, 0 if inside
-    const hit_t = if (t_near >= 0) t_near else 0;
-    if (hit_t > MAX_RANGE) return null;
-
-    // Determine face from which axis and direction
-    const face: Direction = if (t_near < 0)
-        .up // inside the box
-    else switch (near_axis) {
-        0 => if (d[0] > 0) .west else .east,
-        1 => if (d[1] > 0) .down else .up,
-        2 => if (d[2] > 0) .north else .south,
-        else => unreachable,
-    };
-
-    return .{
-        .block_pos = .{ bx, by, bz },
-        .direction = face,
-        .hit_pos = .{
-            origin.x + dir.x * hit_t,
-            origin.y + dir.y * hit_t,
-            origin.z + dir.z * hit_t,
-        },
-    };
-}
-
-/// Fast hit result for full-cube blocks — computes exact face from ray entry.
-fn fullCubeHit(origin: zlm.Vec3, dir: zlm.Vec3, bx: i32, by: i32, bz: i32) BlockHitResult {
     const fx: f32 = @floatFromInt(bx);
     const fy: f32 = @floatFromInt(by);
     const fz: f32 = @floatFromInt(bz);
     const o = [3]f32{ origin.x, origin.y, origin.z };
     const d = [3]f32{ dir.x, dir.y, dir.z };
-    const box_min = [3]f32{ fx, fy, fz };
-    const box_max = [3]f32{ fx + 1, fy + 1, fz + 1 };
 
-    var t_near: f32 = -std.math.inf(f32);
-    var near_axis: u2 = 0;
+    var best_t: f32 = std.math.inf(f32);
+    var best_axis: u2 = 0;
+    var best_inside = false;
 
-    for (0..3) |axis| {
-        if (@abs(d[axis]) < 1e-9) continue;
-        var t1 = (box_min[axis] - o[axis]) / d[axis];
-        var t2 = (box_max[axis] - o[axis]) / d[axis];
-        if (t1 > t2) {
-            const tmp = t1;
-            t1 = t2;
-            t2 = tmp;
+    for (block_boxes.boxes[0..block_boxes.count]) |box| {
+        const box_min = [3]f32{ fx + box.min[0], fy + box.min[1], fz + box.min[2] };
+        const box_max = [3]f32{ fx + box.max[0], fy + box.max[1], fz + box.max[2] };
+
+        var t_near: f32 = -std.math.inf(f32);
+        var t_far: f32 = std.math.inf(f32);
+        var near_axis: u2 = 0;
+        var missed = false;
+
+        for (0..3) |axis| {
+            if (@abs(d[axis]) < 1e-9) {
+                if (o[axis] < box_min[axis] or o[axis] > box_max[axis]) {
+                    missed = true;
+                    break;
+                }
+            } else {
+                var t1 = (box_min[axis] - o[axis]) / d[axis];
+                var t2 = (box_max[axis] - o[axis]) / d[axis];
+                if (t1 > t2) {
+                    const tmp = t1;
+                    t1 = t2;
+                    t2 = tmp;
+                }
+                if (t1 > t_near) {
+                    t_near = t1;
+                    near_axis = @intCast(axis);
+                }
+                if (t2 < t_far) t_far = t2;
+                if (t_near > t_far or t_far < 0) {
+                    missed = true;
+                    break;
+                }
+            }
         }
-        if (t1 > t_near) {
-            t_near = t1;
-            near_axis = @intCast(axis);
+        if (missed) continue;
+
+        const hit_t = if (t_near >= 0) t_near else 0;
+        if (hit_t > MAX_RANGE) continue;
+
+        if (hit_t < best_t) {
+            best_t = hit_t;
+            best_axis = near_axis;
+            best_inside = t_near < 0;
         }
     }
 
-    const hit_t = if (t_near >= 0) t_near else 0;
+    if (best_t == std.math.inf(f32)) return null;
 
-    const face: Direction = if (t_near < 0)
+    const face: Direction = if (best_inside)
         .up
-    else switch (near_axis) {
+    else switch (best_axis) {
         0 => if (d[0] > 0) .west else .east,
         1 => if (d[1] > 0) .down else .up,
         2 => if (d[2] > 0) .north else .south,
@@ -220,9 +185,9 @@ fn fullCubeHit(origin: zlm.Vec3, dir: zlm.Vec3, bx: i32, by: i32, bz: i32) Block
         .block_pos = .{ bx, by, bz },
         .direction = face,
         .hit_pos = .{
-            origin.x + dir.x * hit_t,
-            origin.y + dir.y * hit_t,
-            origin.z + dir.z * hit_t,
+            origin.x + dir.x * best_t,
+            origin.y + dir.y * best_t,
+            origin.z + dir.z * best_t,
         },
     };
 }
