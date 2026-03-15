@@ -3,6 +3,7 @@ const WorldState = @import("WorldState.zig");
 const ExtraQuadModel = WorldState.ExtraQuadModel;
 const ShapeFace = WorldState.ShapeFace;
 const BlockType = WorldState.BlockType;
+const BlockState = @import("BlockState.zig");
 const app_config = @import("../app_config.zig");
 
 const Io = std.Io;
@@ -75,6 +76,9 @@ const Transform = enum {
     rotate_90,
     rotate_180,
     rotate_270,
+    flip_y_rotate_90,
+    flip_y_rotate_180,
+    flip_y_rotate_270,
 };
 
 const ElementRotation = struct {
@@ -83,86 +87,28 @@ const ElementRotation = struct {
     origin: [3]f32,
 };
 
-const BlockModelEntry = struct {
-    block: BlockType,
-    json_file: []const u8,
-    transform: Transform,
-};
-
-// Maps block types to their JSON model file + transform
-const block_model_table = [_]BlockModelEntry{
-    .{ .block = .oak_slab_bottom, .json_file = "oak_slab.json", .transform = .none },
-    .{ .block = .oak_slab_top, .json_file = "oak_slab.json", .transform = .flip_y },
-    .{ .block = .oak_stairs_south, .json_file = "oak_stairs.json", .transform = .none },
-    .{ .block = .oak_stairs_north, .json_file = "oak_stairs.json", .transform = .rotate_180 },
-    .{ .block = .oak_stairs_east, .json_file = "oak_stairs.json", .transform = .rotate_90 },
-    .{ .block = .oak_stairs_west, .json_file = "oak_stairs.json", .transform = .rotate_270 },
-    .{ .block = .torch, .json_file = "torch_standing.json", .transform = .none },
-    .{ .block = .torch_wall_west, .json_file = "torch_wall.json", .transform = .none },
-    .{ .block = .torch_wall_east, .json_file = "torch_wall.json", .transform = .rotate_180 },
-    .{ .block = .torch_wall_south, .json_file = "torch_wall.json", .transform = .rotate_90 },
-    .{ .block = .torch_wall_north, .json_file = "torch_wall.json", .transform = .rotate_270 },
-    .{ .block = .ladder_south, .json_file = "ladder.json", .transform = .none },
-    .{ .block = .ladder_north, .json_file = "ladder.json", .transform = .rotate_180 },
-    .{ .block = .ladder_east, .json_file = "ladder.json", .transform = .rotate_90 },
-    .{ .block = .ladder_west, .json_file = "ladder.json", .transform = .rotate_270 },
-    // Oak door bottom half (left hinge): facing determines closed rotation, open adds 90°
-    .{ .block = .oak_door_bottom_east, .json_file = "oak_door_bottom.json", .transform = .none },
-    .{ .block = .oak_door_bottom_east_open, .json_file = "oak_door_bottom.json", .transform = .rotate_90 },
-    .{ .block = .oak_door_bottom_south, .json_file = "oak_door_bottom.json", .transform = .rotate_90 },
-    .{ .block = .oak_door_bottom_south_open, .json_file = "oak_door_bottom.json", .transform = .rotate_180 },
-    .{ .block = .oak_door_bottom_west, .json_file = "oak_door_bottom.json", .transform = .rotate_180 },
-    .{ .block = .oak_door_bottom_west_open, .json_file = "oak_door_bottom.json", .transform = .rotate_270 },
-    .{ .block = .oak_door_bottom_north, .json_file = "oak_door_bottom.json", .transform = .rotate_270 },
-    .{ .block = .oak_door_bottom_north_open, .json_file = "oak_door_bottom.json", .transform = .none },
-    // Oak door top half
-    .{ .block = .oak_door_top_east, .json_file = "oak_door_top.json", .transform = .none },
-    .{ .block = .oak_door_top_east_open, .json_file = "oak_door_top.json", .transform = .rotate_90 },
-    .{ .block = .oak_door_top_south, .json_file = "oak_door_top.json", .transform = .rotate_90 },
-    .{ .block = .oak_door_top_south_open, .json_file = "oak_door_top.json", .transform = .rotate_180 },
-    .{ .block = .oak_door_top_west, .json_file = "oak_door_top.json", .transform = .rotate_180 },
-    .{ .block = .oak_door_top_west_open, .json_file = "oak_door_top.json", .transform = .rotate_270 },
-    .{ .block = .oak_door_top_north, .json_file = "oak_door_top.json", .transform = .rotate_270 },
-    .{ .block = .oak_door_top_north_open, .json_file = "oak_door_top.json", .transform = .none },
-    // Oak fence: 16 connection variants, each with its own model
-    .{ .block = .oak_fence_post, .json_file = "oak_fence_post.json", .transform = .none },
-    .{ .block = .oak_fence_n, .json_file = "oak_fence_n.json", .transform = .none },
-    .{ .block = .oak_fence_s, .json_file = "oak_fence_s.json", .transform = .none },
-    .{ .block = .oak_fence_e, .json_file = "oak_fence_e.json", .transform = .none },
-    .{ .block = .oak_fence_w, .json_file = "oak_fence_w.json", .transform = .none },
-    .{ .block = .oak_fence_ns, .json_file = "oak_fence_ns.json", .transform = .none },
-    .{ .block = .oak_fence_ne, .json_file = "oak_fence_ne.json", .transform = .none },
-    .{ .block = .oak_fence_nw, .json_file = "oak_fence_nw.json", .transform = .none },
-    .{ .block = .oak_fence_se, .json_file = "oak_fence_se.json", .transform = .none },
-    .{ .block = .oak_fence_sw, .json_file = "oak_fence_sw.json", .transform = .none },
-    .{ .block = .oak_fence_ew, .json_file = "oak_fence_ew.json", .transform = .none },
-    .{ .block = .oak_fence_nse, .json_file = "oak_fence_nse.json", .transform = .none },
-    .{ .block = .oak_fence_nsw, .json_file = "oak_fence_nsw.json", .transform = .none },
-    .{ .block = .oak_fence_new, .json_file = "oak_fence_new.json", .transform = .none },
-    .{ .block = .oak_fence_sew, .json_file = "oak_fence_sew.json", .transform = .none },
-    .{ .block = .oak_fence_nsew, .json_file = "oak_fence_nsew.json", .transform = .none },
-};
+// block_model_table removed — models are now loaded from BlockState.model_info_table indexed by StateId
 
 pub const BlockModelRegistry = struct {
     allocator: std.mem.Allocator,
     extra_models: []ExtraQuadModel,
-    block_shape_faces: [NUM_BLOCKS][]ShapeFace,
-    block_face_tex_indices: [NUM_BLOCKS][]u8,
-    /// Per-block, per-face: 4×4 bitmap of which cells this block covers on the face boundary.
+    state_shape_faces: [BlockState.TOTAL_STATES][]ShapeFace,
+    state_face_tex_indices: [BlockState.TOTAL_STATES][]u8,
+    /// Per-state, per-face: 4×4 bitmap of which cells this state covers on the face boundary.
     /// Bit layout: bit = row * 4 + col, where row/col are 0..3 subdivisions of the face plane.
     /// For vertical faces (S/N/E/W): col = horizontal axis, row = Y (0=bottom, 3=top).
     /// For horizontal faces (up/down): col = X, row = Z.
     /// 0xFFFF = full face coverage. Used for Minecraft-style VoxelShape occlusion culling.
-    block_face_bitmaps: [NUM_BLOCKS][6]u16,
+    state_face_bitmaps: [BlockState.TOTAL_STATES][6]u16,
 
     pub fn init(allocator: std.mem.Allocator) !*BlockModelRegistry {
         const self = try allocator.create(BlockModelRegistry);
         errdefer allocator.destroy(self);
 
         self.allocator = allocator;
-        self.block_shape_faces = .{&.{}} ** NUM_BLOCKS;
-        self.block_face_tex_indices = .{&.{}} ** NUM_BLOCKS;
-        self.block_face_bitmaps = .{.{0} ** 6} ** NUM_BLOCKS;
+        self.state_shape_faces = .{&.{}} ** BlockState.TOTAL_STATES;
+        self.state_face_tex_indices = .{&.{}} ** BlockState.TOTAL_STATES;
+        self.state_face_bitmaps = .{.{0} ** 6} ** BlockState.TOTAL_STATES;
 
         var extra_models_list: std.ArrayList(ExtraQuadModel) = .empty;
         defer extra_models_list.deinit(allocator);
@@ -184,57 +130,62 @@ pub const BlockModelRegistry = struct {
             model_cache.deinit();
         }
 
-        for (block_model_table) |entry| {
+        var loaded_count: u32 = 0;
+        for (0..BlockState.TOTAL_STATES) |state_idx| {
+            const state: BlockState.StateId = @intCast(state_idx);
+            const model_info = BlockState.model_info_table[state] orelse continue;
+
             // Load JSON file (cached)
-            const json_data = if (model_cache.get(entry.json_file)) |cached|
+            const json_data = if (model_cache.get(model_info.json_file)) |cached|
                 cached
             else blk: {
-                const path = try std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ models_dir, entry.json_file }, 0);
+                const path = try std.fmt.allocPrintSentinel(allocator, "{s}{s}", .{ models_dir, model_info.json_file }, 0);
                 defer allocator.free(path);
 
                 const io = Io.Threaded.global_single_threaded.io();
                 const file = Dir.openFileAbsolute(io, path, .{}) catch |err| {
-                    std.log.err("Failed to open model file {s}: {}", .{ entry.json_file, err });
+                    std.log.err("Failed to open model file {s}: {}", .{ model_info.json_file, err });
                     continue;
                 };
                 defer file.close(io);
 
                 const stat = file.stat(io) catch |err| {
-                    std.log.err("Failed to stat model file {s}: {}", .{ entry.json_file, err });
+                    std.log.err("Failed to stat model file {s}: {}", .{ model_info.json_file, err });
                     continue;
                 };
                 const data = allocator.alloc(u8, stat.size) catch continue;
                 const read_n = file.readPositionalAll(io, data, 0) catch |err| {
                     allocator.free(data);
-                    std.log.err("Failed to read model file {s}: {}", .{ entry.json_file, err });
+                    std.log.err("Failed to read model file {s}: {}", .{ model_info.json_file, err });
                     continue;
                 };
                 _ = read_n;
 
-                model_cache.put(entry.json_file, data) catch {
+                model_cache.put(model_info.json_file, data) catch {
                     allocator.free(data);
                     continue;
                 };
                 break :blk data;
             };
 
-            try loadModel(self, allocator, &extra_models_list, json_data, entry.block, entry.transform);
+            const transform = blockStateTransformToLocal(model_info.transform);
+            try loadModel(self, allocator, &extra_models_list, json_data, state, transform);
+            loaded_count += 1;
         }
 
         self.extra_models = try allocator.dupe(ExtraQuadModel, extra_models_list.items);
-        std.log.info("BlockModelLoader: loaded {} extra models for {} block types", .{ self.extra_models.len, block_model_table.len });
-
+        std.log.info("BlockModelLoader: loaded {} extra models for {} states", .{ self.extra_models.len, loaded_count });
 
         return self;
     }
 
     pub fn deinit(self: *BlockModelRegistry) void {
-        for (0..NUM_BLOCKS) |i| {
-            if (self.block_shape_faces[i].len > 0) {
-                self.allocator.free(self.block_shape_faces[i]);
+        for (0..BlockState.TOTAL_STATES) |i| {
+            if (self.state_shape_faces[i].len > 0) {
+                self.allocator.free(self.state_shape_faces[i]);
             }
-            if (self.block_face_tex_indices[i].len > 0) {
-                self.allocator.free(self.block_face_tex_indices[i]);
+            if (self.state_face_tex_indices[i].len > 0) {
+                self.allocator.free(self.state_face_tex_indices[i]);
             }
         }
         if (self.extra_models.len > 0) {
@@ -248,12 +199,25 @@ pub const BlockModelRegistry = struct {
     }
 };
 
+fn blockStateTransformToLocal(t: BlockState.Transform) Transform {
+    return switch (t) {
+        .none => .none,
+        .flip_y => .flip_y,
+        .rotate_90 => .rotate_90,
+        .rotate_180 => .rotate_180,
+        .rotate_270 => .rotate_270,
+        .flip_y_rotate_90 => .flip_y_rotate_90,
+        .flip_y_rotate_180 => .flip_y_rotate_180,
+        .flip_y_rotate_270 => .flip_y_rotate_270,
+    };
+}
+
 fn loadModel(
     registry: *BlockModelRegistry,
     allocator: std.mem.Allocator,
     extra_models: *std.ArrayList(ExtraQuadModel),
     json_data: []const u8,
-    block: BlockType,
+    state: BlockState.StateId,
     transform: Transform,
 ) !void {
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_data, .{});
@@ -389,12 +353,11 @@ fn loadModel(
         }
     }
 
-    const bi = @intFromEnum(block);
-    registry.block_shape_faces[bi] = try allocator.dupe(ShapeFace, shape_faces.items);
-    registry.block_face_tex_indices[bi] = try allocator.dupe(u8, tex_indices.items);
+    registry.state_shape_faces[state] = try allocator.dupe(ShapeFace, shape_faces.items);
+    registry.state_face_tex_indices[state] = try allocator.dupe(u8, tex_indices.items);
 
     // Store accumulated bitmaps (already in transformed space)
-    registry.block_face_bitmaps[bi] = face_bitmaps;
+    registry.state_face_bitmaps[state] = face_bitmaps;
 }
 
 /// Compute a 4×4 bitmap of which cells this element covers on the given block boundary face.
@@ -485,6 +448,18 @@ fn transformBox(from: [3]f32, to: [3]f32, transform: Transform) struct { [3]f32,
         .rotate_270 => .{ // (x,z) → (1-z, x)
             .{ 1.0 - to[2], from[1], from[0] },
             .{ 1.0 - from[2], to[1], to[0] },
+        },
+        .flip_y_rotate_90 => blk: {
+            const f = transformBox(from, to, .flip_y);
+            break :blk transformBox(f[0], f[1], .rotate_90);
+        },
+        .flip_y_rotate_180 => blk: {
+            const f = transformBox(from, to, .flip_y);
+            break :blk transformBox(f[0], f[1], .rotate_180);
+        },
+        .flip_y_rotate_270 => blk: {
+            const f = transformBox(from, to, .flip_y);
+            break :blk transformBox(f[0], f[1], .rotate_270);
         },
     };
 }
@@ -696,6 +671,28 @@ fn applyTransform(model: ExtraQuadModel, transform: Transform, _: u3) ExtraQuadM
             result.normal[0] = -nz;
             result.normal[2] = nx;
         },
+        .flip_y_rotate_90, .flip_y_rotate_180, .flip_y_rotate_270 => {
+            // Apply flip_y first, then rotation
+            var flipped = model;
+            for (0..4) |i| {
+                flipped.corners[i][1] = 1.0 - model.corners[i][1];
+            }
+            // Reverse winding
+            const tmp_c = flipped.corners;
+            const tmp_u = flipped.uvs;
+            flipped.corners = .{ tmp_c[3], tmp_c[2], tmp_c[1], tmp_c[0] };
+            flipped.uvs = .{ tmp_u[3], tmp_u[2], tmp_u[1], tmp_u[0] };
+            flipped.normal[1] = -model.normal[1];
+
+            // Then apply rotation
+            const rot: Transform = switch (transform) {
+                .flip_y_rotate_90 => .rotate_90,
+                .flip_y_rotate_180 => .rotate_180,
+                .flip_y_rotate_270 => .rotate_270,
+                else => unreachable,
+            };
+            return applyTransform(flipped, rot, 0);
+        },
     }
 
     return result;
@@ -735,6 +732,10 @@ fn transformBucket(bucket: u3, transform: Transform) u3 {
             3 => 0, // east → south
             else => bucket,
         },
+        // Combined: flip_y first, then rotate
+        .flip_y_rotate_90 => transformBucket(transformBucket(bucket, .flip_y), .rotate_90),
+        .flip_y_rotate_180 => transformBucket(transformBucket(bucket, .flip_y), .rotate_180),
+        .flip_y_rotate_270 => transformBucket(transformBucket(bucket, .flip_y), .rotate_270),
     };
 }
 

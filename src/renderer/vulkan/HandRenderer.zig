@@ -269,7 +269,6 @@ pub const HandRenderer = struct {
         if (state == self.held_block) return;
         self.held_block = state;
 
-        const legacy = BlockState.toLegacy(state);
         const tex = GameState.blockTexIndices(state);
         self.block_tex_top = tex.top;
         self.block_tex_side = tex.side;
@@ -284,7 +283,7 @@ pub const HandRenderer = struct {
 
         if (BlockState.isShaped(state)) {
             self.is_shaped = true;
-            count = self.buildShapedBlock(vertices, count, legacy);
+            count = self.buildShapedBlock(vertices, count, state);
         } else {
             self.is_shaped = false;
             count = buildUnitBlock(vertices, count);
@@ -424,13 +423,13 @@ pub const HandRenderer = struct {
 
     /// Build geometry for a shaped block, grouped by texture layer.
     /// For doors, both bottom and top halves are combined into one model.
-    fn buildShapedBlock(self: *HandRenderer, vertices: [*]EntityVertex, start: u32, block: WorldState.BlockType) u32 {
+    fn buildShapedBlock(self: *HandRenderer, vertices: [*]EntityVertex, start: u32, state: BlockState.StateId) u32 {
         const registry = WorldState.getRegistry();
 
         // For doors, render both bottom and top halves scaled to fit
-        const is_door = block.isDoor() and block.isDoorBottom();
+        const is_door = BlockState.isDoor(state) and BlockState.isDoorBottom(state);
         const part_count: u8 = if (is_door) 2 else 1;
-        const parts = [2]WorldState.BlockType{ block, if (is_door) block.doorBottomToTop() else block };
+        const parts = [2]BlockState.StateId{ state, if (is_door) BlockState.doorBottomToTop(state) else state };
 
         // First pass: collect unique texture layers across all parts
         var tex_layers: [8]i16 = undefined;

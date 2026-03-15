@@ -113,15 +113,15 @@ pub fn totalModelCount() u32 {
     return getRegistry().totalModelCount();
 }
 
-/// Get the face list for a shaped block.
+/// Get the face list for a shaped block by StateId.
 /// Returns slice of ShapeFace describing all quads to emit.
-pub fn getShapeFaces(block: BlockType) []const ShapeFace {
-    return getRegistry().block_shape_faces[@intFromEnum(block)];
+pub fn getShapeFaces(state: BlockState.StateId) []const ShapeFace {
+    return getRegistry().state_shape_faces[state];
 }
 
-/// Get per-face texture indices for a shaped block.
-pub fn getShapedTexIndices(block: BlockType) []const u8 {
-    return getRegistry().block_face_tex_indices[@intFromEnum(block)];
+/// Get per-face texture indices for a shaped block by StateId.
+pub fn getShapedTexIndices(state: BlockState.StateId) []const u8 {
+    return getRegistry().state_face_tex_indices[state];
 }
 
 /// Get the 4×4 occlusion bitmap for a block on the given face.
@@ -132,7 +132,9 @@ pub fn getOcclusionBitmap(block: BlockType, face: usize) u16 {
     if (block_properties.isOpaque(block)) return 0xFFFF;
     if (block_properties.isSolidShaped(block)) {
         if (registry) |reg| {
-            return reg.block_face_bitmaps[@intFromEnum(block)][face];
+            // Use legacy StateId for bitmap lookup (approximate for new stair variants)
+            const state = BlockState.fromLegacy(block);
+            return reg.state_face_bitmaps[state][face];
         }
         return 0;
     }
@@ -435,9 +437,7 @@ pub const block_properties = struct {
     /// occlude where they exist. Torches and ladders are too thin/transparent.
     pub fn isSolidShaped(block: BlockType) bool {
         return switch (block) {
-            .oak_slab_bottom, .oak_slab_top,
-            .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-            => true,
+            .oak_slab_bottom, .oak_slab_top => true,
             else => false,
         };
     }
@@ -1288,9 +1288,10 @@ pub fn generateChunkMesh(
                 const layer = @intFromEnum(block_properties.renderLayer(block));
 
                 if (block.isShapedBlock()) {
-                    // Shaped block: emit partial quads
-                    const shape_faces = getShapeFaces(block);
-                    const tex_indices = getShapedTexIndices(block);
+                    // Shaped block: emit partial quads (use StateId for model lookup)
+                    const state_id = chunk.blocks[chunkIndex(bx, by, bz)];
+                    const shape_faces = getShapeFaces(state_id);
+                    const tex_indices = getShapedTexIndices(state_id);
                     for (shape_faces, 0..) |sf, sf_idx| {
                         if (!sf.always_emit) {
                             const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
@@ -1679,7 +1680,8 @@ pub fn generateChunkLightOnly(
                 const layer = @intFromEnum(block_properties.renderLayer(block));
 
                 if (block.isShapedBlock()) {
-                    const shape_faces = getShapeFaces(block);
+                    const state_id = chunk.blocks[chunkIndex(bx, by, bz)];
+                    const shape_faces = getShapeFaces(state_id);
                     for (shape_faces) |sf| {
                         if (!sf.always_emit) {
                             const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];

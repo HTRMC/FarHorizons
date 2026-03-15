@@ -392,6 +392,7 @@ pub const UiRenderer = struct {
         if (color[3] < 0.01) return;
 
         const WorldState = @import("../../world/WorldState.zig");
+        const BlockState = WorldState.BlockState;
 
         // Isometric projection constants: Rx(30°) * Ry(225°)
         const cos45: f32 = 0.70711;
@@ -440,28 +441,28 @@ pub const UiRenderer = struct {
             }
         } else {
             // Shaped block: use the same face lists as the chunk mesher
-            const ref_block: WorldState.BlockType = switch (shape) {
-                .slab_bottom => .oak_slab_bottom,
-                .slab_top => .oak_slab_top,
-                .stairs => .oak_stairs_east,
-                .torch => .torch,
-                .ladder => .ladder_north, // north face visible from isometric view
-                .fence => .oak_fence_post,
-                .door => .oak_door_bottom_south,
+            const ref_state: BlockState.StateId = switch (shape) {
+                .slab_bottom => BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)),
+                .slab_top => BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top)),
+                .stairs => BlockState.makeStairState(.east, .bottom, .straight),
+                .torch => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.standing)),
+                .ladder => BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.north)),
+                .fence => BlockState.defaultState(.oak_fence),
+                .door => BlockState.makeDoorState(.south, .bottom, false),
                 .full => unreachable,
             };
 
             // For doors, render both bottom and top halves
             const door_parts: u8 = if (shape == .door) 2 else 1;
-            const door_blocks = [2]WorldState.BlockType{ ref_block, .oak_door_top_south };
+            const door_states = [2]BlockState.StateId{ ref_state, if (shape == .door) BlockState.doorBottomToTop(ref_state) else ref_state };
 
             for (0..door_parts) |part| {
-                const block_ref = door_blocks[part];
-                const part_shape_faces = WorldState.getShapeFaces(block_ref);
+                const state_ref = door_states[part];
+                const part_shape_faces = WorldState.getShapeFaces(state_ref);
                 const use_per_face_tex = (shape == .torch);
-                const per_face_tex = if (use_per_face_tex) WorldState.getShapedTexIndices(block_ref) else &[_]u8{};
+                const per_face_tex = if (use_per_face_tex) WorldState.getShapedTexIndices(state_ref) else &[_]u8{};
                 // For doors, use per-face texture so top half gets the top texture
-                const door_per_face_tex = if (shape == .door) WorldState.getShapedTexIndices(block_ref) else &[_]u8{};
+                const door_per_face_tex = if (shape == .door) WorldState.getShapedTexIndices(state_ref) else &[_]u8{};
                 const skip_cull = (shape == .ladder);
 
                 for (part_shape_faces, 0..) |sf, sf_idx| {
