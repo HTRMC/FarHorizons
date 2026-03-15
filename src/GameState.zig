@@ -852,6 +852,7 @@ pub fn breakBlock(self: *GameState) void {
         const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
         self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
         self.updateFenceNeighbors(wx, wy, wz);
+        self.updateStairNeighbors(wx, wy, wz);
         self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
         return;
     }
@@ -865,6 +866,7 @@ pub fn breakBlock(self: *GameState) void {
     self.markDirtyIncremental(wx, wy, wz, old_block);
     self.queueChunkSave(wx, wy, wz);
     self.updateFenceNeighbors(wx, wy, wz);
+    self.updateStairNeighbors(wx, wy, wz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
@@ -912,6 +914,87 @@ fn updateFenceNeighbors(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     }
 }
 
+/// Update stair shape of the block at (wx,wy,wz) and its 4 horizontal neighbors.
+fn updateStairNeighbors(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    // Update the placed stair itself
+    self.updateSingleStairShape(wx, wy, wz);
+    // Update 4 horizontal neighbors
+    const deltas = [4][2]i32{ .{ 0, -1 }, .{ 0, 1 }, .{ 1, 0 }, .{ -1, 0 } };
+    for (deltas) |d| {
+        self.updateSingleStairShape(wx + d[0], wy, wz + d[1]);
+    }
+}
+
+fn updateSingleStairShape(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    const state = self.chunk_map.getBlock(wx, wy, wz);
+    if (!BlockState.isStairs(state)) return;
+    const facing = BlockState.getFacing(state).?;
+    const half = BlockState.getHalf(state).?;
+    const new_shape = computeStairShape(self, wx, wy, wz, facing, half);
+    const old_shape = BlockState.getStairShape(state).?;
+    if (new_shape != old_shape) {
+        const new_state = BlockState.makeStairState(facing, half, new_shape);
+        self.chunk_map.setBlock(wx, wy, wz, new_state);
+        self.markDirtyIncremental(wx, wy, wz, state);
+        self.queueChunkSave(wx, wy, wz);
+    }
+}
+
+/// Minecraft's stair shape algorithm:
+/// 1. Check block in the facing direction (step side): perpendicular stair → outer corner
+/// 2. Check block opposite to facing (back side): perpendicular stair → inner corner
+fn computeStairShape(self: *GameState, wx: i32, wy: i32, wz: i32, facing: BlockState.Facing, half: BlockState.Half) BlockState.StairShape {
+    const fd = facingDelta(facing);
+    // Check step side (in facing direction) → inner corner (fills the inside of a turn)
+    const step_neighbor = self.chunk_map.getBlock(wx + fd[0], wy, wz + fd[1]);
+    if (BlockState.isStairs(step_neighbor)) {
+        const sf = BlockState.getFacing(step_neighbor).?;
+        const sh = BlockState.getHalf(step_neighbor).?;
+        if (sh == half and isPerpendicular(facing, sf)) {
+            if (isLeftOf(facing, sf)) return .inner_left;
+            return .inner_right;
+        }
+    }
+    // Check back side (opposite to facing) → outer corner (outside of a turn)
+    const back_neighbor = self.chunk_map.getBlock(wx - fd[0], wy, wz - fd[1]);
+    if (BlockState.isStairs(back_neighbor)) {
+        const bf = BlockState.getFacing(back_neighbor).?;
+        const bh = BlockState.getHalf(back_neighbor).?;
+        if (bh == half and isPerpendicular(facing, bf)) {
+            if (isLeftOf(facing, bf)) return .outer_left;
+            return .outer_right;
+        }
+    }
+    return .straight;
+}
+
+/// Delta to move in the facing direction (towards the step/open side).
+fn facingDelta(facing: BlockState.Facing) [2]i32 {
+    return switch (facing) {
+        .south => .{ 0, 1 }, // step at +Z
+        .north => .{ 0, -1 }, // step at -Z
+        .east => .{ 1, 0 }, // step at +X
+        .west => .{ -1, 0 }, // step at -X
+    };
+}
+
+fn isPerpendicular(a: BlockState.Facing, b: BlockState.Facing) bool {
+    // south/north are Z-axis, east/west are X-axis
+    const a_axis = @intFromEnum(a) >> 1; // 0=Z-axis, 1=X-axis
+    const b_axis = @intFromEnum(b) >> 1;
+    return a_axis != b_axis;
+}
+
+fn isLeftOf(facing: BlockState.Facing, other: BlockState.Facing) bool {
+    // "Left of" means: if you face `facing`, is `other` pointing to your left?
+    return switch (facing) {
+        .south => other == .east,
+        .north => other == .west,
+        .east => other == .north,
+        .west => other == .south,
+    };
+}
+
 /// Minecraft-style slab replacement: determines if placing a slab on an existing slab
 /// should merge into a double slab. A bottom slab can be replaced when clicking its top
 /// face or the upper half of a side face; a top slab when clicking its bottom face or
@@ -940,7 +1023,17 @@ fn resolveOrientation(block_state: BlockState.StateId, yaw: f32, hit: Raycast.Bl
                 .west
             else
                 .south;
-            return BlockState.fromBlockProps(.oak_stairs, @intFromEnum(facing));
+            // Determine half: clicking bottom face → top, clicking top face → bottom
+            // Clicking side: upper portion → top, lower portion → bottom
+            const half: BlockState.Half = if (hit.direction == .down)
+                .top
+            else if (hit.direction == .up)
+                .bottom
+            else blk: {
+                const frac_y = hit.hit_pos[1] - @floor(hit.hit_pos[1]);
+                break :blk if (frac_y >= 0.5) .top else .bottom;
+            };
+            return BlockState.makeStairState(facing, half, .straight);
         },
         .oak_slab => {
             if (hit.direction == .down) return BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top));
@@ -1079,8 +1172,9 @@ pub fn placeBlock(self: *GameState) void {
     self.markDirtyIncremental(px, py, pz, old_block);
     self.queueChunkSave(px, py, pz);
 
-    // Update neighboring fences when placing any block
+    // Update neighboring fences and stairs when placing any block
     self.updateFenceNeighbors(px, py, pz);
+    self.updateStairNeighbors(px, py, pz);
 
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
