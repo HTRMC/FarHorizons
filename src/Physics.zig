@@ -135,12 +135,14 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
         scan_min[axis] += movement;
     }
 
-    const bx0 = floori(scan_min[0]);
-    const by0 = floori(scan_min[1]);
-    const bz0 = floori(scan_min[2]);
-    const bx1 = floori(scan_max[0]);
-    const by1 = floori(scan_max[1]);
-    const bz1 = floori(scan_max[2]);
+    // Expand scan by 1 block to catch blocks with collision boxes that extend
+    // beyond their own block (e.g. fences are 1.5 blocks tall).
+    const bx0 = floori(scan_min[0]) - 1;
+    const by0 = floori(scan_min[1]) - 1;
+    const bz0 = floori(scan_min[2]) - 1;
+    const bx1 = floori(scan_max[0]) + 1;
+    const by1 = floori(scan_max[1]) + 1;
+    const bz1 = floori(scan_max[2]) + 1;
 
     var safe_dist = movement;
     var hit = false;
