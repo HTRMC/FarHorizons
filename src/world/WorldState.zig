@@ -525,6 +525,9 @@ pub const block_properties = struct {
             .oak_door_bottom_north, .oak_door_top_north,
             .oak_door_bottom_west_open, .oak_door_top_west_open,
             => .{ .min = .{ 0.0, 0.0, 0.0 }, .max = .{ 1.0, 1.0, 3.0 / 16.0 } },
+            // Slabs: half-block hitbox
+            .oak_slab_bottom => .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
+            .oak_slab_top => .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 1 } },
             // Fence hitboxes: bounding box covering post + connections
             .oak_fence_post => .{ .min = .{ 6.0 / 16.0, 0.0, 6.0 / 16.0 }, .max = .{ 10.0 / 16.0, 1.0, 10.0 / 16.0 } },
             .oak_fence_n => .{ .min = .{ 6.0 / 16.0, 0.0, 0.0 }, .max = .{ 10.0 / 16.0, 1.0, 10.0 / 16.0 } },
