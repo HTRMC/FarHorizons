@@ -195,7 +195,7 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
 }
 
 pub const BlockBox = struct { min: [3]f32, max: [3]f32 };
-pub const BlockBoxes = struct { boxes: [2]BlockBox, count: u8 };
+pub const BlockBoxes = struct { boxes: [3]BlockBox, count: u8 };
 
 pub fn getBlockBoxes(state: BlockState.StateId) BlockBoxes {
     const blk = BlockState.getBlock(state);
@@ -203,33 +203,15 @@ pub fn getBlockBoxes(state: BlockState.StateId) BlockBoxes {
         .oak_slab => {
             const slab_type = BlockState.getSlabType(state).?;
             return switch (slab_type) {
-                .bottom => .{ .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } }, undefined }, .count = 1 },
-                .top => .{ .boxes = .{ .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 1 } }, undefined }, .count = 1 },
-                .double => .{ .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } }, undefined }, .count = 1 },
+                .bottom => oneBox(.{ 0, 0, 0 }, .{ 1, 0.5, 1 }),
+                .top => oneBox(.{ 0, 0.5, 0 }, .{ 1, 1, 1 }),
+                .double => fullCubeBox(),
             };
         },
-        .oak_stairs => {
-            const facing = BlockState.getFacing(state).?;
-            const base_box: BlockBox = .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } };
-            const step_box: BlockBox = switch (facing) {
-                .south => .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 0.5 } },
-                .north => .{ .min = .{ 0, 0.5, 0.5 }, .max = .{ 1, 1, 1 } },
-                .east => .{ .min = .{ 0, 0.5, 0 }, .max = .{ 0.5, 1, 1 } },
-                .west => .{ .min = .{ 0.5, 0.5, 0 }, .max = .{ 1, 1, 1 } },
-            };
-            return .{ .boxes = .{ base_box, step_box }, .count = 2 };
-        },
-        .torch => {
+        .oak_stairs => return getStairBoxes(state),
+        .torch, .ladder, .oak_door => {
             const hitbox = BlockState.getHitbox(state) orelse return fullCubeBox();
-            return .{ .boxes = .{ .{ .min = hitbox.min, .max = hitbox.max }, undefined }, .count = 1 };
-        },
-        .ladder => {
-            const hitbox = BlockState.getHitbox(state) orelse return fullCubeBox();
-            return .{ .boxes = .{ .{ .min = hitbox.min, .max = hitbox.max }, undefined }, .count = 1 };
-        },
-        .oak_door => {
-            const hitbox = BlockState.getHitbox(state) orelse return fullCubeBox();
-            return .{ .boxes = .{ .{ .min = hitbox.min, .max = hitbox.max }, undefined }, .count = 1 };
+            return oneBox(hitbox.min, hitbox.max);
         },
         .oak_fence => {
             const conns = BlockState.getFenceConnections(state).?;
@@ -244,18 +226,103 @@ pub fn getBlockBoxes(state: BlockState.StateId) BlockBoxes {
                     .boxes = .{
                         .{ .min = .{ 6.0 / 16.0, 0, min_z }, .max = .{ 10.0 / 16.0, 1.5, max_z } },
                         .{ .min = .{ min_x, 0, 6.0 / 16.0 }, .max = .{ max_x, 1.5, 10.0 / 16.0 } },
+                        undefined,
                     },
                     .count = 2,
                 };
             }
-            return .{ .boxes = .{ .{ .min = .{ min_x, 0, min_z }, .max = .{ max_x, 1.5, max_z } }, undefined }, .count = 1 };
+            return oneBox(.{ min_x, 0, min_z }, .{ max_x, 1.5, max_z });
         },
         else => return fullCubeBox(),
     };
 }
 
+fn getStairBoxes(state: BlockState.StateId) BlockBoxes {
+    const facing = BlockState.getFacing(state).?;
+    const half = BlockState.getHalf(state).?;
+    const shape = BlockState.getStairShape(state).?;
+
+    // Base slab (bottom or top half)
+    const base_box: BlockBox = if (half == .bottom)
+        .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } }
+    else
+        .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 1 } };
+
+    // Y range for the step portion
+    const sy0: f32 = if (half == .bottom) 0.5 else 0.0;
+    const sy1: f32 = if (half == .bottom) 1.0 else 0.5;
+
+    switch (shape) {
+        .straight => {
+            // Step covers back half (opposite to facing direction)
+            const step = straightStepBox(facing, sy0, sy1);
+            return .{ .boxes = .{ base_box, step, undefined }, .count = 2 };
+        },
+        .inner_left, .inner_right => {
+            // 3/4 block: back half + one side quadrant
+            const back = straightStepBox(facing, sy0, sy1);
+            const side_facing: BlockState.Facing = if (shape == .inner_right)
+                rotateCW(facing)
+            else
+                rotateCCW(facing);
+            const side = quadrantBox(facing, side_facing, sy0, sy1);
+            return .{ .boxes = .{ base_box, back, side }, .count = 3 };
+        },
+        .outer_left, .outer_right => {
+            // 1/4 block: one corner quadrant
+            const side_facing: BlockState.Facing = if (shape == .outer_right)
+                rotateCW(facing)
+            else
+                rotateCCW(facing);
+            const corner = quadrantBox(facing, side_facing, sy0, sy1);
+            return .{ .boxes = .{ base_box, corner, undefined }, .count = 2 };
+        },
+    }
+}
+
+/// Step box covering the back half of the block for a given facing
+fn straightStepBox(facing: BlockState.Facing, sy0: f32, sy1: f32) BlockBox {
+    return switch (facing) {
+        .south => .{ .min = .{ 0, sy0, 0 }, .max = .{ 1, sy1, 0.5 } },
+        .north => .{ .min = .{ 0, sy0, 0.5 }, .max = .{ 1, sy1, 1 } },
+        .east => .{ .min = .{ 0, sy0, 0 }, .max = .{ 0.5, sy1, 1 } },
+        .west => .{ .min = .{ 0.5, sy0, 0 }, .max = .{ 1, sy1, 1 } },
+    };
+}
+
+/// Quarter block at the intersection of two perpendicular facing directions
+fn quadrantBox(facing: BlockState.Facing, side: BlockState.Facing, sy0: f32, sy1: f32) BlockBox {
+    const x0: f32 = if (facing == .east or side == .east) 0.0 else if (facing == .west or side == .west) 0.5 else 0.0;
+    const x1: f32 = if (facing == .west or side == .west) 1.0 else if (facing == .east or side == .east) 0.5 else 1.0;
+    const z0: f32 = if (facing == .south or side == .south) 0.0 else if (facing == .north or side == .north) 0.5 else 0.0;
+    const z1: f32 = if (facing == .north or side == .north) 1.0 else if (facing == .south or side == .south) 0.5 else 1.0;
+    return .{ .min = .{ x0, sy0, z0 }, .max = .{ x1, sy1, z1 } };
+}
+
+fn rotateCW(facing: BlockState.Facing) BlockState.Facing {
+    return switch (facing) {
+        .south => .west,
+        .west => .north,
+        .north => .east,
+        .east => .south,
+    };
+}
+
+fn rotateCCW(facing: BlockState.Facing) BlockState.Facing {
+    return switch (facing) {
+        .south => .east,
+        .east => .north,
+        .north => .west,
+        .west => .south,
+    };
+}
+
+fn oneBox(min: [3]f32, max: [3]f32) BlockBoxes {
+    return .{ .boxes = .{ .{ .min = min, .max = max }, undefined, undefined }, .count = 1 };
+}
+
 fn fullCubeBox() BlockBoxes {
-    return .{ .boxes = .{ .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } }, undefined }, .count = 1 };
+    return oneBox(.{ 0, 0, 0 }, .{ 1, 1, 1 });
 }
 
 fn overlapsOtherAxesBox(aabb_min: [3]f32, aabb_max: [3]f32, box_min: [3]f32, box_max: [3]f32, skip_axis: usize) bool {
