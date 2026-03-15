@@ -9,6 +9,7 @@ pub const Facing = enum(u2) { south, north, east, west };
 pub const Half = enum(u1) { bottom, top };
 pub const SlabType = enum(u2) { bottom, top, double };
 pub const Placement = enum(u3) { standing, wall_south, wall_north, wall_east, wall_west };
+pub const StairShape = enum(u3) { straight, inner_left, inner_right, outer_left, outer_right };
 
 // ==== Block Identity ====
 
@@ -62,12 +63,12 @@ pub const NUM_BLOCKS = @typeInfo(Block).@"enum".fields.len;
 
 pub const StateId = u16;
 pub const AABB = struct { min: [3]f32, max: [3]f32 };
-pub const Transform = enum { none, flip_y, rotate_90, rotate_180, rotate_270 };
+pub const Transform = enum { none, flip_y, rotate_90, rotate_180, rotate_270, flip_y_rotate_90, flip_y_rotate_180, flip_y_rotate_270 };
 
 fn stateCount(block: Block) u16 {
     return switch (block) {
         .oak_slab => 3,
-        .oak_stairs => 4,
+        .oak_stairs => 40, // 4 facings × 2 halves × 5 shapes
         .torch => 5,
         .ladder => 4,
         .oak_door => 16,
@@ -159,9 +160,24 @@ pub fn getFacing(state: StateId) ?Facing {
 
 pub fn getHalf(state: StateId) ?Half {
     return switch (getBlock(state)) {
+        .oak_stairs => @enumFromInt(@as(u1, @truncate(getProps(state) >> 2))),
         .oak_door => @enumFromInt(@as(u1, @truncate(getProps(state) >> 2))),
         else => null,
     };
+}
+
+pub fn getStairShape(state: StateId) ?StairShape {
+    if (getBlock(state) != .oak_stairs) return null;
+    return @enumFromInt(@as(u3, @truncate(getProps(state) >> 3)));
+}
+
+/// Construct a stair StateId from individual properties.
+/// Bit layout: shape(3)[5:3] | half(1)[2] | facing(2)[1:0]
+pub fn makeStairState(facing: Facing, half: Half, shape: StairShape) StateId {
+    const props: u8 = @intFromEnum(facing) |
+        (@as(u8, @intFromEnum(half)) << 2) |
+        (@as(u8, @intFromEnum(shape)) << 3);
+    return fromBlockProps(.oak_stairs, props);
 }
 
 pub fn getSlabType(state: StateId) ?SlabType {
@@ -229,7 +245,6 @@ fn computeProps(block: Block, props: u8) StateProps {
         },
         .is_solid_shaped = switch (block) {
             .oak_slab => !is_double_slab,
-            .oak_stairs => true,
             else => false,
         },
         .culls_self = switch (block) {
@@ -396,6 +411,10 @@ pub fn fenceFromConnections(n: bool, s: bool, e: bool, w: bool) StateId {
     return fromBlockProps(.oak_fence, conn);
 }
 
+pub fn isStairs(state: StateId) bool {
+    return getBlock(state) == .oak_stairs;
+}
+
 pub fn isDoor(state: StateId) bool {
     return getBlock(state) == .oak_door;
 }
@@ -428,7 +447,7 @@ pub fn doorTopToBottom(state: StateId) StateId {
 pub fn getCanonicalState(state: StateId) StateId {
     return switch (getBlock(state)) {
         .oak_slab => fromBlockProps(.oak_slab, @intFromEnum(SlabType.bottom)),
-        .oak_stairs => fromBlockProps(.oak_stairs, @intFromEnum(Facing.south)),
+        .oak_stairs => makeStairState(.south, .bottom, .straight),
         .torch => defaultState(.torch), // standing
         .ladder => fromBlockProps(.ladder, @intFromEnum(Facing.south)),
         .oak_door => makeDoorState(.south, .bottom, false),
@@ -464,9 +483,42 @@ fn computeModelInfo(block: Block, props: u8) ?ModelInfo {
         },
         .oak_stairs => {
             const facing: Facing = @enumFromInt(@as(u2, @truncate(props)));
+            const half: Half = @enumFromInt(@as(u1, @truncate(props >> 2)));
+            const shape: StairShape = @enumFromInt(@as(u3, @truncate(props >> 3)));
+            const json_file: []const u8 = switch (shape) {
+                .straight => "oak_stairs.json",
+                .inner_left, .inner_right => "oak_stairs_inner.json",
+                .outer_left, .outer_right => "oak_stairs_outer.json",
+            };
+            // For left/right: left is the same shape as right rotated 90° CW
+            // (south,inner_left = same physical shape as east,inner_right)
+            const shape_rotation: u16 = switch (shape) {
+                .straight, .inner_right, .outer_right => 0,
+                .inner_left, .outer_left => 90,
+            };
+            const facing_rotation: u16 = switch (facing) {
+                .south => 0,
+                .east => 90,
+                .north => 180,
+                .west => 270,
+            };
+            const total_rotation = (facing_rotation + shape_rotation) % 360;
+            const rot_transform: Transform = switch (total_rotation) {
+                0 => .none,
+                90 => .rotate_90,
+                180 => .rotate_180,
+                270 => .rotate_270,
+                else => .none,
+            };
             return .{
-                .json_file = "oak_stairs.json",
-                .transform = facingToRotation(facing),
+                .json_file = json_file,
+                .transform = if (half == .bottom) rot_transform else switch (rot_transform) {
+                    .none => .flip_y,
+                    .rotate_90 => .flip_y_rotate_90,
+                    .rotate_180 => .flip_y_rotate_180,
+                    .rotate_270 => .flip_y_rotate_270,
+                    else => .flip_y,
+                },
             };
         },
         .torch => {
@@ -643,6 +695,16 @@ const state_to_legacy: [TOTAL_STATES]OldBlockType = blk: {
         const state_id = legacyStateId(field.name);
         table[state_id] = @enumFromInt(field.value);
     }
+    // Map all stair states to their facing-appropriate legacy variant.
+    // States beyond the 4 legacy ones (top half, corners) map to the same facing.
+    const stair_legacy = [4]OldBlockType{ .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west };
+    const stair_base = block_offset_table[@intFromEnum(Block.oak_stairs)];
+    for (0..stateCount(.oak_stairs)) |i| {
+        const facing_bits: u2 = @truncate(i);
+        if (table[stair_base + i] == .air) {
+            table[stair_base + i] = stair_legacy[facing_bits];
+        }
+    }
     break :blk table;
 };
 
@@ -657,7 +719,7 @@ pub fn toLegacy(state: StateId) OldBlockType {
 // ==== Tests ====
 
 test "total state count" {
-    try std.testing.expectEqual(@as(u16, 76), TOTAL_STATES);
+    try std.testing.expectEqual(@as(u16, 112), TOTAL_STATES);
 }
 
 test "simple block round-trip" {
@@ -742,15 +804,27 @@ test "legacy bridge round-trip" {
 }
 
 test "model info" {
-    // Stairs south = no rotation
-    const stairs_s = fromBlockProps(.oak_stairs, @intFromEnum(Facing.south));
+    // Stairs south/bottom/straight = no rotation
+    const stairs_s = makeStairState(.south, .bottom, .straight);
     const info = model_info_table[stairs_s].?;
     try std.testing.expect(std.mem.eql(u8, info.json_file, "oak_stairs.json"));
     try std.testing.expectEqual(Transform.none, info.transform);
 
-    // Stairs north = 180
-    const stairs_n = fromBlockProps(.oak_stairs, @intFromEnum(Facing.north));
+    // Stairs north/bottom/straight = 180
+    const stairs_n = makeStairState(.north, .bottom, .straight);
     try std.testing.expectEqual(Transform.rotate_180, model_info_table[stairs_n].?.transform);
+
+    // Stairs south/top/straight = flip_y
+    const stairs_top = makeStairState(.south, .top, .straight);
+    try std.testing.expectEqual(Transform.flip_y, model_info_table[stairs_top].?.transform);
+
+    // Stairs inner corner
+    const stairs_inner = makeStairState(.south, .bottom, .inner_right);
+    try std.testing.expect(std.mem.eql(u8, model_info_table[stairs_inner].?.json_file, "oak_stairs_inner.json"));
+
+    // Stairs outer corner
+    const stairs_outer = makeStairState(.south, .bottom, .outer_left);
+    try std.testing.expect(std.mem.eql(u8, model_info_table[stairs_outer].?.json_file, "oak_stairs_outer.json"));
 
     // Simple block = no model info
     try std.testing.expectEqual(@as(?ModelInfo, null), model_info_table[defaultState(.stone)]);
@@ -773,9 +847,9 @@ test "hitbox consistency" {
 }
 
 test "canonical states" {
-    // All stair facings canonicalize to south
-    const stairs_e = fromBlockProps(.oak_stairs, @intFromEnum(Facing.east));
-    try std.testing.expectEqual(fromBlockProps(.oak_stairs, @intFromEnum(Facing.south)), getCanonicalState(stairs_e));
+    // All stair variants canonicalize to south/bottom/straight
+    const stairs_e = makeStairState(.east, .top, .inner_left);
+    try std.testing.expectEqual(makeStairState(.south, .bottom, .straight), getCanonicalState(stairs_e));
 
     // Open door canonicalizes to closed bottom south
     const door_open = makeDoorState(.west, .top, true);
