@@ -16,13 +16,13 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
 
         /// Packed palette indices (null when bit_size == 0; all elements are palette[0])
         data: ?[]u32,
-        bit_size: u4,
+        bit_size: u5,
 
         palette: []T,
         occupancy: []u32,
-        palette_len: u16,
-        active_entries: u16,
-        palette_cap: u16,
+        palette_len: u32,
+        active_entries: u32,
+        palette_cap: u32,
 
         allocator: std.mem.Allocator,
 
@@ -64,7 +64,7 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             const new_pi = self.getOrInsertPalette(value);
 
             // Read old index AFTER potential growth (growth preserves index values)
-            const old_pi: u16 = if (self.bit_size == 0) 0 else self.getPackedIndex(idx);
+            const old_pi: u32 = if (self.bit_size == 0) 0 else self.getPackedIndex(idx);
 
             if (old_pi == new_pi) return;
 
@@ -113,23 +113,23 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             return std.mem.eql(u8, std.mem.asBytes(&a), std.mem.asBytes(&b));
         }
 
-        fn dataWordsNeeded(bit_size: u4) u32 {
+        fn dataWordsNeeded(bit_size: u5) u32 {
             if (bit_size == 0) return 0;
             const total_bits: u32 = @as(u32, count) * @as(u32, bit_size);
             return (total_bits + 31) / 32;
         }
 
-        fn getPackedIndex(self: *const Self, index: u32) u16 {
+        fn getPackedIndex(self: *const Self, index: u32) u32 {
             const bs: u5 = self.bit_size;
             const d = self.data orelse return 0;
             const bit_index: u32 = index * bs;
             const word_index = bit_index >> 5;
             const bit_offset: u5 = @intCast(bit_index & 31);
             const mask: u32 = (@as(u32, 1) << bs) - 1;
-            return @intCast((d[word_index] >> bit_offset) & mask);
+            return (d[word_index] >> bit_offset) & mask;
         }
 
-        fn setPackedIndex(self: *Self, index: u32, value: u16) void {
+        fn setPackedIndex(self: *Self, index: u32, value: u32) void {
             const bs: u5 = self.bit_size;
             if (bs == 0) return;
             const d = self.data orelse return;
@@ -140,7 +140,7 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             d[word_index] = (d[word_index] & ~(mask << bit_offset)) | (@as(u32, value) << bit_offset);
         }
 
-        fn getOrInsertPalette(self: *Self, value: T) u16 {
+        fn getOrInsertPalette(self: *Self, value: T) u32 {
             // Linear search (palette is small — typically <50 entries)
             for (self.palette[0..self.palette_len], 0..) |entry, i| {
                 if (valEql(entry, value)) return @intCast(i);
@@ -160,14 +160,15 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
 
         fn growBitSize(self: *Self) void {
             const old_bs = self.bit_size;
-            const new_bs: u4 = switch (old_bs) {
+            const new_bs: u5 = switch (old_bs) {
                 0 => 1,
                 1 => 2,
                 2 => 4,
                 4 => 8,
-                else => @panic("PaletteStorage: palette exceeded 256 entries"),
+                8 => 16,
+                else => @panic("PaletteStorage: palette exceeded 65536 entries"),
             };
-            const new_cap: u16 = @as(u16, 1) << new_bs;
+            const new_cap: u32 = @as(u32, 1) << new_bs;
 
             // Grow palette + occupancy arrays
             const new_palette = self.allocator.alloc(T, new_cap) catch @panic("PaletteStorage: OOM");
@@ -197,7 +198,7 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
                         const old_bit = ci * obs;
                         const old_word = old_bit >> 5;
                         const old_off: u5 = @intCast(old_bit & 31);
-                        const val: u16 = @intCast((old_data[old_word] >> old_off) & old_mask);
+                        const val: u32 = (old_data[old_word] >> old_off) & old_mask;
                         // Write to new layout
                         const new_bit = ci * nbs;
                         const new_word = new_bit >> 5;
@@ -224,8 +225,8 @@ test "init creates uniform storage" {
     defer s.deinit();
     try testing.expectEqual(@as(u8, 0), s.get(0));
     try testing.expectEqual(@as(u8, 0), s.get(15));
-    try testing.expectEqual(@as(u16, 1), s.palette_len);
-    try testing.expectEqual(@as(u4, 0), s.bit_size);
+    try testing.expectEqual(@as(u32, 1), s.palette_len);
+    try testing.expectEqual(@as(u5, 0), s.bit_size);
 }
 
 test "set single value grows palette" {
@@ -234,7 +235,7 @@ test "set single value grows palette" {
     s.set(5, 42);
     try testing.expectEqual(@as(u8, 42), s.get(5));
     try testing.expectEqual(@as(u8, 0), s.get(0));
-    try testing.expectEqual(@as(u16, 2), s.palette_len);
+    try testing.expectEqual(@as(u32, 2), s.palette_len);
     try testing.expect(s.bit_size >= 1);
 }
 
@@ -242,8 +243,8 @@ test "set same value is no-op" {
     var s = PaletteStorage(u8, 16).init(testing.allocator);
     defer s.deinit();
     s.set(0, 0); // same as default
-    try testing.expectEqual(@as(u16, 1), s.palette_len);
-    try testing.expectEqual(@as(u4, 0), s.bit_size);
+    try testing.expectEqual(@as(u32, 1), s.palette_len);
+    try testing.expectEqual(@as(u5, 0), s.bit_size);
 }
 
 test "fillUniform resets to minimal storage" {
@@ -255,8 +256,8 @@ test "fillUniform resets to minimal storage" {
     s.fillUniform(99);
     try testing.expectEqual(@as(u8, 99), s.get(0));
     try testing.expectEqual(@as(u8, 99), s.get(15));
-    try testing.expectEqual(@as(u16, 1), s.palette_len);
-    try testing.expectEqual(@as(u4, 0), s.bit_size);
+    try testing.expectEqual(@as(u32, 1), s.palette_len);
+    try testing.expectEqual(@as(u5, 0), s.bit_size);
     try testing.expect(s.data == null);
 }
 
@@ -294,7 +295,7 @@ test "overwrite existing value" {
     s.set(3, 20);
     try testing.expectEqual(@as(u8, 20), s.get(3));
     // Old value's occupancy should have decreased
-    try testing.expectEqual(@as(u16, 3), s.palette_len);
+    try testing.expectEqual(@as(u32, 3), s.palette_len);
 }
 
 test "fillUniform after growth then reuse" {
@@ -305,7 +306,7 @@ test "fillUniform after growth then reuse" {
     }
     s.fillUniform(0);
     // Should be back to minimal state
-    try testing.expectEqual(@as(u4, 0), s.bit_size);
+    try testing.expectEqual(@as(u5, 0), s.bit_size);
     // Can grow again
     s.set(0, 50);
     s.set(1, 60);

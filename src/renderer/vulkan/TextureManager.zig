@@ -9,17 +9,25 @@ const tracy = @import("../../platform/tracy.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
-const BLOCK_TEXTURE_COUNT = 34;
+const BLOCK_TEXTURE_COUNT = 57;
 const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
-    "glass.png",      "grass_block.png", "dirt.png",       "stone.png",
-    "glowstone.png",  "sand.png",        "snow.png",       "water.png",
-    "gravel.png",     "cobblestone.png", "oak_log.png",    "oak_planks.png",
-    "bricks.png",     "bedrock.png",     "gold_ore.png",   "iron_ore.png",
-    "coal_ore.png",   "diamond_ore.png", "sponge.png",     "pumice.png",
-    "wool.png",       "gold_block.png",  "iron_block.png", "diamond_block.png",
-    "bookshelf.png",  "obsidian.png",    "oak_leaves.png", "oak_log_top.png",
-    "torch.png",      "ladder.png",      "torch_fire.png", "torch_fire_particle.png",
-    "oak_door_bottom.png", "oak_door_top.png",
+    "glass.png",      "grass_block.png", "dirt.png",       "stone.png",        // 0-3
+    "glowstone.png",  "sand.png",        "snow.png",       "water.png",        // 4-7
+    "gravel.png",     "cobblestone.png", "oak_log.png",    "oak_planks.png",   // 8-11
+    "bricks.png",     "bedrock.png",     "gold_ore.png",   "iron_ore.png",     // 12-15
+    "coal_ore.png",   "diamond_ore.png", "sponge.png",     "pumice.png",       // 16-19
+    "wool.png",       "gold_block.png",  "iron_block.png", "diamond_block.png",// 20-23
+    "bookshelf.png",  "obsidian.png",    "oak_leaves.png", "oak_log_top.png",  // 24-27
+    "torch.png",      "ladder.png",      "torch_fire.png", "torch_fire_particle.png", // 28-31
+    "oak_door_bottom.png", "oak_door_top.png",                                 // 32-33
+    "red_glowstone.png",     "crimson_glowstone.png",  "orange_glowstone.png",     // 34-36
+    "peach_glowstone.png",   "lime_glowstone.png",     "green_glowstone.png",      // 37-39
+    "teal_glowstone.png",    "cyan_glowstone.png",     "light_blue_glowstone.png", // 40-42
+    "blue_glowstone.png",    "navy_glowstone.png",     "indigo_glowstone.png",     // 43-45
+    "purple_glowstone.png",  "magenta_glowstone.png",  "pink_glowstone.png",       // 46-48
+    "hot_pink_glowstone.png","white_glowstone.png",    "warm_white_glowstone.png", // 49-51
+    "light_gray_glowstone.png","gray_glowstone.png",   "brown_glowstone.png",      // 52-54
+    "tan_glowstone.png",     "black_glowstone.png",                                // 55-56
 };
 
 const TEX_W = 16;
