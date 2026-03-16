@@ -2,7 +2,10 @@ const std = @import("std");
 const zlm = @import("zlm");
 const WorldState = @import("world/WorldState.zig");
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
+const Physics = @import("Physics.zig");
 
+const BlockState = WorldState.BlockState;
+const AABB = BlockState.AABB;
 const MAX_RANGE: f32 = 5.0;
 
 pub const Direction = enum {
@@ -36,12 +39,10 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
     var block_y: i32 = @intFromFloat(@floor(origin.y));
     var block_z: i32 = @intFromFloat(@floor(origin.z));
 
-    if (WorldState.block_properties.isSolid(chunk_map.getBlock(block_x, block_y, block_z))) {
-        return .{
-            .block_pos = .{ block_x, block_y, block_z },
-            .direction = .up,
-            .hit_pos = .{ origin.x, origin.y, origin.z },
-        };
+    if (BlockState.isTargetable(chunk_map.getBlock(block_x, block_y, block_z))) {
+        if (testBlockHitbox(chunk_map, origin, dir, block_x, block_y, block_z)) |result| {
+            return result;
+        }
     }
 
     const step_x: i32 = if (dir.x > 0) 1 else if (dir.x < 0) -1 else 0;
@@ -76,43 +77,119 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
     const max_steps: u32 = @intFromFloat(@ceil(MAX_RANGE) * 3.0 + 3.0);
 
     for (0..max_steps) |_| {
-        var face: Direction = undefined;
-        var hit_t: f32 = undefined;
-
         if (t_max_x < t_max_y and t_max_x < t_max_z) {
             if (t_max_x > MAX_RANGE) return null;
-            hit_t = t_max_x;
             block_x += step_x;
             t_max_x += t_delta_x;
-            face = if (step_x > 0) .west else .east;
         } else if (t_max_y < t_max_z) {
             if (t_max_y > MAX_RANGE) return null;
-            hit_t = t_max_y;
             block_y += step_y;
             t_max_y += t_delta_y;
-            face = if (step_y > 0) .down else .up;
         } else {
             if (t_max_z > MAX_RANGE) return null;
-            hit_t = t_max_z;
             block_z += step_z;
             t_max_z += t_delta_z;
-            face = if (step_z > 0) .north else .south;
         }
 
-        if (WorldState.block_properties.isSolid(chunk_map.getBlock(block_x, block_y, block_z))) {
-            return .{
-                .block_pos = .{ block_x, block_y, block_z },
-                .direction = face,
-                .hit_pos = .{
-                    origin.x + dir.x * hit_t,
-                    origin.y + dir.y * hit_t,
-                    origin.z + dir.z * hit_t,
-                },
-            };
+        if (BlockState.isTargetable(chunk_map.getBlock(block_x, block_y, block_z))) {
+            if (testBlockHitbox(chunk_map, origin, dir, block_x, block_y, block_z)) |result| {
+                return result;
+            }
         }
     }
 
     return null;
+}
+
+/// Test if a ray hits any of the block's hitboxes. Returns the closest hit result
+/// with correct face direction and hit position, or null if the ray misses all boxes.
+fn testBlockHitbox(
+    chunk_map: *const ChunkMap,
+    origin: zlm.Vec3,
+    dir: zlm.Vec3,
+    bx: i32,
+    by: i32,
+    bz: i32,
+) ?BlockHitResult {
+    const state = chunk_map.getBlock(bx, by, bz);
+    const block_boxes = Physics.getBlockBoxes(state);
+
+    const fx: f32 = @floatFromInt(bx);
+    const fy: f32 = @floatFromInt(by);
+    const fz: f32 = @floatFromInt(bz);
+    const o = [3]f32{ origin.x, origin.y, origin.z };
+    const d = [3]f32{ dir.x, dir.y, dir.z };
+
+    var best_t: f32 = std.math.inf(f32);
+    var best_axis: u2 = 0;
+    var best_inside = false;
+
+    for (block_boxes.boxes[0..block_boxes.count]) |box| {
+        const box_min = [3]f32{ fx + box.min[0], fy + box.min[1], fz + box.min[2] };
+        const box_max = [3]f32{ fx + box.max[0], fy + box.max[1], fz + box.max[2] };
+
+        var t_near: f32 = -std.math.inf(f32);
+        var t_far: f32 = std.math.inf(f32);
+        var near_axis: u2 = 0;
+        var missed = false;
+
+        for (0..3) |axis| {
+            if (@abs(d[axis]) < 1e-9) {
+                if (o[axis] < box_min[axis] or o[axis] > box_max[axis]) {
+                    missed = true;
+                    break;
+                }
+            } else {
+                var t1 = (box_min[axis] - o[axis]) / d[axis];
+                var t2 = (box_max[axis] - o[axis]) / d[axis];
+                if (t1 > t2) {
+                    const tmp = t1;
+                    t1 = t2;
+                    t2 = tmp;
+                }
+                if (t1 > t_near) {
+                    t_near = t1;
+                    near_axis = @intCast(axis);
+                }
+                if (t2 < t_far) t_far = t2;
+                if (t_near > t_far or t_far < 0) {
+                    missed = true;
+                    break;
+                }
+            }
+        }
+        if (missed) continue;
+
+        const hit_t = if (t_near >= 0) t_near else 0;
+        if (hit_t > MAX_RANGE) continue;
+
+        if (hit_t < best_t) {
+            best_t = hit_t;
+            best_axis = near_axis;
+            best_inside = t_near < 0;
+        }
+    }
+
+    if (best_t == std.math.inf(f32)) return null;
+
+    const face: Direction = if (best_inside)
+        .up
+    else switch (best_axis) {
+        0 => if (d[0] > 0) .west else .east,
+        1 => if (d[1] > 0) .down else .up,
+        2 => if (d[2] > 0) .north else .south,
+        else => unreachable,
+    };
+
+    return .{
+        .block_pos = .{ bx, by, bz },
+        .direction = face,
+        .hit_pos = .{
+            origin.x + dir.x * best_t,
+            origin.y + dir.y * best_t,
+            origin.z + dir.z * best_t,
+        },
+    };
 }
 
 // ============================================================
@@ -124,7 +201,7 @@ const testing = std.testing;
 fn makeRaycastTestMap(allocator: std.mem.Allocator) !struct { map: ChunkMap, chunk: *WorldState.Chunk } {
     var map = ChunkMap.init(allocator);
     const chunk = try allocator.create(WorldState.Chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
     return .{ .map = map, .chunk = chunk };
 }
@@ -156,7 +233,7 @@ test "raycast: hit block directly ahead +x" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = BlockState.defaultState(.stone);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(1.0, 0.0, 0.0);
@@ -174,7 +251,7 @@ test "raycast: hit block directly ahead -x" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(2, 5, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(2, 5, 5)] = BlockState.defaultState(.stone);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(-1.0, 0.0, 0.0);
@@ -190,7 +267,7 @@ test "raycast: hit block above (+y)" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(5, 8, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(5, 8, 5)] = BlockState.defaultState(.stone);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(0.0, 1.0, 0.0);
@@ -217,7 +294,7 @@ test "raycast: block beyond MAX_RANGE is not hit" {
     defer state.map.deinit();
 
     // Place block 6 blocks away (MAX_RANGE = 5.0)
-    state.chunk.blocks[WorldState.chunkIndex(12, 5, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(12, 5, 5)] = BlockState.defaultState(.stone);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(1.0, 0.0, 0.0);
@@ -230,7 +307,7 @@ test "raycast: starting inside solid block returns it" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(5, 5, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(1.0, 0.0, 0.0);
@@ -248,8 +325,8 @@ test "raycast: diagonal ray hits nearest block" {
     defer state.map.deinit();
 
     // Place blocks at (8,5,5) and (5,8,5)
-    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = .stone;
-    state.chunk.blocks[WorldState.chunkIndex(5, 8, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = BlockState.defaultState(.stone);
+    state.chunk.blocks[WorldState.chunkIndex(5, 8, 5)] = BlockState.defaultState(.stone);
 
     // Diagonal ray at 45 degrees in XY from center of block (5,5,5)
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
@@ -265,7 +342,7 @@ test "raycast: axis-aligned ray with zero components" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(5, 5, 8)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(5, 5, 8)] = BlockState.defaultState(.stone);
 
     // Pure +z ray
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
@@ -281,7 +358,7 @@ test "raycast: glass is solid and blocks ray" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = .glass;
+    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = BlockState.defaultState(.glass);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(1.0, 0.0, 0.0);
@@ -295,7 +372,7 @@ test "raycast: water is not solid and ray passes through" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = .water;
+    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = BlockState.defaultState(.water);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(1.0, 0.0, 0.0);
@@ -308,7 +385,7 @@ test "raycast: ray with negative direction -z" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(5, 5, 2)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(5, 5, 2)] = BlockState.defaultState(.stone);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(0.0, 0.0, -1.0);
@@ -323,7 +400,7 @@ test "raycast: ray along -y hits block below" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(5, 2, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(5, 2, 5)] = BlockState.defaultState(.stone);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(0.0, -1.0, 0.0);
@@ -339,7 +416,7 @@ test "raycast: block at exact MAX_RANGE boundary" {
     defer state.map.deinit();
 
     // Place block exactly 5 blocks away (at MAX_RANGE boundary)
-    state.chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = BlockState.defaultState(.stone);
 
     const origin = zlm.Vec3.new(5.5, 5.5, 5.5);
     const dir = zlm.Vec3.new(1.0, 0.0, 0.0);
@@ -354,7 +431,7 @@ test "raycast: origin on block boundary" {
     var state = try makeRaycastTestMap(testing.allocator);
     defer state.map.deinit();
 
-    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = .stone;
+    state.chunk.blocks[WorldState.chunkIndex(8, 5, 5)] = BlockState.defaultState(.stone);
 
     // Origin exactly on block boundary (integer coordinate)
     const origin = zlm.Vec3.new(5.0, 5.5, 5.5);

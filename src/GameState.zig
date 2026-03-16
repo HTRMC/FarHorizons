@@ -2,6 +2,7 @@ const std = @import("std");
 const zlm = @import("zlm");
 const Camera = @import("renderer/Camera.zig");
 const WorldState = @import("world/WorldState.zig");
+const BlockState = WorldState.BlockState;
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 const ChunkPool = @import("world/ChunkPool.zig").ChunkPool;
 const LightMapMod = @import("world/LightMap.zig");
@@ -97,8 +98,8 @@ const LOAD_RADIUS_XZ: i32 = 2;
 const LOAD_RADIUS_Y: i32 = 1;
 const MAX_PENDING_UNLOADS: u32 = 256;
 
-pub fn blockName(block: WorldState.BlockType) []const u8 {
-    return switch (block) {
+pub fn blockName(state: BlockState.StateId) []const u8 {
+    return switch (BlockState.getBlock(state)) {
         .air => "Air",
         .glass => "Glass",
         .grass_block => "Grass",
@@ -127,13 +128,17 @@ pub fn blockName(block: WorldState.BlockType) []const u8 {
         .bookshelf => "Bookshelf",
         .obsidian => "Obsidian",
         .oak_leaves => "Oak Leaves",
-        .oak_slab_bottom, .oak_slab_top => "Oak Slab",
-        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => "Oak Stairs",
+        .oak_slab => "Oak Slab",
+        .oak_stairs => "Oak Stairs",
+        .torch => "Torch",
+        .ladder => "Ladder",
+        .oak_door => "Oak Door",
+        .oak_fence => "Oak Fence",
     };
 }
 
-pub fn blockColor(block: WorldState.BlockType) [4]f32 {
-    return switch (block) {
+pub fn blockColor(state: BlockState.StateId) [4]f32 {
+    return switch (BlockState.getBlock(state)) {
         .air => .{ 0.0, 0.0, 0.0, 0.0 },
         .glass => .{ 0.8, 0.9, 1.0, 0.4 },
         .grass_block => .{ 0.3, 0.7, 0.2, 1.0 },
@@ -162,13 +167,18 @@ pub fn blockColor(block: WorldState.BlockType) [4]f32 {
         .bookshelf => .{ 0.55, 0.4, 0.25, 1.0 },
         .obsidian => .{ 0.15, 0.1, 0.2, 1.0 },
         .oak_leaves => .{ 0.2, 0.5, 0.15, 0.8 },
-        .oak_slab_bottom, .oak_slab_top => .{ 0.7, 0.55, 0.33, 1.0 },
-        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ 0.7, 0.55, 0.33, 1.0 },
+        .oak_slab => .{ 0.7, 0.55, 0.33, 1.0 },
+        .oak_stairs => .{ 0.7, 0.55, 0.33, 1.0 },
+        .torch => .{ 0.9, 0.7, 0.2, 1.0 },
+        .ladder => .{ 0.6, 0.45, 0.25, 1.0 },
+        .oak_door => .{ 0.7, 0.55, 0.33, 1.0 },
+        .oak_fence => .{ 0.7, 0.55, 0.33, 1.0 },
     };
 }
 
 /// Returns { tex_top, tex_side } indices into the block texture array for UI rendering.
-pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16 } {
+pub fn blockTexIndices(state: BlockState.StateId) struct { top: i16, side: i16 } {
+    const block = BlockState.getBlock(state);
     return switch (block) {
         .air => .{ .top = -1, .side = -1 },
         .glass => .{ .top = 0, .side = 0 },
@@ -198,18 +208,33 @@ pub fn blockTexIndices(block: WorldState.BlockType) struct { top: i16, side: i16
         .bookshelf => .{ .top = 24, .side = 24 },
         .obsidian => .{ .top = 25, .side = 25 },
         .oak_leaves => .{ .top = 26, .side = 26 },
-        .oak_slab_bottom, .oak_slab_top => .{ .top = 11, .side = 11 },
-        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .{ .top = 11, .side = 11 },
+        .oak_slab => .{ .top = 11, .side = 11 },
+        .oak_stairs => .{ .top = 11, .side = 11 },
+        .torch => .{ .top = 28, .side = 28 },
+        .ladder => .{ .top = 29, .side = 29 },
+        .oak_door => if (BlockState.getHalf(state)) |half| switch (half) {
+            .bottom => .{ .top = 32, .side = 32 },
+            .top => .{ .top = 33, .side = 33 },
+        } else .{ .top = 32, .side = 32 },
+        .oak_fence => .{ .top = 11, .side = 11 },
     };
 }
 
 const WidgetData = @import("ui/WidgetData.zig");
 
-pub fn blockShape(block: WorldState.BlockType) WidgetData.BlockShape {
+pub fn blockShape(state: BlockState.StateId) WidgetData.BlockShape {
+    const block = BlockState.getBlock(state);
     return switch (block) {
-        .oak_slab_bottom => .slab_bottom,
-        .oak_slab_top => .slab_top,
-        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .stairs,
+        .oak_slab => if (BlockState.getSlabType(state)) |st| switch (st) {
+            .bottom => .slab_bottom,
+            .top => .slab_top,
+            .double => .full,
+        } else .full,
+        .oak_stairs => .stairs,
+        .torch => .torch,
+        .ladder => .ladder,
+        .oak_door => .door,
+        .oak_fence => .fence,
         else => .full,
     };
 }
@@ -224,6 +249,10 @@ surface_height_map: SurfaceHeightMap,
 entity_pos: [3]f32,
 entity_vel: [3]f32,
 entity_on_ground: bool,
+entity_in_water: bool,
+eyes_in_water: bool,
+water_vision_time: u16,
+entity_on_ladder: bool,
 mode: MovementMode,
 input_move: [3]f32,
 jump_requested: bool,
@@ -237,17 +266,21 @@ overdraw_mode: bool,
 saved_camera: Camera,
 
 selected_slot: u8 = 0,
-hotbar: [HOTBAR_SIZE]WorldState.BlockType = .{ .grass_block, .dirt, .stone, .sand, .snow, .gravel, .glass, .glowstone, .water },
-inventory: [INV_SIZE]WorldState.BlockType = .{
-    .cobblestone, .oak_log,      .oak_planks,   .bricks,       .bedrock,       .gold_ore,      .iron_ore,      .coal_ore,      .diamond_ore,
-    .sponge,          .pumice,           .wool,             .gold_block,       .iron_block,        .diamond_block,     .bookshelf,         .obsidian,          .oak_leaves,
-    .oak_slab_bottom, .oak_stairs_south, .air,              .air,              .air,               .air,               .air,               .air,               .air,
-    .air,             .air,              .air,              .air,              .air,               .air,               .air,               .air,               .air,
+hotbar: [HOTBAR_SIZE]BlockState.StateId = .{
+    BlockState.defaultState(.grass_block), BlockState.defaultState(.dirt),  BlockState.defaultState(.stone),
+    BlockState.defaultState(.sand),        BlockState.defaultState(.snow),  BlockState.defaultState(.gravel),
+    BlockState.defaultState(.glass),       BlockState.defaultState(.glowstone), BlockState.defaultState(.water),
 },
-armor: [ARMOR_SLOTS]WorldState.BlockType = .{.air} ** ARMOR_SLOTS,
-equip: [EQUIP_SLOTS]WorldState.BlockType = .{.air} ** EQUIP_SLOTS,
-offhand: WorldState.BlockType = .air,
-carried_item: WorldState.BlockType = .air,
+inventory: [INV_SIZE]BlockState.StateId = .{
+    BlockState.defaultState(.cobblestone), BlockState.defaultState(.oak_log),      BlockState.defaultState(.oak_planks),   BlockState.defaultState(.bricks),       BlockState.defaultState(.bedrock),       BlockState.defaultState(.gold_ore),      BlockState.defaultState(.iron_ore),      BlockState.defaultState(.coal_ore),      BlockState.defaultState(.diamond_ore),
+    BlockState.defaultState(.sponge),      BlockState.defaultState(.pumice),       BlockState.defaultState(.wool),         BlockState.defaultState(.gold_block),   BlockState.defaultState(.iron_block),    BlockState.defaultState(.diamond_block), BlockState.defaultState(.bookshelf),     BlockState.defaultState(.obsidian),      BlockState.defaultState(.oak_leaves),
+    BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)), BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south)), BlockState.defaultState(.torch), BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south)), BlockState.makeDoorState(.south, .bottom, false), BlockState.defaultState(.oak_fence), BlockState.defaultState(.air), BlockState.defaultState(.air), BlockState.defaultState(.air),
+    BlockState.defaultState(.air), BlockState.defaultState(.air), BlockState.defaultState(.air), BlockState.defaultState(.air), BlockState.defaultState(.air), BlockState.defaultState(.air), BlockState.defaultState(.air), BlockState.defaultState(.air), BlockState.defaultState(.air),
+},
+armor: [ARMOR_SLOTS]BlockState.StateId = .{BlockState.defaultState(.air)} ** ARMOR_SLOTS,
+equip: [EQUIP_SLOTS]BlockState.StateId = .{BlockState.defaultState(.air)} ** EQUIP_SLOTS,
+offhand: BlockState.StateId = BlockState.defaultState(.air),
+carried_item: BlockState.StateId = BlockState.defaultState(.air),
 inventory_open: bool = false,
 
 world_seed: u64,
@@ -339,7 +372,7 @@ pub const DirtyChunkSet = struct {
 
 /// Get a pointer to the block in a unified slot index.
 /// Slots 0-8: hotbar, 9-44: main inventory, 45-48: armor, 49-52: equip, 53: offhand.
-pub fn slotPtr(self: *GameState, slot: u8) *WorldState.BlockType {
+pub fn slotPtr(self: *GameState, slot: u8) *BlockState.StateId {
     if (slot < HOTBAR_SIZE) return &self.hotbar[slot];
     if (slot < HOTBAR_SIZE + INV_SIZE) return &self.inventory[slot - HOTBAR_SIZE];
     if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS) return &self.armor[slot - HOTBAR_SIZE - INV_SIZE];
@@ -350,7 +383,7 @@ pub fn slotPtr(self: *GameState, slot: u8) *WorldState.BlockType {
 /// Click a slot: pick up, place, or swap with carried item.
 pub fn clickSlot(self: *GameState, slot: u8) void {
     const ptr = self.slotPtr(slot);
-    if (self.carried_item == .air and ptr.* == .air) return;
+    if (self.carried_item == BlockState.defaultState(.air) and ptr.* == BlockState.defaultState(.air)) return;
     const tmp = ptr.*;
     ptr.* = self.carried_item;
     self.carried_item = tmp;
@@ -359,24 +392,25 @@ pub fn clickSlot(self: *GameState, slot: u8) void {
 /// Shift+click: move item between hotbar and main inventory.
 /// Hotbar items go to first empty main slot, main/armor/offhand items go to first empty hotbar slot.
 pub fn quickMove(self: *GameState, slot: u8) void {
+    const air = BlockState.defaultState(.air);
     const ptr = self.slotPtr(slot);
-    if (ptr.* == .air) return;
+    if (ptr.* == air) return;
 
     if (slot < HOTBAR_SIZE) {
         // Hotbar → main inventory
         for (&self.inventory) |*s| {
-            if (s.* == .air) {
+            if (s.* == air) {
                 s.* = ptr.*;
-                ptr.* = .air;
+                ptr.* = air;
                 return;
             }
         }
     } else {
         // Main/armor/offhand → hotbar
         for (&self.hotbar) |*s| {
-            if (s.* == .air) {
+            if (s.* == air) {
                 s.* = ptr.*;
-                ptr.* = .air;
+                ptr.* = air;
                 return;
             }
         }
@@ -440,6 +474,10 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .entity_pos = .{ spawn_x, spawn_y, spawn_z },
         .entity_vel = .{ 0.0, 0.0, 0.0 },
         .entity_on_ground = false,
+        .entity_in_water = false,
+        .eyes_in_water = false,
+        .water_vision_time = 0,
+        .entity_on_ladder = false,
         .mode = .walking,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .jump_requested = false,
@@ -524,6 +562,46 @@ pub fn toggleDebugCamera(self: *GameState) void {
     }
 }
 
+fn updateWaterState(self: *GameState) void {
+    const floori = Physics.floori;
+
+    // In flying mode, use camera position; in walking mode, use entity position
+    const pos_x: f32 = if (self.mode == .flying) self.camera.position.x else self.entity_pos[0];
+    const pos_y: f32 = if (self.mode == .flying) self.camera.position.y - EYE_OFFSET else self.entity_pos[1];
+    const pos_z: f32 = if (self.mode == .flying) self.camera.position.z else self.entity_pos[2];
+    const px = floori(pos_x);
+    const pz = floori(pos_z);
+
+    const feet_block = self.chunk_map.getBlock(px, floori(pos_y), pz);
+    const eye_block = self.chunk_map.getBlock(px, floori(pos_y + EYE_OFFSET), pz);
+
+    self.entity_in_water = (BlockState.getBlock(feet_block) == .water);
+    self.eyes_in_water = (BlockState.getBlock(eye_block) == .water);
+
+    // Ladder detection: check feet and mid-body
+    self.entity_on_ladder = isLadder(feet_block) or
+        isLadder(self.chunk_map.getBlock(px, floori(pos_y + 0.9), pz));
+
+    // Water vision time: MC 0-600 ticks @20Hz → 0-900 @30Hz
+    if (self.eyes_in_water) {
+        if (self.water_vision_time < 900) self.water_vision_time += 1;
+    } else {
+        self.water_vision_time = 0;
+    }
+}
+
+fn isLadder(state: BlockState.StateId) bool {
+    return BlockState.getBlock(state) == .ladder;
+}
+
+/// Returns 0.0 to 1.0 water vision factor (MC two-phase curve).
+pub fn waterVision(self: *const GameState) f32 {
+    const t: f32 = @floatFromInt(self.water_vision_time);
+    const a = std.math.clamp(t / 150.0, 0.0, 1.0);
+    const b = std.math.clamp((t - 150.0) / 750.0, 0.0, 1.0);
+    return a * 0.6 + b * 0.4;
+}
+
 pub fn toggleMode(self: *GameState) void {
     switch (self.mode) {
         .flying => {
@@ -556,6 +634,9 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.prev_entity_pos = self.entity_pos;
     self.prev_camera_pos = self.camera.position;
 
+    // Detect water state before physics (both modes need it for fog)
+    self.updateWaterState();
+
     switch (self.mode) {
         .flying => {
             const forward_input = self.input_move[0];
@@ -566,11 +647,21 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
                 const speed = move_speed * TICK_INTERVAL;
                 self.camera.move(forward_input * speed, right_input * speed, up_input * speed);
             }
+
+            self.entity_pos = .{
+                self.camera.position.x,
+                self.camera.position.y - EYE_OFFSET,
+                self.camera.position.z,
+            };
         },
         .walking => {
+
             if (self.jump_cooldown > 0) {
                 self.jump_cooldown -= 1;
-            } else if (self.jump_requested and self.entity_on_ground) {
+            } else if (self.jump_requested and self.entity_on_ladder) {
+                // Climb up ladder
+                self.entity_vel[1] = Physics.LADDER_CLIMB_SPEED;
+            } else if (self.jump_requested and !self.entity_in_water and self.entity_on_ground) {
                 self.entity_vel[1] = 8.7;
             }
             self.jump_requested = false;
@@ -699,7 +790,7 @@ fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
 
 /// Try to use incremental light update for a single block change.
 /// Falls back to full markDirty if the light map isn't ready for incremental updates.
-fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: WorldState.BlockType) void {
+fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: BlockState.StateId) void {
     const base_key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
 
     // Try to set an incremental update on the center chunk's LightMap.
@@ -733,7 +824,40 @@ pub fn breakBlock(self: *GameState) void {
     const wy = hit.block_pos[1];
     const wz = hit.block_pos[2];
     const old_block = self.chunk_map.getBlock(wx, wy, wz);
-    self.chunk_map.setBlock(wx, wy, wz, .air);
+
+    const air = BlockState.defaultState(.air);
+
+    // Door breaking: remove both halves
+    if (BlockState.isDoor(old_block)) {
+        self.chunk_map.setBlock(wx, wy, wz, air);
+        self.markDirtyIncremental(wx, wy, wz, old_block);
+        self.queueChunkSave(wx, wy, wz);
+
+        // Find and remove the other half
+        const other_y: i32 = if (BlockState.isDoorBottom(old_block)) wy + 1 else wy - 1;
+        const other_block = self.chunk_map.getBlock(wx, other_y, wz);
+        if (BlockState.isDoor(other_block)) {
+            self.chunk_map.setBlock(wx, other_y, wz, air);
+            self.markDirtyIncremental(wx, other_y, wz, other_block);
+            self.queueChunkSave(wx, other_y, wz);
+
+            const key2 = WorldState.ChunkKey.fromWorldPos(wx, other_y, wz);
+            const lx2: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
+            const lz2: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
+            self.surface_height_map.rebuildColumnAt(key2.cx, key2.cz, lx2, lz2, &self.chunk_map);
+        }
+
+        const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+        const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
+        const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
+        self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
+        self.updateFenceNeighbors(wx, wy, wz);
+        self.updateStairNeighbors(wx, wy, wz);
+        self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+        return;
+    }
+
+    self.chunk_map.setBlock(wx, wy, wz, air);
     // Rebuild surface height for this column (broken block may have been the surface)
     const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
     const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
@@ -741,53 +865,305 @@ pub fn breakBlock(self: *GameState) void {
     self.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &self.chunk_map);
     self.markDirtyIncremental(wx, wy, wz, old_block);
     self.queueChunkSave(wx, wy, wz);
+    self.updateFenceNeighbors(wx, wy, wz);
+    self.updateStairNeighbors(wx, wy, wz);
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
-fn resolveOrientation(block_type: WorldState.BlockType, yaw: f32, hit: Raycast.BlockHitResult) WorldState.BlockType {
-    // Orient stairs based on player's facing direction
-    switch (block_type) {
-        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => {
-            // Determine facing from yaw: yaw=0 faces -Z (north)
+fn toggleDoor(self: *GameState, wx: i32, wy: i32, wz: i32, block: BlockState.StateId) void {
+    // Toggle this half
+    const new_block = BlockState.toggleDoor(block);
+    const old_block = self.chunk_map.getBlock(wx, wy, wz);
+    self.chunk_map.setBlock(wx, wy, wz, new_block);
+    self.markDirtyIncremental(wx, wy, wz, old_block);
+    self.queueChunkSave(wx, wy, wz);
+
+    // Toggle the other half
+    const other_y: i32 = if (BlockState.isDoorBottom(block)) wy + 1 else wy - 1;
+    const other_block = self.chunk_map.getBlock(wx, other_y, wz);
+    if (BlockState.isDoor(other_block)) {
+        const new_other = BlockState.toggleDoor(other_block);
+        self.chunk_map.setBlock(wx, other_y, wz, new_other);
+        self.markDirtyIncremental(wx, other_y, wz, other_block);
+        self.queueChunkSave(wx, other_y, wz);
+    }
+
+    self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+}
+
+/// Check 4 horizontal neighbors and update any fences to reflect new connections.
+fn updateFenceNeighbors(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    const deltas = [4][2]i32{ .{ 0, -1 }, .{ 0, 1 }, .{ 1, 0 }, .{ -1, 0 } };
+    for (deltas) |d| {
+        const nx = wx + d[0];
+        const nz = wz + d[1];
+        const neighbor = self.chunk_map.getBlock(nx, wy, nz);
+        if (!BlockState.isFence(neighbor)) continue;
+
+        const new_variant = BlockState.fenceFromConnections(
+            BlockState.connectsToFence(self.chunk_map.getBlock(nx, wy, nz - 1)),
+            BlockState.connectsToFence(self.chunk_map.getBlock(nx, wy, nz + 1)),
+            BlockState.connectsToFence(self.chunk_map.getBlock(nx + 1, wy, nz)),
+            BlockState.connectsToFence(self.chunk_map.getBlock(nx - 1, wy, nz)),
+        );
+        if (new_variant != neighbor) {
+            self.chunk_map.setBlock(nx, wy, nz, new_variant);
+            self.markDirtyIncremental(nx, wy, nz, neighbor);
+            self.queueChunkSave(nx, wy, nz);
+        }
+    }
+}
+
+/// Update stair shape of the block at (wx,wy,wz) and its 4 horizontal neighbors.
+fn updateStairNeighbors(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    // Update the placed stair itself
+    self.updateSingleStairShape(wx, wy, wz);
+    // Update 4 horizontal neighbors
+    const deltas = [4][2]i32{ .{ 0, -1 }, .{ 0, 1 }, .{ 1, 0 }, .{ -1, 0 } };
+    for (deltas) |d| {
+        self.updateSingleStairShape(wx + d[0], wy, wz + d[1]);
+    }
+}
+
+fn updateSingleStairShape(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    const state = self.chunk_map.getBlock(wx, wy, wz);
+    if (!BlockState.isStairs(state)) return;
+    const facing = BlockState.getFacing(state).?;
+    const half = BlockState.getHalf(state).?;
+    const new_shape = computeStairShape(self, wx, wy, wz, facing, half);
+    const old_shape = BlockState.getStairShape(state).?;
+    if (new_shape != old_shape) {
+        const new_state = BlockState.makeStairState(facing, half, new_shape);
+        self.chunk_map.setBlock(wx, wy, wz, new_state);
+        self.markDirtyIncremental(wx, wy, wz, state);
+        self.queueChunkSave(wx, wy, wz);
+    }
+}
+
+/// Minecraft's stair shape algorithm:
+/// 1. Check block in the facing direction (step side): perpendicular stair → outer corner
+/// 2. Check block opposite to facing (back side): perpendicular stair → inner corner
+fn computeStairShape(self: *GameState, wx: i32, wy: i32, wz: i32, facing: BlockState.Facing, half: BlockState.Half) BlockState.StairShape {
+    const fd = facingDelta(facing);
+    // Check step side (in facing direction) → inner corner (fills the inside of a turn)
+    const step_neighbor = self.chunk_map.getBlock(wx + fd[0], wy, wz + fd[1]);
+    if (BlockState.isStairs(step_neighbor)) {
+        const sf = BlockState.getFacing(step_neighbor).?;
+        const sh = BlockState.getHalf(step_neighbor).?;
+        if (sh == half and isPerpendicular(facing, sf)) {
+            if (isLeftOf(facing, sf)) return .inner_left;
+            return .inner_right;
+        }
+    }
+    // Check back side (opposite to facing) → outer corner (outside of a turn)
+    const back_neighbor = self.chunk_map.getBlock(wx - fd[0], wy, wz - fd[1]);
+    if (BlockState.isStairs(back_neighbor)) {
+        const bf = BlockState.getFacing(back_neighbor).?;
+        const bh = BlockState.getHalf(back_neighbor).?;
+        if (bh == half and isPerpendicular(facing, bf)) {
+            if (isLeftOf(facing, bf)) return .outer_left;
+            return .outer_right;
+        }
+    }
+    return .straight;
+}
+
+/// Delta to move in the facing direction (towards the step/open side).
+fn facingDelta(facing: BlockState.Facing) [2]i32 {
+    return switch (facing) {
+        .south => .{ 0, 1 }, // step at +Z
+        .north => .{ 0, -1 }, // step at -Z
+        .east => .{ 1, 0 }, // step at +X
+        .west => .{ -1, 0 }, // step at -X
+    };
+}
+
+fn isPerpendicular(a: BlockState.Facing, b: BlockState.Facing) bool {
+    // south/north are Z-axis, east/west are X-axis
+    const a_axis = @intFromEnum(a) >> 1; // 0=Z-axis, 1=X-axis
+    const b_axis = @intFromEnum(b) >> 1;
+    return a_axis != b_axis;
+}
+
+fn isLeftOf(facing: BlockState.Facing, other: BlockState.Facing) bool {
+    // "Left of" means: if you face `facing`, is `other` pointing to your left?
+    return switch (facing) {
+        .south => other == .east,
+        .north => other == .west,
+        .east => other == .north,
+        .west => other == .south,
+    };
+}
+
+/// Minecraft-style slab replacement: determines if placing a slab on an existing slab
+/// should merge into a double slab. A bottom slab can be replaced when clicking its top
+/// face or the upper half of a side face; a top slab when clicking its bottom face or
+/// the lower half of a side face.
+fn slabCanBeReplaced(existing: BlockState.StateId, hit: Raycast.BlockHitResult) bool {
+    const slab_type = BlockState.getSlabType(existing) orelse return false;
+    const above = hit.hit_pos[1] - @floor(hit.hit_pos[1]) > 0.5;
+    return switch (slab_type) {
+        .bottom => hit.direction == .up or (above and hit.direction != .down),
+        .top => hit.direction == .down or (!above and hit.direction != .up),
+        .double => false,
+    };
+}
+
+fn resolveOrientation(block_state: BlockState.StateId, yaw: f32, hit: Raycast.BlockHitResult) BlockState.StateId {
+    const block = BlockState.getBlock(block_state);
+    switch (block) {
+        .oak_stairs => {
             const pi = std.math.pi;
-            // Normalize yaw to [0, 2pi)
             const norm_yaw = @mod(yaw, 2.0 * pi);
-            if (norm_yaw >= 0.25 * pi and norm_yaw < 0.75 * pi) return .oak_stairs_east;
-            if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi) return .oak_stairs_north;
-            if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi) return .oak_stairs_west;
-            return .oak_stairs_south;
+            const facing: BlockState.Facing = if (norm_yaw >= 0.25 * pi and norm_yaw < 0.75 * pi)
+                .east
+            else if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi)
+                .north
+            else if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi)
+                .west
+            else
+                .south;
+            // Determine half: clicking bottom face → top, clicking top face → bottom
+            // Clicking side: upper portion → top, lower portion → bottom
+            const half: BlockState.Half = if (hit.direction == .down)
+                .top
+            else if (hit.direction == .up)
+                .bottom
+            else blk: {
+                const frac_y = hit.hit_pos[1] - @floor(hit.hit_pos[1]);
+                break :blk if (frac_y >= 0.5) .top else .bottom;
+            };
+            return BlockState.makeStairState(facing, half, .straight);
         },
-        .oak_slab_bottom, .oak_slab_top => {
-            // Top slab when clicking underside of block, or upper half of a side face
-            if (hit.direction == .down) return .oak_slab_top;
-            if (hit.direction == .up) return .oak_slab_bottom;
-            // Side face: check if click was on upper or lower half
+        .oak_slab => {
+            if (hit.direction == .down) return BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top));
+            if (hit.direction == .up) return BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom));
             const frac_y = hit.hit_pos[1] - @floor(hit.hit_pos[1]);
-            if (frac_y >= 0.5) return .oak_slab_top;
-            return .oak_slab_bottom;
+            if (frac_y >= 0.5) return BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top));
+            return BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom));
         },
-        else => return block_type,
+        .torch => {
+            return switch (hit.direction) {
+                .up => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.standing)),
+                .south => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.wall_north)),
+                .north => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.wall_south)),
+                .east => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.wall_west)),
+                .west => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.wall_east)),
+                .down => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.standing)),
+            };
+        },
+        .ladder => {
+            return switch (hit.direction) {
+                .south => BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south)),
+                .north => BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.north)),
+                .east => BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.east)),
+                .west => BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.west)),
+                else => block_state,
+            };
+        },
+        .oak_door => {
+            const pi = std.math.pi;
+            const norm_yaw = @mod(yaw, 2.0 * pi);
+            const facing: BlockState.Facing = if (norm_yaw >= 0.25 * pi and norm_yaw < 0.75 * pi)
+                .east
+            else if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi)
+                .north
+            else if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi)
+                .west
+            else
+                .south;
+            return BlockState.makeDoorState(facing, .bottom, false);
+        },
+        .oak_fence => return BlockState.defaultState(.oak_fence),
+        else => return block_state,
     }
 }
 
 pub fn placeBlock(self: *GameState) void {
-    var block_type = self.hotbar[self.selected_slot];
-    if (block_type == .air) return;
     const hit = self.hit_result orelse return;
+
+    const air = BlockState.defaultState(.air);
+
+    // If clicking on a door, toggle it instead of placing
+    const clicked_block = self.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    if (BlockState.isDoor(clicked_block)) {
+        self.toggleDoor(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], clicked_block);
+        return;
+    }
+
+    var block_state = self.hotbar[self.selected_slot];
+    if (block_state == air) return;
+
+    // Double slab: placing a slab on a compatible existing slab merges into a full block
+    if (BlockState.getBlock(block_state) == .oak_slab) {
+        if (slabCanBeReplaced(clicked_block, hit)) {
+            const bx = hit.block_pos[0];
+            const by = hit.block_pos[1];
+            const bz = hit.block_pos[2];
+            const double_slab = BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.double));
+            self.chunk_map.setBlock(bx, by, bz, double_slab);
+            if (BlockState.isOpaque(double_slab)) {
+                const key = WorldState.ChunkKey.fromWorldPos(bx, by, bz);
+                const local_x: usize = @intCast(@mod(bx, @as(i32, WorldState.CHUNK_SIZE)));
+                const local_z: usize = @intCast(@mod(bz, @as(i32, WorldState.CHUNK_SIZE)));
+                self.surface_height_map.updateBlockPlaced(key.cx, key.cz, local_x, local_z, by);
+            }
+            self.markDirtyIncremental(bx, by, bz, clicked_block);
+            self.queueChunkSave(bx, by, bz);
+            self.updateFenceNeighbors(bx, by, bz);
+            self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+            return;
+        }
+    }
+
     const n = hit.direction.normal();
     const px = hit.block_pos[0] + n[0];
     const py = hit.block_pos[1] + n[1];
     const pz = hit.block_pos[2] + n[2];
-    if (WorldState.block_properties.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
-    if (WorldState.block_properties.isSolid(block_type) and blockOverlapsPlayer(px, py, pz, self.entity_pos)) return;
+    if (BlockState.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
+    if (BlockState.isSolid(block_state) and blockOverlapsPlayer(px, py, pz, self.entity_pos)) return;
 
     // Orient stairs based on player yaw, and slabs based on hit face/position
-    block_type = resolveOrientation(block_type, self.camera.yaw, hit);
+    block_state = resolveOrientation(block_state, self.camera.yaw, hit);
+
+    // Fence placement: calculate connections from neighbors
+    if (BlockState.isFence(block_state)) {
+        block_state = BlockState.fenceFromConnections(
+            BlockState.connectsToFence(self.chunk_map.getBlock(px, py, pz - 1)),
+            BlockState.connectsToFence(self.chunk_map.getBlock(px, py, pz + 1)),
+            BlockState.connectsToFence(self.chunk_map.getBlock(px + 1, py, pz)),
+            BlockState.connectsToFence(self.chunk_map.getBlock(px - 1, py, pz)),
+        );
+    }
+
+    // Door placement: need space for both halves
+    if (BlockState.isDoor(block_state)) {
+        // Check that the block above is free
+        const above = self.chunk_map.getBlock(px, py + 1, pz);
+        if (BlockState.isSolid(above)) return;
+        if (BlockState.getBlock(above) != .air and BlockState.getBlock(above) != .water) return;
+
+        // Place bottom half
+        const old_bottom = self.chunk_map.getBlock(px, py, pz);
+        self.chunk_map.setBlock(px, py, pz, block_state);
+        self.markDirtyIncremental(px, py, pz, old_bottom);
+        self.queueChunkSave(px, py, pz);
+
+        // Place top half
+        const top_type = BlockState.doorBottomToTop(block_state);
+        const old_top = self.chunk_map.getBlock(px, py + 1, pz);
+        self.chunk_map.setBlock(px, py + 1, pz, top_type);
+        self.markDirtyIncremental(px, py + 1, pz, old_top);
+        self.queueChunkSave(px, py + 1, pz);
+
+        self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+        return;
+    }
 
     const old_block = self.chunk_map.getBlock(px, py, pz);
-    self.chunk_map.setBlock(px, py, pz, block_type);
+    self.chunk_map.setBlock(px, py, pz, block_state);
     // Update surface height if placing an opaque block
-    if (WorldState.block_properties.isOpaque(block_type)) {
+    if (BlockState.isOpaque(block_state)) {
         const key = WorldState.ChunkKey.fromWorldPos(px, py, pz);
         const local_x: usize = @intCast(@mod(px, @as(i32, WorldState.CHUNK_SIZE)));
         const local_z: usize = @intCast(@mod(pz, @as(i32, WorldState.CHUNK_SIZE)));
@@ -795,31 +1171,32 @@ pub fn placeBlock(self: *GameState) void {
     }
     self.markDirtyIncremental(px, py, pz, old_block);
     self.queueChunkSave(px, py, pz);
+
+    // Update neighboring fences and stairs when placing any block
+    self.updateFenceNeighbors(px, py, pz);
+    self.updateStairNeighbors(px, py, pz);
+
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 }
 
 pub fn pickBlock(self: *GameState) void {
     const hit = self.hit_result orelse return;
-    const raw_type = self.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
-    if (raw_type == .air) return;
+    const raw_state = self.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    if (raw_state == BlockState.defaultState(.air)) return;
 
     // Normalize oriented variants to their canonical form for inventory
-    const block_type: WorldState.BlockType = switch (raw_type) {
-        .oak_slab_top => .oak_slab_bottom,
-        .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => .oak_stairs_south,
-        else => raw_type,
-    };
+    const block_state = BlockState.getCanonicalState(raw_state);
 
     // If already in hotbar, just select that slot
     for (self.hotbar, 0..) |slot_block, i| {
-        if (slot_block == block_type) {
+        if (slot_block == block_state) {
             self.selected_slot = @intCast(i);
             return;
         }
     }
 
     // Otherwise replace the current slot
-    self.hotbar[self.selected_slot] = block_type;
+    self.hotbar[self.selected_slot] = block_state;
 }
 
 fn blockOverlapsPlayer(bx: i32, by: i32, bz: i32, pos: [3]f32) bool {
@@ -1175,12 +1552,12 @@ const testing = std.testing;
 
 fn makeTestGameState() GameState {
     var gs: GameState = undefined;
-    gs.hotbar = .{.grass_block} ** HOTBAR_SIZE;
-    gs.inventory = .{.air} ** INV_SIZE;
-    gs.armor = .{.air} ** ARMOR_SLOTS;
-    gs.equip = .{.air} ** EQUIP_SLOTS;
-    gs.offhand = .air;
-    gs.carried_item = .air;
+    gs.hotbar = .{BlockState.defaultState(.grass_block)} ** HOTBAR_SIZE;
+    gs.inventory = .{BlockState.defaultState(.air)} ** INV_SIZE;
+    gs.armor = .{BlockState.defaultState(.air)} ** ARMOR_SLOTS;
+    gs.equip = .{BlockState.defaultState(.air)} ** EQUIP_SLOTS;
+    gs.offhand = BlockState.defaultState(.air);
+    gs.carried_item = BlockState.defaultState(.air);
     gs.selected_slot = 0;
     return gs;
 }
@@ -1227,88 +1604,102 @@ test "slotPtr: offhand slot 53" {
 }
 
 test "clickSlot: pick up item from hotbar" {
+    const air = BlockState.defaultState(.air);
+    const stone = BlockState.defaultState(.stone);
     var gs = makeTestGameState();
-    gs.hotbar[0] = .stone;
-    gs.carried_item = .air;
+    gs.hotbar[0] = stone;
+    gs.carried_item = air;
 
     gs.clickSlot(0);
 
-    try testing.expectEqual(WorldState.BlockType.air, gs.hotbar[0]);
-    try testing.expectEqual(WorldState.BlockType.stone, gs.carried_item);
+    try testing.expectEqual(air, gs.hotbar[0]);
+    try testing.expectEqual(stone, gs.carried_item);
 }
 
 test "clickSlot: swap carried with slot" {
+    const stone = BlockState.defaultState(.stone);
+    const dirt = BlockState.defaultState(.dirt);
     var gs = makeTestGameState();
-    gs.hotbar[0] = .stone;
-    gs.carried_item = .dirt;
+    gs.hotbar[0] = stone;
+    gs.carried_item = dirt;
 
     gs.clickSlot(0);
 
-    try testing.expectEqual(WorldState.BlockType.dirt, gs.hotbar[0]);
-    try testing.expectEqual(WorldState.BlockType.stone, gs.carried_item);
+    try testing.expectEqual(dirt, gs.hotbar[0]);
+    try testing.expectEqual(stone, gs.carried_item);
 }
 
 test "clickSlot: both empty does nothing" {
+    const air = BlockState.defaultState(.air);
     var gs = makeTestGameState();
-    gs.hotbar[0] = .air;
-    gs.carried_item = .air;
+    gs.hotbar[0] = air;
+    gs.carried_item = air;
 
     gs.clickSlot(0);
 
-    try testing.expectEqual(WorldState.BlockType.air, gs.hotbar[0]);
-    try testing.expectEqual(WorldState.BlockType.air, gs.carried_item);
+    try testing.expectEqual(air, gs.hotbar[0]);
+    try testing.expectEqual(air, gs.carried_item);
 }
 
 test "quickMove: hotbar to inventory" {
+    const air = BlockState.defaultState(.air);
+    const stone = BlockState.defaultState(.stone);
     var gs = makeTestGameState();
-    gs.hotbar[0] = .stone;
-    gs.inventory[0] = .air;
+    gs.hotbar[0] = stone;
+    gs.inventory[0] = air;
 
     gs.quickMove(0);
 
-    try testing.expectEqual(WorldState.BlockType.air, gs.hotbar[0]);
-    try testing.expectEqual(WorldState.BlockType.stone, gs.inventory[0]);
+    try testing.expectEqual(air, gs.hotbar[0]);
+    try testing.expectEqual(stone, gs.inventory[0]);
 }
 
 test "quickMove: inventory to hotbar" {
+    const air = BlockState.defaultState(.air);
+    const stone = BlockState.defaultState(.stone);
+    const dirt = BlockState.defaultState(.dirt);
     var gs = makeTestGameState();
-    gs.hotbar = .{.dirt} ** HOTBAR_SIZE; // fill hotbar except slot 2
-    gs.hotbar[2] = .air;
-    gs.inventory[0] = .stone;
+    gs.hotbar = .{dirt} ** HOTBAR_SIZE; // fill hotbar except slot 2
+    gs.hotbar[2] = air;
+    gs.inventory[0] = stone;
 
     gs.quickMove(HOTBAR_SIZE); // slot 9 = first inventory slot
 
-    try testing.expectEqual(WorldState.BlockType.stone, gs.hotbar[2]);
-    try testing.expectEqual(WorldState.BlockType.air, gs.inventory[0]);
+    try testing.expectEqual(stone, gs.hotbar[2]);
+    try testing.expectEqual(air, gs.inventory[0]);
 }
 
 test "quickMove: no empty target does nothing" {
+    const stone = BlockState.defaultState(.stone);
+    const dirt = BlockState.defaultState(.dirt);
     var gs = makeTestGameState();
-    gs.hotbar[0] = .stone;
-    gs.inventory = .{.dirt} ** INV_SIZE; // all full
+    gs.hotbar[0] = stone;
+    gs.inventory = .{dirt} ** INV_SIZE; // all full
 
     gs.quickMove(0);
 
     // Item stays in place
-    try testing.expectEqual(WorldState.BlockType.stone, gs.hotbar[0]);
+    try testing.expectEqual(stone, gs.hotbar[0]);
 }
 
 test "blockTexIndices: air returns -1" {
-    const tex = blockTexIndices(.air);
+    const tex = blockTexIndices(BlockState.defaultState(.air));
     try testing.expectEqual(@as(i16, -1), tex.top);
     try testing.expectEqual(@as(i16, -1), tex.side);
 }
 
 test "blockTexIndices: oak_log has different top and side" {
-    const tex = blockTexIndices(.oak_log);
+    const tex = blockTexIndices(BlockState.defaultState(.oak_log));
     try testing.expect(tex.top != tex.side);
 }
 
 test "blockShape: slabs and stairs" {
-    try testing.expectEqual(WidgetData.BlockShape.slab_bottom, blockShape(.oak_slab_bottom));
-    try testing.expectEqual(WidgetData.BlockShape.slab_top, blockShape(.oak_slab_top));
-    try testing.expectEqual(WidgetData.BlockShape.stairs, blockShape(.oak_stairs_south));
-    try testing.expectEqual(WidgetData.BlockShape.full, blockShape(.stone));
+    try testing.expectEqual(WidgetData.BlockShape.slab_bottom, blockShape(BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom))));
+    try testing.expectEqual(WidgetData.BlockShape.slab_top, blockShape(BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top))));
+    try testing.expectEqual(WidgetData.BlockShape.stairs, blockShape(BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south))));
+    try testing.expectEqual(WidgetData.BlockShape.torch, blockShape(BlockState.defaultState(.torch)));
+    try testing.expectEqual(WidgetData.BlockShape.ladder, blockShape(BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south))));
+    try testing.expectEqual(WidgetData.BlockShape.full, blockShape(BlockState.defaultState(.stone)));
 }
 
 test "slot boundary constants" {

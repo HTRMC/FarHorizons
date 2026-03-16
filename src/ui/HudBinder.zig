@@ -8,6 +8,8 @@ const ui_renderer_mod = @import("../renderer/vulkan/UiRenderer.zig");
 const UiRenderer = ui_renderer_mod.UiRenderer;
 const SpriteRect = ui_renderer_mod.SpriteRect;
 const GameState = @import("../GameState.zig");
+const WorldState = @import("../world/WorldState.zig");
+const BlockState = WorldState.BlockState;
 
 const log = std.log.scoped(.UI);
 
@@ -72,7 +74,7 @@ pub const HudBinder = struct {
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
                     const block = gs.hotbar[i];
-                    if (block != .air) {
+                    if (block != BlockState.defaultState(.air)) {
                         const c = GameState.blockColor(block);
                         w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                         const tex = GameState.blockTexIndices(block);
@@ -96,9 +98,9 @@ pub const HudBinder = struct {
         if (self.block_name_id != NULL_WIDGET) {
             const selected_block = gs.hotbar[gs.selected_slot];
             if (tree.getWidget(self.block_name_id)) |w| {
-                w.visible = (selected_block != .air);
+                w.visible = (selected_block != BlockState.defaultState(.air));
             }
-            if (selected_block != .air) {
+            if (selected_block != BlockState.defaultState(.air)) {
                 if (tree.getData(self.block_name_id)) |data| {
                     data.label.setText(GameState.blockName(selected_block));
                 }

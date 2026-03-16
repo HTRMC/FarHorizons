@@ -2,6 +2,7 @@ const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const Chunk = WorldState.Chunk;
 const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
+const BlockState = @import("BlockState.zig");
 const Io = std.Io;
 
 pub const ChunkPool = struct {
@@ -36,7 +37,7 @@ pub const ChunkPool = struct {
         if (result) |chunk| return chunk;
 
         const chunk = self.allocator.create(Chunk) catch @panic("ChunkPool: out of memory");
-        chunk.blocks = .{.air} ** BLOCKS_PER_CHUNK;
+        @memset(&chunk.blocks, @as(u16, 0)); // StateId 0 = air
         return chunk;
     }
 

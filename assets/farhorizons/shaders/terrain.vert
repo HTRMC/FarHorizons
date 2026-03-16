@@ -16,6 +16,7 @@ layout(location=1) flat out uint fragTexIndex;
 layout(location=2) flat out uvec4 fragLightPacked;
 layout(location=3) flat out uint fragAoData;
 layout(location=4) flat out vec3 fragNormal;
+layout(location=5) out float fragDist;
 
 void main() {
     uint faceID = gl_VertexIndex >> 2;
@@ -61,4 +62,5 @@ void main() {
     );
 
     fragAoData = face.word1;
+    fragDist = gl_Position.w;
 }

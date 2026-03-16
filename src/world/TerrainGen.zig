@@ -5,7 +5,8 @@ const TreeGen = @import("TreeGen.zig");
 
 const Chunk = WorldState.Chunk;
 const ChunkKey = WorldState.ChunkKey;
-const BlockType = WorldState.BlockType;
+const BlockState = WorldState.BlockState;
+const StateId = WorldState.StateId;
 const CHUNK_SIZE = WorldState.CHUNK_SIZE;
 const CS = CHUNK_SIZE;
 
@@ -64,7 +65,7 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
     ng.selector.fillGrid3D(&selector, gx_start, gy_start, gz_start, SELECTOR_SCALE_XZ, SELECTOR_SCALE_Y, SELECTOR_SCALE_XZ);
 
     // --- Fill chunk ---
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(StateId, 0));
 
     const oy_i32 = origin[1];
 
@@ -150,9 +151,9 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
                 const density = blended - bias;
 
                 if (density > 0.0) {
-                    chunk.blocks[idx] = .stone;
+                    chunk.blocks[idx] = BlockState.defaultState(.stone);
                 } else if (wy <= SEA_LEVEL) {
-                    chunk.blocks[idx] = .water;
+                    chunk.blocks[idx] = BlockState.defaultState(.water);
                 }
             }
         }
@@ -183,7 +184,8 @@ fn surfacePass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
                 const block = chunk.blocks[idx];
                 const wy = oy_i32 + @as(i32, @intCast(by_rev));
 
-                if (block == .air or block == .water) {
+                const blk = BlockState.getBlock(block);
+                if (blk == .air or blk == .water) {
                     depth = 0;
                     continue;
                 }
@@ -197,14 +199,14 @@ fn surfacePass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
     }
 }
 
-fn selectBlock(depth: i32, wy: i32, seed: i32) BlockType {
+fn selectBlock(depth: i32, wy: i32, seed: i32) StateId {
     _ = seed;
     if (depth == 0) {
-        if (wy >= SEA_LEVEL) return .grass_block;
-        return .dirt; // underwater surface
+        if (wy >= SEA_LEVEL) return BlockState.defaultState(.grass_block);
+        return BlockState.defaultState(.dirt); // underwater surface
     }
-    if (depth <= 3) return .dirt;
-    return .stone;
+    if (depth <= 3) return BlockState.defaultState(.dirt);
+    return BlockState.defaultState(.stone);
 }
 
 fn bedrockPass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
@@ -216,11 +218,12 @@ fn bedrockPass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
         for (0..CS) |bz| {
             for (0..CS) |bx| {
                 const idx = WorldState.chunkIndex(bx, by, bz);
-                if (chunk.blocks[idx] != .air and chunk.blocks[idx] != .water) {
+                const bed_blk = BlockState.getBlock(chunk.blocks[idx]);
+                if (bed_blk != .air and bed_blk != .water) {
                     // Random bedrock top boundary (Infdev line 187)
                     const threshold: i32 = -64 + @as(i32, @intCast(rng.bounded(6)));
                     if (wy <= threshold) {
-                        chunk.blocks[idx] = .bedrock;
+                        chunk.blocks[idx] = BlockState.defaultState(.bedrock);
                     }
                 }
             }
@@ -469,9 +472,9 @@ fn carveEllipsoid(
                 if (fdx * fdx + fdy * fdy + fdz * fdz >= 1.0) continue;
 
                 const idx = WorldState.chunkIndex(bx, by, bz);
-                const block = chunk.blocks[idx];
-                if (block != .air and block != .water and block != .bedrock) {
-                    chunk.blocks[idx] = .air;
+                const cave_blk = BlockState.getBlock(chunk.blocks[idx]);
+                if (cave_blk != .air and cave_blk != .water and cave_blk != .bedrock) {
+                    chunk.blocks[idx] = BlockState.defaultState(.air);
                 }
             }
         }
@@ -696,7 +699,7 @@ pub fn generateLodChunk(chunk: *Chunk, key: ChunkKey, seed: u64, voxel_size: u32
     const step_f: f64 = @floatFromInt(Noise.STEP);
 
     // Clear chunk to air
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(StateId, 0));
 
     for (0..CS) |bz| {
         for (0..CS) |bx| {
@@ -731,13 +734,13 @@ pub fn generateLodChunk(chunk: *Chunk, key: ChunkKey, seed: u64, voxel_size: u32
                 const idx = WorldState.chunkIndex(bx, by, bz);
 
                 if (depth >= 4 * vs) {
-                    chunk.blocks[idx] = .stone;
+                    chunk.blocks[idx] = BlockState.defaultState(.stone);
                 } else if (depth >= 1 * vs) {
-                    chunk.blocks[idx] = .dirt;
+                    chunk.blocks[idx] = BlockState.defaultState(.dirt);
                 } else if (depth >= 0) {
-                    chunk.blocks[idx] = if (wy < SEA_LEVEL) .sand else .grass_block;
+                    chunk.blocks[idx] = if (wy < SEA_LEVEL) BlockState.defaultState(.sand) else BlockState.defaultState(.grass_block);
                 } else if (wy <= SEA_LEVEL) {
-                    chunk.blocks[idx] = .water;
+                    chunk.blocks[idx] = BlockState.defaultState(.water);
                 }
                 // else: already air
             }
@@ -764,7 +767,7 @@ test "generateChunk: deterministic output (same seed same blocks)" {
     generateChunk(chunk1, key, seed);
     generateChunk(chunk2, key, seed);
 
-    try testing.expectEqualSlices(BlockType, &chunk1.blocks, &chunk2.blocks);
+    try testing.expectEqualSlices(StateId, &chunk1.blocks, &chunk2.blocks);
 }
 
 test "generateChunk: different seeds produce different chunks" {
@@ -798,8 +801,9 @@ test "generateChunk: surface chunks have stone and air" {
     var has_stone = false;
     var has_air = false;
     for (&chunk.blocks) |b| {
-        if (b == .stone) has_stone = true;
-        if (b == .air) has_air = true;
+        const blk = BlockState.getBlock(b);
+        if (blk == .stone) has_stone = true;
+        if (blk == .air) has_air = true;
     }
     try testing.expect(has_stone);
     try testing.expect(has_air);
@@ -815,7 +819,8 @@ test "generateChunk: deep underground is mostly solid" {
 
     var solid: u32 = 0;
     for (&chunk.blocks) |b| {
-        if (b != .air and b != .water) solid += 1;
+        const blk = BlockState.getBlock(b);
+        if (blk != .air and blk != .water) solid += 1;
     }
     // Should be mostly solid (bedrock + stone), at least 90%
     try testing.expect(solid > WorldState.BLOCKS_PER_CHUNK * 9 / 10);
@@ -852,14 +857,14 @@ test "CaveRng.float: values in [0, 1)" {
 
 test "selectBlock: surface blocks" {
     // At sea level, depth 0 = grass
-    try testing.expectEqual(BlockType.grass_block, selectBlock(0, SEA_LEVEL, 0));
+    try testing.expectEqual(BlockState.defaultState(.grass_block), selectBlock(0, SEA_LEVEL, 0));
     // Below sea level, depth 0 = dirt (underwater)
-    try testing.expectEqual(BlockType.dirt, selectBlock(0, SEA_LEVEL - 1, 0));
+    try testing.expectEqual(BlockState.defaultState(.dirt), selectBlock(0, SEA_LEVEL - 1, 0));
     // Depth 1-3 = dirt
-    try testing.expectEqual(BlockType.dirt, selectBlock(1, SEA_LEVEL, 0));
-    try testing.expectEqual(BlockType.dirt, selectBlock(3, SEA_LEVEL, 0));
+    try testing.expectEqual(BlockState.defaultState(.dirt), selectBlock(1, SEA_LEVEL, 0));
+    try testing.expectEqual(BlockState.defaultState(.dirt), selectBlock(3, SEA_LEVEL, 0));
     // Depth 4+ = stone
-    try testing.expectEqual(BlockType.stone, selectBlock(4, SEA_LEVEL, 0));
+    try testing.expectEqual(BlockState.defaultState(.stone), selectBlock(4, SEA_LEVEL, 0));
 }
 
 // ============================================================

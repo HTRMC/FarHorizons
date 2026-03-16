@@ -307,7 +307,7 @@ pub const IoPipeline = struct {
         defer self.region_cache.releaseRegion(region);
 
         var indices: [BatchSaveData.MAX_BATCH_SIZE]u9 = undefined;
-        var block_ptrs: [BatchSaveData.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.BlockType = undefined;
+        var block_ptrs: [BatchSaveData.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
         for (0..batch.count) |i| {
             indices[i] = batch.indices[i];
             block_ptrs[i] = &batch.chunks[i].blocks;

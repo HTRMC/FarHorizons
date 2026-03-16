@@ -1,7 +1,7 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const ChunkMap = @import("ChunkMap.zig").ChunkMap;
-const block_properties = WorldState.block_properties;
+const BlockState = @import("BlockState.zig");
 const CHUNK_SIZE = WorldState.CHUNK_SIZE;
 
 pub const SurfaceHeightMap = struct {
@@ -56,7 +56,7 @@ pub const SurfaceHeightMap = struct {
                 var y: i32 = CHUNK_SIZE - 1;
                 while (y >= 0) : (y -= 1) {
                     const idx = @as(usize, @intCast(y)) * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
-                    if (block_properties.isOpaque(chunk.blocks[idx])) {
+                    if (BlockState.isOpaque(chunk.blocks[idx])) {
                         const world_y = base_y + y;
                         const col_idx = z * CHUNK_SIZE + x;
                         if (world_y > col[col_idx]) {
@@ -88,7 +88,7 @@ pub const SurfaceHeightMap = struct {
             var y: i32 = CHUNK_SIZE - 1;
             while (y >= 0) : (y -= 1) {
                 const idx = @as(usize, @intCast(y)) * CHUNK_SIZE * CHUNK_SIZE + local_z * CHUNK_SIZE + local_x;
-                if (block_properties.isOpaque(chunk.blocks[idx])) {
+                if (BlockState.isOpaque(chunk.blocks[idx])) {
                     const world_y = base_y + y;
                     if (world_y > col[col_idx]) {
                         col[col_idx] = world_y;
@@ -139,7 +139,7 @@ fn chunkIndex(x: usize, y: usize, z: usize) usize {
 
 fn allocChunk() !*Chunk {
     const chunk = try testing.allocator.create(Chunk);
-    chunk.* = .{ .blocks = .{.air} ** BLOCKS_PER_CHUNK };
+    chunk.* = .{ .blocks = .{BlockState.defaultState(.air)} ** BLOCKS_PER_CHUNK };
     return chunk;
 }
 
@@ -166,7 +166,7 @@ test "single opaque block sets surface height" {
 
     const chunk = try allocChunk();
     defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(5, 10, 7)] = .stone;
+    chunk.blocks[chunkIndex(5, 10, 7)] = BlockState.defaultState(.stone);
 
     const key = WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
     shm.updateFromChunk(key, chunk);
@@ -184,11 +184,11 @@ test "higher chunk overrides lower surface height" {
 
     const chunk_low = try allocChunk();
     defer testing.allocator.destroy(chunk_low);
-    chunk_low.blocks[chunkIndex(3, 5, 3)] = .stone;
+    chunk_low.blocks[chunkIndex(3, 5, 3)] = BlockState.defaultState(.stone);
 
     const chunk_high = try allocChunk();
     defer testing.allocator.destroy(chunk_high);
-    chunk_high.blocks[chunkIndex(3, 20, 3)] = .stone;
+    chunk_high.blocks[chunkIndex(3, 20, 3)] = BlockState.defaultState(.stone);
 
     // Load low chunk first (cy=0, world_y=5)
     shm.updateFromChunk(.{ .cx = 0, .cy = 0, .cz = 0 }, chunk_low);
@@ -206,7 +206,7 @@ test "updateBlockPlaced updates height" {
 
     const chunk = try allocChunk();
     defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(0, 5, 0)] = .stone;
+    chunk.blocks[chunkIndex(0, 5, 0)] = BlockState.defaultState(.stone);
 
     shm.updateFromChunk(.{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
     const col = shm.getHeights(0, 0).?;
@@ -229,8 +229,8 @@ test "rebuildColumnAt rescans after break" {
     defer chunk_map.deinit();
 
     const chunk = try allocChunk();
-    chunk.blocks[chunkIndex(2, 10, 2)] = .stone;
-    chunk.blocks[chunkIndex(2, 5, 2)] = .stone;
+    chunk.blocks[chunkIndex(2, 10, 2)] = BlockState.defaultState(.stone);
+    chunk.blocks[chunkIndex(2, 5, 2)] = BlockState.defaultState(.stone);
 
     const key = WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
     chunk_map.put(key, chunk);
@@ -240,7 +240,7 @@ test "rebuildColumnAt rescans after break" {
     try testing.expectEqual(@as(i32, 10), col[2 * CHUNK_SIZE + 2]);
 
     // Simulate breaking the top block
-    chunk.blocks[chunkIndex(2, 10, 2)] = .air;
+    chunk.blocks[chunkIndex(2, 10, 2)] = BlockState.defaultState(.air);
     shm.rebuildColumnAt(0, 0, 2, 2, &chunk_map);
 
     // Should now show the lower block
@@ -253,7 +253,7 @@ test "negative chunk cy produces correct world heights" {
 
     const chunk = try allocChunk();
     defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(0, 0, 0)] = .stone;
+    chunk.blocks[chunkIndex(0, 0, 0)] = BlockState.defaultState(.stone);
 
     // cy = -1, so world_y = -1 * 32 + 0 = -32
     shm.updateFromChunk(.{ .cx = 0, .cy = -1, .cz = 0 }, chunk);

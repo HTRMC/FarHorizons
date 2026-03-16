@@ -997,14 +997,16 @@ pub fn main() !void {
             // Sync hand renderer with held block
             const hr = &vk_impl.render_state.hand_renderer;
             if (game_state) |*gs| {
-                const held = gs.hotbar[gs.selected_slot];
-                const tex = GameState.blockTexIndices(held);
-                hr.block_tex_top = tex.top;
-                hr.block_tex_side = tex.side;
+                hr.updateHeldBlock(gs.hotbar[gs.selected_slot]);
             } else {
-                hr.block_tex_top = -1;
-                hr.block_tex_side = -1;
+                hr.updateHeldBlock(WorldState.BlockState.defaultState(.air));
             }
+        }
+
+        // Tick animated textures (Minecraft-style 20Hz frame advancement)
+        {
+            const vk_impl: *VulkanRenderer = @ptrCast(@alignCast(renderer.impl));
+            vk_impl.render_state.world_renderer.texture_manager.tickAnimations(delta_time);
         }
 
         ui_manager.tickCursorBlink(delta_time);

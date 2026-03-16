@@ -1,0 +1,47 @@
+{
+    "textures": {
+        "all": "oak_planks"
+    },
+    "elements": [
+        {
+            "comment": "Bottom slab (full width, half height)",
+            "from": [0, 0, 0],
+            "to": [16, 8, 16],
+            "faces": {
+                "down":  { "uv": [0, 0, 16, 16], "texture": "#all", "cullface": "down" },
+                "south": { "uv": [0, 8, 16, 16], "texture": "#all", "cullface": "south" },
+                "north": { "uv": [0, 8, 16, 16], "texture": "#all", "cullface": "north" },
+                "west":  { "uv": [0, 8, 16, 16], "texture": "#all", "cullface": "west" },
+                "east":  { "uv": [0, 8, 16, 16], "texture": "#all", "cullface": "east" }
+            }
+        },
+        {
+            "comment": "Step top surfaces (3 quarters exposed)",
+            "from": [0, 8, 8],
+            "to": [16, 8, 16],
+            "faces": {
+                "up": { "uv": [0, 8, 16, 16], "texture": "#all" }
+            }
+        },
+        {
+            "comment": "Step top surface - back left quarter",
+            "from": [0, 8, 0],
+            "to": [8, 8, 8],
+            "faces": {
+                "up": { "uv": [0, 0, 8, 8], "texture": "#all" }
+            }
+        },
+        {
+            "comment": "Upper corner (one quarter: x=8..16, z=0..8)",
+            "from": [8, 8, 0],
+            "to": [16, 16, 8],
+            "faces": {
+                "up":    { "uv": [8, 0, 16, 8], "texture": "#all", "cullface": "up" },
+                "north": { "uv": [0, 0, 8, 8],  "texture": "#all", "cullface": "north" },
+                "east":  { "uv": [0, 0, 8, 8],  "texture": "#all", "cullface": "east" },
+                "south": { "uv": [8, 0, 16, 8], "texture": "#all" },
+                "west":  { "uv": [0, 0, 8, 8],  "texture": "#all" }
+            }
+        }
+    ]
+}

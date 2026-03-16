@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const glfw = @import("glfw.zig");
 const vk = @import("volk.zig");
 const tracy = @import("tracy.zig");
+const stb_image = @import("stb_image.zig");
 
 const win32 = if (builtin.os.tag == .windows) struct {
     const HWND = *opaque {};
@@ -39,7 +40,29 @@ const win32 = if (builtin.os.tag == .windows) struct {
     }
 } else struct {};
 
+const app_config = @import("../app_config.zig");
+
 var glfw_init_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+
+fn setIcon(handle: *glfw.Window) void {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const assets_path = app_config.getAssetsPath(allocator) catch return;
+    defer allocator.free(assets_path);
+
+    const icon_path = std.fmt.allocPrintSentinel(allocator, "{s}" ++ std.fs.path.sep_str ++ "icon.png", .{assets_path}, 0) catch return;
+    defer allocator.free(icon_path);
+
+    var width: c_int = 0;
+    var height: c_int = 0;
+    var channels: c_int = 0;
+    const pixels = stb_image.load(icon_path, &width, &height, &channels, 4) orelse return;
+    defer stb_image.free(@ptrCast(pixels));
+
+    glfw.setWindowIcon(handle, width, height, pixels);
+}
 
 pub const Window = struct {
     handle: *glfw.Window,
@@ -82,6 +105,9 @@ pub const Window = struct {
         if (comptime builtin.os.tag == .windows) {
             win32.applySystemTheme(handle);
         }
+
+        // Set window icon from assets
+        setIcon(handle);
 
         return Window{ .handle = handle };
     }

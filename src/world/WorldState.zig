@@ -6,12 +6,16 @@ const LightMapMod = @import("LightMap.zig");
 const LightMap = LightMapMod.LightMap;
 const LightBorderSnapshot = LightMapMod.LightBorderSnapshot;
 const tracy = @import("../platform/tracy.zig");
+pub const BlockModelLoader = @import("BlockModelLoader.zig");
+pub const BlockModelRegistry = BlockModelLoader.BlockModelRegistry;
+pub const BlockState = @import("BlockState.zig");
 
 pub const CHUNK_SIZE = 32;
 pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 pub const MAX_FACES_PER_CHUNK = BLOCKS_PER_CHUNK * 6;
 
-pub const face_vertices = [6][4]struct { px: f32, py: f32, pz: f32, u: f32, v: f32 }{
+pub const FaceVertex = struct { px: f32, py: f32, pz: f32, u: f32, v: f32 };
+pub const face_vertices = [6][4]FaceVertex{
     .{
         .{ .px = 0.0, .py = 0.0, .pz = 1.0, .u = 0.0, .v = 1.0 },
         .{ .px = 1.0, .py = 0.0, .pz = 1.0, .u = 1.0, .v = 1.0 },
@@ -61,8 +65,24 @@ pub const face_neighbor_offsets = [6][3]i32{
     .{ 0, -1, 0 },
 };
 
+// --- Water face models (same as cube faces but top at 14/16) ---
+// Models 6-11 mirror faces 0-5 with py clamped to WATER_HEIGHT.
+pub const WATER_HEIGHT: f32 = 14.0 / 16.0;
+pub const water_face_vertices: [6][4]FaceVertex = blk: {
+    var result = face_vertices;
+    for (&result) |*face| {
+        for (face) |*vert| {
+            if (vert.py == 1.0) vert.py = WATER_HEIGHT;
+        }
+    }
+    break :blk result;
+};
+
 // --- Extra quad models for shaped blocks (slabs, stairs) ---
 // Models 0-5 are standard full-cube faces from face_vertices.
+// Models 6-11 are water faces from water_face_vertices.
+pub const WATER_MODEL_BASE: u9 = 6;
+pub const EXTRA_MODEL_BASE: u32 = 12;
 // Models 6+ are partial quads for shaped blocks.
 pub const ExtraQuadModel = struct {
     corners: [4][3]f32,
@@ -75,385 +95,92 @@ pub const ShapeFace = struct {
     model_index: u9, // index into combined model array (0-5 = standard, 6+ = extra)
     face_bucket: u3, // which direction bucket (0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y)
     always_emit: bool, // true for internal faces (slab top at y=0.5, step risers)
+    face_bitmap: u16, // 4x4 bitmap of THIS quad's coverage area on the face boundary
 };
 
-// Helper to build a quad with 4 corners, UVs, and a normal
-fn quad(c0: [3]f32, c1: [3]f32, c2: [3]f32, c3: [3]f32, uv0: [2]f32, uv1: [2]f32, uv2: [2]f32, uv3: [2]f32, normal: [3]f32) ExtraQuadModel {
-    return .{ .corners = .{ c0, c1, c2, c3 }, .uvs = .{ uv0, uv1, uv2, uv3 }, .normal = normal };
+// --- Model registry (loaded at runtime from JSON) ---
+var registry: ?*const BlockModelRegistry = null;
+
+pub fn setRegistry(reg: *const BlockModelRegistry) void {
+    registry = reg;
 }
 
-pub const EXTRA_MODEL_COUNT = 30;
+pub fn getRegistry() *const BlockModelRegistry {
+    return registry.?;
+}
 
-// Bottom slab: models 6-10
-// 6: slab top (+Y at y=0.5)
-// 7: slab +Z side (y: 0→0.5)
-// 8: slab -Z side (y: 0→0.5)
-// 9: slab -X side (y: 0→0.5)
-// 10: slab +X side (y: 0→0.5)
-//
-// Top slab: models 11-15
-// 11: slab bottom (-Y at y=0.5)
-// 12: slab +Z side (y: 0.5→1)
-// 13: slab -Z side (y: 0.5→1)
-// 14: slab -X side (y: 0.5→1)
-// 15: slab +X side (y: 0.5→1)
-//
-// Stairs south (step toward +Z, back at -Z): models 16-20
-// 16: top back (+Y at y=1, z: 0→0.5)
-// 17: step top (+Y at y=0.5, z: 0.5→1)
-// 18: step riser (+Z at z=0.5, y: 0.5→1)
-// 19: left upper back (-X, z: 0→0.5, y: 0.5→1)
-// 20: right upper back (+X, z: 0→0.5, y: 0.5→1)
-//
-// Stairs north (step toward -Z, back at +Z): models 21-25
-// Stairs east (step toward +X, back at -X): models 26-30
-// Stairs west (step toward -X, back at +X): models 31-35
+pub fn totalModelCount() u32 {
+    return getRegistry().totalModelCount();
+}
 
-pub const extra_quad_models = [EXTRA_MODEL_COUNT]ExtraQuadModel{
-    // --- Bottom slab models (6-10) ---
-    // 6: slab top (+Y at y=0.5)
-    quad(.{ 0, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 1, 0 }),
-    // 7: slab +Z side half-height (y: 0→0.5)
-    quad(.{ 0, 0, 1 }, .{ 1, 0, 1 }, .{ 1, 0.5, 1 }, .{ 0, 0.5, 1 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, 1 }),
-    // 8: slab -Z side half-height (y: 0→0.5)
-    quad(.{ 1, 0, 0 }, .{ 0, 0, 0 }, .{ 0, 0.5, 0 }, .{ 1, 0.5, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, -1 }),
-    // 9: slab -X side half-height (y: 0→0.5)
-    quad(.{ 0, 0, 0 }, .{ 0, 0, 1 }, .{ 0, 0.5, 1 }, .{ 0, 0.5, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ -1, 0, 0 }),
-    // 10: slab +X side half-height (y: 0→0.5)
-    quad(.{ 1, 0, 1 }, .{ 1, 0, 0 }, .{ 1, 0.5, 0 }, .{ 1, 0.5, 1 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 1, 0, 0 }),
-
-    // --- Top slab models (11-15) ---
-    // 11: slab bottom (-Y at y=0.5)
-    quad(.{ 0, 0.5, 0 }, .{ 1, 0.5, 0 }, .{ 1, 0.5, 1 }, .{ 0, 0.5, 1 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0, 0 }, .{ 0, -1, 0 }),
-    // 12: slab +Z side upper half (y: 0.5→1)
-    quad(.{ 0, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 1, 1 }, .{ 0, 1, 1 }, .{ 0, 0.5 }, .{ 1, 0.5 }, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 0, 1 }),
-    // 13: slab -Z side upper half (y: 0.5→1)
-    quad(.{ 1, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1, 0 }, .{ 1, 1, 0 }, .{ 0, 0.5 }, .{ 1, 0.5 }, .{ 1, 0 }, .{ 0, 0 }, .{ 0, 0, -1 }),
-    // 14: slab -X side upper half (y: 0.5→1)
-    quad(.{ 0, 0.5, 0 }, .{ 0, 0.5, 1 }, .{ 0, 1, 1 }, .{ 0, 1, 0 }, .{ 0, 0.5 }, .{ 1, 0.5 }, .{ 1, 0 }, .{ 0, 0 }, .{ -1, 0, 0 }),
-    // 15: slab +X side upper half (y: 0.5→1)
-    quad(.{ 1, 0.5, 1 }, .{ 1, 0.5, 0 }, .{ 1, 1, 0 }, .{ 1, 1, 1 }, .{ 0, 0.5 }, .{ 1, 0.5 }, .{ 1, 0 }, .{ 0, 0 }, .{ 1, 0, 0 }),
-
-    // --- Stairs south models (step toward +Z, back at -Z) (16-20) ---
-    // 16: top back (+Y at y=1, z: 0→0.5) — half-depth top
-    quad(.{ 0, 1, 0.5 }, .{ 1, 1, 0.5 }, .{ 1, 1, 0 }, .{ 0, 1, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 1, 0 }),
-    // 17: step top (+Y at y=0.5, z: 0.5→1) — half-depth step
-    quad(.{ 0, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 0.5, 0.5 }, .{ 0, 0.5, 0.5 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 1, 0 }),
-    // 18: step riser (+Z at z=0.5, y: 0.5→1) — inner vertical face
-    quad(.{ 0, 0.5, 0.5 }, .{ 1, 0.5, 0.5 }, .{ 1, 1, 0.5 }, .{ 0, 1, 0.5 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, 1 }),
-    // 19: left upper back (-X, z: 0→0.5, y: 0.5→1)
-    quad(.{ 0, 0.5, 0 }, .{ 0, 0.5, 0.5 }, .{ 0, 1, 0.5 }, .{ 0, 1, 0 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 }, .{ 0, 0.5 }, .{ -1, 0, 0 }),
-    // 20: right upper back (+X, z: 0→0.5, y: 0.5→1)
-    quad(.{ 1, 0.5, 0.5 }, .{ 1, 0.5, 0 }, .{ 1, 1, 0 }, .{ 1, 1, 0.5 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 }, .{ 0, 0.5 }, .{ 1, 0, 0 }),
-
-    // --- Stairs north models (step toward -Z, back at +Z) (21-25) ---
-    // 21: top back (+Y at y=1, z: 0.5→1)
-    quad(.{ 0, 1, 1 }, .{ 1, 1, 1 }, .{ 1, 1, 0.5 }, .{ 0, 1, 0.5 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 1, 0 }),
-    // 22: step top (+Y at y=0.5, z: 0→0.5)
-    quad(.{ 0, 0.5, 0.5 }, .{ 1, 0.5, 0.5 }, .{ 1, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 1, 0 }),
-    // 23: step riser (-Z at z=0.5, y: 0.5→1)
-    quad(.{ 1, 0.5, 0.5 }, .{ 0, 0.5, 0.5 }, .{ 0, 1, 0.5 }, .{ 1, 1, 0.5 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, -1 }),
-    // 24: left upper back (-X, z: 0.5→1, y: 0.5→1)
-    quad(.{ 0, 0.5, 0.5 }, .{ 0, 0.5, 1 }, .{ 0, 1, 1 }, .{ 0, 1, 0.5 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0.5, 0.5 }, .{ -1, 0, 0 }),
-    // 25: right upper back (+X, z: 0.5→1, y: 0.5→1)
-    quad(.{ 1, 0.5, 1 }, .{ 1, 0.5, 0.5 }, .{ 1, 1, 0.5 }, .{ 1, 1, 1 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0.5, 0.5 }, .{ 1, 0, 0 }),
-
-    // --- Stairs east models (step toward +X, back at -X) (26-30) ---
-    // 26: top back (+Y at y=1, x: 0→0.5)
-    quad(.{ 0, 1, 1 }, .{ 0.5, 1, 1 }, .{ 0.5, 1, 0 }, .{ 0, 1, 0 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0 }, .{ 0, 0 }, .{ 0, 1, 0 }),
-    // 27: step top (+Y at y=0.5, x: 0.5→1)
-    quad(.{ 0.5, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 0.5, 0 }, .{ 0.5, 0.5, 0 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0.5, 0 }, .{ 0, 1, 0 }),
-    // 28: step riser (+X at x=0.5, y: 0.5→1)
-    quad(.{ 0.5, 0.5, 1 }, .{ 0.5, 0.5, 0 }, .{ 0.5, 1, 0 }, .{ 0.5, 1, 1 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ 1, 0, 0 }),
-    // 29: front upper back (-Z, x: 0→0.5, y: 0.5→1)
-    quad(.{ 0.5, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1, 0 }, .{ 0.5, 1, 0 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, -1 }),
-    // 30: back upper back (+Z, x: 0→0.5, y: 0.5→1)
-    quad(.{ 0, 0.5, 1 }, .{ 0.5, 0.5, 1 }, .{ 0.5, 1, 1 }, .{ 0, 1, 1 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0.5 }, .{ 0, 0.5 }, .{ 0, 0, 1 }),
-
-    // --- Stairs west models (step toward -X, back at +X) (31-35) ---
-    // 31: top back (+Y at y=1, x: 0.5→1)
-    quad(.{ 0.5, 1, 1 }, .{ 1, 1, 1 }, .{ 1, 1, 0 }, .{ 0.5, 1, 0 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0 }, .{ 0.5, 0 }, .{ 0, 1, 0 }),
-    // 32: step top (+Y at y=0.5, x: 0→0.5)
-    quad(.{ 0, 0.5, 1 }, .{ 0.5, 0.5, 1 }, .{ 0.5, 0.5, 0 }, .{ 0, 0.5, 0 }, .{ 0, 1 }, .{ 0.5, 1 }, .{ 0.5, 0 }, .{ 0, 0 }, .{ 0, 1, 0 }),
-    // 33: step riser (-X at x=0.5, y: 0.5→1)
-    quad(.{ 0.5, 0.5, 0 }, .{ 0.5, 0.5, 1 }, .{ 0.5, 1, 1 }, .{ 0.5, 1, 0 }, .{ 0, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0, 0.5 }, .{ -1, 0, 0 }),
-    // 34: front upper back (-Z, x: 0.5→1, y: 0.5→1)
-    quad(.{ 1, 0.5, 0 }, .{ 0.5, 0.5, 0 }, .{ 0.5, 1, 0 }, .{ 1, 1, 0 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0.5, 0.5 }, .{ 0, 0, -1 }),
-    // 35: back upper back (+Z, x: 0.5→1, y: 0.5→1)
-    quad(.{ 0.5, 0.5, 1 }, .{ 1, 0.5, 1 }, .{ 1, 1, 1 }, .{ 0.5, 1, 1 }, .{ 0.5, 1 }, .{ 1, 1 }, .{ 1, 0.5 }, .{ 0.5, 0.5 }, .{ 0, 0, 1 }),
-};
-
-pub const TOTAL_MODEL_COUNT = 6 + EXTRA_MODEL_COUNT;
-
-/// Get the face list for a shaped block.
+/// Get the face list for a shaped block by StateId.
 /// Returns slice of ShapeFace describing all quads to emit.
-pub fn getShapeFaces(block: BlockType) []const ShapeFace {
-    return switch (block) {
-        .oak_slab_bottom => &bottom_slab_faces,
-        .oak_slab_top => &top_slab_faces,
-        .oak_stairs_south => &stairs_south_faces,
-        .oak_stairs_north => &stairs_north_faces,
-        .oak_stairs_east => &stairs_east_faces,
-        .oak_stairs_west => &stairs_west_faces,
-        else => &.{},
-    };
+pub fn getShapeFaces(state: BlockState.StateId) []const ShapeFace {
+    return getRegistry().state_shape_faces[state];
 }
 
-const bottom_slab_faces = [_]ShapeFace{
-    .{ .model_index = 6, .face_bucket = 4, .always_emit = true }, // top at y=0.5 (always visible)
-    .{ .model_index = 5, .face_bucket = 5, .always_emit = false }, // bottom (standard -Y)
-    .{ .model_index = 7, .face_bucket = 0, .always_emit = false }, // +Z half-height
-    .{ .model_index = 8, .face_bucket = 1, .always_emit = false }, // -Z half-height
-    .{ .model_index = 9, .face_bucket = 2, .always_emit = false }, // -X half-height
-    .{ .model_index = 10, .face_bucket = 3, .always_emit = false }, // +X half-height
-};
+/// Get per-face texture indices for a shaped block by StateId.
+pub fn getShapedTexIndices(state: BlockState.StateId) []const u8 {
+    return getRegistry().state_face_tex_indices[state];
+}
 
-const top_slab_faces = [_]ShapeFace{
-    .{ .model_index = 4, .face_bucket = 4, .always_emit = false }, // top (standard +Y)
-    .{ .model_index = 11, .face_bucket = 5, .always_emit = true }, // bottom at y=0.5 (always visible)
-    .{ .model_index = 12, .face_bucket = 0, .always_emit = false }, // +Z upper half
-    .{ .model_index = 13, .face_bucket = 1, .always_emit = false }, // -Z upper half
-    .{ .model_index = 14, .face_bucket = 2, .always_emit = false }, // -X upper half
-    .{ .model_index = 15, .face_bucket = 3, .always_emit = false }, // +X upper half
-};
+/// Get the 4x4 occlusion bitmap for a block on the given face.
+/// Full opaque blocks = 0xFFFF. Solid shaped blocks use registry bitmaps.
+/// Transparent/non-solid blocks = 0 (don't occlude).
+pub fn getOcclusionBitmap(state: StateId, face: usize) u16 {
+    if (state == 0) return 0; // air
+    if (BlockState.isOpaque(state)) return 0xFFFF;
+    if (BlockState.isSolidShaped(state)) {
+        if (registry) |reg| {
+            return reg.state_face_bitmaps[state][face];
+        }
+        return 0;
+    }
+    return 0;
+}
 
-// South stair: step faces +Z, back wall at -Z
-// Lower half = full slab, upper half = back portion (z: 0→0.5)
-const stairs_south_faces = [_]ShapeFace{
-    // Bottom slab portion
-    .{ .model_index = 5, .face_bucket = 5, .always_emit = false }, // bottom -Y
-    .{ .model_index = 7, .face_bucket = 0, .always_emit = false }, // +Z front half-height
-    .{ .model_index = 9, .face_bucket = 2, .always_emit = false }, // -X lower half
-    .{ .model_index = 10, .face_bucket = 3, .always_emit = false }, // +X lower half
-    // Upper back portion
-    .{ .model_index = 1, .face_bucket = 1, .always_emit = false }, // -Z back full-height
-    .{ .model_index = 16, .face_bucket = 4, .always_emit = false }, // top back at y=1
-    .{ .model_index = 17, .face_bucket = 4, .always_emit = true }, // step top at y=0.5 (internal)
-    .{ .model_index = 18, .face_bucket = 0, .always_emit = true }, // step riser (internal)
-    .{ .model_index = 19, .face_bucket = 2, .always_emit = false }, // -X upper back
-    .{ .model_index = 20, .face_bucket = 3, .always_emit = false }, // +X upper back
-};
+/// Minecraft-style VoxelShape face culling: should this block's face be culled
+/// given the neighbor block on that side?
+/// Compares 4x4 bitmaps: cull if the neighbor covers every cell this block exposes.
+/// face: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
+pub fn shouldCullFace(state: StateId, face: usize, neighbor: StateId) bool {
+    const neighbor_bmp = getOcclusionBitmap(neighbor, oppositeFace(face));
+    if (neighbor_bmp == 0) return false;
+    if (neighbor_bmp == 0xFFFF) return true;
+    const this_bmp = getOcclusionBitmap(state, face);
+    if (this_bmp == 0) return false;
+    return (this_bmp & ~neighbor_bmp) == 0;
+}
 
-const stairs_north_faces = [_]ShapeFace{
-    .{ .model_index = 5, .face_bucket = 5, .always_emit = false },
-    .{ .model_index = 8, .face_bucket = 1, .always_emit = false }, // -Z front half-height
-    .{ .model_index = 9, .face_bucket = 2, .always_emit = false },
-    .{ .model_index = 10, .face_bucket = 3, .always_emit = false },
-    .{ .model_index = 0, .face_bucket = 0, .always_emit = false }, // +Z back full-height
-    .{ .model_index = 21, .face_bucket = 4, .always_emit = false },
-    .{ .model_index = 22, .face_bucket = 4, .always_emit = true },
-    .{ .model_index = 23, .face_bucket = 1, .always_emit = true },
-    .{ .model_index = 24, .face_bucket = 2, .always_emit = false },
-    .{ .model_index = 25, .face_bucket = 3, .always_emit = false },
-};
+/// Per-quad face culling for shaped blocks: checks if the neighbor covers
+/// this individual quad's area (using the quad's own face_bitmap).
+pub fn shouldCullShapeFace(sf: ShapeFace, neighbor: StateId) bool {
+    const neighbor_bmp = getOcclusionBitmap(neighbor, oppositeFace(sf.face_bucket));
+    if (neighbor_bmp == 0) return false;
+    if (neighbor_bmp == 0xFFFF) return true;
+    if (sf.face_bitmap == 0) return false;
+    return (sf.face_bitmap & ~neighbor_bmp) == 0;
+}
 
-const stairs_east_faces = [_]ShapeFace{
-    .{ .model_index = 5, .face_bucket = 5, .always_emit = false },
-    .{ .model_index = 10, .face_bucket = 3, .always_emit = false }, // +X front half-height
-    .{ .model_index = 7, .face_bucket = 0, .always_emit = false }, // +Z lower half
-    .{ .model_index = 8, .face_bucket = 1, .always_emit = false }, // -Z lower half
-    .{ .model_index = 2, .face_bucket = 2, .always_emit = false }, // -X back full-height
-    .{ .model_index = 26, .face_bucket = 4, .always_emit = false },
-    .{ .model_index = 27, .face_bucket = 4, .always_emit = true },
-    .{ .model_index = 28, .face_bucket = 3, .always_emit = true },
-    .{ .model_index = 29, .face_bucket = 1, .always_emit = false },
-    .{ .model_index = 30, .face_bucket = 0, .always_emit = false },
-};
-
-const stairs_west_faces = [_]ShapeFace{
-    .{ .model_index = 5, .face_bucket = 5, .always_emit = false },
-    .{ .model_index = 9, .face_bucket = 2, .always_emit = false }, // -X front half-height
-    .{ .model_index = 7, .face_bucket = 0, .always_emit = false }, // +Z lower half
-    .{ .model_index = 8, .face_bucket = 1, .always_emit = false }, // -Z lower half
-    .{ .model_index = 3, .face_bucket = 3, .always_emit = false }, // +X back full-height
-    .{ .model_index = 31, .face_bucket = 4, .always_emit = false },
-    .{ .model_index = 32, .face_bucket = 4, .always_emit = true },
-    .{ .model_index = 33, .face_bucket = 2, .always_emit = true },
-    .{ .model_index = 34, .face_bucket = 1, .always_emit = false },
-    .{ .model_index = 35, .face_bucket = 0, .always_emit = false },
-};
+/// Opposite face direction: 0<->1, 2<->3, 4<->5
+pub fn oppositeFace(face: usize) usize {
+    return face ^ 1;
+}
 
 pub const WorldType = enum(u8) {
     normal,
     debug,
 };
 
-pub const LAYER_COUNT = 3;
-pub const RenderLayer = enum(u2) { solid, cutout, translucent };
-
-pub const BlockType = enum(u8) {
-    air,
-    glass,
-    grass_block,
-    dirt,
-    stone,
-    glowstone,
-    sand,
-    snow,
-    water,
-    gravel,
-    cobblestone,
-    oak_log,
-    oak_planks,
-    bricks,
-    bedrock,
-    gold_ore,
-    iron_ore,
-    coal_ore,
-    diamond_ore,
-    sponge,
-    pumice,
-    wool,
-    gold_block,
-    iron_block,
-    diamond_block,
-    bookshelf,
-    obsidian,
-    oak_leaves,
-    oak_slab_bottom,
-    oak_slab_top,
-    oak_stairs_south,
-    oak_stairs_north,
-    oak_stairs_east,
-    oak_stairs_west,
-
-    pub fn isShapedBlock(self: BlockType) bool {
-        return switch (self) {
-            .oak_slab_bottom, .oak_slab_top,
-            .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-            => true,
-            else => false,
-        };
-    }
-};
-
-pub const block_properties = struct {
-    // Comptime lookup tables — single array index instead of switch branch table.
-    const BLOCK_COUNT = std.meta.fields(BlockType).len;
-
-    const opaque_lut = blk: {
-        var lut: [BLOCK_COUNT]bool = undefined;
-        for (0..BLOCK_COUNT) |i| {
-            const b: BlockType = @enumFromInt(i);
-            lut[i] = switch (b) {
-                .air, .glass, .water, .oak_leaves,
-                .oak_slab_bottom, .oak_slab_top,
-                .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-                => false,
-                .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
-                .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
-                .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
-                .sponge, .pumice, .wool, .gold_block, .iron_block,
-                .diamond_block, .bookshelf, .obsidian,
-                => true,
-            };
-        }
-        break :blk lut;
-    };
-
-    const culls_self_lut = blk: {
-        var lut: [BLOCK_COUNT]bool = undefined;
-        for (0..BLOCK_COUNT) |i| {
-            const b: BlockType = @enumFromInt(i);
-            lut[i] = switch (b) {
-                .air => false,
-                .glass, .water => true,
-                .oak_leaves => false,
-                .oak_slab_bottom, .oak_slab_top,
-                .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-                => false,
-                .grass_block, .dirt, .stone, .glowstone, .sand, .snow, .gravel,
-                .cobblestone, .oak_log, .oak_planks, .bricks, .bedrock,
-                .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
-                .sponge, .pumice, .wool, .gold_block, .iron_block,
-                .diamond_block, .bookshelf, .obsidian,
-                => true,
-            };
-        }
-        break :blk lut;
-    };
-
-    const render_layer_lut = blk: {
-        var lut: [BLOCK_COUNT]RenderLayer = undefined;
-        for (0..BLOCK_COUNT) |i| {
-            const b: BlockType = @enumFromInt(i);
-            lut[i] = switch (b) {
-                .glass, .water => .translucent,
-                .oak_leaves => .cutout,
-                else => .solid,
-            };
-        }
-        break :blk lut;
-    };
-
-    const tex_index_lut = blk: {
-        var lut: [BLOCK_COUNT]u8 = undefined;
-        for (0..BLOCK_COUNT) |i| {
-            const b: BlockType = @enumFromInt(i);
-            lut[i] = switch (b) {
-                .air => 0,
-                .glass => 0,
-                .grass_block => 1,
-                .dirt => 2,
-                .stone => 3,
-                .glowstone => 4,
-                .sand => 5,
-                .snow => 6,
-                .water => 7,
-                .gravel => 8,
-                .cobblestone => 9,
-                .oak_log => 10,
-                .oak_planks => 11,
-                .bricks => 12,
-                .bedrock => 13,
-                .gold_ore => 14,
-                .iron_ore => 15,
-                .coal_ore => 16,
-                .diamond_ore => 17,
-                .sponge => 18,
-                .pumice => 19,
-                .wool => 20,
-                .gold_block => 21,
-                .iron_block => 22,
-                .diamond_block => 23,
-                .bookshelf => 24,
-                .obsidian => 25,
-                .oak_leaves => 26,
-                .oak_slab_bottom, .oak_slab_top,
-                .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west,
-                => 11,
-            };
-        }
-        break :blk lut;
-    };
-
-    pub inline fn isOpaque(block: BlockType) bool {
-        return opaque_lut[@intFromEnum(block)];
-    }
-    pub inline fn cullsSelf(block: BlockType) bool {
-        return culls_self_lut[@intFromEnum(block)];
-    }
-    pub fn isSolid(block: BlockType) bool {
-        return block != .air and block != .water;
-    }
-    pub inline fn renderLayer(block: BlockType) RenderLayer {
-        return render_layer_lut[@intFromEnum(block)];
-    }
-    pub inline fn texIndex(block: BlockType) u8 {
-        return tex_index_lut[@intFromEnum(block)];
-    }
-    pub fn emittedLight(block: BlockType) [3]u8 {
-        return switch (block) {
-            .glowstone => .{ 255, 200, 100 },
-            else => .{ 0, 0, 0 },
-        };
-    }
-};
+pub const LAYER_COUNT = @import("BlockTypes.zig").LAYER_COUNT;
+pub const RenderLayer = @import("BlockTypes.zig").RenderLayer;
 
 // --- Core types ---
 
+pub const StateId = BlockState.StateId;
+
 pub const Chunk = struct {
-    blocks: [BLOCKS_PER_CHUNK]BlockType,
+    blocks: [BLOCKS_PER_CHUNK]StateId,
 };
 
 pub const ChunkKey = struct {
@@ -473,7 +200,6 @@ pub const ChunkKey = struct {
         };
     }
 
-    /// World-space origin of this chunk (block coordinates of corner 0,0,0).
     pub fn position(self: ChunkKey) [3]i32 {
         return .{
             self.cx * CHUNK_SIZE,
@@ -482,7 +208,6 @@ pub const ChunkKey = struct {
         };
     }
 
-    /// World-space origin scaled by voxel size (for GPU chunk data).
     pub fn positionScaled(self: ChunkKey, voxel_size: u32) [3]i32 {
         const vs: i32 = @intCast(voxel_size);
         return .{
@@ -500,7 +225,6 @@ pub const ChunkMeshResult = struct {
     lights: []LightEntry,
     light_count: u32,
 
-    /// Sum face counts across all layers for each normal direction.
     pub fn totalFaceCounts(self: ChunkMeshResult) [6]u32 {
         var out: [6]u32 = .{ 0, 0, 0, 0, 0, 0 };
         for (0..LAYER_COUNT) |l| {
@@ -530,45 +254,41 @@ pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
 
 // --- Terrain generation ---
 
-/// Generate flat terrain into a chunk based on its key.
-/// Grass at wy=0, dirt at wy=-1..-2, stone at wy=-3..-7, air elsewhere.
 pub fn generateFlatChunk(chunk: *Chunk, key: ChunkKey) void {
-    chunk.blocks = .{.air} ** BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, BlockState.defaultState(.air));
 
     for (0..CHUNK_SIZE) |by| {
         const wy: i32 = key.cy * CHUNK_SIZE + @as(i32, @intCast(by));
 
-        const block_type: BlockType = if (wy == 0)
-            .grass_block
+        const state: StateId = if (wy == 0)
+            BlockState.defaultState(.grass_block)
         else if (wy >= -2 and wy <= -1)
-            .dirt
+            BlockState.defaultState(.dirt)
         else if (wy >= -7 and wy <= -3)
-            .stone
+            BlockState.defaultState(.stone)
         else
-            .air;
+            BlockState.defaultState(.air);
 
-        if (block_type == .air) continue;
+        if (state == BlockState.defaultState(.air)) continue;
 
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                chunk.blocks[chunkIndex(bx, by, bz)] = block_type;
+                chunk.blocks[chunkIndex(bx, by, bz)] = state;
             }
         }
     }
 }
 
-/// Debug world: places one of each block type in a grid at y=0, stone floor at y=-1.
 pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
-    chunk.blocks = .{.air} ** BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, BlockState.defaultState(.air));
 
     const COLS = 6;
     const SPACING = 2;
 
-    // Stone floor at y = -1
     if (key.cy == -1) {
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                chunk.blocks[chunkIndex(bx, CHUNK_SIZE - 1, bz)] = .stone;
+                chunk.blocks[chunkIndex(bx, CHUNK_SIZE - 1, bz)] = BlockState.defaultState(.stone);
             }
         }
         return;
@@ -576,79 +296,22 @@ pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
 
     if (key.cy != 0) return;
 
-    // Enumerate all non-air block types
-    const fields = @typeInfo(BlockType).@"enum".fields;
-    inline for (fields, 0..) |field, i| {
-        const bt: BlockType = @enumFromInt(field.value);
-        if (bt == .air) continue;
-
-        const idx = i - 1; // skip air
+    for (0..BlockState.TOTAL_STATES) |si| {
+        if (si == 0) continue;
+        const idx = si - 1;
         const col = idx % COLS;
         const row = idx / COLS;
 
-        // World position of this block
         const wx: i32 = @intCast(col * SPACING);
         const wz: i32 = @intCast(row * SPACING);
 
-        // Check if this block falls within this chunk
         const lx = wx - key.cx * CHUNK_SIZE;
         const lz = wz - key.cz * CHUNK_SIZE;
 
         if (lx >= 0 and lx < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE) {
-            chunk.blocks[chunkIndex(@intCast(lx), 0, @intCast(lz))] = bt;
+            chunk.blocks[chunkIndex(@intCast(lx), 0, @intCast(lz))] = @intCast(si);
         }
     }
-}
-
-// --- Neighbor block lookup ---
-
-/// Get a block at local coordinates that may extend into neighbor chunks.
-/// For single-axis out-of-bounds, reads from the corresponding face neighbor.
-/// For multi-axis out-of-bounds (diagonal), returns .air.
-///
-/// Face neighbor mapping:
-///   0: +Z, 1: -Z, 2: -X, 3: +X, 4: +Y, 5: -Y
-fn getNeighborBlock(
-    chunk: *const Chunk,
-    neighbors: [6]?*const Chunk,
-    lx: i32,
-    ly: i32,
-    lz: i32,
-) BlockType {
-    // Fast path: within current chunk
-    if (lx >= 0 and lx < CHUNK_SIZE and ly >= 0 and ly < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE) {
-        return chunk.blocks[chunkIndex(@intCast(lx), @intCast(ly), @intCast(lz))];
-    }
-
-    // Count how many axes are out of bounds
-    const x_out = lx < 0 or lx >= CHUNK_SIZE;
-    const y_out = ly < 0 or ly >= CHUNK_SIZE;
-    const z_out = lz < 0 or lz >= CHUNK_SIZE;
-
-    const out_count = @as(u32, @intFromBool(x_out)) + @intFromBool(y_out) + @intFromBool(z_out);
-    if (out_count != 1) return .air;
-
-    // Determine which face neighbor to use
-    const face_idx: usize = if (lx < 0)
-        2 // -X
-    else if (lx >= CHUNK_SIZE)
-        3 // +X
-    else if (ly < 0)
-        5 // -Y
-    else if (ly >= CHUNK_SIZE)
-        4 // +Y
-    else if (lz < 0)
-        1 // -Z
-    else
-        0; // +Z
-
-    const neighbor = neighbors[face_idx] orelse return .air;
-
-    const nlx: usize = @intCast(@mod(lx, @as(i32, CHUNK_SIZE)));
-    const nly: usize = @intCast(@mod(ly, @as(i32, CHUNK_SIZE)));
-    const nlz: usize = @intCast(@mod(lz, @as(i32, CHUNK_SIZE)));
-
-    return neighbor.blocks[chunkIndex(nlx, nly, nlz)];
 }
 
 // --- AO computation ---
@@ -709,7 +372,6 @@ fn paddedIndex(x: usize, y: usize, z: usize) usize {
     return y * PADDED_SIZE * PADDED_SIZE + z * PADDED_SIZE + x;
 }
 
-/// Comptime padded-index offsets for the 6 face neighbors.
 const padded_face_deltas = computePaddedFaceDeltas();
 
 fn computePaddedFaceDeltas() [6]i32 {
@@ -721,7 +383,6 @@ fn computePaddedFaceDeltas() [6]i32 {
     return result;
 }
 
-/// Comptime padded-index offsets for AO corner samples.
 const padded_ao_deltas = computePaddedAoDeltas();
 
 fn computePaddedAoDeltas() [6][4][3]i32 {
@@ -737,10 +398,6 @@ fn computePaddedAoDeltas() [6][4][3]i32 {
     return result;
 }
 
-/// Comptime trilinear light sample offsets and weights per face/corner.
-/// Derived from Cubyz getCornerLight: lightPos = vertex + normal*0.5 - 0.5,
-/// then trilinear interpolation over 8 surrounding blocks.
-/// For axis-aligned faces, collapses to 4 samples with equal weight (64/256 each).
 const TrilinearSample = struct {
     delta: i32,
     weight: u16,
@@ -756,7 +413,6 @@ fn computeTrilinearLightSamples() [6][4][4]TrilinearSample {
         for (0..4) |corner| {
             const vert = face_vertices[face][corner];
 
-            // lightPos = vertex + normal * 0.5 - 0.5 (per axis)
             const light_pos = [3]f32{
                 vert.px + @as(f32, @floatFromInt(normal[0])) * 0.5 - 0.5,
                 vert.py + @as(f32, @floatFromInt(normal[1])) * 0.5 - 0.5,
@@ -807,39 +463,32 @@ fn computeTrilinearLightSamples() [6][4][4]TrilinearSample {
     return result;
 }
 
-/// Build a 34³ padded block array: center 32³ from chunk, 1-block border from neighbors, .air elsewhere.
-fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, neighbors: [6]?*const Chunk) void {
-    @memset(padded, .air);
+/// Build a 34^3 padded state array: center 32^3 from chunk, 1-block border from neighbors, air (0) elsewhere.
+fn buildPaddedStates(padded: *[PADDED_BLOCKS]StateId, chunk: *const Chunk, neighbors: [6]?*const Chunk) void {
+    @memset(padded, 0);
 
-    // Copy center 32³ — row by row (x-axis contiguous in memory)
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
-            @memcpy(
-                padded[paddedIndex(1, y + 1, z + 1)..][0..CHUNK_SIZE],
-                chunk.blocks[chunkIndex(0, y, z)..][0..CHUNK_SIZE],
-            );
+            const src = chunk.blocks[chunkIndex(0, y, z)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, y + 1, z + 1)..][0..CHUNK_SIZE];
+            @memcpy(dst, src);
         }
     }
 
-    // +Z face (0): neighbor's z=0 slice → padded z=PADDED_SIZE-1
     if (neighbors[0]) |n| {
         for (0..CHUNK_SIZE) |y| {
-            @memcpy(
-                padded[paddedIndex(1, y + 1, PADDED_SIZE - 1)..][0..CHUNK_SIZE],
-                n.blocks[chunkIndex(0, y, 0)..][0..CHUNK_SIZE],
-            );
+            const src = n.blocks[chunkIndex(0, y, 0)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, y + 1, PADDED_SIZE - 1)..][0..CHUNK_SIZE];
+            @memcpy(dst, src);
         }
     }
-    // -Z face (1): neighbor's z=31 slice → padded z=0
     if (neighbors[1]) |n| {
         for (0..CHUNK_SIZE) |y| {
-            @memcpy(
-                padded[paddedIndex(1, y + 1, 0)..][0..CHUNK_SIZE],
-                n.blocks[chunkIndex(0, y, CHUNK_SIZE - 1)..][0..CHUNK_SIZE],
-            );
+            const src = n.blocks[chunkIndex(0, y, CHUNK_SIZE - 1)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, y + 1, 0)..][0..CHUNK_SIZE];
+            @memcpy(dst, src);
         }
     }
-    // -X face (2): neighbor's x=31 → padded x=0
     if (neighbors[2]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
@@ -847,7 +496,6 @@ fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, nei
             }
         }
     }
-    // +X face (3): neighbor's x=0 → padded x=PADDED_SIZE-1
     if (neighbors[3]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
@@ -855,40 +503,33 @@ fn buildPaddedBlocks(padded: *[PADDED_BLOCKS]BlockType, chunk: *const Chunk, nei
             }
         }
     }
-    // +Y face (4): neighbor's y=0 → padded y=PADDED_SIZE-1
     if (neighbors[4]) |n| {
         for (0..CHUNK_SIZE) |z| {
-            @memcpy(
-                padded[paddedIndex(1, PADDED_SIZE - 1, z + 1)..][0..CHUNK_SIZE],
-                n.blocks[chunkIndex(0, 0, z)..][0..CHUNK_SIZE],
-            );
+            const src = n.blocks[chunkIndex(0, 0, z)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, PADDED_SIZE - 1, z + 1)..][0..CHUNK_SIZE];
+            @memcpy(dst, src);
         }
     }
-    // -Y face (5): neighbor's y=31 → padded y=0
     if (neighbors[5]) |n| {
         for (0..CHUNK_SIZE) |z| {
-            @memcpy(
-                padded[paddedIndex(1, 0, z + 1)..][0..CHUNK_SIZE],
-                n.blocks[chunkIndex(0, CHUNK_SIZE - 1, z)..][0..CHUNK_SIZE],
-            );
+            const src = n.blocks[chunkIndex(0, CHUNK_SIZE - 1, z)..][0..CHUNK_SIZE];
+            const dst = padded[paddedIndex(1, 0, z + 1)..][0..CHUNK_SIZE];
+            @memcpy(dst, src);
         }
     }
 }
 
-/// Build padded 34³ light volumes from center LightMap + 6 neighbor border snapshots.
 fn buildPaddedLight(
     padded_sky: *[PADDED_BLOCKS]u8,
     padded_block: *[PADDED_BLOCKS][3]u8,
     light_map: ?*const LightMap,
     neighbor_borders: [6]LightBorderSnapshot,
 ) void {
-    // Default: full sky, no block light
     @memset(padded_sky, 255);
     @memset(padded_block, .{ 0, 0, 0 });
 
     const lm = light_map orelse return;
 
-    // Copy center 32³
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
             for (0..CHUNK_SIZE) |x| {
@@ -900,8 +541,6 @@ fn buildPaddedLight(
         }
     }
 
-    // Copy border from neighbor snapshots (already copied under brief locks)
-    // +Z face (0): border_idx = y * CS + x
     if (neighbor_borders[0].valid) {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |x| {
@@ -912,7 +551,6 @@ fn buildPaddedLight(
             }
         }
     }
-    // -Z face (1): border_idx = y * CS + x
     if (neighbor_borders[1].valid) {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |x| {
@@ -923,7 +561,6 @@ fn buildPaddedLight(
             }
         }
     }
-    // -X face (2): border_idx = y * CS + z
     if (neighbor_borders[2].valid) {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
@@ -934,7 +571,6 @@ fn buildPaddedLight(
             }
         }
     }
-    // +X face (3): border_idx = y * CS + z
     if (neighbor_borders[3].valid) {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
@@ -945,7 +581,6 @@ fn buildPaddedLight(
             }
         }
     }
-    // +Y face (4): border_idx = z * CS + x
     if (neighbor_borders[4].valid) {
         for (0..CHUNK_SIZE) |z| {
             for (0..CHUNK_SIZE) |x| {
@@ -956,7 +591,6 @@ fn buildPaddedLight(
             }
         }
     }
-    // -Y face (5): border_idx = z * CS + x
     if (neighbor_borders[5].valid) {
         for (0..CHUNK_SIZE) |z| {
             for (0..CHUNK_SIZE) |x| {
@@ -969,7 +603,6 @@ fn buildPaddedLight(
     }
 }
 
-/// Pack sky and block light values into the 30-bit GPU format.
 fn packLight(sky_val: u8, block_light_val: [3]u8) u32 {
     const s5: u32 = @as(u32, sky_val) >> 3;
     const br5: u32 = @as(u32, block_light_val[0]) >> 3;
@@ -978,15 +611,13 @@ fn packLight(sky_val: u8, block_light_val: [3]u8) u32 {
     return (s5 << 0) | (s5 << 5) | (s5 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
 }
 
-/// Trilinear light sampling for one corner of a face quad.
-/// Samples 4 surrounding block positions with precomputed weights (Cubyz-style).
 const TrilinearLightResult = struct { sky: u8, block: [3]u8 };
 
 fn sampleTrilinearLight(
     base: i32,
     face: usize,
     corner: usize,
-    padded: *const [PADDED_BLOCKS]BlockType,
+    padded: *const [PADDED_BLOCKS]StateId,
     padded_sky: *const [PADDED_BLOCKS]u8,
     padded_block_light: *const [PADDED_BLOCKS][3]u8,
 ) TrilinearLightResult {
@@ -1000,13 +631,10 @@ fn sampleTrilinearLight(
         const sample = samples[s];
         if (sample.weight == 0) continue;
         const sample_idx: usize = @intCast(base + sample.delta);
-        // Skip opaque samples — AO already handles corner darkening
-        if (block_properties.isOpaque(padded[sample_idx])) continue;
+        if (BlockState.isOpaque(padded[sample_idx])) continue;
         const w: u32 = sample.weight;
         total_weight += w;
 
-        // Per-sample directional shadow: compare light at sample with one
-        // step further in normal direction; darken if facing away from light.
         var sky_val: u8 = padded_sky[sample_idx];
         var blk_val: [3]u8 = padded_block_light[sample_idx];
         const next_signed: i32 = @as(i32, @intCast(sample_idx)) + face_delta;
@@ -1027,7 +655,6 @@ fn sampleTrilinearLight(
         blk_sum[2] += @as(u32, blk_val[2]) * w;
     }
 
-    // If all samples were opaque, fall back to face neighbor light
     if (total_weight == 0) {
         const face_idx: usize = @intCast(base + face_delta);
         return .{
@@ -1046,59 +673,55 @@ fn sampleTrilinearLight(
     };
 }
 
-/// Returns true if this chunk will produce zero mesh faces:
-/// all blocks are opaque AND all 6 neighbor boundary faces are opaque.
 pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
-    // 1. Check all blocks in the chunk are opaque
-    for (&chunk.blocks) |b| {
-        if (!block_properties.isOpaque(b)) return false;
+    for (&chunk.blocks) |s| {
+        if (!BlockState.isOpaque(s)) return false;
     }
 
-    // 2. Check each neighbor's boundary face is fully opaque
     for (0..6) |face| {
         const n = neighbors[face] orelse return false;
         const nb = &n.blocks;
 
         switch (face) {
-            0 => { // +Z: neighbor z=0
+            0 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(x, y, 0)])) return false;
+                        if (!BlockState.isOpaque(nb[chunkIndex(x, y, 0)])) return false;
                     }
                 }
             },
-            1 => { // -Z: neighbor z=31
+            1 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(x, y, CHUNK_SIZE - 1)])) return false;
+                        if (!BlockState.isOpaque(nb[chunkIndex(x, y, CHUNK_SIZE - 1)])) return false;
                     }
                 }
             },
-            2 => { // -X: neighbor x=31
-                for (0..CHUNK_SIZE) |y| {
-                    for (0..CHUNK_SIZE) |z| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(CHUNK_SIZE - 1, y, z)])) return false;
-                    }
-                }
-            },
-            3 => { // +X: neighbor x=0
+            2 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |z| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(0, y, z)])) return false;
+                        if (!BlockState.isOpaque(nb[chunkIndex(CHUNK_SIZE - 1, y, z)])) return false;
                     }
                 }
             },
-            4 => { // +Y: neighbor y=0
-                for (0..CHUNK_SIZE) |z| {
-                    for (0..CHUNK_SIZE) |x| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(x, 0, z)])) return false;
+            3 => {
+                for (0..CHUNK_SIZE) |y| {
+                    for (0..CHUNK_SIZE) |z| {
+                        if (!BlockState.isOpaque(nb[chunkIndex(0, y, z)])) return false;
                     }
                 }
             },
-            5 => { // -Y: neighbor y=31
+            4 => {
                 for (0..CHUNK_SIZE) |z| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!block_properties.isOpaque(nb[chunkIndex(x, CHUNK_SIZE - 1, z)])) return false;
+                        if (!BlockState.isOpaque(nb[chunkIndex(x, 0, z)])) return false;
+                    }
+                }
+            },
+            5 => {
+                for (0..CHUNK_SIZE) |z| {
+                    for (0..CHUNK_SIZE) |x| {
+                        if (!BlockState.isOpaque(nb[chunkIndex(x, CHUNK_SIZE - 1, z)])) return false;
                     }
                 }
             },
@@ -1121,8 +744,8 @@ pub fn generateChunkMesh(
     const tz = tracy.zone(@src(), "generateChunkMesh");
     defer tz.end();
 
-    var padded: [PADDED_BLOCKS]BlockType = undefined;
-    buildPaddedBlocks(&padded, chunk, neighbors);
+    var padded: [PADDED_BLOCKS]StateId = undefined;
+    buildPaddedStates(&padded, chunk, neighbors);
 
     var padded_sky: [PADDED_BLOCKS]u8 = undefined;
     var padded_block_light: [PADDED_BLOCKS][3]u8 = undefined;
@@ -1147,21 +770,20 @@ pub fn generateChunkMesh(
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
                 const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
-                const block = padded[@intCast(base)];
-                if (block == .air) continue;
+                const state_id = padded[@intCast(base)];
+                if (state_id == 0) continue;
 
-                const layer = @intFromEnum(block_properties.renderLayer(block));
+                const layer = @intFromEnum(BlockState.renderLayer(state_id));
 
-                if (block.isShapedBlock()) {
-                    // Shaped block: emit partial quads
-                    const shape_faces = getShapeFaces(block);
-                    for (shape_faces) |sf| {
+                if (BlockState.isShaped(state_id)) {
+                    const shape_faces = getShapeFaces(state_id);
+                    const tex_indices = getShapedTexIndices(state_id);
+                    for (shape_faces, 0..) |sf, sf_idx| {
                         if (!sf.always_emit) {
                             const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
-                            if (block_properties.isOpaque(neighbor)) continue;
+                            if (shouldCullShapeFace(sf, neighbor)) continue;
                         }
                         const face: usize = sf.face_bucket;
-                        // Light/AO uses the face bucket direction
                         var corner_packed: [4]u32 = undefined;
                         var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
                         for (0..4) |corner| {
@@ -1172,21 +794,22 @@ pub fn generateChunkMesh(
                         var ao: [4]u2 = undefined;
                         for (0..4) |corner| {
                             const deltas = padded_ao_deltas[face][corner];
-                            const s1 = block_properties.isOpaque(padded[@intCast(base + deltas[0])]);
-                            const s2 = block_properties.isOpaque(padded[@intCast(base + deltas[1])]);
+                            const s1 = BlockState.isOpaque(padded[@intCast(base + deltas[0])]);
+                            const s2 = BlockState.isOpaque(padded[@intCast(base + deltas[1])]);
                             const diag = if (s1 and s2)
                                 true
                             else
-                                block_properties.isOpaque(padded[@intCast(base + deltas[2])]);
+                                BlockState.isOpaque(padded[@intCast(base + deltas[2])]);
                             const raw_ao: u3 = @as(u3, @intFromBool(s1)) + @intFromBool(s2) + @intFromBool(diag);
                             const reduction: u3 = @intCast(@min(@as(u32, 3), @as(u32, corner_block_brightness[corner]) / 64));
                             ao[corner] = @intCast(raw_ao -| reduction);
                         }
+                        const shaped_tex: u8 = tex_indices[sf_idx];
                         const face_data = types.packFaceData(
                             @intCast(bx),
                             @intCast(by),
                             @intCast(bz),
-                            11, // oak_planks texture
+                            shaped_tex,
                             sf.model_index,
                             ao,
                         );
@@ -1196,16 +819,21 @@ pub fn generateChunkMesh(
                     continue;
                 }
 
-                const emits = block_properties.emittedLight(block);
+                const emits = BlockState.emittedLight(state_id);
                 const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
+
+                const is_water = BlockState.getBlock(state_id) == .water;
+                const water_lowered = is_water and
+                    BlockState.getBlock(padded[@intCast(base + padded_face_deltas[4])]) != .water;
 
                 for (0..6) |face| {
                     const neighbor = padded[@intCast(base + padded_face_deltas[face])];
 
-                    if (block_properties.isOpaque(neighbor)) continue;
-                    if (neighbor == block and block_properties.cullsSelf(block)) continue;
+                    if (shouldCullFace(state_id, face, neighbor)) continue;
+                    if (neighbor == state_id and BlockState.cullsSelf(state_id)) continue;
 
-                    const tex_index: u8 = if (block == .oak_log and (face == 4 or face == 5)) 27 else block_properties.texIndex(block);
+                    const tex = BlockState.blockTexIndices(state_id);
+                    const tex_index: u8 = @intCast(if (face == 4 or face == 5) tex.top else tex.side);
 
                     var corner_packed: [4]u32 = undefined;
                     var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
@@ -1231,12 +859,12 @@ pub fn generateChunkMesh(
                     } else {
                         for (0..4) |corner| {
                             const deltas = padded_ao_deltas[face][corner];
-                            const s1 = block_properties.isOpaque(padded[@intCast(base + deltas[0])]);
-                            const s2 = block_properties.isOpaque(padded[@intCast(base + deltas[1])]);
+                            const s1 = BlockState.isOpaque(padded[@intCast(base + deltas[0])]);
+                            const s2 = BlockState.isOpaque(padded[@intCast(base + deltas[1])]);
                             const diag = if (s1 and s2)
                                 true
                             else
-                                block_properties.isOpaque(padded[@intCast(base + deltas[2])]);
+                                BlockState.isOpaque(padded[@intCast(base + deltas[2])]);
                             const raw_ao: u3 = @as(u3, @intFromBool(s1)) + @intFromBool(s2) + @intFromBool(diag);
 
                             const reduction: u3 = @intCast(@min(@as(u32, 3), @as(u32, corner_block_brightness[corner]) / 64));
@@ -1244,12 +872,16 @@ pub fn generateChunkMesh(
                         }
                     }
 
+                    const model_index: u9 = if (water_lowered)
+                        WATER_MODEL_BASE + @as(u9, @intCast(face))
+                    else
+                        @intCast(face);
                     const face_data = types.packFaceData(
                         @intCast(bx),
                         @intCast(by),
                         @intCast(bz),
                         tex_index,
-                        @intCast(face),
+                        model_index,
                         ao,
                     );
 
@@ -1304,8 +936,8 @@ pub fn generateLodChunkMesh(
     const tz = tracy.zone(@src(), "generateLodChunkMesh");
     defer tz.end();
 
-    var padded: [PADDED_BLOCKS]BlockType = undefined;
-    buildPaddedBlocks(&padded, chunk, neighbors);
+    var padded: [PADDED_BLOCKS]StateId = undefined;
+    buildPaddedStates(&padded, chunk, neighbors);
 
     const max_sky_packed = packLight(255, .{ 0, 0, 0 });
     const lod_light = LightEntry{ .corners = .{ max_sky_packed, max_sky_packed, max_sky_packed, max_sky_packed } };
@@ -1330,56 +962,34 @@ pub fn generateLodChunkMesh(
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
                 const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
-                const block = padded[@intCast(base)];
-                if (block == .air) continue;
+                const state_id = padded[@intCast(base)];
+                if (state_id == 0) continue;
 
-                const layer = @intFromEnum(block_properties.renderLayer(block));
+                const layer = @intFromEnum(BlockState.renderLayer(state_id));
+
+                const is_water = BlockState.getBlock(state_id) == .water;
+                const water_lowered = is_water and
+                    BlockState.getBlock(padded[@intCast(base + padded_face_deltas[4])]) != .water;
 
                 for (0..6) |face| {
                     const neighbor = padded[@intCast(base + padded_face_deltas[face])];
 
-                    if (block_properties.isOpaque(neighbor)) continue;
-                    if (neighbor == block and block_properties.cullsSelf(block)) continue;
+                    if (shouldCullFace(state_id, face, neighbor)) continue;
+                    if (neighbor == state_id and BlockState.cullsSelf(state_id)) continue;
 
-                    const tex_index: u8 = switch (block) {
-                        .air => unreachable,
-                        .glass => 0,
-                        .grass_block => 1,
-                        .dirt => 2,
-                        .stone => 3,
-                        .glowstone => 4,
-                        .sand => 5,
-                        .snow => 6,
-                        .water => 7,
-                        .gravel => 8,
-                        .cobblestone => 9,
-                        .oak_log => if (face == 4 or face == 5) @as(u8, 27) else 10,
-                        .oak_planks => 11,
-                        .bricks => 12,
-                        .bedrock => 13,
-                        .gold_ore => 14,
-                        .iron_ore => 15,
-                        .coal_ore => 16,
-                        .diamond_ore => 17,
-                        .sponge => 18,
-                        .pumice => 19,
-                        .wool => 20,
-                        .gold_block => 21,
-                        .iron_block => 22,
-                        .diamond_block => 23,
-                        .bookshelf => 24,
-                        .obsidian => 25,
-                        .oak_leaves => 26,
-                        .oak_slab_bottom, .oak_slab_top => 11,
-                        .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west => 11,
-                    };
+                    const tex = BlockState.blockTexIndices(state_id);
+                    const tex_index: u8 = @intCast(if (face == 4 or face == 5) tex.top else tex.side);
 
+                    const model_index: u9 = if (water_lowered)
+                        WATER_MODEL_BASE + @as(u9, @intCast(face))
+                    else
+                        @intCast(face);
                     const face_data = types.packFaceData(
                         @intCast(bx),
                         @intCast(by),
                         @intCast(bz),
                         tex_index,
-                        @intCast(face),
+                        model_index,
                         lod_ao,
                     );
 
@@ -1436,8 +1046,8 @@ pub fn generateChunkLightOnly(
     const tz = tracy.zone(@src(), "generateChunkLightOnly");
     defer tz.end();
 
-    var padded: [PADDED_BLOCKS]BlockType = undefined;
-    buildPaddedBlocks(&padded, chunk, neighbors);
+    var padded: [PADDED_BLOCKS]StateId = undefined;
+    buildPaddedStates(&padded, chunk, neighbors);
 
     var padded_sky: [PADDED_BLOCKS]u8 = undefined;
     var padded_block_light: [PADDED_BLOCKS][3]u8 = undefined;
@@ -1459,17 +1069,17 @@ pub fn generateChunkLightOnly(
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
                 const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
-                const block = padded[@intCast(base)];
-                if (block == .air) continue;
+                const state_id = padded[@intCast(base)];
+                if (state_id == 0) continue;
 
-                const layer = @intFromEnum(block_properties.renderLayer(block));
+                const layer = @intFromEnum(BlockState.renderLayer(state_id));
 
-                if (block.isShapedBlock()) {
-                    const shape_faces = getShapeFaces(block);
+                if (BlockState.isShaped(state_id)) {
+                    const shape_faces = getShapeFaces(state_id);
                     for (shape_faces) |sf| {
                         if (!sf.always_emit) {
                             const neighbor = padded[@intCast(base + padded_face_deltas[sf.face_bucket])];
-                            if (block_properties.isOpaque(neighbor)) continue;
+                            if (shouldCullShapeFace(sf, neighbor)) continue;
                         }
                         const face: usize = sf.face_bucket;
                         var corner_packed: [4]u32 = undefined;
@@ -1482,14 +1092,14 @@ pub fn generateChunkLightOnly(
                     continue;
                 }
 
-                const emits = block_properties.emittedLight(block);
+                const emits = BlockState.emittedLight(state_id);
                 const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
 
                 for (0..6) |face| {
-                    const neighbor_block = padded[@intCast(base + padded_face_deltas[face])];
+                    const neighbor = padded[@intCast(base + padded_face_deltas[face])];
 
-                    if (block_properties.isOpaque(neighbor_block)) continue;
-                    if (neighbor_block == block and block_properties.cullsSelf(block)) continue;
+                    if (shouldCullFace(state_id, face, neighbor)) continue;
+                    if (neighbor == state_id and BlockState.cullsSelf(state_id)) continue;
 
                     var corner_packed: [4]u32 = undefined;
 
@@ -1544,9 +1154,6 @@ pub fn generateChunkLightOnly(
 
 // --- Affected chunks ---
 
-/// Returns the chunk keys affected by a block change at world coordinates.
-/// Includes the primary chunk and up to 6 adjacent chunks if the block
-/// is within 1 block of a chunk boundary.
 pub fn affectedChunks(wx: i32, wy: i32, wz: i32) AffectedChunks {
     const cs: i32 = CHUNK_SIZE;
     const base_cx = @divFloor(wx, cs);
@@ -1611,7 +1218,7 @@ fn unpackFace(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, normal_
 }
 
 fn makeEmptyChunk() Chunk {
-    return .{ .blocks = .{.air} ** BLOCKS_PER_CHUNK };
+    return .{ .blocks = .{BlockState.defaultState(.air)} ** BLOCKS_PER_CHUNK };
 }
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
@@ -1620,7 +1227,7 @@ const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
 test "single block in air produces 6 faces" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1644,8 +1251,8 @@ test "single block in air produces 6 faces" {
 
 test "two adjacent blocks share face - culled" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
-    chunk.blocks[chunkIndex(6, 5, 5)] = .stone;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
+    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.defaultState(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1666,7 +1273,7 @@ test "face_counts sum equals total_face_count" {
     var chunk = makeEmptyChunk();
     for (3..7) |x| {
         for (3..6) |y| {
-            chunk.blocks[chunkIndex(x, y, 4)] = .dirt;
+            chunk.blocks[chunkIndex(x, y, 4)] = BlockState.defaultState(.dirt);
         }
     }
 
@@ -1683,7 +1290,7 @@ test "face_counts sum equals total_face_count" {
 
 test "normal indices in faces match their group" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(10, 10, 10)] = .grass_block;
+    chunk.blocks[chunkIndex(10, 10, 10)] = BlockState.defaultState(.grass_block);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1704,13 +1311,11 @@ test "normal indices in faces match their group" {
 test "cross-chunk boundary face culling" {
     var chunk0 = makeEmptyChunk();
     var chunk1 = makeEmptyChunk();
-    chunk0.blocks[chunkIndex(CHUNK_SIZE - 1, 5, 5)] = .stone;
-    chunk1.blocks[chunkIndex(0, 5, 5)] = .stone;
+    chunk0.blocks[chunkIndex(CHUNK_SIZE - 1, 5, 5)] = BlockState.defaultState(.stone);
+    chunk1.blocks[chunkIndex(0, 5, 5)] = BlockState.defaultState(.stone);
 
-    // chunk0 has chunk1 as its +X neighbor (face 3)
     var neighbors0 = no_neighbors;
     neighbors0[3] = &chunk1;
-    // chunk1 has chunk0 as its -X neighbor (face 2)
     var neighbors1 = no_neighbors;
     neighbors1[2] = &chunk0;
 
@@ -1743,8 +1348,8 @@ test "empty chunk produces no faces" {
 
 test "glass does not cull adjacent non-glass" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
-    chunk.blocks[chunkIndex(6, 5, 5)] = .glass;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
+    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.defaultState(.glass);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1755,8 +1360,8 @@ test "glass does not cull adjacent non-glass" {
 
 test "glass-glass adjacency culls shared face" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .glass;
-    chunk.blocks[chunkIndex(6, 5, 5)] = .glass;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.glass);
+    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.defaultState(.glass);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1768,7 +1373,7 @@ test "glass-glass adjacency culls shared face" {
 test "light count equals face count (1:1 mapping)" {
     var chunk = makeEmptyChunk();
     for (0..4) |x| {
-        chunk.blocks[chunkIndex(x, 5, 5)] = .stone;
+        chunk.blocks[chunkIndex(x, 5, 5)] = BlockState.defaultState(.stone);
     }
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
@@ -1810,7 +1415,7 @@ test "ChunkKey.fromWorldPos handles negative coords" {
 
 test "world boundary blocks have all outer faces" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(0, 0, 0)] = .stone;
+    chunk.blocks[chunkIndex(0, 0, 0)] = BlockState.defaultState(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1844,7 +1449,7 @@ fn findFaceByNormal(result: ChunkMeshResult, normal: u3) ?FaceData {
 
 test "AO: single block in air has no occlusion" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1859,7 +1464,7 @@ test "AO: block on flat surface has correct top face AO" {
     var chunk = makeEmptyChunk();
     for (4..7) |x| {
         for (4..7) |z| {
-            chunk.blocks[chunkIndex(x, 5, z)] = .stone;
+            chunk.blocks[chunkIndex(x, 5, z)] = BlockState.defaultState(.stone);
         }
     }
 
@@ -1882,7 +1487,6 @@ test "AO: block on flat surface has correct top face AO" {
     }
 
     const ao = unpackAo(center_top.?);
-    // Center block's top face: no blocks above (y=6) → no occlusion
     for (ao) |level| {
         try testing.expectEqual(@as(u2, 0), level);
     }
@@ -1890,10 +1494,10 @@ test "AO: block on flat surface has correct top face AO" {
 
 test "AO: block in corner has maximum occlusion on enclosed corner" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = .stone;
-    chunk.blocks[chunkIndex(6, 5, 5)] = .stone;
-    chunk.blocks[chunkIndex(5, 6, 5)] = .stone;
-    chunk.blocks[chunkIndex(5, 5, 6)] = .stone;
+    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
+    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.defaultState(.stone);
+    chunk.blocks[chunkIndex(5, 6, 5)] = BlockState.defaultState(.stone);
+    chunk.blocks[chunkIndex(5, 5, 6)] = BlockState.defaultState(.stone);
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1941,7 +1545,6 @@ test "affectedChunks: center of chunk returns only self" {
 }
 
 test "affectedChunks: edge of chunk returns neighbor" {
-    // Block at (0, 16, 16) is at lx=0 in chunk (0,0,0), so neighbor (-1,0,0) is affected
     const result = affectedChunks(0, 16, 16);
     try testing.expect(result.count >= 2);
 }
@@ -1949,10 +1552,110 @@ test "affectedChunks: edge of chunk returns neighbor" {
 test "generateFlatChunk: grass at wy=0" {
     var chunk: Chunk = undefined;
     generateFlatChunk(&chunk, .{ .cx = 0, .cy = 0, .cz = 0 });
-    // wy=0 is at by=0 in chunk cy=0
-    try testing.expectEqual(BlockType.grass_block, chunk.blocks[chunkIndex(0, 0, 0)]);
-    // wy=1 should be air
-    try testing.expectEqual(BlockType.air, chunk.blocks[chunkIndex(0, 1, 0)]);
+    try testing.expectEqual(BlockState.defaultState(.grass_block), chunk.blocks[chunkIndex(0, 0, 0)]);
+    try testing.expectEqual(@as(StateId, 0), chunk.blocks[chunkIndex(0, 1, 0)]);
+}
+
+test "oppositeFace: correct pairs" {
+    try testing.expectEqual(@as(usize, 1), oppositeFace(0));
+    try testing.expectEqual(@as(usize, 0), oppositeFace(1));
+    try testing.expectEqual(@as(usize, 3), oppositeFace(2));
+    try testing.expectEqual(@as(usize, 2), oppositeFace(3));
+    try testing.expectEqual(@as(usize, 5), oppositeFace(4));
+    try testing.expectEqual(@as(usize, 4), oppositeFace(5));
+}
+
+test "oppositeFace: double opposite is identity" {
+    for (0..6) |f| {
+        try testing.expectEqual(f, oppositeFace(oppositeFace(f)));
+    }
+}
+
+test "getOcclusionBitmap: air is zero" {
+    for (0..6) |f| {
+        try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(0, f));
+    }
+}
+
+test "getOcclusionBitmap: opaque blocks are full" {
+    const opaque_blocks = [_]StateId{
+        BlockState.defaultState(.stone),
+        BlockState.defaultState(.dirt),
+        BlockState.defaultState(.grass_block),
+        BlockState.defaultState(.cobblestone),
+        BlockState.defaultState(.oak_planks),
+        BlockState.defaultState(.bedrock),
+    };
+    for (opaque_blocks) |state| {
+        for (0..6) |f| {
+            try testing.expectEqual(@as(u16, 0xFFFF), getOcclusionBitmap(state, f));
+        }
+    }
+}
+
+test "getOcclusionBitmap: transparent blocks are zero" {
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(BlockState.defaultState(.glass), 0));
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(BlockState.defaultState(.water), 0));
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(BlockState.defaultState(.oak_leaves), 0));
+}
+
+test "getOcclusionBitmap: non-solid shaped blocks are zero" {
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(BlockState.defaultState(.torch), 0));
+    try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(BlockState.defaultState(.ladder), 0));
+}
+
+test "shouldCullFace: opaque next to air shows face" {
+    try testing.expect(!shouldCullFace(BlockState.defaultState(.stone), 0, 0));
+}
+
+test "shouldCullFace: opaque next to opaque hides face" {
+    const stone = BlockState.defaultState(.stone);
+    try testing.expect(shouldCullFace(stone, 0, stone));
+}
+
+test "shouldCullFace: opaque next to glass shows face" {
+    try testing.expect(!shouldCullFace(BlockState.defaultState(.stone), 0, BlockState.defaultState(.glass)));
+}
+
+test "shouldCullFace: glass next to opaque hides face" {
+    try testing.expect(shouldCullFace(BlockState.defaultState(.glass), 0, BlockState.defaultState(.stone)));
+}
+
+test "shouldCullFace: glass next to partial shows face" {
+    try testing.expect(!shouldCullFace(BlockState.defaultState(.glass), 0, BlockState.defaultState(.oak_slab)));
+}
+
+test "shouldCullFace: opaque next to slab shows face (no registry)" {
+    try testing.expect(!shouldCullFace(BlockState.defaultState(.stone), 0, BlockState.defaultState(.oak_slab)));
+}
+
+test "shouldCullFace: slab next to torch shows face" {
+    try testing.expect(!shouldCullFace(BlockState.defaultState(.oak_slab), 0, BlockState.defaultState(.torch)));
+}
+
+test "shouldCullFace: slab top face next to air shows" {
+    try testing.expect(!shouldCullFace(BlockState.defaultState(.oak_slab), 4, 0));
+}
+
+test "bitmap culling logic: slab-vs-slab covers shared area" {
+    const slab_side: u16 = 0x00FF;
+    const full_face: u16 = 0xFFFF;
+
+    try testing.expect((slab_side & ~full_face) == 0);
+    try testing.expect((full_face & ~slab_side) != 0);
+    try testing.expect((slab_side & ~slab_side) == 0);
+    try testing.expect((slab_side & ~@as(u16, 0)) != 0);
+}
+
+test "bitmap culling logic: stairs partial faces" {
+    const stairs_west: u16 = 0x33FF;
+    const full_face: u16 = 0xFFFF;
+    const slab_side: u16 = 0x00FF;
+
+    try testing.expect((stairs_west & ~full_face) == 0);
+    try testing.expect((full_face & ~stairs_west) != 0);
+    try testing.expect((stairs_west & ~slab_side) != 0);
+    try testing.expect((slab_side & ~stairs_west) == 0);
 }
 
 // ============================================================

@@ -217,6 +217,15 @@ pub fn getRequiredInstanceExtensions(count: *u32) ?[*]const [*:0]const u8 {
     return @ptrCast(extensions);
 }
 
+pub fn setWindowIcon(window: *Window, width: c_int, height: c_int, pixels: [*]const u8) void {
+    const image = c.GLFWimage{
+        .width = width,
+        .height = height,
+        .pixels = @constCast(pixels),
+    };
+    c.glfwSetWindowIcon(window, 1, &image);
+}
+
 pub fn createWindowSurface(
     instance: anytype,
     window: *Window,

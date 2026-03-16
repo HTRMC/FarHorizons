@@ -1,0 +1,15 @@
+{
+    "textures": {
+        "ladder": "ladder"
+    },
+    "elements": [
+        {
+            "comment": "Flat panel on -Z wall, facing +Z",
+            "from": [0, 0, 0],
+            "to": [16, 16, 1],
+            "faces": {
+                "south": { "uv": [0, 0, 16, 16], "texture": "#ladder" }
+            }
+        }
+    ]
+}

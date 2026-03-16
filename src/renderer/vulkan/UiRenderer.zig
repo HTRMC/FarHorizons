@@ -392,6 +392,7 @@ pub const UiRenderer = struct {
         if (color[3] < 0.01) return;
 
         const WorldState = @import("../../world/WorldState.zig");
+        const BlockState = WorldState.BlockState;
 
         // Isometric projection constants: Rx(30°) * Ry(225°)
         const cos45: f32 = 0.70711;
@@ -415,9 +416,10 @@ pub const UiRenderer = struct {
             corners: [4][3]f32,
             uvs: [4][2]f32,
             normal: [3]f32,
+            tex_override: i16, // -1 = use top/side logic, >=0 = per-face texture
         };
 
-        var faces: [16]FaceInfo = undefined;
+        var faces: [64]FaceInfo = undefined;
         var face_count: usize = 0;
 
         if (shape == .full) {
@@ -428,6 +430,7 @@ pub const UiRenderer = struct {
                 if (nf[0] * view[0] + nf[1] * view[1] + nf[2] * view[2] <= 0) continue;
                 var info: FaceInfo = undefined;
                 info.normal = nf;
+                info.tex_override = -1;
                 for (0..4) |ci| {
                     const fv = WorldState.face_vertices[fi][ci];
                     info.corners[ci] = .{ fv.px, fv.py, fv.pz };
@@ -438,41 +441,86 @@ pub const UiRenderer = struct {
             }
         } else {
             // Shaped block: use the same face lists as the chunk mesher
-            const shape_faces: []const WorldState.ShapeFace = switch (shape) {
-                .slab_bottom => WorldState.getShapeFaces(.oak_slab_bottom),
-                .slab_top => WorldState.getShapeFaces(.oak_slab_top),
-                .stairs => WorldState.getShapeFaces(.oak_stairs_east),
+            const ref_state: BlockState.StateId = switch (shape) {
+                .slab_bottom => BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)),
+                .slab_top => BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top)),
+                .stairs => BlockState.makeStairState(.east, .bottom, .straight),
+                .torch => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.standing)),
+                .ladder => BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.north)),
+                .fence => BlockState.defaultState(.oak_fence),
+                .door => BlockState.makeDoorState(.south, .bottom, false),
                 .full => unreachable,
             };
-            for (shape_faces) |sf| {
-                const mi = sf.model_index;
-                var info: FaceInfo = undefined;
-                if (mi < 6) {
-                    const n = WorldState.face_neighbor_offsets[mi];
-                    info.normal = .{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
-                    for (0..4) |ci| {
-                        const fv = WorldState.face_vertices[mi][ci];
-                        info.corners[ci] = .{ fv.px, fv.py, fv.pz };
-                        info.uvs[ci] = .{ fv.u, fv.v };
+
+            // For doors, render both bottom and top halves
+            const door_parts: u8 = if (shape == .door) 2 else 1;
+            const door_states = [2]BlockState.StateId{ ref_state, if (shape == .door) BlockState.doorBottomToTop(ref_state) else ref_state };
+
+            for (0..door_parts) |part| {
+                const state_ref = door_states[part];
+                const part_shape_faces = WorldState.getShapeFaces(state_ref);
+                const use_per_face_tex = (shape == .torch);
+                const per_face_tex = if (use_per_face_tex) WorldState.getShapedTexIndices(state_ref) else &[_]u8{};
+                // For doors, use per-face texture so top half gets the top texture
+                const door_per_face_tex = if (shape == .door) WorldState.getShapedTexIndices(state_ref) else &[_]u8{};
+                const skip_cull = (shape == .ladder);
+
+                for (part_shape_faces, 0..) |sf, sf_idx| {
+                    const mi = sf.model_index;
+                    var info: FaceInfo = undefined;
+                    if (use_per_face_tex and sf_idx < per_face_tex.len) {
+                        info.tex_override = @intCast(per_face_tex[sf_idx]);
+                    } else if (shape == .door and sf_idx < door_per_face_tex.len) {
+                        info.tex_override = @intCast(door_per_face_tex[sf_idx]);
+                    } else {
+                        info.tex_override = -1;
                     }
-                } else {
-                    const em = WorldState.extra_quad_models[mi - 6];
-                    info.corners = em.corners;
-                    info.uvs = em.uvs;
-                    info.normal = em.normal;
+                    if (mi < 6) {
+                        const n = WorldState.face_neighbor_offsets[mi];
+                        info.normal = .{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
+                        for (0..4) |ci| {
+                            const fv = WorldState.face_vertices[mi][ci];
+                            info.corners[ci] = .{ fv.px, fv.py, fv.pz };
+                            info.uvs[ci] = .{ fv.u, fv.v };
+                        }
+                    } else {
+                        const em = WorldState.getRegistry().extra_models[@as(usize, mi) - WorldState.EXTRA_MODEL_BASE];
+                        info.corners = em.corners;
+                        info.uvs = em.uvs;
+                        info.normal = em.normal;
+                    }
+                    // Skip cross quads for torch (diagonal normals look bad in inventory)
+                    if (shape == .torch) {
+                        if (@abs(info.normal[0]) > 0.1 and @abs(info.normal[2]) > 0.1) continue;
+                    }
+                    // Shift top door half up by 1 and scale both to half height
+                    if (shape == .door) {
+                        for (0..4) |ci| {
+                            info.corners[ci][1] = info.corners[ci][1] * 0.5 + @as(f32, @floatFromInt(part)) * 0.5;
+                        }
+                    }
+                    if (!skip_cull and info.normal[0] * view[0] + info.normal[1] * view[1] + info.normal[2] * view[2] <= 0) continue;
+                    faces[face_count] = info;
+                    face_count += 1;
                 }
-                if (info.normal[0] * view[0] + info.normal[1] * view[1] + info.normal[2] * view[2] <= 0) continue;
-                faces[face_count] = info;
-                face_count += 1;
             }
         }
 
         // Sort by camera-space depth (painter's algorithm, back-to-front)
-        var depths: [16]f32 = undefined;
+        var depths: [64]f32 = undefined;
         for (0..face_count) |i| {
             var d: f32 = 0;
             for (0..4) |ci| {
                 d += 0.61237 * faces[i].corners[ci][0] + 0.5 * faces[i].corners[ci][1] - 0.61237 * faces[i].corners[ci][2];
+            }
+            // Bias internal up-facing faces (step tops at y < 1) to draw last.
+            // These share edges with riser faces and painter's sort gets the order wrong.
+            if (faces[i].normal[1] > 0.5) {
+                var max_y: f32 = 0;
+                for (0..4) |ci| {
+                    if (faces[i].corners[ci][1] > max_y) max_y = faces[i].corners[ci][1];
+                }
+                if (max_y < 0.95) d -= 100.0; // force to draw last
             }
             depths[i] = d;
         }
@@ -509,8 +557,12 @@ pub const UiRenderer = struct {
             else if (face.normal[2] < -0.5) 0.8 // -Z north
             else 0.6; // +X east, +Z south, etc.
 
-            const is_top = face.normal[1] > 0.5;
-            const tex = if (is_top) tex_top else tex_side;
+            const tex: i16 = if (face.tex_override >= 0)
+                face.tex_override
+            else if (face.normal[1] > 0.5)
+                tex_top
+            else
+                tex_side;
 
             if (tex >= 0) {
                 self.drawTexturedQuad(

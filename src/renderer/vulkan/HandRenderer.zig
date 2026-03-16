@@ -10,6 +10,8 @@ const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 const app_config = @import("../../app_config.zig");
 const EntityVertex = @import("EntityRenderer.zig").EntityVertex;
 const GameState = @import("../../GameState.zig");
+const WorldState = @import("../../world/WorldState.zig");
+const BlockState = WorldState.BlockState;
 const Io = std.Io;
 const Dir = Io.Dir;
 
@@ -35,6 +37,12 @@ pub const HandRenderer = struct {
     visible: bool = true,
     block_tex_top: i16 = -1,
     block_tex_side: i16 = -1,
+    held_block: BlockState.StateId = BlockState.defaultState(.air),
+    is_shaped: bool = false,
+    tex_groups: [8]TexGroup = undefined,
+    tex_group_count: u8 = 0,
+
+    const TexGroup = struct { start: u32, count: u32, tex_layer: i16 };
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -185,44 +193,102 @@ pub const HandRenderer = struct {
 
         // --- Draw held block ---
         if (has_block) {
-            // MC's applyItemArmTransform (line 316):
-            //   poseStack.translate(invert * 0.56F, -0.52F + inverseArmHeight * -0.6F, -0.72F);
-            // Then swingArm applies attack transforms (0 at rest).
-            // MC block items get additional display transform from the item model.
-            // For a simple block, MC's FIRST_PERSON_RIGHT_HAND display applies
-            // rotation(0, 45, 0) + translation(0, 0, 0) + scale(0.4, 0.4, 0.4).
+            // Position the held block at the hand by using the arm's transform chain
+            // up to the hand position, then apply block display transforms.
             const invert: f32 = 1.0;
-            const inverse_arm_height: f32 = 0.0;
+            const attack_value2: f32 = 0.0;
+            const inverse_arm_height2: f32 = 0.0;
 
+            const sqrt_attack2 = @sqrt(attack_value2);
+            const x_swing_pos2 = -0.3 * @sin(sqrt_attack2 * std.math.pi);
+            const y_swing_pos2 = 0.4 * @sin(sqrt_attack2 * (std.math.pi * 2.0));
+            const z_swing_pos2 = -0.4 * @sin(attack_value2 * std.math.pi);
+
+            // Same base transform as arm (applyItemArmTransform)
             const t1 = mat4Translate(
-                invert * 0.56,
-                -0.52 + inverse_arm_height * -0.6,
-                -0.72,
+                invert * (x_swing_pos2 + 0.56),
+                y_swing_pos2 + -0.52 + inverse_arm_height2 * -0.6,
+                z_swing_pos2 + -0.72,
             );
+            const r1 = mat4RotY(std.math.degreesToRadians(invert * 45.0));
+
+            const z_swing_rot2 = @sin(attack_value2 * attack_value2 * std.math.pi);
+            const y_swing_rot2 = @sin(sqrt_attack2 * std.math.pi);
+            const r2 = mat4RotY(std.math.degreesToRadians(invert * y_swing_rot2 * 70.0));
+            const r3 = mat4RotZ(std.math.degreesToRadians(invert * z_swing_rot2 * -20.0));
+
+            // Block display transform: rotation(0, 45, 0) + scale(0.4)
             const bs: f32 = 0.4;
             const block_rot = mat4RotY(std.math.degreesToRadians(45.0));
             const block_scale = mat4Scale(bs, bs, bs);
-            const block_model = zlm.Mat4.mul(t1, zlm.Mat4.mul(block_rot, block_scale));
+
+            // Chain: t1 * r1 * r2 * r3 * block_rot * block_scale
+            var block_model = t1;
+            block_model = zlm.Mat4.mul(block_model, r1);
+            block_model = zlm.Mat4.mul(block_model, r2);
+            block_model = zlm.Mat4.mul(block_model, r3);
+            block_model = zlm.Mat4.mul(block_model, block_rot);
+            block_model = zlm.Mat4.mul(block_model, block_scale);
             const mvp = zlm.Mat4.mul(proj, block_model);
 
-            // Draw 4 side faces (24 verts) with side texture
-            const pc_side = PushConstants{
-                .mvp = mvp.m,
-                .use_block_texture = 1,
-                .tex_layer = self.block_tex_side,
-            };
-            vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_side));
-            vk.cmdDraw(command_buffer, 24, 1, self.block_vertex_start, 0);
+            if (self.is_shaped) {
+                // Shaped block: draw per-texture groups
+                for (self.tex_groups[0..self.tex_group_count]) |group| {
+                    const pc = PushConstants{
+                        .mvp = mvp.m,
+                        .use_block_texture = 1,
+                        .tex_layer = group.tex_layer,
+                    };
+                    vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
+                    vk.cmdDraw(command_buffer, group.count, 1, group.start, 0);
+                }
+            } else {
+                // Full cube: draw 4 side faces (24 verts) with side texture
+                const pc_side = PushConstants{
+                    .mvp = mvp.m,
+                    .use_block_texture = 1,
+                    .tex_layer = self.block_tex_side,
+                };
+                vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_side));
+                vk.cmdDraw(command_buffer, 24, 1, self.block_vertex_start, 0);
 
-            // Draw top + bottom faces (12 verts) with top texture
-            const pc_top = PushConstants{
-                .mvp = mvp.m,
-                .use_block_texture = 1,
-                .tex_layer = self.block_tex_top,
-            };
-            vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
-            vk.cmdDraw(command_buffer, 12, 1, self.block_vertex_start + 24, 0);
+                // Draw top + bottom faces (12 verts) with top texture
+                const pc_top = PushConstants{
+                    .mvp = mvp.m,
+                    .use_block_texture = 1,
+                    .tex_layer = self.block_tex_top,
+                };
+                vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
+                vk.cmdDraw(command_buffer, 12, 1, self.block_vertex_start + 24, 0);
+            }
         }
+    }
+
+    /// Update the held block, rebuilding geometry if the shape changes.
+    pub fn updateHeldBlock(self: *HandRenderer, state: BlockState.StateId) void {
+        if (state == self.held_block) return;
+        self.held_block = state;
+
+        const tex = GameState.blockTexIndices(state);
+        self.block_tex_top = tex.top;
+        self.block_tex_side = tex.side;
+
+        if (BlockState.getBlock(state) == .air) {
+            self.is_shaped = false;
+            return;
+        }
+
+        const vertices: [*]EntityVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
+        var count = self.block_vertex_start;
+
+        if (BlockState.isShaped(state)) {
+            self.is_shaped = true;
+            count = self.buildShapedBlock(vertices, count, state);
+        } else {
+            self.is_shaped = false;
+            count = buildUnitBlock(vertices, count);
+        }
+        self.block_vertex_count = count - self.block_vertex_start;
     }
 
     // ============================================================
@@ -351,6 +417,92 @@ pub const HandRenderer = struct {
         count = addQuad(vertices, count, -s, s, s, s, s, s, s, s, -s, -s, s, -s, 0, 1, 0, 0, 1, 1, 0, false);
         // Bottom face (y-)
         count = addQuad(vertices, count, -s, -s, -s, s, -s, -s, s, -s, s, -s, -s, s, 0, -1, 0, 0, 1, 1, 0, false);
+
+        return count;
+    }
+
+    /// Build geometry for a shaped block, grouped by texture layer.
+    /// For doors, both bottom and top halves are combined into one model.
+    fn buildShapedBlock(self: *HandRenderer, vertices: [*]EntityVertex, start: u32, state: BlockState.StateId) u32 {
+        const registry = WorldState.getRegistry();
+
+        // For doors, render both bottom and top halves scaled to fit
+        const is_door = BlockState.isDoor(state) and BlockState.isDoorBottom(state);
+        const part_count: u8 = if (is_door) 2 else 1;
+        const parts = [2]BlockState.StateId{ state, if (is_door) BlockState.doorBottomToTop(state) else state };
+
+        // First pass: collect unique texture layers across all parts
+        var tex_layers: [8]i16 = undefined;
+        var n_tex: u8 = 0;
+        for (0..part_count) |pi| {
+            const part_faces = WorldState.getShapeFaces(parts[pi]);
+            const part_tex = WorldState.getShapedTexIndices(parts[pi]);
+            for (0..part_faces.len) |fi| {
+                const tl: i16 = if (fi < part_tex.len) @intCast(part_tex[fi]) else self.block_tex_side;
+                var found = false;
+                for (tex_layers[0..n_tex]) |existing| {
+                    if (existing == tl) { found = true; break; }
+                }
+                if (!found and n_tex < 8) {
+                    tex_layers[n_tex] = tl;
+                    n_tex += 1;
+                }
+            }
+        }
+
+        // Second pass: emit verts grouped by texture
+        var count = start;
+        self.tex_group_count = 0;
+        for (tex_layers[0..n_tex]) |tl| {
+            const group_start = count;
+            for (0..part_count) |pi| {
+                const part_faces = WorldState.getShapeFaces(parts[pi]);
+                const part_tex = WorldState.getShapedTexIndices(parts[pi]);
+                for (part_faces, 0..) |sf, fi| {
+                    const face_tex: i16 = if (fi < part_tex.len) @intCast(part_tex[fi]) else self.block_tex_side;
+                    if (face_tex != tl) continue;
+
+                    const mi = sf.model_index;
+                    if (mi < WorldState.EXTRA_MODEL_BASE) continue;
+                    const em = registry.extra_models[@as(usize, mi) - WorldState.EXTRA_MODEL_BASE];
+
+                    var v: [4]EntityVertex = undefined;
+                    for (0..4) |ci| {
+                        var py = em.corners[ci][1];
+                        if (is_door) {
+                            // Scale both halves to fit: bottom=[0,0.5], top=[0.5,1]
+                            py = py * 0.5 + @as(f32, @floatFromInt(pi)) * 0.5;
+                        }
+                        v[ci] = .{
+                            .px = em.corners[ci][0] - 0.5,
+                            .py = py - 0.5,
+                            .pz = em.corners[ci][2] - 0.5,
+                            .nx = em.normal[0],
+                            .ny = em.normal[1],
+                            .nz = em.normal[2],
+                            .u = em.uvs[ci][0],
+                            .v = em.uvs[ci][1],
+                        };
+                    }
+                    vertices[count] = v[0];
+                    vertices[count + 1] = v[1];
+                    vertices[count + 2] = v[2];
+                    vertices[count + 3] = v[0];
+                    vertices[count + 4] = v[2];
+                    vertices[count + 5] = v[3];
+                    count += 6;
+                }
+            }
+            const group_count = count - group_start;
+            if (group_count > 0 and self.tex_group_count < 8) {
+                self.tex_groups[self.tex_group_count] = .{
+                    .start = group_start,
+                    .count = group_count,
+                    .tex_layer = tl,
+                };
+                self.tex_group_count += 1;
+            }
+        }
 
         return count;
     }

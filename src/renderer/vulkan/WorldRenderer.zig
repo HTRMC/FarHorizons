@@ -120,7 +120,7 @@ pub const WorldRenderer = struct {
         }
 
         try self.createIndirectBuffer(ctx, gpu_alloc);
-        try self.createPersistentBuffers(ctx, gpu_alloc);
+        try self.createPersistentBuffers(allocator, ctx, gpu_alloc);
     }
 
     pub fn deinit(self: *WorldRenderer, device: vk.VkDevice) void {
@@ -331,7 +331,7 @@ pub const WorldRenderer = struct {
         self.draw_counts = layer_counts;
     }
 
-    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool, ambient_light: [3]f32) void {
+    pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool, ambient_light: [3]f32, fog_color: [3]f32, fog_start: f32, fog_end: f32) void {
         var total_draws: u32 = 0;
         for (self.draw_counts) |dc| total_draws += dc;
         if (total_draws == 0) return;
@@ -374,6 +374,18 @@ pub const WorldRenderer = struct {
             80,
             @sizeOf([3]f32),
             @ptrCast(&ambient_light),
+        );
+
+        // Fog parameters (offset 96: vec3 fogColor, 108: fogStart, 112: fogEnd)
+        const FogPC = extern struct { color: [3]f32, start: f32, end: f32 };
+        const fog_pc = FogPC{ .color = fog_color, .start = fog_start, .end = fog_end };
+        vk.cmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
+            96,
+            @sizeOf(FogPC),
+            @ptrCast(&fog_pc),
         );
 
         const cmd_stride: u32 = @sizeOf(vk.VkDrawIndexedIndirectCommand);
@@ -569,7 +581,7 @@ pub const WorldRenderer = struct {
         const push_constant_range = vk.VkPushConstantRange{
             .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT,
             .offset = 0,
-            .size = 92,
+            .size = 116,
         };
 
         const pipeline_layout_info = vk.VkPipelineLayoutCreateInfo{
@@ -817,7 +829,7 @@ pub const WorldRenderer = struct {
         std.log.info("Indirect draw buffers created (max {} draw commands per layer, {} layers)", .{ MAX_INDIRECT_COMMANDS, LAYER_COUNT });
     }
 
-    fn createPersistentBuffers(self: *WorldRenderer, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {
+    fn createPersistentBuffers(self: *WorldRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {
         const tz = tracy.zone(@src(), "createPersistentBuffers");
         defer tz.end();
 
@@ -834,13 +846,13 @@ pub const WorldRenderer = struct {
             self.light_alloc = try gpu_alloc.createBuffer(lb_capacity, transfer_usage, .device_local);
         }
 
-        const model_size: vk.VkDeviceSize = WorldState.TOTAL_MODEL_COUNT * @sizeOf(QuadModel);
+        const model_size: vk.VkDeviceSize = @as(u64, WorldState.totalModelCount()) * @sizeOf(QuadModel);
         self.model_alloc = try gpu_alloc.createBuffer(
             model_size,
             vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
             .device_local,
         );
-        try self.uploadModelBuffer(ctx, model_size);
+        try self.uploadModelBuffer(allocator, ctx, model_size);
 
         const index_count: u64 = @as(u64, MAX_FACES_PER_DRAW) * 6;
         const ib_capacity: vk.VkDeviceSize = index_count * @sizeOf(u16);
@@ -870,8 +882,11 @@ pub const WorldRenderer = struct {
         });
     }
 
-    fn uploadModelBuffer(self: *WorldRenderer, ctx: *const VulkanContext, model_size: vk.VkDeviceSize) !void {
-        var models: [WorldState.TOTAL_MODEL_COUNT]QuadModel = undefined;
+    fn uploadModelBuffer(self: *WorldRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext, model_size: vk.VkDeviceSize) !void {
+        const total_count = WorldState.totalModelCount();
+        const reg = WorldState.getRegistry();
+        const models = try allocator.alloc(QuadModel, total_count);
+        defer allocator.free(models);
 
         // Standard full-cube face models (0-5)
         for (0..6) |face| {
@@ -897,9 +912,32 @@ pub const WorldRenderer = struct {
             };
         }
 
-        // Extra quad models for shaped blocks (6+)
-        for (0..WorldState.EXTRA_MODEL_COUNT) |i| {
-            const em = WorldState.extra_quad_models[i];
+        // Water face models (6-11): same as standard but top at 14/16
+        for (0..6) |face| {
+            var corners: [12]f32 = undefined;
+            var uvs: [8]f32 = undefined;
+            for (0..4) |v| {
+                const fv = WorldState.water_face_vertices[face][v];
+                corners[v * 3 + 0] = fv.px;
+                corners[v * 3 + 1] = fv.py;
+                corners[v * 3 + 2] = fv.pz;
+                uvs[v * 2 + 0] = fv.u;
+                uvs[v * 2 + 1] = fv.v;
+            }
+            const fno = WorldState.face_neighbor_offsets[face];
+            models[WorldState.WATER_MODEL_BASE + face] = .{
+                .corners = corners,
+                .uvs = uvs,
+                .normal = .{
+                    @floatFromInt(fno[0]),
+                    @floatFromInt(fno[1]),
+                    @floatFromInt(fno[2]),
+                },
+            };
+        }
+
+        // Extra quad models for shaped blocks (12+)
+        for (reg.extra_models, 0..) |em, i| {
             var corners: [12]f32 = undefined;
             var uvs: [8]f32 = undefined;
             for (0..4) |v| {
@@ -909,7 +947,7 @@ pub const WorldRenderer = struct {
                 uvs[v * 2 + 0] = em.uvs[v][0];
                 uvs[v * 2 + 1] = em.uvs[v][1];
             }
-            models[6 + i] = .{
+            models[WorldState.EXTRA_MODEL_BASE + i] = .{
                 .corners = corners,
                 .uvs = uvs,
                 .normal = em.normal,
@@ -934,7 +972,7 @@ pub const WorldRenderer = struct {
         var data: ?*anyopaque = null;
         try vk.mapMemory(ctx.device, staging_memory, 0, model_size, 0, &data);
         const dst: [*]QuadModel = @ptrCast(@alignCast(data));
-        @memcpy(dst[0..WorldState.TOTAL_MODEL_COUNT], &models);
+        @memcpy(dst[0..total_count], models);
         vk.unmapMemory(ctx.device, staging_memory);
 
         try vk_utils.copyBuffer(ctx, staging_buffer, self.model_alloc.buffer, model_size);

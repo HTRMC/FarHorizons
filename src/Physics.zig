@@ -1,6 +1,7 @@
 const std = @import("std");
 const GameState = @import("GameState.zig");
 const WorldState = @import("world/WorldState.zig");
+const BlockState = WorldState.BlockState;
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 
 const GRAVITY: f32 = 32.0;
@@ -11,6 +12,18 @@ const WALK_SPEED: f32 = 4.3;
 const FRICTION: f32 = 20.0;
 const AIR_CONTROL: f32 = 0.3;
 const EPSILON: f32 = 1.0e-7;
+
+// Water physics (matched to Minecraft constants)
+const WATER_GRAVITY: f32 = 2.0; // GRAVITY / 16
+const WATER_SPEED: f32 = 2.0; // terminal horizontal velocity in water
+const WATER_SWIM_SPEED: f32 = 3.0; // vertical swim speed
+const WATER_FRICTION: f32 = 12.0; // approach rate for velocity
+const WATER_XZ_DRAG: f32 = 0.86; // per-tick horizontal drag (MC 0.8 @20Hz → 0.86 @30Hz)
+const WATER_Y_DRAG: f32 = 0.86; // per-tick vertical drag
+
+// Ladder physics (matched to Minecraft)
+pub const LADDER_CLIMB_SPEED: f32 = 3.0; // climb speed when holding jump
+const LADDER_MAX_FALL: f32 = -2.4; // max fall speed on ladder (MC: -0.15/tick @20Hz)
 
 pub fn updateEntity(state: *GameState, dt: f32) void {
     if (state.mode == .flying) return;
@@ -30,13 +43,30 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         wish_z *= inv_len;
     }
 
-    const target_vx = wish_x * WALK_SPEED;
-    const target_vz = wish_z * WALK_SPEED;
+    if (state.entity_in_water) {
+        // Water horizontal movement
+        const target_vx = wish_x * WATER_SPEED;
+        const target_vz = wish_z * WATER_SPEED;
+        const water_control = WATER_FRICTION * dt;
+        state.entity_vel[0] = approach(state.entity_vel[0], target_vx, water_control);
+        state.entity_vel[2] = approach(state.entity_vel[2], target_vz, water_control);
 
-    const control = if (state.entity_on_ground) FRICTION else FRICTION * AIR_CONTROL;
-    const max_delta = control * dt;
-    state.entity_vel[0] = approach(state.entity_vel[0], target_vx, max_delta);
-    state.entity_vel[2] = approach(state.entity_vel[2], target_vz, max_delta);
+        // Vertical swimming (input_move[1]: +1 jump, -1 sneak)
+        // Only apply when input is active — otherwise let gravity/drag handle sinking
+        const up_input = state.input_move[1];
+        if (up_input != 0.0) {
+            const target_vy = up_input * WATER_SWIM_SPEED;
+            state.entity_vel[1] = approach(state.entity_vel[1], target_vy, water_control);
+        }
+    } else {
+        // Land horizontal movement
+        const target_vx = wish_x * WALK_SPEED;
+        const target_vz = wish_z * WALK_SPEED;
+        const control = if (state.entity_on_ground) FRICTION else FRICTION * AIR_CONTROL;
+        const max_delta = control * dt;
+        state.entity_vel[0] = approach(state.entity_vel[0], target_vx, max_delta);
+        state.entity_vel[2] = approach(state.entity_vel[2], target_vz, max_delta);
+    }
 
     state.entity_on_ground = false;
 
@@ -72,8 +102,26 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         }
     }
 
-    state.entity_vel[1] -= GRAVITY * dt;
-    state.entity_vel[1] *= Y_DRAG;
+    if (state.entity_in_water) {
+        state.entity_vel[1] -= WATER_GRAVITY * dt;
+        state.entity_vel[0] *= WATER_XZ_DRAG;
+        state.entity_vel[1] *= WATER_Y_DRAG;
+        state.entity_vel[2] *= WATER_XZ_DRAG;
+    } else if (state.entity_on_ladder) {
+        state.entity_vel[1] -= GRAVITY * dt;
+        state.entity_vel[1] *= Y_DRAG;
+        // Cap fall speed on ladder
+        if (state.entity_vel[1] < LADDER_MAX_FALL) {
+            state.entity_vel[1] = LADDER_MAX_FALL;
+        }
+        // Sneak to hold position on ladder
+        if (state.input_move[1] < 0.0 and state.entity_vel[1] < 0.0) {
+            state.entity_vel[1] = 0.0;
+        }
+    } else {
+        state.entity_vel[1] -= GRAVITY * dt;
+        state.entity_vel[1] *= Y_DRAG;
+    }
 }
 
 fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usize) struct { distance: f32, hit: bool } {
@@ -88,12 +136,14 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
         scan_min[axis] += movement;
     }
 
-    const bx0 = floori(scan_min[0]);
-    const by0 = floori(scan_min[1]);
-    const bz0 = floori(scan_min[2]);
-    const bx1 = floori(scan_max[0]);
-    const by1 = floori(scan_max[1]);
-    const bz1 = floori(scan_max[2]);
+    // Expand scan by 1 block to catch blocks with collision boxes that extend
+    // beyond their own block (e.g. fences are 1.5 blocks tall).
+    const bx0 = floori(scan_min[0]) - 1;
+    const by0 = floori(scan_min[1]) - 1;
+    const bz0 = floori(scan_min[2]) - 1;
+    const bx1 = floori(scan_max[0]) + 1;
+    const by1 = floori(scan_max[1]) + 1;
+    const bz1 = floori(scan_max[2]) + 1;
 
     var safe_dist = movement;
     var hit = false;
@@ -105,10 +155,10 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
             var bx: i32 = bx0;
             while (bx <= bx1) : (bx += 1) {
                 const block = chunk_map.getBlock(bx, by, bz);
-                if (!WorldState.block_properties.isSolid(block)) continue;
+                if (!BlockState.isSolid(block)) continue;
 
                 const coords = [3]i32{ bx, by, bz };
-                const block_boxes = getBlockBoxes(block);
+                const block_boxes = BlockState.getCollisionBoxes(block);
                 for (block_boxes.boxes[0..block_boxes.count]) |box| {
                     const box_min = [3]f32{
                         @as(f32, @floatFromInt(coords[0])) + box.min[0],
@@ -144,62 +194,9 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
     return .{ .distance = safe_dist, .hit = hit };
 }
 
-pub const BlockBox = struct { min: [3]f32, max: [3]f32 };
-pub const BlockBoxes = struct { boxes: [2]BlockBox, count: u8 };
-
-pub fn getBlockBoxes(block: WorldState.BlockType) BlockBoxes {
-    return switch (block) {
-        .oak_slab_bottom => .{
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .oak_slab_top => .{
-            .boxes = .{
-                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 1 } },
-                undefined,
-            },
-            .count = 1,
-        },
-        .oak_stairs_south => .{ // back at -Z, step at +Z
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } }, // bottom slab
-                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 0.5 } }, // upper back
-            },
-            .count = 2,
-        },
-        .oak_stairs_north => .{ // back at +Z, step at -Z
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
-                .{ .min = .{ 0, 0.5, 0.5 }, .max = .{ 1, 1, 1 } },
-            },
-            .count = 2,
-        },
-        .oak_stairs_east => .{ // back at -X, step at +X
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
-                .{ .min = .{ 0, 0.5, 0 }, .max = .{ 0.5, 1, 1 } },
-            },
-            .count = 2,
-        },
-        .oak_stairs_west => .{ // back at +X, step at -X
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } },
-                .{ .min = .{ 0.5, 0.5, 0 }, .max = .{ 1, 1, 1 } },
-            },
-            .count = 2,
-        },
-        else => .{
-            .boxes = .{
-                .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 1 } },
-                undefined,
-            },
-            .count = 1,
-        },
-    };
-}
+pub const BlockBox = BlockState.BlockBox;
+pub const BlockBoxes = BlockState.BlockBoxes;
+pub const getBlockBoxes = BlockState.getCollisionBoxes;
 
 fn overlapsOtherAxesBox(aabb_min: [3]f32, aabb_max: [3]f32, box_min: [3]f32, box_max: [3]f32, skip_axis: usize) bool {
     const axes_to_check: [2]usize = switch (skip_axis) {
@@ -235,7 +232,7 @@ fn overlapsOtherAxes(aabb_min: [3]f32, aabb_max: [3]f32, block: [3]i32, skip_axi
     return true;
 }
 
-fn floori(v: f32) i32 {
+pub fn floori(v: f32) i32 {
     return @intFromFloat(@floor(v));
 }
 
@@ -321,7 +318,7 @@ test "collideAxis: no collision in empty chunk" {
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
     defer testing.allocator.destroy(chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     const pos = [3]f32{ 5.0, 5.0, 5.0 };
@@ -336,10 +333,10 @@ test "collideAxis: collision with solid block" {
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
     defer testing.allocator.destroy(chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
 
     // Place stone at (10, 5, 5)
-    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .stone;
+    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = BlockState.defaultState(.stone);
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     // Entity at x=8.0 (HALF_W=0.4, so right edge at 8.4), moving +x toward block at x=10
@@ -358,10 +355,10 @@ test "collideAxis: negative movement collision" {
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
     defer testing.allocator.destroy(chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
 
     // Place stone at (3, 5, 5) — block spans x=[3,4)
-    chunk.blocks[WorldState.chunkIndex(3, 5, 5)] = .stone;
+    chunk.blocks[WorldState.chunkIndex(3, 5, 5)] = BlockState.defaultState(.stone);
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     // Entity at x=5.0 (left edge at 4.6), moving -x toward block ending at x=4
@@ -379,10 +376,10 @@ test "collideAxis: water is not solid" {
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
     defer testing.allocator.destroy(chunk);
-    chunk.blocks = .{.air} ** WorldState.BLOCKS_PER_CHUNK;
+    @memset(&chunk.blocks, @as(u16, 0));
 
     // Place water at (10, 5, 5)
-    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = .water;
+    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = BlockState.defaultState(.water);
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     const pos = [3]f32{ 8.0, 5.0, 5.5 };

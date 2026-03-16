@@ -86,6 +86,9 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    // Embed the application icon on Windows
+    exe.root_module.addWin32ResourceFile(.{ .file = b.path("assets/icon.rc") });
+
     // Hide the console window on Windows unless -Dconsole=true
     if (exe.root_module.resolved_target.?.result.os.tag == .windows and !console_enabled) {
         exe.subsystem = .windows;
