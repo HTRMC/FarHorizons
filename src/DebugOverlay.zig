@@ -71,7 +71,8 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     const deg = 180.0 / std.math.pi;
     const yaw_deg = gs.camera.yaw * deg;
     const pitch_deg = gs.camera.pitch * deg;
-    const ang_text = std.fmt.bufPrint(&buf, "Yaw: {d:.2}  Pitch: {d:.2}", .{ yaw_deg, pitch_deg }) catch "Yaw: ?";
+    const facing = yawFacing(gs.camera.yaw);
+    const ang_text = std.fmt.bufPrint(&buf, "Facing: {s}  Yaw: {d:.2}  Pitch: {d:.2}", .{ facing, yaw_deg, pitch_deg }) catch "Facing: ?";
     text.drawText(x, y, ang_text, yellow);
     y += LINE_HEIGHT;
 
@@ -240,6 +241,21 @@ fn drawF5(text: *TextRenderer, gs: *GameState) void {
     }) catch "Player Chunk: ?";
     drawTextRight(text, y, ck_text, yellow);
     y += LINE_HEIGHT;
+}
+
+fn yawFacing(yaw: f32) []const u8 {
+    // Normalize to [0, 2π)
+    const tau = std.math.pi * 2.0;
+    const normalized = @mod(yaw, tau);
+    // yaw=0 → -Z (north), increases counterclockwise: N → W → S → E
+    if (normalized < std.math.pi * 0.25 or normalized >= std.math.pi * 1.75)
+        return "North (-Z)"
+    else if (normalized < std.math.pi * 0.75)
+        return "West (-X)"
+    else if (normalized < std.math.pi * 1.25)
+        return "South (+Z)"
+    else
+        return "East (+X)";
 }
 
 fn dirName(dir: Raycast.Direction) []const u8 {

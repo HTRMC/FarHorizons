@@ -166,7 +166,7 @@ test "single opaque block sets surface height" {
 
     const chunk = try allocChunk();
     defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(5, 10, 7)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(5, 10, 7)] = BlockState.defaultState(.stone);
 
     const key = WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
     shm.updateFromChunk(key, chunk);
@@ -184,11 +184,11 @@ test "higher chunk overrides lower surface height" {
 
     const chunk_low = try allocChunk();
     defer testing.allocator.destroy(chunk_low);
-    chunk_low.blocks[chunkIndex(3, 5, 3)] = BlockState.fromLegacy(.stone);
+    chunk_low.blocks[chunkIndex(3, 5, 3)] = BlockState.defaultState(.stone);
 
     const chunk_high = try allocChunk();
     defer testing.allocator.destroy(chunk_high);
-    chunk_high.blocks[chunkIndex(3, 20, 3)] = BlockState.fromLegacy(.stone);
+    chunk_high.blocks[chunkIndex(3, 20, 3)] = BlockState.defaultState(.stone);
 
     // Load low chunk first (cy=0, world_y=5)
     shm.updateFromChunk(.{ .cx = 0, .cy = 0, .cz = 0 }, chunk_low);
@@ -206,7 +206,7 @@ test "updateBlockPlaced updates height" {
 
     const chunk = try allocChunk();
     defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(0, 5, 0)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(0, 5, 0)] = BlockState.defaultState(.stone);
 
     shm.updateFromChunk(.{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
     const col = shm.getHeights(0, 0).?;
@@ -229,8 +229,8 @@ test "rebuildColumnAt rescans after break" {
     defer chunk_map.deinit();
 
     const chunk = try allocChunk();
-    chunk.blocks[chunkIndex(2, 10, 2)] = BlockState.fromLegacy(.stone);
-    chunk.blocks[chunkIndex(2, 5, 2)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(2, 10, 2)] = BlockState.defaultState(.stone);
+    chunk.blocks[chunkIndex(2, 5, 2)] = BlockState.defaultState(.stone);
 
     const key = WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
     chunk_map.put(key, chunk);
@@ -253,7 +253,7 @@ test "negative chunk cy produces correct world heights" {
 
     const chunk = try allocChunk();
     defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(0, 0, 0)] = BlockState.fromLegacy(.stone);
+    chunk.blocks[chunkIndex(0, 0, 0)] = BlockState.defaultState(.stone);
 
     // cy = -1, so world_y = -1 * 32 + 0 = -32
     shm.updateFromChunk(.{ .cx = 0, .cy = -1, .cz = 0 }, chunk);

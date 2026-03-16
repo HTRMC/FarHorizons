@@ -2,15 +2,12 @@ const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const ExtraQuadModel = WorldState.ExtraQuadModel;
 const ShapeFace = WorldState.ShapeFace;
-const BlockType = WorldState.BlockType;
 const BlockState = @import("BlockState.zig");
 const app_config = @import("../app_config.zig");
 
 const Io = std.Io;
 const Dir = Io.Dir;
 const sep = std.fs.path.sep_str;
-
-const NUM_BLOCKS = @typeInfo(BlockType).@"enum".fields.len;
 
 // Texture name → index mapping (must match TextureManager.block_texture_names)
 const texture_map = std.StaticStringMap(u8).initComptime(.{

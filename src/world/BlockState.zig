@@ -1,7 +1,5 @@
 const std = @import("std");
-const WorldState = @import("WorldState.zig");
-const OldBlockType = WorldState.BlockType;
-const RenderLayer = WorldState.RenderLayer;
+const RenderLayer = @import("BlockTypes.zig").RenderLayer;
 
 // ==== Property Types ====
 
@@ -64,6 +62,8 @@ pub const NUM_BLOCKS = @typeInfo(Block).@"enum".fields.len;
 pub const StateId = u16;
 pub const AABB = struct { min: [3]f32, max: [3]f32 };
 pub const Transform = enum { none, flip_y, rotate_90, rotate_180, rotate_270, flip_y_rotate_90, flip_y_rotate_180, flip_y_rotate_270 };
+pub const BlockBox = struct { min: [3]f32, max: [3]f32 };
+pub const BlockBoxes = struct { boxes: [3]BlockBox, count: u8 };
 
 fn stateCount(block: Block) u16 {
     return switch (block) {
@@ -396,6 +396,182 @@ pub inline fn getHitbox(state: StateId) ?AABB {
     return state_props[state].hitbox;
 }
 
+// ==== Collision ====
+
+fn oneBox(min: [3]f32, max: [3]f32) BlockBoxes {
+    return .{ .boxes = .{ .{ .min = min, .max = max }, undefined, undefined }, .count = 1 };
+}
+
+fn fullCubeBox() BlockBoxes {
+    return oneBox(.{ 0, 0, 0 }, .{ 1, 1, 1 });
+}
+
+fn computeCollision(block: Block, props: u8) BlockBoxes {
+    switch (block) {
+        .oak_slab => {
+            const slab_type: SlabType = @enumFromInt(@as(u2, @truncate(props)));
+            return switch (slab_type) {
+                .bottom => oneBox(.{ 0, 0, 0 }, .{ 1, 0.5, 1 }),
+                .top => oneBox(.{ 0, 0.5, 0 }, .{ 1, 1, 1 }),
+                .double => fullCubeBox(),
+            };
+        },
+        .oak_stairs => return computeStairBoxes(props),
+        .torch, .ladder, .oak_door => {
+            const hitbox = computeHitbox(block, props) orelse return fullCubeBox();
+            return oneBox(hitbox.min, hitbox.max);
+        },
+        .oak_fence => {
+            const n = props & 1 != 0;
+            const s = (props >> 1) & 1 != 0;
+            const e = (props >> 2) & 1 != 0;
+            const w = (props >> 3) & 1 != 0;
+            const min_x: f32 = if (w) 0.0 else 6.0 / 16.0;
+            const max_x: f32 = if (e) 1.0 else 10.0 / 16.0;
+            const min_z: f32 = if (n) 0.0 else 6.0 / 16.0;
+            const max_z: f32 = if (s) 1.0 else 10.0 / 16.0;
+            const n_count = @as(u8, @intFromBool(n)) + @intFromBool(s) + @intFromBool(e) + @intFromBool(w);
+            if (n_count >= 2 and (n or s) and (e or w)) {
+                return .{
+                    .boxes = .{
+                        .{ .min = .{ 6.0 / 16.0, 0, min_z }, .max = .{ 10.0 / 16.0, 1.5, max_z } },
+                        .{ .min = .{ min_x, 0, 6.0 / 16.0 }, .max = .{ max_x, 1.5, 10.0 / 16.0 } },
+                        undefined,
+                    },
+                    .count = 2,
+                };
+            }
+            return oneBox(.{ min_x, 0, min_z }, .{ max_x, 1.5, max_z });
+        },
+        else => return fullCubeBox(),
+    }
+}
+
+fn computeStairBoxes(props: u8) BlockBoxes {
+    const facing: Facing = @enumFromInt(@as(u2, @truncate(props)));
+    const half: Half = @enumFromInt(@as(u1, @truncate(props >> 2)));
+    const shape: StairShape = @enumFromInt(@as(u3, @truncate(props >> 3)));
+    const base_box: BlockBox = if (half == .bottom)
+        .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 0.5, 1 } }
+    else
+        .{ .min = .{ 0, 0.5, 0 }, .max = .{ 1, 1, 1 } };
+    const sy0: f32 = if (half == .bottom) 0.5 else 0.0;
+    const sy1: f32 = if (half == .bottom) 1.0 else 0.5;
+    switch (shape) {
+        .straight => {
+            const step = straightStepBox(facing, sy0, sy1);
+            return .{ .boxes = .{ base_box, step, undefined }, .count = 2 };
+        },
+        .inner_left, .inner_right => {
+            const back = straightStepBox(facing, sy0, sy1);
+            const side_facing: Facing = if (shape == .inner_right) rotateCW(facing) else rotateCCW(facing);
+            const side = quadrantBox(facing, side_facing, sy0, sy1);
+            return .{ .boxes = .{ base_box, back, side }, .count = 3 };
+        },
+        .outer_left, .outer_right => {
+            const side_facing: Facing = if (shape == .outer_right) rotateCW(facing) else rotateCCW(facing);
+            const corner = quadrantBox(facing, side_facing, sy0, sy1);
+            return .{ .boxes = .{ base_box, corner, undefined }, .count = 2 };
+        },
+    }
+}
+
+fn straightStepBox(facing: Facing, sy0: f32, sy1: f32) BlockBox {
+    return switch (facing) {
+        .south => .{ .min = .{ 0, sy0, 0 }, .max = .{ 1, sy1, 0.5 } },
+        .north => .{ .min = .{ 0, sy0, 0.5 }, .max = .{ 1, sy1, 1 } },
+        .east => .{ .min = .{ 0, sy0, 0 }, .max = .{ 0.5, sy1, 1 } },
+        .west => .{ .min = .{ 0.5, sy0, 0 }, .max = .{ 1, sy1, 1 } },
+    };
+}
+
+fn quadrantBox(facing: Facing, side: Facing, sy0: f32, sy1: f32) BlockBox {
+    const x0: f32 = if (facing == .east or side == .east) 0.0 else if (facing == .west or side == .west) 0.5 else 0.0;
+    const x1: f32 = if (facing == .west or side == .west) 1.0 else if (facing == .east or side == .east) 0.5 else 1.0;
+    const z0: f32 = if (facing == .south or side == .south) 0.0 else if (facing == .north or side == .north) 0.5 else 0.0;
+    const z1: f32 = if (facing == .north or side == .north) 1.0 else if (facing == .south or side == .south) 0.5 else 1.0;
+    return .{ .min = .{ x0, sy0, z0 }, .max = .{ x1, sy1, z1 } };
+}
+
+fn rotateCW(facing: Facing) Facing {
+    return switch (facing) { .south => .west, .west => .north, .north => .east, .east => .south };
+}
+
+fn rotateCCW(facing: Facing) Facing {
+    return switch (facing) { .south => .east, .east => .north, .north => .west, .west => .south };
+}
+
+const collision_table: [TOTAL_STATES]BlockBoxes = blk: {
+    var table: [TOTAL_STATES]BlockBoxes = undefined;
+    for (0..TOTAL_STATES) |i| {
+        table[i] = computeCollision(state_to_block_table[i], state_to_props_table[i]);
+    }
+    break :blk table;
+};
+
+pub inline fn getCollisionBoxes(state: StateId) BlockBoxes {
+    return collision_table[state];
+}
+
+pub const TexIndices = struct { top: i16, side: i16 };
+
+/// Per-state mesh texture indices (top/bottom face vs side faces).
+/// For non-shaped full-cube blocks this is the primary texture lookup.
+/// Shaped blocks use getShapedTexIndices from the model registry instead.
+pub inline fn blockTexIndices(state: StateId) TexIndices {
+    return tex_indices_table[state];
+}
+
+const tex_indices_table: [TOTAL_STATES]TexIndices = blk: {
+    var table: [TOTAL_STATES]TexIndices = undefined;
+    for (0..TOTAL_STATES) |i| {
+        table[i] = computeTexIndices(state_to_block_table[i], state_to_props_table[i]);
+    }
+    break :blk table;
+};
+
+fn computeTexIndices(block: Block, props: u8) TexIndices {
+    return switch (block) {
+        .air => .{ .top = -1, .side = -1 },
+        .glass => .{ .top = 0, .side = 0 },
+        .grass_block => .{ .top = 1, .side = 1 },
+        .dirt => .{ .top = 2, .side = 2 },
+        .stone => .{ .top = 3, .side = 3 },
+        .glowstone => .{ .top = 4, .side = 4 },
+        .sand => .{ .top = 5, .side = 5 },
+        .snow => .{ .top = 6, .side = 6 },
+        .water => .{ .top = 7, .side = 7 },
+        .gravel => .{ .top = 8, .side = 8 },
+        .cobblestone => .{ .top = 9, .side = 9 },
+        .oak_log => .{ .top = 27, .side = 10 },
+        .oak_planks => .{ .top = 11, .side = 11 },
+        .bricks => .{ .top = 12, .side = 12 },
+        .bedrock => .{ .top = 13, .side = 13 },
+        .gold_ore => .{ .top = 14, .side = 14 },
+        .iron_ore => .{ .top = 15, .side = 15 },
+        .coal_ore => .{ .top = 16, .side = 16 },
+        .diamond_ore => .{ .top = 17, .side = 17 },
+        .sponge => .{ .top = 18, .side = 18 },
+        .pumice => .{ .top = 19, .side = 19 },
+        .wool => .{ .top = 20, .side = 20 },
+        .gold_block => .{ .top = 21, .side = 21 },
+        .iron_block => .{ .top = 22, .side = 22 },
+        .diamond_block => .{ .top = 23, .side = 23 },
+        .bookshelf => .{ .top = 24, .side = 24 },
+        .obsidian => .{ .top = 25, .side = 25 },
+        .oak_leaves => .{ .top = 26, .side = 26 },
+        .oak_slab => .{ .top = 11, .side = 11 },
+        .oak_stairs => .{ .top = 11, .side = 11 },
+        .torch => .{ .top = 28, .side = 28 },
+        .ladder => .{ .top = 29, .side = 29 },
+        .oak_door => blk: {
+            const half: Half = @enumFromInt(@as(u1, @truncate(props >> 2)));
+            break :blk if (half == .bottom) .{ .top = 32, .side = 32 } else .{ .top = 33, .side = 33 };
+        },
+        .oak_fence => .{ .top = 11, .side = 11 },
+    };
+}
+
 // ==== Block Behavior Functions ====
 
 pub fn connectsToFence(state: StateId) bool {
@@ -611,111 +787,6 @@ pub const model_info_table: [TOTAL_STATES]?ModelInfo = blk: {
     break :blk table;
 };
 
-// ==== Legacy Bridge ====
-
-const OLD_BLOCK_COUNT = @typeInfo(OldBlockType).@"enum".fields.len;
-
-fn legacyStateId(comptime name: []const u8) StateId {
-    @setEvalBranchQuota(10000);
-    // Slab variants
-    if (comptime std.mem.eql(u8, name, "oak_slab_bottom")) return fromBlockProps(.oak_slab, @intFromEnum(SlabType.bottom));
-    if (comptime std.mem.eql(u8, name, "oak_slab_top")) return fromBlockProps(.oak_slab, @intFromEnum(SlabType.top));
-    if (comptime std.mem.eql(u8, name, "oak_slab_double")) return fromBlockProps(.oak_slab, @intFromEnum(SlabType.double));
-    // Stairs
-    if (comptime std.mem.eql(u8, name, "oak_stairs_south")) return fromBlockProps(.oak_stairs, @intFromEnum(Facing.south));
-    if (comptime std.mem.eql(u8, name, "oak_stairs_north")) return fromBlockProps(.oak_stairs, @intFromEnum(Facing.north));
-    if (comptime std.mem.eql(u8, name, "oak_stairs_east")) return fromBlockProps(.oak_stairs, @intFromEnum(Facing.east));
-    if (comptime std.mem.eql(u8, name, "oak_stairs_west")) return fromBlockProps(.oak_stairs, @intFromEnum(Facing.west));
-    // Torches
-    if (comptime std.mem.eql(u8, name, "torch")) return fromBlockProps(.torch, @intFromEnum(Placement.standing));
-    if (comptime std.mem.eql(u8, name, "torch_wall_south")) return fromBlockProps(.torch, @intFromEnum(Placement.wall_south));
-    if (comptime std.mem.eql(u8, name, "torch_wall_north")) return fromBlockProps(.torch, @intFromEnum(Placement.wall_north));
-    if (comptime std.mem.eql(u8, name, "torch_wall_east")) return fromBlockProps(.torch, @intFromEnum(Placement.wall_east));
-    if (comptime std.mem.eql(u8, name, "torch_wall_west")) return fromBlockProps(.torch, @intFromEnum(Placement.wall_west));
-    // Ladders
-    if (comptime std.mem.eql(u8, name, "ladder_south")) return fromBlockProps(.ladder, @intFromEnum(Facing.south));
-    if (comptime std.mem.eql(u8, name, "ladder_north")) return fromBlockProps(.ladder, @intFromEnum(Facing.north));
-    if (comptime std.mem.eql(u8, name, "ladder_east")) return fromBlockProps(.ladder, @intFromEnum(Facing.east));
-    if (comptime std.mem.eql(u8, name, "ladder_west")) return fromBlockProps(.ladder, @intFromEnum(Facing.west));
-    // Doors: oak_door_{bottom,top}_{east,south,west,north}[_open]
-    if (comptime std.mem.eql(u8, name, "oak_door_bottom_east")) return makeDoorState(.east, .bottom, false);
-    if (comptime std.mem.eql(u8, name, "oak_door_bottom_east_open")) return makeDoorState(.east, .bottom, true);
-    if (comptime std.mem.eql(u8, name, "oak_door_bottom_south")) return makeDoorState(.south, .bottom, false);
-    if (comptime std.mem.eql(u8, name, "oak_door_bottom_south_open")) return makeDoorState(.south, .bottom, true);
-    if (comptime std.mem.eql(u8, name, "oak_door_bottom_west")) return makeDoorState(.west, .bottom, false);
-    if (comptime std.mem.eql(u8, name, "oak_door_bottom_west_open")) return makeDoorState(.west, .bottom, true);
-    if (comptime std.mem.eql(u8, name, "oak_door_bottom_north")) return makeDoorState(.north, .bottom, false);
-    if (comptime std.mem.eql(u8, name, "oak_door_bottom_north_open")) return makeDoorState(.north, .bottom, true);
-    if (comptime std.mem.eql(u8, name, "oak_door_top_east")) return makeDoorState(.east, .top, false);
-    if (comptime std.mem.eql(u8, name, "oak_door_top_east_open")) return makeDoorState(.east, .top, true);
-    if (comptime std.mem.eql(u8, name, "oak_door_top_south")) return makeDoorState(.south, .top, false);
-    if (comptime std.mem.eql(u8, name, "oak_door_top_south_open")) return makeDoorState(.south, .top, true);
-    if (comptime std.mem.eql(u8, name, "oak_door_top_west")) return makeDoorState(.west, .top, false);
-    if (comptime std.mem.eql(u8, name, "oak_door_top_west_open")) return makeDoorState(.west, .top, true);
-    if (comptime std.mem.eql(u8, name, "oak_door_top_north")) return makeDoorState(.north, .top, false);
-    if (comptime std.mem.eql(u8, name, "oak_door_top_north_open")) return makeDoorState(.north, .top, true);
-    // Fences: oak_fence_{connections}
-    if (comptime std.mem.eql(u8, name, "oak_fence_post")) return fenceFromConnections(false, false, false, false);
-    if (comptime std.mem.eql(u8, name, "oak_fence_n")) return fenceFromConnections(true, false, false, false);
-    if (comptime std.mem.eql(u8, name, "oak_fence_s")) return fenceFromConnections(false, true, false, false);
-    if (comptime std.mem.eql(u8, name, "oak_fence_e")) return fenceFromConnections(false, false, true, false);
-    if (comptime std.mem.eql(u8, name, "oak_fence_w")) return fenceFromConnections(false, false, false, true);
-    if (comptime std.mem.eql(u8, name, "oak_fence_ns")) return fenceFromConnections(true, true, false, false);
-    if (comptime std.mem.eql(u8, name, "oak_fence_ne")) return fenceFromConnections(true, false, true, false);
-    if (comptime std.mem.eql(u8, name, "oak_fence_nw")) return fenceFromConnections(true, false, false, true);
-    if (comptime std.mem.eql(u8, name, "oak_fence_se")) return fenceFromConnections(false, true, true, false);
-    if (comptime std.mem.eql(u8, name, "oak_fence_sw")) return fenceFromConnections(false, true, false, true);
-    if (comptime std.mem.eql(u8, name, "oak_fence_ew")) return fenceFromConnections(false, false, true, true);
-    if (comptime std.mem.eql(u8, name, "oak_fence_nse")) return fenceFromConnections(true, true, true, false);
-    if (comptime std.mem.eql(u8, name, "oak_fence_nsw")) return fenceFromConnections(true, true, false, true);
-    if (comptime std.mem.eql(u8, name, "oak_fence_new")) return fenceFromConnections(true, false, true, true);
-    if (comptime std.mem.eql(u8, name, "oak_fence_sew")) return fenceFromConnections(false, true, true, true);
-    if (comptime std.mem.eql(u8, name, "oak_fence_nsew")) return fenceFromConnections(true, true, true, true);
-    // Simple blocks: match by name in Block enum
-    inline for (@typeInfo(Block).@"enum".fields) |field| {
-        if (comptime std.mem.eql(u8, name, field.name)) {
-            return fromBlockProps(@enumFromInt(field.value), 0);
-        }
-    }
-    @compileError("Unknown legacy block: " ++ name);
-}
-
-const legacy_to_state: [OLD_BLOCK_COUNT]StateId = blk: {
-    var table: [OLD_BLOCK_COUNT]StateId = undefined;
-    for (@typeInfo(OldBlockType).@"enum".fields, 0..) |field, i| {
-        table[i] = legacyStateId(field.name);
-    }
-    break :blk table;
-};
-
-const state_to_legacy: [TOTAL_STATES]OldBlockType = blk: {
-    // Initialize with air (default for states that might not have a legacy equivalent)
-    var table: [TOTAL_STATES]OldBlockType = .{.air} ** TOTAL_STATES;
-    for (@typeInfo(OldBlockType).@"enum".fields) |field| {
-        const state_id = legacyStateId(field.name);
-        table[state_id] = @enumFromInt(field.value);
-    }
-    // Map all stair states to their facing-appropriate legacy variant.
-    // States beyond the 4 legacy ones (top half, corners) map to the same facing.
-    const stair_legacy = [4]OldBlockType{ .oak_stairs_south, .oak_stairs_north, .oak_stairs_east, .oak_stairs_west };
-    const stair_base = block_offset_table[@intFromEnum(Block.oak_stairs)];
-    for (0..stateCount(.oak_stairs)) |i| {
-        const facing_bits: u2 = @truncate(i);
-        if (table[stair_base + i] == .air) {
-            table[stair_base + i] = stair_legacy[facing_bits];
-        }
-    }
-    break :blk table;
-};
-
-pub fn fromLegacy(old: OldBlockType) StateId {
-    return legacy_to_state[@intFromEnum(old)];
-}
-
-pub fn toLegacy(state: StateId) OldBlockType {
-    return state_to_legacy[state];
-}
-
 // ==== Tests ====
 
 test "total state count" {
@@ -777,30 +848,6 @@ test "fence connections" {
     const nsew = fenceFromConnections(true, true, true, true);
     const conns2 = getFenceConnections(nsew).?;
     try std.testing.expect(conns2.n and conns2.s and conns2.e and conns2.w);
-}
-
-test "legacy bridge round-trip" {
-    // Simple blocks
-    try std.testing.expectEqual(defaultState(.air), fromLegacy(.air));
-    try std.testing.expectEqual(defaultState(.stone), fromLegacy(.stone));
-    try std.testing.expectEqual(OldBlockType.air, toLegacy(defaultState(.air)));
-    try std.testing.expectEqual(OldBlockType.stone, toLegacy(defaultState(.stone)));
-
-    // Slab
-    try std.testing.expectEqual(OldBlockType.oak_slab_bottom, toLegacy(fromBlockProps(.oak_slab, @intFromEnum(SlabType.bottom))));
-    try std.testing.expectEqual(OldBlockType.oak_slab_double, toLegacy(fromBlockProps(.oak_slab, @intFromEnum(SlabType.double))));
-
-    // Door
-    const door_state = fromLegacy(.oak_door_bottom_east_open);
-    try std.testing.expectEqual(Block.oak_door, getBlock(door_state));
-    try std.testing.expect(isOpen(door_state));
-    try std.testing.expectEqual(Facing.east, getFacing(door_state).?);
-    try std.testing.expectEqual(Half.bottom, getHalf(door_state).?);
-
-    // Fence
-    const fence_state = fromLegacy(.oak_fence_nsew);
-    const conns = getFenceConnections(fence_state).?;
-    try std.testing.expect(conns.n and conns.s and conns.e and conns.w);
 }
 
 test "model info" {
