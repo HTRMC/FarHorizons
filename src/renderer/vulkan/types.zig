@@ -4,21 +4,26 @@ pub const FaceData = extern struct {
 };
 
 /// Pack face data into two u32 words.
-/// Bits [22:0] = x(5)|y(5)|z(5)|tex_index(8)
-/// Bits [31:23] = model_index(9) — selects QuadModel for vertex positions/UVs/normal
-pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, model_index: u9, ao: [4]u2) FaceData {
+/// word0 bits [22:0] = x(5)|y(5)|z(5)|tex_index(8)
+/// word0 bits [31:23] = model_index low 9 bits
+/// word1 bits [7:0] = ao(2×4)
+/// word1 bit 8 = flip
+/// word1 bits [11:9] = model_index high 3 bits
+pub fn packFaceData(x: u5, y: u5, z: u5, tex_index: u8, model_index: u12, ao: [4]u2) FaceData {
     const flip: u32 = @intFromBool(@as(u3, ao[0]) + ao[2] > @as(u3, ao[1]) + ao[3]);
+    const mi: u32 = model_index;
     return .{
         .word0 = @as(u32, x) |
             (@as(u32, y) << 5) |
             (@as(u32, z) << 10) |
             (@as(u32, tex_index) << 15) |
-            (@as(u32, model_index) << 23),
+            ((mi & 0x1FF) << 23),
         .word1 = @as(u32, ao[0]) |
             (@as(u32, ao[1]) << 2) |
             (@as(u32, ao[2]) << 4) |
             (@as(u32, ao[3]) << 6) |
-            (flip << 8),
+            (flip << 8) |
+            ((mi >> 9) << 9),
     };
 }
 
@@ -90,13 +95,13 @@ pub const UiVertex = extern struct {
 };
 
 
-fn unpackFaceData(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, model_index: u9 } {
+fn unpackFaceData(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, model_index: u12 } {
     return .{
         .x = @intCast(fd.word0 & 0x1F),
         .y = @intCast((fd.word0 >> 5) & 0x1F),
         .z = @intCast((fd.word0 >> 10) & 0x1F),
         .tex_index = @intCast((fd.word0 >> 15) & 0xFF),
-        .model_index = @intCast((fd.word0 >> 23) & 0x1FF),
+        .model_index = @intCast(((fd.word0 >> 23) & 0x1FF) | (((fd.word1 >> 9) & 0x7) << 9)),
     };
 }
 
@@ -118,18 +123,18 @@ test "packFaceData roundtrip - zero values" {
     try std.testing.expectEqual(@as(u5, 0), u.y);
     try std.testing.expectEqual(@as(u5, 0), u.z);
     try std.testing.expectEqual(@as(u8, 0), u.tex_index);
-    try std.testing.expectEqual(@as(u9, 0), u.model_index);
+    try std.testing.expectEqual(@as(u12, 0), u.model_index);
     try std.testing.expectEqual(no_ao, unpackAo(fd));
 }
 
 test "packFaceData roundtrip - max values" {
-    const fd = packFaceData(31, 31, 31, 255, 511, .{ 3, 3, 3, 3 });
+    const fd = packFaceData(31, 31, 31, 255, 4095, .{ 3, 3, 3, 3 });
     const u = unpackFaceData(fd);
     try std.testing.expectEqual(@as(u5, 31), u.x);
     try std.testing.expectEqual(@as(u5, 31), u.y);
     try std.testing.expectEqual(@as(u5, 31), u.z);
     try std.testing.expectEqual(@as(u8, 255), u.tex_index);
-    try std.testing.expectEqual(@as(u9, 511), u.model_index);
+    try std.testing.expectEqual(@as(u12, 4095), u.model_index);
     try std.testing.expectEqual([4]u2{ 3, 3, 3, 3 }, unpackAo(fd));
 }
 
@@ -140,7 +145,7 @@ test "packFaceData roundtrip - typical values" {
     try std.testing.expectEqual(@as(u5, 20), u.y);
     try std.testing.expectEqual(@as(u5, 5), u.z);
     try std.testing.expectEqual(@as(u8, 3), u.tex_index);
-    try std.testing.expectEqual(@as(u9, 4), u.model_index);
+    try std.testing.expectEqual(@as(u12, 4), u.model_index);
     try std.testing.expectEqual([4]u2{ 0, 1, 2, 3 }, unpackAo(fd));
 }
 
@@ -150,7 +155,7 @@ test "packFaceData - no field overlap" {
     try std.testing.expectEqual(@as(u5, 31), u_x.x);
     try std.testing.expectEqual(@as(u5, 0), u_x.y);
     try std.testing.expectEqual(@as(u8, 0), u_x.tex_index);
-    try std.testing.expectEqual(@as(u9, 0), u_x.model_index);
+    try std.testing.expectEqual(@as(u12, 0), u_x.model_index);
 
     const fd_t = packFaceData(0, 0, 0, 255, 0, no_ao);
     const u_t = unpackFaceData(fd_t);
@@ -158,13 +163,13 @@ test "packFaceData - no field overlap" {
     try std.testing.expectEqual(@as(u5, 0), u_t.y);
     try std.testing.expectEqual(@as(u5, 0), u_t.z);
     try std.testing.expectEqual(@as(u8, 255), u_t.tex_index);
-    try std.testing.expectEqual(@as(u9, 0), u_t.model_index);
+    try std.testing.expectEqual(@as(u12, 0), u_t.model_index);
 
-    const fd_m = packFaceData(0, 0, 0, 0, 511, no_ao);
+    const fd_m = packFaceData(0, 0, 0, 0, 4095, no_ao);
     const u_m = unpackFaceData(fd_m);
     try std.testing.expectEqual(@as(u5, 0), u_m.x);
     try std.testing.expectEqual(@as(u8, 0), u_m.tex_index);
-    try std.testing.expectEqual(@as(u9, 511), u_m.model_index);
+    try std.testing.expectEqual(@as(u12, 4095), u_m.model_index);
 
     const fd_ao = packFaceData(0, 0, 0, 0, 0, .{ 1, 2, 3, 0 });
     const u_ao = unpackFaceData(fd_ao);
@@ -174,19 +179,24 @@ test "packFaceData - no field overlap" {
 }
 
 test "packFaceData - shader unpacking matches" {
-    const fd = packFaceData(15, 8, 22, 130, 165, .{ 2, 1, 3, 0 });
+    // Use model_index 1189 (0x4A5) to test high bits: low9=0x0A5=165, high3=0x4>>9=2
+    const fd = packFaceData(15, 8, 22, 130, 1189, .{ 2, 1, 3, 0 });
     const w = fd.word0;
     try std.testing.expectEqual(@as(u32, 15), w & 0x1F);
     try std.testing.expectEqual(@as(u32, 8), (w >> 5) & 0x1F);
     try std.testing.expectEqual(@as(u32, 22), (w >> 10) & 0x1F);
     try std.testing.expectEqual(@as(u32, 130), (w >> 15) & 0xFF);
-    try std.testing.expectEqual(@as(u32, 165), (w >> 23) & 0x1FF);
+    try std.testing.expectEqual(@as(u32, 165), (w >> 23) & 0x1FF); // low 9 bits of 1189
     const w1 = fd.word1;
     try std.testing.expectEqual(@as(u32, 2), w1 & 0x3);
     try std.testing.expectEqual(@as(u32, 1), (w1 >> 2) & 0x3);
     try std.testing.expectEqual(@as(u32, 3), (w1 >> 4) & 0x3);
     try std.testing.expectEqual(@as(u32, 0), (w1 >> 6) & 0x3);
     try std.testing.expectEqual(@as(u32, 1), (w1 >> 8) & 0x1);
+    try std.testing.expectEqual(@as(u32, 2), (w1 >> 9) & 0x7); // high 3 bits of 1189
+    // Verify full model_index roundtrip
+    const u = unpackFaceData(fd);
+    try std.testing.expectEqual(@as(u12, 1189), u.model_index);
 }
 
 test "packFaceData - flip bit set only when needed" {

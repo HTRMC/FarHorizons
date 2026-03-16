@@ -92,7 +92,7 @@ pub const ExtraQuadModel = struct {
 
 /// Face definition for shaped blocks: which model to use and which face bucket it belongs to.
 pub const ShapeFace = struct {
-    model_index: u9, // index into combined model array (0-5 = standard, 6+ = extra)
+    model_index: u12, // index into combined model array (0-5 = standard, 6-11 = water, 12+ = extra)
     face_bucket: u3, // which direction bucket (0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y)
     always_emit: bool, // true for internal faces (slab top at y=0.5, step risers)
     face_bitmap: u16, // 4x4 bitmap of THIS quad's coverage area on the face boundary
@@ -872,7 +872,7 @@ pub fn generateChunkMesh(
                         }
                     }
 
-                    const model_index: u9 = if (water_lowered)
+                    const model_index: u12 = if (water_lowered)
                         WATER_MODEL_BASE + @as(u9, @intCast(face))
                     else
                         @intCast(face);
@@ -980,7 +980,7 @@ pub fn generateLodChunkMesh(
                     const tex = BlockState.blockTexIndices(state_id);
                     const tex_index: u8 = @intCast(if (face == 4 or face == 5) tex.top else tex.side);
 
-                    const model_index: u9 = if (water_lowered)
+                    const model_index: u12 = if (water_lowered)
                         WATER_MODEL_BASE + @as(u9, @intCast(face))
                     else
                         @intCast(face);
@@ -1681,14 +1681,14 @@ fn printBenchResult(comptime name: []const u8, samples: []const u64, face_count:
 
 /// Bottom 16 layers stone, layer 16 dirt, layer 17 grass, rest air.
 fn makeSurfaceChunk() Chunk {
-    var chunk: Chunk = .{ .blocks = .{.air} ** BLOCKS_PER_CHUNK };
+    var chunk: Chunk = .{ .blocks = .{BlockState.defaultState(.air)} ** BLOCKS_PER_CHUNK };
     for (0..CHUNK_SIZE) |x| {
         for (0..CHUNK_SIZE) |z| {
             for (0..16) |y| {
-                chunk.blocks[chunkIndex(x, y, z)] = .stone;
+                chunk.blocks[chunkIndex(x, y, z)] = BlockState.defaultState(.stone);
             }
-            chunk.blocks[chunkIndex(x, 16, z)] = .dirt;
-            chunk.blocks[chunkIndex(x, 17, z)] = .grass_block;
+            chunk.blocks[chunkIndex(x, 16, z)] = BlockState.defaultState(.dirt);
+            chunk.blocks[chunkIndex(x, 17, z)] = BlockState.defaultState(.grass_block);
         }
     }
     return chunk;
@@ -1696,12 +1696,12 @@ fn makeSurfaceChunk() Chunk {
 
 /// Alternating stone/air — worst-case face count.
 fn makeCheckerboardChunk() Chunk {
-    var chunk: Chunk = .{ .blocks = .{.air} ** BLOCKS_PER_CHUNK };
+    var chunk: Chunk = .{ .blocks = .{BlockState.defaultState(.air)} ** BLOCKS_PER_CHUNK };
     for (0..CHUNK_SIZE) |x| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
                 if ((x + y + z) % 2 == 0) {
-                    chunk.blocks[chunkIndex(x, y, z)] = .stone;
+                    chunk.blocks[chunkIndex(x, y, z)] = BlockState.defaultState(.stone);
                 }
             }
         }

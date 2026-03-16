@@ -36,7 +36,7 @@ void main() {
     uint y = (face.word0 >> 5) & 0x1F;
     uint z = (face.word0 >> 10) & 0x1F;
     uint texIdx = (face.word0 >> 15) & 0xFF;
-    uint modelIdx = (face.word0 >> 23) & 0x1FF;
+    uint modelIdx = ((face.word0 >> 23) & 0x1FF) | (((face.word1 >> 9) & 0x7) << 9);
 
     QuadModel model = models[modelIdx];
     uint vs = chunk.voxelSize;
