@@ -222,7 +222,7 @@ fn dedupOrAppend(
     quad: ExtraQuadModel,
     allocator: std.mem.Allocator,
 ) !u16 {
-    const key: QuadBytes = @bitCast(quad);
+    const key: QuadBytes = std.mem.toBytes(quad);
     if (quad_dedup.get(key)) |existing_idx| {
         return existing_idx;
     }
