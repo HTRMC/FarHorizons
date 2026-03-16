@@ -533,7 +533,6 @@ pub const UiManager = struct {
     }
 
     fn updateSliderDrag(self: *UiManager, tree: *WidgetTree, slider_id: WidgetId, mouse_x: f32) void {
-        _ = self;
         const w = tree.getWidgetConst(slider_id) orelse return;
         const data = tree.getData(slider_id) orelse return;
 
@@ -542,6 +541,11 @@ pub const UiManager = struct {
 
         const frac = std.math.clamp((mouse_x - rect.x) / rect.w, 0.0, 1.0);
         data.slider.value = data.slider.min_value + frac * (data.slider.max_value - data.slider.min_value);
+
+        const action_name = data.slider.on_change_action[0..data.slider.on_change_action_len];
+        if (action_name.len > 0) {
+            _ = self.registry.dispatch(action_name);
+        }
     }
 
     pub fn loadScreenFromFile(self: *UiManager, filename: []const u8, allocator: std.mem.Allocator) bool {

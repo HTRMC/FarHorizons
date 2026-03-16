@@ -974,6 +974,7 @@ pub fn main() !void {
         // Sync options → game state
         if (game_state) |*gs| {
             gs.third_person_crosshair = options.third_person_crosshair;
+            gs.camera.fov = std.math.degreesToRadians(options.fov);
         }
 
         // Sync entity renderer with inventory viewport + third person

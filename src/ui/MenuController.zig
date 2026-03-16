@@ -70,6 +70,8 @@ pub const MenuController = struct {
     rebind_hint_id: WidgetId = NULL_WIDGET,
     keybind_button_ids: [Options.Action.count]WidgetId = .{NULL_WIDGET} ** Options.Action.count,
     tp_crosshair_cb_id: WidgetId = NULL_WIDGET,
+    fov_slider_id: WidgetId = NULL_WIDGET,
+    fov_label_id: WidgetId = NULL_WIDGET,
 
     // Game state reference (set during updateInventory for action handlers)
     game_state: ?*GameState = null,
@@ -229,6 +231,8 @@ pub const MenuController = struct {
         self.keybind_list_id = tree.findById("keybind_list") orelse NULL_WIDGET;
         self.rebind_hint_id = tree.findById("rebind_hint") orelse NULL_WIDGET;
         self.tp_crosshair_cb_id = tree.findById("tp_crosshair_cb") orelse NULL_WIDGET;
+        self.fov_slider_id = tree.findById("fov_slider") orelse NULL_WIDGET;
+        self.fov_label_id = tree.findById("fov_label") orelse NULL_WIDGET;
 
         // Sync checkbox state from options
         if (self.options) |opts| {
@@ -237,6 +241,13 @@ pub const MenuController = struct {
                     data.checkbox.checked = opts.third_person_crosshair;
                 }
             }
+            // Sync FOV slider from options
+            if (self.fov_slider_id != NULL_WIDGET) {
+                if (tree.getData(self.fov_slider_id)) |data| {
+                    data.slider.value = opts.fov;
+                }
+            }
+            self.updateFovLabel();
         }
     }
 
@@ -373,6 +384,7 @@ pub const MenuController = struct {
         reg.register("rebind_key", actionRebindKey, ctx);
         reg.register("toggle_tp_crosshair", actionToggleTpCrosshair, ctx);
         reg.register("toggle_tp_crosshair_cb", actionToggleTpCrosshairCb, ctx);
+        reg.register("change_fov", actionChangeFov, ctx);
         reg.register("inv_slot_click", actionInvSlotClick, ctx);
     }
 
@@ -1061,6 +1073,33 @@ pub const MenuController = struct {
             }
         }
         opts.save(self.allocator);
+    }
+
+    fn actionChangeFov(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const opts = self.options orelse return;
+        const tree = self.menuTree() orelse return;
+        if (self.fov_slider_id != NULL_WIDGET) {
+            if (tree.getData(self.fov_slider_id)) |data| {
+                opts.fov = @round(data.slider.value);
+                data.slider.value = opts.fov;
+            }
+        }
+        self.updateFovLabel();
+        opts.save(self.allocator);
+    }
+
+    fn updateFovLabel(self: *MenuController) void {
+        const tree = self.menuTree() orelse return;
+        const opts = self.options orelse return;
+        if (self.fov_label_id != NULL_WIDGET) {
+            if (tree.getData(self.fov_label_id)) |data| {
+                const val: i32 = @intFromFloat(opts.fov);
+                var buf: [8]u8 = undefined;
+                const slice = std.fmt.bufPrint(&buf, "{d}", .{val}) catch return;
+                data.label.setText(slice);
+            }
+        }
     }
 
     fn actionInvSlotClick(ctx: ?*anyopaque) void {

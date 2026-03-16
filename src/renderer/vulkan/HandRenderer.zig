@@ -249,8 +249,8 @@ pub const HandRenderer = struct {
             const invert: f32 = 1.0;
             const deg = std.math.degreesToRadians;
 
-            // applyItemArmTransform (no attack, no equip animation)
-            const t_arm = mat4Translate(invert * 0.56, -0.52, -0.72);
+            // applyItemArmTransform — Y lowered to reach hand level
+            const t_arm = mat4Translate(invert * 0.56, -0.22, -0.72);
 
             // HMI block scale: itemPose scale(0.9) * block scale(0.3) = 0.27
             const display_rot = mat4RotY(deg(45.0));
