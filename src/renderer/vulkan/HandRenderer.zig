@@ -34,6 +34,9 @@ pub const HandRenderer = struct {
     block_vertex_start: u32 = 0,
     block_vertex_count: u32 = 0,
     visible: bool = true,
+    // Walk animation state
+    walk_phase: f32 = 0.0, // continuous phase accumulator
+    walk_smoother: f32 = 0.0, // 0=idle, 1=full walk blend
     block_tex_top: i16 = -1,
     block_tex_side: i16 = -1,
     held_block: BlockState.StateId = BlockState.defaultState(.air),
@@ -80,6 +83,23 @@ pub const HandRenderer = struct {
         vk.destroyDescriptorPool(device, self.descriptor_pool, null);
         vk.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
         self.gpu_alloc.destroyBuffer(self.vertex_alloc);
+    }
+
+    /// Update walk animation state. Call once per frame.
+    pub fn updateWalkAnim(self: *HandRenderer, dt: f32, horizontal_speed: f32, vertical_speed: f32, on_ground: bool) void {
+        const speed_threshold: f32 = 0.5;
+        const vert_threshold: f32 = 2.0;
+        const smooth_rate: f32 = 8.0; // blend speed (units/sec)
+
+        const walking = horizontal_speed > speed_threshold and @abs(vertical_speed) < vert_threshold and on_ground;
+
+        if (walking) {
+            // Accumulate phase proportional to speed
+            self.walk_phase += horizontal_speed * dt * 2.5;
+            self.walk_smoother = @min(1.0, self.walk_smoother + smooth_rate * dt);
+        } else {
+            self.walk_smoother = @max(0.0, self.walk_smoother - smooth_rate * dt);
+        }
     }
 
     pub fn recordDraw(self: *const HandRenderer, command_buffer: vk.VkCommandBuffer, screen_width: f32, screen_height: f32, third_person: bool) void {
@@ -178,6 +198,28 @@ pub const HandRenderer = struct {
             m = zlm.Mat4.mul(m, r5);
             m = zlm.Mat4.mul(m, r6);
             m = zlm.Mat4.mul(m, t3);
+
+            // Walk bob: rotate around pivot (shoulder-ish) with sin/cos waves
+            if (self.walk_smoother > 0.001) {
+                const ws = self.walk_smoother;
+                const wp = self.walk_phase;
+                // Pivot point for rotation (approximate shoulder)
+                const pivot_y: f32 = -0.4;
+                const t_to_pivot = mat4Translate(0, -pivot_y, 0);
+                const t_from_pivot = mat4Translate(0, pivot_y, 0);
+                // Pitch (up/down swing), Yaw (side-to-side), Roll (twist)
+                const bob_x = mat4RotX(1.5 * @sin(wp) * ws * 0.05);
+                const bob_y = mat4RotY(-0.5 * @cos(wp * 1.5) * ws * 0.05);
+                const bob_z = mat4RotZ(1.0 * @cos(wp * 1.5) * ws * 0.05);
+                // Apply: translate to pivot → rotate → translate back
+                var walk_m = t_to_pivot;
+                walk_m = zlm.Mat4.mul(walk_m, bob_x);
+                walk_m = zlm.Mat4.mul(walk_m, bob_y);
+                walk_m = zlm.Mat4.mul(walk_m, bob_z);
+                walk_m = zlm.Mat4.mul(walk_m, t_from_pivot);
+                m = zlm.Mat4.mul(m, walk_m);
+            }
+
             const arm_model = zlm.Mat4.mul(m, pre);
             const mvp = zlm.Mat4.mul(proj, arm_model);
 
@@ -221,11 +263,30 @@ pub const HandRenderer = struct {
             const block_rot = mat4RotY(std.math.degreesToRadians(45.0));
             const block_scale = mat4Scale(bs, bs, bs);
 
-            // Chain: t1 * r1 * r2 * r3 * block_rot * block_scale
+            // Chain: t1 * r1 * r2 * r3 * walk_bob * block_rot * block_scale
             var block_model = t1;
             block_model = zlm.Mat4.mul(block_model, r1);
             block_model = zlm.Mat4.mul(block_model, r2);
             block_model = zlm.Mat4.mul(block_model, r3);
+
+            // Walk bob (same as arm)
+            if (self.walk_smoother > 0.001) {
+                const ws = self.walk_smoother;
+                const wp = self.walk_phase;
+                const pivot_y: f32 = -0.4;
+                const t_to_pivot = mat4Translate(0, -pivot_y, 0);
+                const t_from_pivot = mat4Translate(0, pivot_y, 0);
+                const bob_x = mat4RotX(1.5 * @sin(wp) * ws * 0.05);
+                const bob_y = mat4RotY(-0.5 * @cos(wp * 1.5) * ws * 0.05);
+                const bob_z = mat4RotZ(1.0 * @cos(wp * 1.5) * ws * 0.05);
+                var walk_m = t_to_pivot;
+                walk_m = zlm.Mat4.mul(walk_m, bob_x);
+                walk_m = zlm.Mat4.mul(walk_m, bob_y);
+                walk_m = zlm.Mat4.mul(walk_m, bob_z);
+                walk_m = zlm.Mat4.mul(walk_m, t_from_pivot);
+                block_model = zlm.Mat4.mul(block_model, walk_m);
+            }
+
             block_model = zlm.Mat4.mul(block_model, block_rot);
             block_model = zlm.Mat4.mul(block_model, block_scale);
             const mvp = zlm.Mat4.mul(proj, block_model);

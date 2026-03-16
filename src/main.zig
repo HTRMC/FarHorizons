@@ -994,10 +994,12 @@ pub fn main() !void {
                 er.world_visible = false;
             }
 
-            // Sync hand renderer with held block
+            // Sync hand renderer with held block + walk animation
             const hr = &vk_impl.render_state.hand_renderer;
             if (game_state) |*gs| {
                 hr.updateHeldBlock(gs.hotbar[gs.selected_slot]);
+                const hspeed = @sqrt(gs.entity_vel[0] * gs.entity_vel[0] + gs.entity_vel[2] * gs.entity_vel[2]);
+                hr.updateWalkAnim(delta_time, hspeed, gs.entity_vel[1], gs.entity_on_ground);
             } else {
                 hr.updateHeldBlock(WorldState.BlockState.defaultState(.air));
             }
