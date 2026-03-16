@@ -92,7 +92,7 @@ pub const ExtraQuadModel = struct {
 
 /// Face definition for shaped blocks: which model to use and which face bucket it belongs to.
 pub const ShapeFace = struct {
-    model_index: u12, // index into combined model array (0-5 = standard, 6-11 = water, 12+ = extra)
+    model_index: u16, // index into combined model array (0-5 = standard, 6-11 = water, 12+ = extra)
     face_bucket: u3, // which direction bucket (0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y)
     always_emit: bool, // true for internal faces (slab top at y=0.5, step risers)
     face_bitmap: u16, // 4x4 bitmap of THIS quad's coverage area on the face boundary
@@ -872,7 +872,7 @@ pub fn generateChunkMesh(
                         }
                     }
 
-                    const model_index: u12 = if (water_lowered)
+                    const model_index: u16 = if (water_lowered)
                         WATER_MODEL_BASE + @as(u9, @intCast(face))
                     else
                         @intCast(face);
@@ -980,7 +980,7 @@ pub fn generateLodChunkMesh(
                     const tex = BlockState.blockTexIndices(state_id);
                     const tex_index: u8 = @intCast(if (face == 4 or face == 5) tex.top else tex.side);
 
-                    const model_index: u12 = if (water_lowered)
+                    const model_index: u16 = if (water_lowered)
                         WATER_MODEL_BASE + @as(u9, @intCast(face))
                     else
                         @intCast(face);

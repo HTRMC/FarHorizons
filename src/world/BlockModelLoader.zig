@@ -110,6 +110,10 @@ pub const BlockModelRegistry = struct {
         var extra_models_list: std.ArrayList(ExtraQuadModel) = .empty;
         defer extra_models_list.deinit(allocator);
 
+        // Deduplication map: hash of quad geometry → existing index
+        var quad_dedup = std.AutoHashMap(QuadBytes, u16).init(allocator);
+        defer quad_dedup.deinit();
+
         // Load JSON files and build the registry
         const assets_path = try app_config.getAssetsPath(allocator);
         defer allocator.free(assets_path);
@@ -166,12 +170,12 @@ pub const BlockModelRegistry = struct {
             };
 
             const transform = blockStateTransformToLocal(model_info.transform);
-            try loadModel(self, allocator, &extra_models_list, json_data, state, transform);
+            try loadModel(self, allocator, &extra_models_list, &quad_dedup, json_data, state, transform);
             loaded_count += 1;
         }
 
         self.extra_models = try allocator.dupe(ExtraQuadModel, extra_models_list.items);
-        std.log.info("BlockModelLoader: loaded {} extra models for {} states", .{ self.extra_models.len, loaded_count });
+        std.log.info("BlockModelLoader: {} unique quads for {} states", .{ self.extra_models.len, loaded_count });
 
         return self;
     }
@@ -209,10 +213,30 @@ fn blockStateTransformToLocal(t: BlockState.Transform) Transform {
     };
 }
 
+const QuadBytes = [@sizeOf(ExtraQuadModel)]u8;
+
+/// Return the model index for this quad, reusing an existing one if identical geometry exists.
+fn dedupOrAppend(
+    extra_models: *std.ArrayList(ExtraQuadModel),
+    quad_dedup: *std.AutoHashMap(QuadBytes, u16),
+    quad: ExtraQuadModel,
+    allocator: std.mem.Allocator,
+) !u16 {
+    const key: QuadBytes = @bitCast(quad);
+    if (quad_dedup.get(key)) |existing_idx| {
+        return existing_idx;
+    }
+    const idx: u16 = @intCast(WorldState.EXTRA_MODEL_BASE + extra_models.items.len);
+    try extra_models.append(allocator, quad);
+    try quad_dedup.put(key, idx);
+    return idx;
+}
+
 fn loadModel(
     registry: *BlockModelRegistry,
     allocator: std.mem.Allocator,
     extra_models: *std.ArrayList(ExtraQuadModel),
+    quad_dedup: *std.AutoHashMap(QuadBytes, u16),
     json_data: []const u8,
     state: BlockState.StateId,
     transform: Transform,
@@ -300,13 +324,12 @@ fn loadModel(
             if (std.mem.startsWith(u8, face_name, "__cross_")) {
                 const quad_model = buildCrossQuad(face_name, uv, transform);
                 if (quad_model) |qm| {
-                    const model_idx: u12 = @intCast(WorldState.EXTRA_MODEL_BASE + extra_models.items.len);
-                    try extra_models.append(allocator, qm);
+                    const model_idx = try dedupOrAppend(extra_models, quad_dedup, qm, allocator);
                     // Cross faces get face_bucket based on which cross
-                    const bucket: u3 = getCrossFaceBucket(face_name);
+                    const bucket_val: u3 = getCrossFaceBucket(face_name);
                     try shape_faces.append(allocator, .{
                         .model_index = model_idx,
-                        .face_bucket = bucket,
+                        .face_bucket = bucket_val,
                         .always_emit = true,
                         .face_bitmap = 0,
                     });
@@ -338,8 +361,7 @@ fn loadModel(
             quad_model = applyTransform(quad_model, transform, bucket);
             const always_emit = !has_cullface;
 
-            const model_idx: u12 = @intCast(WorldState.EXTRA_MODEL_BASE + extra_models.items.len);
-            try extra_models.append(allocator, quad_model);
+            const model_idx = try dedupOrAppend(extra_models, quad_dedup, quad_model, allocator);
             try shape_faces.append(allocator, .{
                 .model_index = model_idx,
                 .face_bucket = transformed_bucket,
