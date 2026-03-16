@@ -37,6 +37,18 @@ pub const HandRenderer = struct {
     // Walk animation state (HMI-style)
     walk_phase: f32 = 0.0, // continuous phase accumulator
     walk_smoother: f32 = 0.0, // 0=idle, 1=full walk blend
+    // View bob state (MC renderHandsWithItems xBob/yBob)
+    bob_pitch: f32 = 0.0, // smoothed pitch (MC: xBob)
+    bob_yaw: f32 = 0.0, // smoothed yaw (MC: yBob)
+    cam_pitch: f32 = 0.0, // current camera pitch (for view bob delta)
+    cam_yaw: f32 = 0.0, // current camera yaw
+    // Swing animation state
+    swing_progress: f32 = 0.0, // 0=idle, 0→1 during swing
+    swing_ticks: f32 = 0.0, // current swing timer
+    is_swinging: bool = false,
+    // Equip animation state (MC: mainHandHeight)
+    equip_progress: f32 = 1.0, // 0=lowered, 1=raised
+    pending_block: BlockState.StateId = BlockState.defaultState(.air),
     block_tex_top: i16 = -1,
     block_tex_side: i16 = -1,
     held_block: BlockState.StateId = BlockState.defaultState(.air),
@@ -85,24 +97,74 @@ pub const HandRenderer = struct {
         self.gpu_alloc.destroyBuffer(self.vertex_alloc);
     }
 
-    /// Update walk animation state. Call once per frame.
-    /// Values converted from HMI mod (MC blocks/tick @ 20tps → our blocks/sec):
-    ///   MC threshold 0.08 b/tick × 20 = 1.6 b/s
-    ///   MC phase rate: pSpeed × 30  →  hspeed × 1.5  (30 × 0.215/4.3)
-    ///   MC smooth rate: 0.1 × 30 = 3.0/s
-    pub fn updateWalkAnim(self: *HandRenderer, dt: f32, horizontal_speed: f32, vertical_speed: f32, on_ground: bool) void {
-        const speed_threshold: f32 = 1.6; // MC: 0.08 b/tick × 20 tps
-        const vert_threshold: f32 = 1.6; // MC: 0.08 b/tick × 20 tps
+    /// Update all hand animation state. Call once per frame.
+    pub fn updateAnimations(self: *HandRenderer, dt: f32, horizontal_speed: f32, vertical_speed: f32, on_ground: bool, cam_pitch: f32, cam_yaw: f32) void {
+        // --- Walk bob ---
+        // MC threshold 0.08 b/tick × 20 = 1.6 b/s
+        const speed_threshold: f32 = 1.6;
+        const vert_threshold: f32 = 1.6;
         const smooth_rate: f32 = 3.0; // MC: 0.1 * 30
 
         const walking = horizontal_speed > speed_threshold and @abs(vertical_speed) < vert_threshold and on_ground;
 
         if (walking) {
-            self.walk_phase += horizontal_speed * dt * 1.5; // MC: pSpeed * dt * 30
+            self.walk_phase += horizontal_speed * dt * 1.5;
             self.walk_smoother = @min(1.0, self.walk_smoother + smooth_rate * dt);
         } else {
             self.walk_smoother = @max(0.0, self.walk_smoother - smooth_rate * dt);
         }
+
+        // --- View bob (MC: xBob/yBob) ---
+        // MC: xBob += (xRot - xBob) * 0.5  per tick (20tps)
+        // Continuous: factor = 1 - (1-0.5)^(dt*20) ≈ min(1, 10*dt)
+        self.cam_pitch = cam_pitch;
+        self.cam_yaw = cam_yaw;
+        const bob_rate = @min(1.0, 10.0 * dt);
+        self.bob_pitch += (cam_pitch - self.bob_pitch) * bob_rate;
+        self.bob_yaw += (cam_yaw - self.bob_yaw) * bob_rate;
+
+        // --- Swing animation ---
+        // MC: 6 tick swing duration = 0.3s
+        if (self.is_swinging) {
+            self.swing_ticks += dt * 20.0; // convert to MC ticks
+            if (self.swing_ticks >= 6.0) {
+                self.swing_ticks = 0.0;
+                self.swing_progress = 0.0;
+                self.is_swinging = false;
+            } else {
+                self.swing_progress = self.swing_ticks / 6.0;
+            }
+        }
+
+        // --- Equip animation ---
+        // MC: mainHandHeight moves at ±0.4/tick (±8/s) toward target
+        const equip_rate: f32 = 8.0 * dt;
+        if (self.pending_block != self.held_block) {
+            // Lowering: target is 0
+            self.equip_progress = @max(0.0, self.equip_progress - equip_rate);
+            if (self.equip_progress < 0.05) {
+                // At bottom: swap to new block
+                self.updateHeldBlock(self.pending_block);
+                self.equip_progress = 0.0;
+            }
+        } else {
+            // Raising: target is 1
+            self.equip_progress = @min(1.0, self.equip_progress + equip_rate);
+        }
+    }
+
+    /// Trigger an arm swing (call on block break/place).
+    pub fn triggerSwing(self: *HandRenderer) void {
+        if (!self.is_swinging) {
+            self.is_swinging = true;
+            self.swing_ticks = 0.0;
+            self.swing_progress = 0.0;
+        }
+    }
+
+    /// Set the pending block (equip animation will swap when arm is lowered).
+    pub fn setPendingBlock(self: *HandRenderer, state: BlockState.StateId) void {
+        self.pending_block = state;
     }
 
     pub fn recordDraw(self: *const HandRenderer, command_buffer: vk.VkCommandBuffer, screen_width: f32, screen_height: f32, third_person: bool) void {
@@ -137,6 +199,13 @@ pub const HandRenderer = struct {
         const aspect = screen_width / @max(screen_height, 1.0);
         const proj = zlm.Mat4.perspective(std.math.degreesToRadians(70.0), aspect, 0.05, 100.0);
 
+        // MC view bob (renderHandsWithItems:326-327)
+        // Hand sways slightly when looking around due to lag between
+        // actual camera angles and smoothed bob values.
+        const view_bob_x = mat4RotX((self.cam_pitch - self.bob_pitch) * 0.1);
+        const view_bob_y = mat4RotY((self.cam_yaw - self.bob_yaw) * 0.1);
+        const view_bob_mat = zlm.Mat4.mul(view_bob_x, view_bob_y);
+
         // Walk bob matrix (shared by arm and held block), applied as outermost
         // transform matching HMI's scene pose: rotate around pivot (0, -0.4, 0).
         var walk_mat = zlm.Mat4.identity();
@@ -163,7 +232,8 @@ pub const HandRenderer = struct {
 
         // HMI scenePoseMain: shared base transform for arm + block when holding an item
         // translate(0, -0.35, 0.2) only when holding something
-        var scene_mat = walk_mat;
+        // View bob is outermost: applied before walk bob and scene transforms
+        var scene_mat = zlm.Mat4.mul(view_bob_mat, walk_mat);
         if (has_block) {
             scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.35, 0.2));
         }
@@ -185,8 +255,8 @@ pub const HandRenderer = struct {
         // When not holding anything, falls back to vanilla MC positioning.
         {
             const invert: f32 = 1.0; // right arm
-            const attack_value: f32 = 0.0; // no swing for now
-            const inverse_arm_height: f32 = 0.0; // fully equipped
+            const attack_value: f32 = self.swing_progress;
+            const inverse_arm_height: f32 = 1.0 - self.equip_progress;
 
             const sqrt_attack = @sqrt(attack_value);
             const x_swing_pos = -0.3 * @sin(sqrt_attack * std.math.pi);
@@ -259,8 +329,9 @@ pub const HandRenderer = struct {
         //           scale(0.3)
         //           translate(-0.9, -0.45, -0.7)
         if (has_block) {
-            // HMI itemPose
-            var block_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.5, -0.15, -0.85));
+            // HMI itemPose (equip offset lowers Y when swapping items)
+            const equip_y = (1.0 - self.equip_progress) * -0.6;
+            var block_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.5, -0.15 + equip_y, -0.85));
             block_model = zlm.Mat4.mul(block_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
             block_model = zlm.Mat4.mul(block_model, mat4Scale(0.9, 0.9, 0.9));
 

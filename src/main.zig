@@ -995,14 +995,18 @@ pub fn main() !void {
                 er.world_visible = false;
             }
 
-            // Sync hand renderer with held block + walk animation
+            // Sync hand renderer with held block + all hand animations
             const hr = &vk_impl.render_state.hand_renderer;
             if (game_state) |*gs| {
-                hr.updateHeldBlock(gs.hotbar[gs.selected_slot]);
+                hr.setPendingBlock(gs.hotbar[gs.selected_slot]);
+                if (gs.swing_requested) {
+                    hr.triggerSwing();
+                    gs.swing_requested = false;
+                }
                 const hspeed = @sqrt(gs.entity_vel[0] * gs.entity_vel[0] + gs.entity_vel[2] * gs.entity_vel[2]);
-                hr.updateWalkAnim(delta_time, hspeed, gs.entity_vel[1], gs.entity_on_ground);
+                hr.updateAnimations(delta_time, hspeed, gs.entity_vel[1], gs.entity_on_ground, gs.camera.pitch, gs.camera.yaw);
             } else {
-                hr.updateHeldBlock(WorldState.BlockState.defaultState(.air));
+                hr.setPendingBlock(WorldState.BlockState.defaultState(.air));
             }
         }
 

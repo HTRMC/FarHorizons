@@ -241,6 +241,7 @@ input_move: [3]f32,
 jump_requested: bool,
 jump_cooldown: u8,
 hit_result: ?Raycast.BlockHitResult,
+swing_requested: bool,
 dirty_chunks: DirtyChunkSet,
 debug_camera_active: bool,
 third_person: bool = false,
@@ -466,6 +467,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .jump_requested = false,
         .jump_cooldown = 0,
         .hit_result = null,
+        .swing_requested = false,
         .dirty_chunks = DirtyChunkSet.init(allocator),
         .player_dirty_chunks = DirtyChunkSet.init(allocator),
         .world_seed = world_seed,
@@ -802,6 +804,7 @@ fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: 
 }
 
 pub fn breakBlock(self: *GameState) void {
+    self.swing_requested = true;
     const hit = self.hit_result orelse return;
     const wx = hit.block_pos[0];
     const wy = hit.block_pos[1];
@@ -1063,6 +1066,7 @@ fn resolveOrientation(block_state: BlockState.StateId, yaw: f32, hit: Raycast.Bl
 }
 
 pub fn placeBlock(self: *GameState) void {
+    self.swing_requested = true;
     const hit = self.hit_result orelse return;
 
     const air = BlockState.defaultState(.air);
