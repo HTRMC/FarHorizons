@@ -240,8 +240,7 @@ pub const HandRenderer = struct {
 
         // --- Draw held block ---
         if (has_block) {
-            // Position the held block at the hand by using the arm's transform chain
-            // up to the hand position, then apply block display transforms.
+            // Vanilla MC applyItemArmTransform + walk bob
             const invert: f32 = 1.0;
             const attack_value2: f32 = 0.0;
             const inverse_arm_height2: f32 = 0.0;
@@ -251,7 +250,6 @@ pub const HandRenderer = struct {
             const y_swing_pos2 = 0.4 * @sin(sqrt_attack2 * (std.math.pi * 2.0));
             const z_swing_pos2 = -0.4 * @sin(attack_value2 * std.math.pi);
 
-            // Same base transform as arm (applyItemArmTransform)
             const t1 = mat4Translate(
                 invert * (x_swing_pos2 + 0.56),
                 y_swing_pos2 + -0.52 + inverse_arm_height2 * -0.6,
