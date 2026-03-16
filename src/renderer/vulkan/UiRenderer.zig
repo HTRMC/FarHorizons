@@ -385,14 +385,24 @@ pub const UiRenderer = struct {
         self.vertex_count += 6;
     }
 
-    /// Draw an isometric block using the same geometry as the world chunk mesher.
+    /// Draw an isometric block using the actual baked model quads from the block model registry.
     /// Projects 3D face quads through Rx(30°) * Ry(225°) with back-face culling and painter's sort.
-    /// tex_top/tex_side are block texture array layer indices (-1 = use solid color fallback).
-    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32, tex_top: i16, tex_side: i16, shape: @import("../../ui/WidgetData.zig").BlockShape) void {
+    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32, state: u16) void {
         if (color[3] < 0.01) return;
 
         const WorldState = @import("../../world/WorldState.zig");
         const BlockState = WorldState.BlockState;
+
+        const block = BlockState.getBlock(state);
+        if (block == .air) return;
+
+        const tex_info = BlockState.blockTexIndices(state);
+        const tex_top = tex_info.top;
+        const tex_side = tex_info.side;
+        const is_shaped = BlockState.isShaped(state);
+        const is_door = BlockState.isDoor(state) and BlockState.isDoorBottom(state);
+        const is_torch = block == .torch;
+        const is_ladder = block == .ladder;
 
         // Isometric projection constants: Rx(30°) * Ry(225°)
         const cos45: f32 = 0.70711;
@@ -422,7 +432,7 @@ pub const UiRenderer = struct {
         var faces: [64]FaceInfo = undefined;
         var face_count: usize = 0;
 
-        if (shape == .full) {
+        if (!is_shaped) {
             // Standard 6 cube faces, back-face culled
             for (0..6) |fi| {
                 const n = WorldState.face_neighbor_offsets[fi];
@@ -440,48 +450,37 @@ pub const UiRenderer = struct {
                 face_count += 1;
             }
         } else {
-            // Shaped block: use the same face lists as the chunk mesher
-            const ref_state: BlockState.StateId = switch (shape) {
-                .slab_bottom => BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)),
-                .slab_top => BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top)),
-                .stairs => BlockState.makeStairState(.east, .bottom, .straight),
-                .torch => BlockState.fromBlockProps(.torch, @intFromEnum(BlockState.Placement.standing)),
-                .ladder => BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.north)),
-                .fence => BlockState.defaultState(.oak_fence),
-                .door => BlockState.makeDoorState(.south, .bottom, false),
-                .full => unreachable,
-            };
+            // Shaped block: use the actual baked model quads from the registry
+            const part_count: u8 = if (is_door) 2 else 1;
+            const parts = [2]BlockState.StateId{ state, if (is_door) BlockState.doorBottomToTop(state) else state };
 
-            // For doors, render both bottom and top halves
-            const door_parts: u8 = if (shape == .door) 2 else 1;
-            const door_states = [2]BlockState.StateId{ ref_state, if (shape == .door) BlockState.doorBottomToTop(ref_state) else ref_state };
-
-            for (0..door_parts) |part| {
-                const state_ref = door_states[part];
-                const part_shape_faces = WorldState.getShapeFaces(state_ref);
-                const use_per_face_tex = (shape == .torch);
-                const per_face_tex = if (use_per_face_tex) WorldState.getShapedTexIndices(state_ref) else &[_]u8{};
-                // For doors, use per-face texture so top half gets the top texture
-                const door_per_face_tex = if (shape == .door) WorldState.getShapedTexIndices(state_ref) else &[_]u8{};
-                const skip_cull = (shape == .ladder);
+            for (0..part_count) |part| {
+                const part_state = parts[part];
+                const part_shape_faces = WorldState.getShapeFaces(part_state);
+                const per_face_tex = WorldState.getShapedTexIndices(part_state);
 
                 for (part_shape_faces, 0..) |sf, sf_idx| {
                     const mi = sf.model_index;
                     var info: FaceInfo = undefined;
-                    if (use_per_face_tex and sf_idx < per_face_tex.len) {
+
+                    // Use per-face texture for shaped blocks that have them (torch, door, etc.)
+                    if (sf_idx < per_face_tex.len) {
                         info.tex_override = @intCast(per_face_tex[sf_idx]);
-                    } else if (shape == .door and sf_idx < door_per_face_tex.len) {
-                        info.tex_override = @intCast(door_per_face_tex[sf_idx]);
                     } else {
                         info.tex_override = -1;
                     }
-                    if (mi < 6) {
-                        const n = WorldState.face_neighbor_offsets[mi];
-                        info.normal = .{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
-                        for (0..4) |ci| {
-                            const fv = WorldState.face_vertices[mi][ci];
-                            info.corners[ci] = .{ fv.px, fv.py, fv.pz };
-                            info.uvs[ci] = .{ fv.u, fv.v };
+
+                    if (mi < WorldState.EXTRA_MODEL_BASE) {
+                        if (mi < 6) {
+                            const n = WorldState.face_neighbor_offsets[mi];
+                            info.normal = .{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
+                            for (0..4) |ci| {
+                                const fv = WorldState.face_vertices[mi][ci];
+                                info.corners[ci] = .{ fv.px, fv.py, fv.pz };
+                                info.uvs[ci] = .{ fv.u, fv.v };
+                            }
+                        } else {
+                            continue; // water models 6-11, skip
                         }
                     } else {
                         const em = WorldState.getRegistry().extra_models[@as(usize, mi) - WorldState.EXTRA_MODEL_BASE];
@@ -489,17 +488,18 @@ pub const UiRenderer = struct {
                         info.uvs = em.uvs;
                         info.normal = em.normal;
                     }
+
                     // Skip cross quads for torch (diagonal normals look bad in inventory)
-                    if (shape == .torch) {
+                    if (is_torch) {
                         if (@abs(info.normal[0]) > 0.1 and @abs(info.normal[2]) > 0.1) continue;
                     }
                     // Shift top door half up by 1 and scale both to half height
-                    if (shape == .door) {
+                    if (is_door) {
                         for (0..4) |ci| {
                             info.corners[ci][1] = info.corners[ci][1] * 0.5 + @as(f32, @floatFromInt(part)) * 0.5;
                         }
                     }
-                    if (!skip_cull and info.normal[0] * view[0] + info.normal[1] * view[1] + info.normal[2] * view[2] <= 0) continue;
+                    if (!is_ladder and info.normal[0] * view[0] + info.normal[1] * view[1] + info.normal[2] * view[2] <= 0) continue;
                     faces[face_count] = info;
                     face_count += 1;
                 }

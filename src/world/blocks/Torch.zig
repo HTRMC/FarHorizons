@@ -33,7 +33,6 @@ pub const def = T.BlockDef{
     .base_solid = false,
     .base_culls_self = false,
     .base_shaped = true,
-    .base_block_shape = .torch,
     .hitbox_fn = &hitbox,
     .model_info_fn = &modelInfo,
 };

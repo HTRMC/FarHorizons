@@ -33,7 +33,6 @@ pub fn fullCubeBox() BlockBoxes {
 pub const RenderLayer = enum(u2) { solid, cutout, translucent };
 pub const LAYER_COUNT = 3;
 pub const TexIndices = struct { top: i16, side: i16 };
-pub const BlockShape = enum(u8) { full, slab_bottom, slab_top, stairs, torch, ladder, fence, door };
 
 // ==== Block Definition ====
 
@@ -55,7 +54,6 @@ pub const BlockDef = struct {
     base_culls_self: bool = true,
     base_shaped: bool = false,
     base_solid_shaped: bool = false,
-    base_block_shape: BlockShape = .full,
 
     // State-dependent overrides (null = use base value)
     is_opaque_fn: ?*const fn (u8) bool = null,
@@ -67,7 +65,6 @@ pub const BlockDef = struct {
     collision_fn: ?*const fn (u8) BlockBoxes = null,
     model_info_fn: ?*const fn (u8) ?ModelInfo = null,
     tex_indices_fn: ?*const fn (u8) TexIndices = null,
-    block_shape_fn: ?*const fn (u8) BlockShape = null,
 };
 
 // ==== Shared Geometry Helpers ====

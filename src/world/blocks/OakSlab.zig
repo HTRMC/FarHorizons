@@ -47,15 +47,6 @@ fn modelInfo(props: u8) ?T.ModelInfo {
     };
 }
 
-fn blockShape(props: u8) T.BlockShape {
-    const slab_type: T.SlabType = @enumFromInt(@as(u2, @truncate(props)));
-    return switch (slab_type) {
-        .bottom => .slab_bottom,
-        .top => .slab_top,
-        .double => .full,
-    };
-}
-
 pub const def = T.BlockDef{
     .name = "Oak Slab",
     .state_count = 3,
@@ -70,5 +61,4 @@ pub const def = T.BlockDef{
     .hitbox_fn = &hitbox,
     .collision_fn = &collision,
     .model_info_fn = &modelInfo,
-    .block_shape_fn = &blockShape,
 };

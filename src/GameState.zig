@@ -176,69 +176,6 @@ pub fn blockColor(state: BlockState.StateId) [4]f32 {
     };
 }
 
-/// Returns { tex_top, tex_side } indices into the block texture array for UI rendering.
-pub fn blockTexIndices(state: BlockState.StateId) struct { top: i16, side: i16 } {
-    const block = BlockState.getBlock(state);
-    return switch (block) {
-        .air => .{ .top = -1, .side = -1 },
-        .glass => .{ .top = 0, .side = 0 },
-        .grass_block => .{ .top = 1, .side = 1 },
-        .dirt => .{ .top = 2, .side = 2 },
-        .stone => .{ .top = 3, .side = 3 },
-        .glowstone => .{ .top = 4, .side = 4 },
-        .sand => .{ .top = 5, .side = 5 },
-        .snow => .{ .top = 6, .side = 6 },
-        .water => .{ .top = 7, .side = 7 },
-        .gravel => .{ .top = 8, .side = 8 },
-        .cobblestone => .{ .top = 9, .side = 9 },
-        .oak_log => .{ .top = 27, .side = 10 },
-        .oak_planks => .{ .top = 11, .side = 11 },
-        .bricks => .{ .top = 12, .side = 12 },
-        .bedrock => .{ .top = 13, .side = 13 },
-        .gold_ore => .{ .top = 14, .side = 14 },
-        .iron_ore => .{ .top = 15, .side = 15 },
-        .coal_ore => .{ .top = 16, .side = 16 },
-        .diamond_ore => .{ .top = 17, .side = 17 },
-        .sponge => .{ .top = 18, .side = 18 },
-        .pumice => .{ .top = 19, .side = 19 },
-        .wool => .{ .top = 20, .side = 20 },
-        .gold_block => .{ .top = 21, .side = 21 },
-        .iron_block => .{ .top = 22, .side = 22 },
-        .diamond_block => .{ .top = 23, .side = 23 },
-        .bookshelf => .{ .top = 24, .side = 24 },
-        .obsidian => .{ .top = 25, .side = 25 },
-        .oak_leaves => .{ .top = 26, .side = 26 },
-        .oak_slab => .{ .top = 11, .side = 11 },
-        .oak_stairs => .{ .top = 11, .side = 11 },
-        .torch => .{ .top = 28, .side = 28 },
-        .ladder => .{ .top = 29, .side = 29 },
-        .oak_door => if (BlockState.getHalf(state)) |half| switch (half) {
-            .bottom => .{ .top = 32, .side = 32 },
-            .top => .{ .top = 33, .side = 33 },
-        } else .{ .top = 32, .side = 32 },
-        .oak_fence => .{ .top = 11, .side = 11 },
-    };
-}
-
-const WidgetData = @import("ui/WidgetData.zig");
-
-pub fn blockShape(state: BlockState.StateId) WidgetData.BlockShape {
-    const block = BlockState.getBlock(state);
-    return switch (block) {
-        .oak_slab => if (BlockState.getSlabType(state)) |st| switch (st) {
-            .bottom => .slab_bottom,
-            .top => .slab_top,
-            .double => .full,
-        } else .full,
-        .oak_stairs => .stairs,
-        .torch => .torch,
-        .ladder => .ladder,
-        .oak_door => .door,
-        .oak_fence => .fence,
-        else => .full,
-    };
-}
-
 allocator: std.mem.Allocator,
 camera: Camera,
 chunk_map: ChunkMap,
@@ -1680,26 +1617,6 @@ test "quickMove: no empty target does nothing" {
 
     // Item stays in place
     try testing.expectEqual(stone, gs.hotbar[0]);
-}
-
-test "blockTexIndices: air returns -1" {
-    const tex = blockTexIndices(BlockState.defaultState(.air));
-    try testing.expectEqual(@as(i16, -1), tex.top);
-    try testing.expectEqual(@as(i16, -1), tex.side);
-}
-
-test "blockTexIndices: oak_log has different top and side" {
-    const tex = blockTexIndices(BlockState.defaultState(.oak_log));
-    try testing.expect(tex.top != tex.side);
-}
-
-test "blockShape: slabs and stairs" {
-    try testing.expectEqual(WidgetData.BlockShape.slab_bottom, blockShape(BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom))));
-    try testing.expectEqual(WidgetData.BlockShape.slab_top, blockShape(BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top))));
-    try testing.expectEqual(WidgetData.BlockShape.stairs, blockShape(BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south))));
-    try testing.expectEqual(WidgetData.BlockShape.torch, blockShape(BlockState.defaultState(.torch)));
-    try testing.expectEqual(WidgetData.BlockShape.ladder, blockShape(BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south))));
-    try testing.expectEqual(WidgetData.BlockShape.full, blockShape(BlockState.defaultState(.stone)));
 }
 
 test "slot boundary constants" {

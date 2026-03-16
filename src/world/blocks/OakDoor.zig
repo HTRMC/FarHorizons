@@ -80,7 +80,6 @@ pub const def = T.BlockDef{
     .base_opaque = false,
     .base_culls_self = false,
     .base_shaped = true,
-    .base_block_shape = .door,
     .is_solid_fn = &isSolid,
     .hitbox_fn = &hitbox,
     .collision_fn = &collision,

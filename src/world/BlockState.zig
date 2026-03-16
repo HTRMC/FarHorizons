@@ -632,6 +632,20 @@ pub fn getCanonicalState(state: StateId) StateId {
     };
 }
 
+/// Get the state used for isometric inventory/GUI display.
+/// Chooses facing/orientation that looks best at the isometric view angle (30°, 225°).
+pub fn getDisplayState(state: StateId) StateId {
+    return switch (getBlock(state)) {
+        .oak_slab => state, // preserve bottom/top/double
+        .oak_stairs => makeStairState(.east, .bottom, .straight),
+        .torch => fromBlockProps(.torch, @intFromEnum(Placement.standing)),
+        .ladder => fromBlockProps(.ladder, @intFromEnum(Facing.north)),
+        .oak_door => makeDoorState(.south, .bottom, false),
+        .oak_fence => defaultState(.oak_fence),
+        else => state,
+    };
+}
+
 /// Construct a door StateId from individual properties.
 pub fn makeDoorState(facing: Facing, half: Half, open_flag: bool) StateId {
     const props: u8 = @intFromEnum(facing) |

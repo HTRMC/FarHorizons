@@ -77,18 +77,13 @@ pub const HudBinder = struct {
                     if (block != BlockState.defaultState(.air)) {
                         const c = GameState.blockColor(block);
                         w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
-                        const tex = GameState.blockTexIndices(block);
                         if (tree.getData(id)) |data| {
-                            data.panel.block_tex_top = tex.top;
-                            data.panel.block_tex_side = tex.side;
-                            data.panel.block_shape = GameState.blockShape(block);
+                            data.panel.block_state = BlockState.getDisplayState(block);
                         }
                     } else {
                         w.background = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
                         if (tree.getData(id)) |data| {
-                            data.panel.block_tex_top = -1;
-                            data.panel.block_tex_side = -1;
-                            data.panel.block_shape = .full;
+                            data.panel.block_state = BlockState.defaultState(.air);
                         }
                     }
                 }

@@ -79,7 +79,6 @@ pub const def = T.BlockDef{
     .base_opaque = false,
     .base_culls_self = false,
     .base_shaped = true,
-    .base_block_shape = .fence,
     .hitbox_fn = &hitbox,
     .collision_fn = &collision,
     .model_info_fn = &modelInfo,

@@ -80,10 +80,6 @@ fn modelInfo(props: u8) ?T.ModelInfo {
     };
 }
 
-fn blockShape(_: u8) T.BlockShape {
-    return .stairs;
-}
-
 pub const def = T.BlockDef{
     .name = "Oak Stairs",
     .state_count = 40,
@@ -92,7 +88,6 @@ pub const def = T.BlockDef{
     .base_opaque = false,
     .base_culls_self = false,
     .base_shaped = true,
-    .base_block_shape = .stairs,
     .collision_fn = &collision,
     .model_info_fn = &modelInfo,
 };

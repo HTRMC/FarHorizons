@@ -9,7 +9,6 @@ const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 const app_config = @import("../../app_config.zig");
 const EntityVertex = @import("EntityRenderer.zig").EntityVertex;
-const GameState = @import("../../GameState.zig");
 const WorldState = @import("../../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
 const Io = std.Io;
@@ -269,7 +268,7 @@ pub const HandRenderer = struct {
         if (state == self.held_block) return;
         self.held_block = state;
 
-        const tex = GameState.blockTexIndices(state);
+        const tex = BlockState.blockTexIndices(state);
         self.block_tex_top = tex.top;
         self.block_tex_side = tex.side;
 

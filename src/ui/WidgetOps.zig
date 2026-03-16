@@ -22,7 +22,7 @@ pub fn drawWidget(
 
     if (w.background.a > 0.01) {
         if (w.kind == .panel and data.panel.draw_isometric) {
-            ui.drawIsometricBlock(r.x, r.y, r.w, r.h, w.background.toArray(), data.panel.block_tex_top, data.panel.block_tex_side, data.panel.block_shape);
+            ui.drawIsometricBlock(r.x, r.y, r.w, r.h, w.background.toArray(), data.panel.block_state);
         } else {
             ui.drawRect(r.x, r.y, r.w, r.h, w.background.toArray());
         }
