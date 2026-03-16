@@ -240,40 +240,26 @@ pub const HandRenderer = struct {
 
         // --- Draw held block ---
         if (has_block) {
-            // Vanilla MC applyItemArmTransform + walk bob
+            // Vanilla MC held block: applyItemArmTransform → display transform
+            // applyItemArmTransform: just translate (no rotation)
+            // Display (block/block.json firstperson_righthand):
+            //   rotation [0, 45, 0], translation [0, 0, 0], scale [0.4, 0.4, 0.4]
+            // ItemTransform.apply: translate → rotateXYZ → scale → translate(-0.5,-0.5,-0.5)
+            //   (last translate centers 0-1 block; our geometry is already centered, skip it)
             const invert: f32 = 1.0;
-            const attack_value2: f32 = 0.0;
-            const inverse_arm_height2: f32 = 0.0;
+            const deg = std.math.degreesToRadians;
 
-            const sqrt_attack2 = @sqrt(attack_value2);
-            const x_swing_pos2 = -0.3 * @sin(sqrt_attack2 * std.math.pi);
-            const y_swing_pos2 = 0.4 * @sin(sqrt_attack2 * (std.math.pi * 2.0));
-            const z_swing_pos2 = -0.4 * @sin(attack_value2 * std.math.pi);
+            // applyItemArmTransform (no attack, no equip animation)
+            const t_arm = mat4Translate(invert * 0.56, -0.52, -0.72);
 
-            const t1 = mat4Translate(
-                invert * (x_swing_pos2 + 0.56),
-                y_swing_pos2 + -0.52 + inverse_arm_height2 * -0.6,
-                z_swing_pos2 + -0.72,
-            );
-            const r1 = mat4RotY(std.math.degreesToRadians(invert * 45.0));
+            // HMI block scale: itemPose scale(0.9) * block scale(0.3) = 0.27
+            const display_rot = mat4RotY(deg(45.0));
+            const display_scale = mat4Scale(0.27, 0.27, 0.27);
 
-            const z_swing_rot2 = @sin(attack_value2 * attack_value2 * std.math.pi);
-            const y_swing_rot2 = @sin(sqrt_attack2 * std.math.pi);
-            const r2 = mat4RotY(std.math.degreesToRadians(invert * y_swing_rot2 * 70.0));
-            const r3 = mat4RotZ(std.math.degreesToRadians(invert * z_swing_rot2 * -20.0));
-
-            // Block display transform: rotation(0, 45, 0) + scale(0.4)
-            const bs: f32 = 0.4;
-            const block_rot = mat4RotY(std.math.degreesToRadians(45.0));
-            const block_scale = mat4Scale(bs, bs, bs);
-
-            // Chain: walk_bob * t1 * r1 * r2 * r3 * block_rot * block_scale
-            var block_model = zlm.Mat4.mul(walk_mat, t1);
-            block_model = zlm.Mat4.mul(block_model, r1);
-            block_model = zlm.Mat4.mul(block_model, r2);
-            block_model = zlm.Mat4.mul(block_model, r3);
-            block_model = zlm.Mat4.mul(block_model, block_rot);
-            block_model = zlm.Mat4.mul(block_model, block_scale);
+            // Chain: walk_bob * t_arm * display_rot * display_scale
+            var block_model = zlm.Mat4.mul(walk_mat, t_arm);
+            block_model = zlm.Mat4.mul(block_model, display_rot);
+            block_model = zlm.Mat4.mul(block_model, display_scale);
             const mvp = zlm.Mat4.mul(proj, block_model);
 
             if (self.is_shaped) {
