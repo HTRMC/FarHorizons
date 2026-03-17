@@ -989,7 +989,7 @@ pub fn main() !void {
             er.rotation_y = menu_ctrl.player_rotation;
             if (game_state) |*gs| {
                 er.world_visible = gs.third_person;
-                er.world_pos = gs.render_entity_pos;
+                er.world_pos = gs.entities.render_pos[GameState.Entity.PLAYER];
                 er.world_yaw = gs.camera.yaw;
             } else {
                 er.world_visible = false;
@@ -1003,8 +1003,10 @@ pub fn main() !void {
                     hr.triggerSwing();
                     gs.swing_requested = false;
                 }
-                const hspeed = @sqrt(gs.entity_vel[0] * gs.entity_vel[0] + gs.entity_vel[2] * gs.entity_vel[2]);
-                hr.updateAnimations(delta_time, hspeed, gs.entity_vel[1], gs.entity_on_ground, gs.camera.pitch, gs.camera.yaw);
+                const P = GameState.Entity.PLAYER;
+                const vel = gs.entities.vel[P];
+                const hspeed = @sqrt(vel[0] * vel[0] + vel[2] * vel[2]);
+                hr.updateAnimations(delta_time, hspeed, vel[1], gs.entities.flags[P].on_ground, gs.camera.pitch, gs.camera.yaw);
             } else {
                 hr.setPendingBlock(WorldState.BlockState.defaultState(.air));
             }

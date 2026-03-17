@@ -11,6 +11,7 @@ const LightMapPool = LightMapMod.LightMapPool;
 pub const ChunkStreamer = @import("world/ChunkStreamer.zig").ChunkStreamer;
 const TerrainGen = @import("world/TerrainGen.zig");
 const Physics = @import("Physics.zig");
+pub const Entity = @import("Entity.zig");
 const Raycast = @import("Raycast.zig");
 const Storage = @import("world/storage/Storage.zig");
 const WorldRenderer = @import("renderer/vulkan/WorldRenderer.zig").WorldRenderer;
@@ -229,13 +230,7 @@ chunk_pool: ChunkPool,
 light_maps: std.AutoHashMap(WorldState.ChunkKey, *LightMap),
 light_map_pool: LightMapPool,
 surface_height_map: SurfaceHeightMap,
-entity_pos: [3]f32,
-entity_vel: [3]f32,
-entity_on_ground: bool,
-entity_in_water: bool,
-eyes_in_water: bool,
-water_vision_time: u16,
-entity_on_ladder: bool,
+entities: Entity.EntityStore,
 mode: MovementMode,
 input_move: [3]f32,
 jump_requested: bool,
@@ -301,10 +296,8 @@ show_ui: bool = true,
 delta_time: f32 = 0,
 frame_timing: FrameTiming = .{},
 
-prev_entity_pos: [3]f32,
 prev_camera_pos: zlm.Vec3,
 tick_camera_pos: zlm.Vec3,
-render_entity_pos: [3]f32,
 
 pub const FrameTiming = struct {
     update_ms: f32 = 0,
@@ -455,13 +448,11 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .light_maps = light_maps,
         .light_map_pool = light_map_pool,
         .surface_height_map = surface_height_map,
-        .entity_pos = .{ spawn_x, spawn_y, spawn_z },
-        .entity_vel = .{ 0.0, 0.0, 0.0 },
-        .entity_on_ground = false,
-        .entity_in_water = false,
-        .eyes_in_water = false,
-        .water_vision_time = 0,
-        .entity_on_ladder = false,
+        .entities = blk: {
+            var store = Entity.EntityStore{};
+            _ = store.spawn(.player, .{ spawn_x, spawn_y, spawn_z });
+            break :blk store;
+        },
         .mode = .walking,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .jump_requested = false,
@@ -482,10 +473,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .debug_camera_active = false,
         .overdraw_mode = false,
         .saved_camera = cam,
-        .prev_entity_pos = .{ spawn_x, spawn_y, spawn_z },
         .prev_camera_pos = cam.position,
         .tick_camera_pos = cam.position,
-        .render_entity_pos = .{ spawn_x, spawn_y, spawn_z },
     };
 }
 
@@ -494,10 +483,11 @@ pub fn save(self: *GameState) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const save_start = std.Io.Clock.now(.awake, io);
 
+    const pos = self.entities.pos[Entity.PLAYER];
     s.savePlayerData(Storage.LOCAL_PLAYER_UUID, .{
-        .x = self.entity_pos[0],
-        .y = self.entity_pos[1],
-        .z = self.entity_pos[2],
+        .x = pos[0],
+        .y = pos[1],
+        .z = pos[2],
         .yaw = self.camera.yaw,
         .pitch = self.camera.pitch,
     });
@@ -549,29 +539,31 @@ pub fn toggleDebugCamera(self: *GameState) void {
 
 fn updateWaterState(self: *GameState) void {
     const floori = Physics.floori;
+    const P = Entity.PLAYER;
+    const epos = self.entities.pos[P];
 
     // In flying mode, use camera position; in walking mode, use entity position
-    const pos_x: f32 = if (self.mode == .flying) self.camera.position.x else self.entity_pos[0];
-    const pos_y: f32 = if (self.mode == .flying) self.camera.position.y - EYE_OFFSET else self.entity_pos[1];
-    const pos_z: f32 = if (self.mode == .flying) self.camera.position.z else self.entity_pos[2];
+    const pos_x: f32 = if (self.mode == .flying) self.camera.position.x else epos[0];
+    const pos_y: f32 = if (self.mode == .flying) self.camera.position.y - EYE_OFFSET else epos[1];
+    const pos_z: f32 = if (self.mode == .flying) self.camera.position.z else epos[2];
     const px = floori(pos_x);
     const pz = floori(pos_z);
 
     const feet_block = self.chunk_map.getBlock(px, floori(pos_y), pz);
     const eye_block = self.chunk_map.getBlock(px, floori(pos_y + EYE_OFFSET), pz);
 
-    self.entity_in_water = (BlockState.getBlock(feet_block) == .water);
-    self.eyes_in_water = (BlockState.getBlock(eye_block) == .water);
+    self.entities.flags[P].in_water = (BlockState.getBlock(feet_block) == .water);
+    self.entities.flags[P].eyes_in_water = (BlockState.getBlock(eye_block) == .water);
 
     // Ladder detection: check feet and mid-body
-    self.entity_on_ladder = isLadder(feet_block) or
+    self.entities.flags[P].on_ladder = isLadder(feet_block) or
         isLadder(self.chunk_map.getBlock(px, floori(pos_y + 0.9), pz));
 
     // Water vision time: MC 0-600 ticks @20Hz → 0-900 @30Hz
-    if (self.eyes_in_water) {
-        if (self.water_vision_time < 900) self.water_vision_time += 1;
+    if (self.entities.flags[P].eyes_in_water) {
+        if (self.entities.water_vision_time[P] < 900) self.entities.water_vision_time[P] += 1;
     } else {
-        self.water_vision_time = 0;
+        self.entities.water_vision_time[P] = 0;
     }
 }
 
@@ -581,32 +573,34 @@ fn isLadder(state: BlockState.StateId) bool {
 
 /// Returns 0.0 to 1.0 water vision factor (MC two-phase curve).
 pub fn waterVision(self: *const GameState) f32 {
-    const t: f32 = @floatFromInt(self.water_vision_time);
+    const t: f32 = @floatFromInt(self.entities.water_vision_time[Entity.PLAYER]);
     const a = std.math.clamp(t / 150.0, 0.0, 1.0);
     const b = std.math.clamp((t - 150.0) / 750.0, 0.0, 1.0);
     return a * 0.6 + b * 0.4;
 }
 
 pub fn toggleMode(self: *GameState) void {
+    const P = Entity.PLAYER;
     switch (self.mode) {
         .flying => {
-            self.entity_pos = .{
+            self.entities.pos[P] = .{
                 self.camera.position.x,
                 self.camera.position.y - EYE_OFFSET,
                 self.camera.position.z,
             };
-            self.prev_entity_pos = self.entity_pos;
-            self.entity_vel = .{ 0.0, 0.0, 0.0 };
-            self.entity_on_ground = false;
+            self.entities.prev_pos[P] = self.entities.pos[P];
+            self.entities.vel[P] = .{ 0.0, 0.0, 0.0 };
+            self.entities.flags[P].on_ground = false;
             self.jump_requested = false;
             self.jump_cooldown = 5;
             self.mode = .walking;
         },
         .walking => {
+            const epos = self.entities.pos[P];
             self.camera.position = zlm.Vec3.init(
-                self.entity_pos[0],
-                self.entity_pos[1] + EYE_OFFSET,
-                self.entity_pos[2],
+                epos[0],
+                epos[1] + EYE_OFFSET,
+                epos[2],
             );
             self.prev_camera_pos = self.camera.position;
             self.mode = .flying;
@@ -615,8 +609,9 @@ pub fn toggleMode(self: *GameState) void {
 }
 
 pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
+    const P = Entity.PLAYER;
     self.game_time +%= 1;
-    self.prev_entity_pos = self.entity_pos;
+    self.entities.prev_pos[P] = self.entities.pos[P];
     self.prev_camera_pos = self.camera.position;
 
     // Detect water state before physics (both modes need it for fog)
@@ -633,30 +628,32 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
                 self.camera.move(forward_input * speed, right_input * speed, up_input * speed);
             }
 
-            self.entity_pos = .{
+            self.entities.pos[P] = .{
                 self.camera.position.x,
                 self.camera.position.y - EYE_OFFSET,
                 self.camera.position.z,
             };
         },
         .walking => {
+            const flags = self.entities.flags[P];
 
             if (self.jump_cooldown > 0) {
                 self.jump_cooldown -= 1;
-            } else if (self.jump_requested and self.entity_on_ladder) {
+            } else if (self.jump_requested and flags.on_ladder) {
                 // Climb up ladder
-                self.entity_vel[1] = Physics.LADDER_CLIMB_SPEED;
-            } else if (self.jump_requested and !self.entity_in_water and self.entity_on_ground) {
-                self.entity_vel[1] = 8.7;
+                self.entities.vel[P][1] = Physics.LADDER_CLIMB_SPEED;
+            } else if (self.jump_requested and !flags.in_water and flags.on_ground) {
+                self.entities.vel[P][1] = 8.7;
             }
             self.jump_requested = false;
 
-            Physics.updateEntity(self, TICK_INTERVAL);
+            Physics.updateEntity(&self.entities, P, &self.chunk_map, self.input_move, self.camera.yaw, TICK_INTERVAL);
 
+            const epos = self.entities.pos[P];
             self.camera.position = zlm.Vec3.init(
-                self.entity_pos[0],
-                self.entity_pos[1] + EYE_OFFSET,
-                self.entity_pos[2],
+                epos[0],
+                epos[1] + EYE_OFFSET,
+                epos[2],
             );
         },
     }
@@ -715,21 +712,22 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
+    const P = Entity.PLAYER;
     self.tick_camera_pos = self.camera.position;
-    self.render_entity_pos = lerpArray3(self.prev_entity_pos, self.entity_pos, alpha);
+    self.entities.render_pos[P] = lerpArray3(self.entities.prev_pos[P], self.entities.pos[P], alpha);
     switch (self.mode) {
         .flying => {
             self.camera.position = lerpVec3(self.prev_camera_pos, self.tick_camera_pos, alpha);
         },
         .walking => {
+            const rpos = self.entities.render_pos[P];
             self.camera.position = zlm.Vec3.init(
-                self.render_entity_pos[0],
-                self.render_entity_pos[1] + EYE_OFFSET,
-                self.render_entity_pos[2],
+                rpos[0],
+                rpos[1] + EYE_OFFSET,
+                rpos[2],
             );
         },
     }
-
 }
 
 pub fn restoreAfterRender(self: *GameState) void {
@@ -738,10 +736,11 @@ pub fn restoreAfterRender(self: *GameState) void {
             self.camera.position = self.tick_camera_pos;
         },
         .walking => {
+            const epos = self.entities.pos[Entity.PLAYER];
             self.camera.position = zlm.Vec3.init(
-                self.entity_pos[0],
-                self.entity_pos[1] + EYE_OFFSET,
-                self.entity_pos[2],
+                epos[0],
+                epos[1] + EYE_OFFSET,
+                epos[2],
             );
         },
     }
@@ -1108,7 +1107,7 @@ pub fn placeBlock(self: *GameState) void {
     const py = hit.block_pos[1] + n[1];
     const pz = hit.block_pos[2] + n[2];
     if (BlockState.isSolid(self.chunk_map.getBlock(px, py, pz))) return;
-    if (BlockState.isSolid(block_state) and blockOverlapsPlayer(px, py, pz, self.entity_pos)) return;
+    if (BlockState.isSolid(block_state) and blockOverlapsPlayer(px, py, pz, self.entities.pos[Entity.PLAYER])) return;
 
     // Orient stairs based on player yaw, and slabs based on hit face/position
     block_state = resolveOrientation(block_state, self.camera.yaw, hit);

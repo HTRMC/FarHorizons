@@ -63,7 +63,7 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     text.drawText(x, y, xyz_text, yellow);
     y += LINE_HEIGHT;
 
-    const vel = gs.entity_vel;
+    const vel = gs.entities.vel[GameState.Entity.PLAYER];
     const vel_text = std.fmt.bufPrint(&buf, "Velocity: {d:.2} / {d:.2} / {d:.2}", .{ vel[0], vel[1], vel[2] }) catch "Velocity: ?";
     text.drawText(x, y, vel_text, yellow);
     y += LINE_HEIGHT;
@@ -83,7 +83,7 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     text.drawText(x, y, mode_text, yellow);
     y += LINE_HEIGHT;
 
-    const ground_text: []const u8 = if (gs.entity_on_ground) "On Ground: true" else "On Ground: false";
+    const ground_text: []const u8 = if (gs.entities.flags[GameState.Entity.PLAYER].on_ground) "On Ground: true" else "On Ground: false";
     text.drawText(x, y, ground_text, yellow);
     y += LINE_HEIGHT;
 

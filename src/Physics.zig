@@ -1,5 +1,6 @@
 const std = @import("std");
 const GameState = @import("GameState.zig");
+const Entity = GameState.Entity;
 const WorldState = @import("world/WorldState.zig");
 const BlockState = WorldState.BlockState;
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
@@ -25,14 +26,19 @@ const WATER_Y_DRAG: f32 = 0.86; // per-tick vertical drag
 pub const LADDER_CLIMB_SPEED: f32 = 3.0; // climb speed when holding jump
 const LADDER_MAX_FALL: f32 = -2.4; // max fall speed on ladder (MC: -0.15/tick @20Hz)
 
-pub fn updateEntity(state: *GameState, dt: f32) void {
-    if (state.mode == .flying) return;
+pub fn updateEntity(
+    entities: *Entity.EntityStore,
+    id: Entity.EntityId,
+    chunk_map: *const ChunkMap,
+    input_move: [3]f32,
+    camera_yaw: f32,
+    dt: f32,
+) void {
+    const forward_input = input_move[0];
+    const right_input = input_move[2];
 
-    const forward_input = state.input_move[0];
-    const right_input = state.input_move[2];
-
-    const sin_yaw = @sin(state.camera.yaw);
-    const cos_yaw = @cos(state.camera.yaw);
+    const sin_yaw = @sin(camera_yaw);
+    const cos_yaw = @cos(camera_yaw);
 
     var wish_x = -forward_input * sin_yaw + right_input * cos_yaw;
     var wish_z = -forward_input * cos_yaw - right_input * sin_yaw;
@@ -43,37 +49,39 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         wish_z *= inv_len;
     }
 
-    if (state.entity_in_water) {
+    const flags = entities.flags[id];
+
+    if (flags.in_water) {
         // Water horizontal movement
         const target_vx = wish_x * WATER_SPEED;
         const target_vz = wish_z * WATER_SPEED;
         const water_control = WATER_FRICTION * dt;
-        state.entity_vel[0] = approach(state.entity_vel[0], target_vx, water_control);
-        state.entity_vel[2] = approach(state.entity_vel[2], target_vz, water_control);
+        entities.vel[id][0] = approach(entities.vel[id][0], target_vx, water_control);
+        entities.vel[id][2] = approach(entities.vel[id][2], target_vz, water_control);
 
         // Vertical swimming (input_move[1]: +1 jump, -1 sneak)
         // Only apply when input is active — otherwise let gravity/drag handle sinking
-        const up_input = state.input_move[1];
+        const up_input = input_move[1];
         if (up_input != 0.0) {
             const target_vy = up_input * WATER_SWIM_SPEED;
-            state.entity_vel[1] = approach(state.entity_vel[1], target_vy, water_control);
+            entities.vel[id][1] = approach(entities.vel[id][1], target_vy, water_control);
         }
     } else {
         // Land horizontal movement
         const target_vx = wish_x * WALK_SPEED;
         const target_vz = wish_z * WALK_SPEED;
-        const control = if (state.entity_on_ground) FRICTION else FRICTION * AIR_CONTROL;
+        const control = if (flags.on_ground) FRICTION else FRICTION * AIR_CONTROL;
         const max_delta = control * dt;
-        state.entity_vel[0] = approach(state.entity_vel[0], target_vx, max_delta);
-        state.entity_vel[2] = approach(state.entity_vel[2], target_vz, max_delta);
+        entities.vel[id][0] = approach(entities.vel[id][0], target_vx, max_delta);
+        entities.vel[id][2] = approach(entities.vel[id][2], target_vz, max_delta);
     }
 
-    state.entity_on_ground = false;
+    entities.flags[id].on_ground = false;
 
     const movement = [3]f32{
-        state.entity_vel[0] * dt,
-        state.entity_vel[1] * dt,
-        state.entity_vel[2] * dt,
+        entities.vel[id][0] * dt,
+        entities.vel[id][1] * dt,
+        entities.vel[id][2] * dt,
     };
 
     const abs_mov = [3]f32{
@@ -91,36 +99,36 @@ pub fn updateEntity(state: *GameState, dt: f32) void {
         const desired = movement[axis];
         if (desired == 0.0) continue;
 
-        const result = collideAxis(&state.chunk_map, state.entity_pos, desired, axis);
-        state.entity_pos[axis] += result.distance;
+        const result = collideAxis(chunk_map, entities.pos[id], desired, axis);
+        entities.pos[id][axis] += result.distance;
 
         if (result.hit) {
-            if (axis == 1 and state.entity_vel[1] < 0.0) {
-                state.entity_on_ground = true;
+            if (axis == 1 and entities.vel[id][1] < 0.0) {
+                entities.flags[id].on_ground = true;
             }
-            state.entity_vel[axis] = 0.0;
+            entities.vel[id][axis] = 0.0;
         }
     }
 
-    if (state.entity_in_water) {
-        state.entity_vel[1] -= WATER_GRAVITY * dt;
-        state.entity_vel[0] *= WATER_XZ_DRAG;
-        state.entity_vel[1] *= WATER_Y_DRAG;
-        state.entity_vel[2] *= WATER_XZ_DRAG;
-    } else if (state.entity_on_ladder) {
-        state.entity_vel[1] -= GRAVITY * dt;
-        state.entity_vel[1] *= Y_DRAG;
+    if (flags.in_water) {
+        entities.vel[id][1] -= WATER_GRAVITY * dt;
+        entities.vel[id][0] *= WATER_XZ_DRAG;
+        entities.vel[id][1] *= WATER_Y_DRAG;
+        entities.vel[id][2] *= WATER_XZ_DRAG;
+    } else if (flags.on_ladder) {
+        entities.vel[id][1] -= GRAVITY * dt;
+        entities.vel[id][1] *= Y_DRAG;
         // Cap fall speed on ladder
-        if (state.entity_vel[1] < LADDER_MAX_FALL) {
-            state.entity_vel[1] = LADDER_MAX_FALL;
+        if (entities.vel[id][1] < LADDER_MAX_FALL) {
+            entities.vel[id][1] = LADDER_MAX_FALL;
         }
         // Sneak to hold position on ladder
-        if (state.input_move[1] < 0.0 and state.entity_vel[1] < 0.0) {
-            state.entity_vel[1] = 0.0;
+        if (input_move[1] < 0.0 and entities.vel[id][1] < 0.0) {
+            entities.vel[id][1] = 0.0;
         }
     } else {
-        state.entity_vel[1] -= GRAVITY * dt;
-        state.entity_vel[1] *= Y_DRAG;
+        entities.vel[id][1] -= GRAVITY * dt;
+        entities.vel[id][1] *= Y_DRAG;
     }
 }
 

@@ -336,7 +336,7 @@ pub const DebugRenderer = struct {
         count = addLine(vertices, count, 0.0, 0.0, 0.0, 0.0, 0.0, 64.0, .{ 0.0, 0.0, 1.0, 1.0 });
 
         if (game_state.show_hitbox) {
-            const entity_pos = game_state.render_entity_pos;
+            const entity_pos = game_state.entities.render_pos[GameState.Entity.PLAYER];
             const half_w: f32 = 0.4;
             const height: f32 = 1.8;
             const x0 = entity_pos[0] - half_w;

@@ -904,7 +904,7 @@ pub const VulkanRenderer = struct {
             .{ 0, 0, 0, 1 };
 
         // Underwater fog parameters
-        const eyes_in_water = if (self.game_state) |gs| gs.eyes_in_water else false;
+        const eyes_in_water = if (self.game_state) |gs| gs.entities.flags[GameState.Entity.PLAYER].eyes_in_water else false;
         const fog_color: [3]f32 = .{ 0.05, 0.1, 0.3 };
         var fog_start: f32 = 10000.0;
         var fog_end: f32 = 10000.0;
