@@ -609,7 +609,7 @@ pub const MenuController = struct {
             const id = self.inv_slot_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, inv.hotbar[i].block);
+                    updateSlotWidget(w, tree, id, inv.hotbar[i]);
                 }
             }
             updateCountLabel(tree, self.inv_slot_count_ids[i], inv.hotbar[i].count);
@@ -620,7 +620,7 @@ pub const MenuController = struct {
             const id = self.inv_main_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, inv.main[i].block);
+                    updateSlotWidget(w, tree, id, inv.main[i]);
                 }
             }
             updateCountLabel(tree, self.inv_main_count_ids[i], inv.main[i].count);
@@ -631,7 +631,7 @@ pub const MenuController = struct {
             const id = self.inv_armor_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, inv.armor[i].block);
+                    updateSlotWidget(w, tree, id, inv.armor[i]);
                 }
             }
             updateCountLabel(tree, self.inv_armor_count_ids[i], inv.armor[i].count);
@@ -642,7 +642,7 @@ pub const MenuController = struct {
             const id = self.inv_equip_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, inv.equip[i].block);
+                    updateSlotWidget(w, tree, id, inv.equip[i]);
                 }
             }
             updateCountLabel(tree, self.inv_equip_count_ids[i], inv.equip[i].count);
@@ -652,7 +652,7 @@ pub const MenuController = struct {
         if (self.inv_offhand_id != NULL_WIDGET) {
             const id = self.inv_offhand_id;
             if (tree.getWidget(id)) |w| {
-                updateSlotWidget(w, tree, id, inv.offhand.block);
+                updateSlotWidget(w, tree, id, inv.offhand);
             }
         }
         updateCountLabel(tree, self.inv_offhand_count_id, inv.offhand.count);
@@ -662,10 +662,13 @@ pub const MenuController = struct {
             const cid = self.cursor_item_id;
             if (tree.getWidget(cid)) |w| {
                 if (!gs.carried_item.isEmpty()) {
-                    const c = GameState.blockColor(gs.carried_item.block);
+                    const c = GameState.itemColor(gs.carried_item.block);
                     w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                     if (tree.getData(cid)) |data| {
-                        data.panel.block_state = BlockState.getDisplayState(gs.carried_item.block);
+                        data.panel.block_state = if (gs.carried_item.isTool())
+                            BlockState.defaultState(.air)
+                        else
+                            BlockState.getDisplayState(gs.carried_item.block);
                     }
                     w.visible = true;
                 } else {
@@ -1230,14 +1233,17 @@ pub const MenuController = struct {
         }
     }
 
-    fn updateSlotWidget(w: *Widget.Widget, tree: *WidgetTree, id: WidgetId, block: BlockState.StateId) void {
-        if (BlockState.getBlock(block) != .air) {
-            const c = GameState.blockColor(block);
+    fn updateSlotWidget(w: *Widget.Widget, tree: *WidgetTree, id: WidgetId, stack: GameState.Entity.ItemStack) void {
+        if (!stack.isEmpty()) {
+            const c = GameState.itemColor(stack.block);
             w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
             if (tree.getData(id)) |data| {
-                data.panel.block_state = BlockState.getDisplayState(block);
+                data.panel.block_state = if (stack.isTool())
+                    BlockState.defaultState(.air)
+                else
+                    BlockState.getDisplayState(stack.block);
             }
-            const name = GameState.blockName(block);
+            const name = GameState.itemName(stack.block);
             const len: u8 = @intCast(@min(name.len, 64));
             @memcpy(w.tooltip[0..len], name[0..len]);
             w.tooltip_len = len;

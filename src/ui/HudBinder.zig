@@ -23,6 +23,7 @@ pub const HudBinder = struct {
     block_name_id: WidgetId = NULL_WIDGET,
     health_bar_id: WidgetId = NULL_WIDGET,
     air_bar_id: WidgetId = NULL_WIDGET,
+    break_bar_id: WidgetId = NULL_WIDGET,
     slot_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
     count_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
 
@@ -35,6 +36,7 @@ pub const HudBinder = struct {
         self.block_name_id = tree.findById("block_name") orelse NULL_WIDGET;
         self.health_bar_id = tree.findById("health_bar") orelse NULL_WIDGET;
         self.air_bar_id = tree.findById("air_bar") orelse NULL_WIDGET;
+        self.break_bar_id = tree.findById("break_bar") orelse NULL_WIDGET;
 
         inline for (0..HOTBAR_SIZE) |i| {
             const name = comptime std.fmt.comptimePrint("slot_{d}", .{i});
@@ -77,16 +79,31 @@ pub const HudBinder = struct {
             }
         }
 
+        // Break progress bar
+        if (self.break_bar_id != NULL_WIDGET) {
+            if (tree.getWidget(self.break_bar_id)) |w| {
+                w.visible = gs.break_progress > 0;
+            }
+            if (gs.break_progress > 0) {
+                if (tree.getData(self.break_bar_id)) |data| {
+                    data.progress_bar.value = gs.break_progress;
+                }
+            }
+        }
+
         for (0..HOTBAR_SIZE) |i| {
             const id = self.slot_ids[i];
             const stack = gs.playerInv().hotbar[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
                     if (!stack.isEmpty()) {
-                        const c = GameState.blockColor(stack.block);
+                        const c = GameState.itemColor(stack.block);
                         w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                         if (tree.getData(id)) |data| {
-                            data.panel.block_state = BlockState.getDisplayState(stack.block);
+                            data.panel.block_state = if (stack.isTool())
+                                BlockState.defaultState(.air)
+                            else
+                                BlockState.getDisplayState(stack.block);
                         }
                     } else {
                         w.background = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
@@ -146,7 +163,7 @@ pub const HudBinder = struct {
             }
             if (!selected_stack.isEmpty()) {
                 if (tree.getData(self.block_name_id)) |data| {
-                    data.label.setText(GameState.blockName(selected_stack.block));
+                    data.label.setText(GameState.itemName(selected_stack.block));
                 }
             }
         }
