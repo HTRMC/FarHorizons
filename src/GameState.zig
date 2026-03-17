@@ -1256,6 +1256,7 @@ pub fn placeBlock(self: *GameState) void {
 pub fn dropSelectedItem(self: *GameState) void {
     const stack = &self.playerInv().hotbar[self.selected_slot];
     if (stack.isEmpty()) return;
+    if (self.entities.count >= Entity.MAX_ENTITIES) return;
 
     const P = Entity.PLAYER;
     const epos = self.entities.pos[P];
@@ -1266,7 +1267,9 @@ pub fn dropSelectedItem(self: *GameState) void {
         epos[1] + EYE_OFFSET + forward.y * 0.5,
         epos[2] + forward.z * 0.5,
     };
+    const prev_count = self.entities.count;
     self.entities.spawnItemDrop(drop_pos, stack.block, 1);
+    if (self.entities.count <= prev_count) return; // spawn failed
     // Give the drop forward velocity
     const last = self.entities.count - 1;
     self.entities.vel[last] = .{
@@ -1415,6 +1418,13 @@ fn readLightRaw(self: *const GameState, bx: i32, by: i32, bz: i32) [4]f32 {
     const ly: usize = @intCast(@mod(by, @as(i32, WorldState.CHUNK_SIZE)));
     const lz: usize = @intCast(@mod(bz, @as(i32, WorldState.CHUNK_SIZE)));
     const ci = WorldState.chunkIndex(lx, ly, lz);
+
+    // Lock to prevent race with mesh worker recomputing light data
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const lm_mut: *LightMapMod.LightMap = @constCast(lm);
+    lm_mut.mutex.lockUncancelable(io);
+    defer lm_mut.mutex.unlock(io);
+
     const blk = lm.block_light.get(ci);
     const sky = lm.sky_light.get(ci);
     return .{
