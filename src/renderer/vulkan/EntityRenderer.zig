@@ -26,6 +26,14 @@ pub const EntityVertex = extern struct {
 
 const MAX_VERTICES = 4096;
 
+const EntityPushConstants = extern struct {
+    mvp: [16]f32,
+    ambient_light: [3]f32,
+    contrast: f32,
+    sun_dir: [3]f32,
+    _pad: f32 = 0,
+};
+
 pub const EntityRenderer = struct {
     pipeline: vk.VkPipeline, // No depth test (inventory overlay)
     pipeline_depth: vk.VkPipeline, // With depth test (world rendering)
@@ -143,7 +151,13 @@ pub const EntityRenderer = struct {
 
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_depth);
         vk.cmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &[_]vk.VkDescriptorSet{self.descriptor_set}, 0, null);
-        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(zlm.Mat4), &mvp.m);
+        const pc = EntityPushConstants{
+            .mvp = mvp.m,
+            .ambient_light = .{ 1.0, 1.0, 1.0 },
+            .contrast = 0.25,
+            .sun_dir = .{ 0.4, 0.8, 0.5 },
+        };
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
 
         // Restore full-screen viewport/scissor
@@ -153,7 +167,7 @@ pub const EntityRenderer = struct {
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{full_scissor});
     }
 
-    pub fn recordDrawWorld(self: *const EntityRenderer, command_buffer: vk.VkCommandBuffer, view_proj: zlm.Mat4) void {
+    pub fn recordDrawWorld(self: *const EntityRenderer, command_buffer: vk.VkCommandBuffer, view_proj: zlm.Mat4, ambient_light: [3]f32, sun_dir: [3]f32) void {
         if (!self.world_visible or self.vertex_count == 0) return;
 
         const sin_y = @sin(self.world_yaw + std.math.pi);
@@ -165,7 +179,13 @@ pub const EntityRenderer = struct {
 
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_depth);
         vk.cmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &[_]vk.VkDescriptorSet{self.descriptor_set}, 0, null);
-        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(zlm.Mat4), &mvp.m);
+        const pc = EntityPushConstants{
+            .mvp = mvp.m,
+            .ambient_light = ambient_light,
+            .contrast = 0.25,
+            .sun_dir = sun_dir,
+        };
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
     }
 
@@ -634,11 +654,14 @@ pub const EntityRenderer = struct {
         const blend_att = vk.VkPipelineColorBlendAttachmentState{ .blendEnable = vk.VK_FALSE, .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE, .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO, .colorBlendOp = vk.VK_BLEND_OP_ADD, .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE, .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO, .alphaBlendOp = vk.VK_BLEND_OP_ADD, .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT };
         const color_blending = vk.VkPipelineColorBlendStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .pNext = null, .flags = 0, .logicOpEnable = vk.VK_FALSE, .logicOp = 0, .attachmentCount = 1, .pAttachments = &blend_att, .blendConstants = .{ 0, 0, 0, 0 } };
 
-        const push_range = vk.VkPushConstantRange{ .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = 64 };
+        const push_ranges = [_]vk.VkPushConstantRange{
+            .{ .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = 64 },
+            .{ .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 64, .size = @sizeOf(EntityPushConstants) - 64 },
+        };
         self.pipeline_layout = try vk.createPipelineLayout(device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .pNext = null, .flags = 0,
             .setLayoutCount = 1, .pSetLayouts = &self.descriptor_set_layout,
-            .pushConstantRangeCount = 1, .pPushConstantRanges = &push_range,
+            .pushConstantRangeCount = 2, .pPushConstantRanges = &push_ranges,
         }, null);
 
         const color_fmt = [_]vk.VkFormat{swapchain_format};

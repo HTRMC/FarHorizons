@@ -9,6 +9,9 @@ layout(set = 0, binding = 2) uniform sampler2DArray blockTextures;
 layout(push_constant) uniform PushConstants {
     layout(offset = 64) int useBlockTexture;
     layout(offset = 68) int texLayer;
+    layout(offset = 80) vec3 ambientLight;
+    layout(offset = 92) float contrast;
+    layout(offset = 96) vec3 sunDir;
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -22,11 +25,16 @@ void main() {
     }
     if (texColor.a < 0.01) discard;
 
-    // Simple directional lighting from upper-right
-    vec3 lightDir = normalize(vec3(0.4, 0.8, 0.5));
-    float ambient = 0.35;
-    float diffuse = max(dot(normalize(fragNormal), lightDir), 0.0) * 0.65;
-    float lighting = ambient + diffuse;
+    // Directional shading matching terrain: normal-based variation
+    vec3 n = normalize(fragNormal);
+    float baseLighting = 1.0 - pc.contrast;
+    float variation = baseLighting + dot(n, vec3(0, pc.contrast / 2.0, pc.contrast));
 
-    outColor = vec4(texColor.rgb * lighting, texColor.a);
+    // Diffuse from sun direction
+    float sunDiffuse = max(dot(n, normalize(pc.sunDir)), 0.0) * 0.3;
+
+    vec3 light = pc.ambientLight * (variation + sunDiffuse);
+    light = min(light, vec3(1.0));
+
+    outColor = vec4(texColor.rgb * light, texColor.a);
 }

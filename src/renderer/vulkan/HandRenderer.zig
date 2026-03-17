@@ -20,6 +20,12 @@ const PushConstants = extern struct {
     mvp: [16]f32,
     use_block_texture: i32,
     tex_layer: i32,
+    _pad0: i32 = 0,
+    _pad1: i32 = 0,
+    ambient_light: [3]f32,
+    contrast: f32,
+    sun_dir: [3]f32,
+    _pad2: f32 = 0,
 };
 
 pub const HandRenderer = struct {
@@ -167,7 +173,7 @@ pub const HandRenderer = struct {
         self.pending_block = state;
     }
 
-    pub fn recordDraw(self: *const HandRenderer, command_buffer: vk.VkCommandBuffer, screen_width: f32, screen_height: f32, third_person: bool) void {
+    pub fn recordDraw(self: *const HandRenderer, command_buffer: vk.VkCommandBuffer, screen_width: f32, screen_height: f32, third_person: bool, ambient_light: [3]f32, sun_dir: [3]f32) void {
         if (!self.visible or third_person) return;
         if (self.arm_vertex_count == 0) return;
 
@@ -304,6 +310,9 @@ pub const HandRenderer = struct {
                 .mvp = mvp.m,
                 .use_block_texture = 0,
                 .tex_layer = 0,
+                .ambient_light = ambient_light,
+                .contrast = 0.25,
+                .sun_dir = sun_dir,
             };
             vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
             vk.cmdDraw(command_buffer, self.arm_vertex_count, 1, 0, 0);
@@ -332,6 +341,9 @@ pub const HandRenderer = struct {
                         .mvp = mvp.m,
                         .use_block_texture = 1,
                         .tex_layer = group.tex_layer,
+                        .ambient_light = ambient_light,
+                        .contrast = 0.25,
+                        .sun_dir = sun_dir,
                     };
                     vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
                     vk.cmdDraw(command_buffer, group.count, 1, group.start, 0);
@@ -342,6 +354,9 @@ pub const HandRenderer = struct {
                     .mvp = mvp.m,
                     .use_block_texture = 1,
                     .tex_layer = self.block_tex_side,
+                    .ambient_light = ambient_light,
+                    .contrast = 0.25,
+                    .sun_dir = sun_dir,
                 };
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_side));
                 vk.cmdDraw(command_buffer, 24, 1, self.block_vertex_start, 0);
@@ -351,6 +366,9 @@ pub const HandRenderer = struct {
                     .mvp = mvp.m,
                     .use_block_texture = 1,
                     .tex_layer = self.block_tex_top,
+                    .ambient_light = ambient_light,
+                    .contrast = 0.25,
+                    .sun_dir = sun_dir,
                 };
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
                 vk.cmdDraw(command_buffer, 12, 1, self.block_vertex_start + 24, 0);
@@ -880,10 +898,10 @@ pub const HandRenderer = struct {
         const blend_att = vk.VkPipelineColorBlendAttachmentState{ .blendEnable = vk.VK_FALSE, .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE, .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO, .colorBlendOp = vk.VK_BLEND_OP_ADD, .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE, .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO, .alphaBlendOp = vk.VK_BLEND_OP_ADD, .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT };
         const color_blending = vk.VkPipelineColorBlendStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .pNext = null, .flags = 0, .logicOpEnable = vk.VK_FALSE, .logicOp = 0, .attachmentCount = 1, .pAttachments = &blend_att, .blendConstants = .{ 0, 0, 0, 0 } };
 
-        // Push constants: 64 bytes MVP (vertex) + 8 bytes (fragment: useBlockTexture + texLayer)
+        // Push constants: 64 bytes MVP (vertex) + 36 bytes fragment (useBlockTexture, texLayer, ambientLight, contrast, sunDir)
         const push_ranges = [_]vk.VkPushConstantRange{
             .{ .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = 64 },
-            .{ .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 64, .size = 8 },
+            .{ .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 64, .size = @sizeOf(PushConstants) - 64 },
         };
         self.pipeline_layout = try vk.createPipelineLayout(device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .pNext = null, .flags = 0,

@@ -891,6 +891,12 @@ pub const VulkanRenderer = struct {
             .sky_color = .{ 0.224, 0.643, 0.918 },
         };
 
+        // Sun direction from day/night cycle (shared by sky, entity, hand renderers)
+        const sun_angle: f32 = if (self.game_state) |gs| blk: {
+            break :blk @as(f32, @floatFromInt(@mod(gs.game_time, GameState.DAY_CYCLE))) / @as(f32, @floatFromInt(GameState.DAY_CYCLE)) * 2.0 * std.math.pi;
+        } else 0.0;
+        const sun_dir = [3]f32{ 0.0, @cos(sun_angle), @sin(sun_angle) };
+
         // Underwater fog parameters
         const eyes_in_water = if (self.game_state) |gs| gs.eyes_in_water else false;
         const fog_color: [3]f32 = .{ 0.05, 0.1, 0.3 };
@@ -992,16 +998,13 @@ pub const VulkanRenderer = struct {
 
             // Sun/moon celestial bodies (rendered on sky background via depth test)
             if (!overdraw and !eyes_in_water) {
-                const pi = std.math.pi;
-                const angle: f32 = @as(f32, @floatFromInt(@mod(gs.game_time, GameState.DAY_CYCLE))) / @as(f32, @floatFromInt(GameState.DAY_CYCLE)) * 2.0 * pi;
-                const sun_dir = [3]f32{ 0.0, @cos(angle), @sin(angle) };
-                const moon_dir = [3]f32{ 0.0, -@cos(angle), -@sin(angle) };
+                const moon_dir = [3]f32{ 0.0, -sun_dir[1], -sun_dir[2] };
                 self.render_state.sky_renderer.record(command_buffer, &mvp.m, sun_dir, moon_dir);
             }
 
             // Third-person player model (rendered with world depth)
             if (gs.third_person and !overdraw) {
-                self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp);
+                self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp, day_night.ambient_light, sun_dir);
             }
 
             if (!overdraw) {
@@ -1023,7 +1026,7 @@ pub const VulkanRenderer = struct {
         if (self.game_state) |gs_| {
             const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
             const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
-            self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, gs_.third_person);
+            self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, gs_.third_person, day_night.ambient_light, sun_dir);
         }
 
         self.render_state.ui_renderer.recordDraw(command_buffer);
