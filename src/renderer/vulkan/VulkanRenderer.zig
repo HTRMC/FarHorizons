@@ -897,6 +897,12 @@ pub const VulkanRenderer = struct {
         } else 0.0;
         const sun_dir = [3]f32{ 0.0, @cos(sun_angle), @sin(sun_angle) };
 
+        // Sample block/sky light at player eye position
+        const player_light: [4]f32 = if (self.game_state) |gs|
+            gs.sampleLightAt(gs.camera.position.x, gs.camera.position.y, gs.camera.position.z)
+        else
+            .{ 0, 0, 0, 1 };
+
         // Underwater fog parameters
         const eyes_in_water = if (self.game_state) |gs| gs.eyes_in_water else false;
         const fog_color: [3]f32 = .{ 0.05, 0.1, 0.3 };
@@ -1004,7 +1010,7 @@ pub const VulkanRenderer = struct {
 
             // Third-person player model (rendered with world depth)
             if (gs.third_person and !overdraw) {
-                self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp, day_night.ambient_light, sun_dir);
+                self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp, day_night.ambient_light, sun_dir, player_light[3], .{ player_light[0], player_light[1], player_light[2] });
             }
 
             if (!overdraw) {
@@ -1026,7 +1032,7 @@ pub const VulkanRenderer = struct {
         if (self.game_state) |gs_| {
             const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
             const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
-            self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, gs_.third_person, day_night.ambient_light, sun_dir);
+            self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, gs_.third_person, day_night.ambient_light, sun_dir, player_light[3], .{ player_light[0], player_light[1], player_light[2] });
         }
 
         self.render_state.ui_renderer.recordDraw(command_buffer);

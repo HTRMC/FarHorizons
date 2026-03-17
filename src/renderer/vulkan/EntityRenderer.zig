@@ -31,6 +31,8 @@ const EntityPushConstants = extern struct {
     ambient_light: [3]f32,
     contrast: f32,
     sun_dir: [3]f32,
+    sky_level: f32,
+    block_light: [3]f32,
     _pad: f32 = 0,
 };
 
@@ -156,6 +158,8 @@ pub const EntityRenderer = struct {
             .ambient_light = .{ 1.0, 1.0, 1.0 },
             .contrast = 0.25,
             .sun_dir = .{ 0.4, 0.8, 0.5 },
+            .sky_level = 1.0,
+            .block_light = .{ 0, 0, 0 },
         };
         vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
@@ -167,7 +171,7 @@ pub const EntityRenderer = struct {
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{full_scissor});
     }
 
-    pub fn recordDrawWorld(self: *const EntityRenderer, command_buffer: vk.VkCommandBuffer, view_proj: zlm.Mat4, ambient_light: [3]f32, sun_dir: [3]f32) void {
+    pub fn recordDrawWorld(self: *const EntityRenderer, command_buffer: vk.VkCommandBuffer, view_proj: zlm.Mat4, ambient_light: [3]f32, sun_dir: [3]f32, sky_level: f32, block_light: [3]f32) void {
         if (!self.world_visible or self.vertex_count == 0) return;
 
         const sin_y = @sin(self.world_yaw + std.math.pi);
@@ -184,6 +188,8 @@ pub const EntityRenderer = struct {
             .ambient_light = ambient_light,
             .contrast = 0.25,
             .sun_dir = sun_dir,
+            .sky_level = sky_level,
+            .block_light = block_light,
         };
         vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);

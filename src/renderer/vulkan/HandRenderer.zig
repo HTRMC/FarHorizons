@@ -25,6 +25,8 @@ const PushConstants = extern struct {
     ambient_light: [3]f32,
     contrast: f32,
     sun_dir: [3]f32,
+    sky_level: f32,
+    block_light: [3]f32,
     _pad2: f32 = 0,
 };
 
@@ -173,7 +175,7 @@ pub const HandRenderer = struct {
         self.pending_block = state;
     }
 
-    pub fn recordDraw(self: *const HandRenderer, command_buffer: vk.VkCommandBuffer, screen_width: f32, screen_height: f32, third_person: bool, ambient_light: [3]f32, sun_dir: [3]f32) void {
+    pub fn recordDraw(self: *const HandRenderer, command_buffer: vk.VkCommandBuffer, screen_width: f32, screen_height: f32, third_person: bool, ambient_light: [3]f32, sun_dir: [3]f32, sky_level: f32, block_light: [3]f32) void {
         if (!self.visible or third_person) return;
         if (self.arm_vertex_count == 0) return;
 
@@ -313,6 +315,8 @@ pub const HandRenderer = struct {
                 .ambient_light = ambient_light,
                 .contrast = 0.25,
                 .sun_dir = sun_dir,
+                .sky_level = sky_level,
+                .block_light = block_light,
             };
             vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
             vk.cmdDraw(command_buffer, self.arm_vertex_count, 1, 0, 0);
@@ -344,6 +348,8 @@ pub const HandRenderer = struct {
                         .ambient_light = ambient_light,
                         .contrast = 0.25,
                         .sun_dir = sun_dir,
+                        .sky_level = sky_level,
+                        .block_light = block_light,
                     };
                     vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
                     vk.cmdDraw(command_buffer, group.count, 1, group.start, 0);
@@ -357,6 +363,8 @@ pub const HandRenderer = struct {
                     .ambient_light = ambient_light,
                     .contrast = 0.25,
                     .sun_dir = sun_dir,
+                    .sky_level = sky_level,
+                    .block_light = block_light,
                 };
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_side));
                 vk.cmdDraw(command_buffer, 24, 1, self.block_vertex_start, 0);
@@ -369,6 +377,8 @@ pub const HandRenderer = struct {
                     .ambient_light = ambient_light,
                     .contrast = 0.25,
                     .sun_dir = sun_dir,
+                    .sky_level = sky_level,
+                    .block_light = block_light,
                 };
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
                 vk.cmdDraw(command_buffer, 12, 1, self.block_vertex_start + 24, 0);

@@ -12,6 +12,8 @@ layout(push_constant) uniform PushConstants {
     layout(offset = 80) vec3 ambientLight;
     layout(offset = 92) float contrast;
     layout(offset = 96) vec3 sunDir;
+    layout(offset = 108) float skyLevel;
+    layout(offset = 112) vec3 blockLight;
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -30,11 +32,11 @@ void main() {
     float baseLighting = 1.0 - pc.contrast;
     float variation = baseLighting + dot(n, vec3(0, pc.contrast / 2.0, pc.contrast));
 
-    // Diffuse from sun direction
-    float sunDiffuse = max(dot(n, normalize(pc.sunDir)), 0.0) * 0.3;
+    // Sky light: ambient * sky level * directional variation
+    vec3 sky = pc.ambientLight * pc.skyLevel * variation;
 
-    vec3 light = pc.ambientLight * (variation + sunDiffuse);
-    light = min(light, vec3(1.0));
+    // Combine sky and block light (same as terrain)
+    vec3 light = min(vec3(1.0), sqrt(sky * sky + pc.blockLight * pc.blockLight));
 
     outColor = vec4(texColor.rgb * light, texColor.a);
 }
