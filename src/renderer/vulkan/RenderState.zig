@@ -78,7 +78,14 @@ pub const RenderState = struct {
         );
         errdefer self.hand_renderer.deinit(ctx.device);
 
-        self.item_drop_renderer = try ItemDropRenderer.init(&shader_compiler, ctx, swapchain_format, gpu_alloc);
+        self.item_drop_renderer = try ItemDropRenderer.init(
+            &shader_compiler,
+            ctx,
+            swapchain_format,
+            gpu_alloc,
+            self.world_renderer.texture_manager.texture_image_view,
+            self.world_renderer.texture_manager.texture_sampler,
+        );
         errdefer self.item_drop_renderer.deinit(ctx.device);
 
         self.sky_renderer = try SkyRenderer.init(allocator, &shader_compiler, ctx, swapchain_format);

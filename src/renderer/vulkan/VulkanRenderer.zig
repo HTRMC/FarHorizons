@@ -1015,7 +1015,7 @@ pub const VulkanRenderer = struct {
 
             // Item drop entities (rendered with world depth)
             if (!overdraw) {
-                self.render_state.item_drop_renderer.recordDraw(command_buffer, gs, mvp, day_night.ambient_light);
+                self.render_state.item_drop_renderer.recordDraw(command_buffer, gs, mvp, day_night.ambient_light, sun_dir);
             }
 
             if (!overdraw) {
