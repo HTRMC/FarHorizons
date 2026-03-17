@@ -73,12 +73,12 @@ pub const HudBinder = struct {
             const id = self.slot_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    const block = gs.playerInv().hotbar[i];
-                    if (block != BlockState.defaultState(.air)) {
-                        const c = GameState.blockColor(block);
+                    const stack = gs.playerInv().hotbar[i];
+                    if (!stack.isEmpty()) {
+                        const c = GameState.blockColor(stack.block);
                         w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                         if (tree.getData(id)) |data| {
-                            data.panel.block_state = BlockState.getDisplayState(block);
+                            data.panel.block_state = BlockState.getDisplayState(stack.block);
                         }
                     } else {
                         w.background = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
@@ -91,13 +91,13 @@ pub const HudBinder = struct {
         }
 
         if (self.block_name_id != NULL_WIDGET) {
-            const selected_block = gs.playerInv().hotbar[gs.selected_slot];
+            const selected_stack = gs.playerInv().hotbar[gs.selected_slot];
             if (tree.getWidget(self.block_name_id)) |w| {
-                w.visible = (selected_block != BlockState.defaultState(.air));
+                w.visible = !selected_stack.isEmpty();
             }
-            if (selected_block != BlockState.defaultState(.air)) {
+            if (!selected_stack.isEmpty()) {
                 if (tree.getData(self.block_name_id)) |data| {
-                    data.label.setText(GameState.blockName(selected_block));
+                    data.label.setText(GameState.blockName(selected_stack.block));
                 }
             }
         }

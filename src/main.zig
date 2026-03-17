@@ -323,6 +323,12 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 return;
             }
 
+            if (opts.keyMatches(.drop_item, key) and action == glfw.GLFW_PRESS) {
+                if (input_state.game_state) |gs| {
+                    if (!gs.debug_camera_active) gs.dropSelectedItem();
+                }
+            }
+
             if (opts.keyMatches(.toggle_debug_camera, key) and action == glfw.GLFW_PRESS) {
                 input_state.debug_toggle_requested = true;
             }
@@ -998,7 +1004,7 @@ pub fn main() !void {
             // Sync hand renderer with held block + all hand animations
             const hr = &vk_impl.render_state.hand_renderer;
             if (game_state) |*gs| {
-                hr.setPendingBlock(gs.playerInv().hotbar[gs.selected_slot]);
+                hr.setPendingBlock(gs.playerInv().hotbar[gs.selected_slot].block);
                 if (gs.swing_requested) {
                     hr.triggerSwing();
                     gs.swing_requested = false;

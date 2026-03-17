@@ -546,27 +546,9 @@ pub const MenuController = struct {
     pub fn hideInventory(self: *MenuController, gs: ?*GameState) void {
         // Return carried item to inventory when closing
         if (gs) |g| {
-            if (g.carried_item != BlockState.defaultState(.air)) {
-                const inv = g.playerInv();
-                // Find first empty slot to place carried item
-                for (&inv.hotbar) |*slot| {
-                    if (slot.* == BlockState.defaultState(.air)) {
-                        slot.* = g.carried_item;
-                        g.carried_item = BlockState.defaultState(.air);
-                        break;
-                    }
-                }
-                if (g.carried_item != BlockState.defaultState(.air)) {
-                    for (&inv.main) |*slot| {
-                        if (slot.* == BlockState.defaultState(.air)) {
-                            slot.* = g.carried_item;
-                            g.carried_item = BlockState.defaultState(.air);
-                            break;
-                        }
-                    }
-                }
-                // If still not placed, just drop it (clear it)
-                g.carried_item = BlockState.defaultState(.air);
+            if (!g.carried_item.isEmpty()) {
+                _ = g.addToInventory(g.carried_item);
+                g.carried_item = GameState.Entity.ItemStack.EMPTY;
             }
         }
         self.game_state = null;
@@ -598,7 +580,7 @@ pub const MenuController = struct {
             const id = self.inv_slot_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, inv.hotbar[i]);
+                    updateSlotWidget(w, tree, id, inv.hotbar[i].block);
                 }
             }
         }
@@ -608,7 +590,7 @@ pub const MenuController = struct {
             const id = self.inv_main_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, inv.main[i]);
+                    updateSlotWidget(w, tree, id, inv.main[i].block);
                 }
             }
         }
@@ -618,7 +600,7 @@ pub const MenuController = struct {
             const id = self.inv_armor_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, inv.armor[i]);
+                    updateSlotWidget(w, tree, id, inv.armor[i].block);
                 }
             }
         }
@@ -628,7 +610,7 @@ pub const MenuController = struct {
             const id = self.inv_equip_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, inv.equip[i]);
+                    updateSlotWidget(w, tree, id, inv.equip[i].block);
                 }
             }
         }
@@ -637,7 +619,7 @@ pub const MenuController = struct {
         if (self.inv_offhand_id != NULL_WIDGET) {
             const id = self.inv_offhand_id;
             if (tree.getWidget(id)) |w| {
-                updateSlotWidget(w, tree, id, inv.offhand);
+                updateSlotWidget(w, tree, id, inv.offhand.block);
             }
         }
 
@@ -645,11 +627,11 @@ pub const MenuController = struct {
         if (self.cursor_item_id != NULL_WIDGET) {
             const cid = self.cursor_item_id;
             if (tree.getWidget(cid)) |w| {
-                if (gs.carried_item != BlockState.defaultState(.air)) {
-                    const c = GameState.blockColor(gs.carried_item);
+                if (!gs.carried_item.isEmpty()) {
+                    const c = GameState.blockColor(gs.carried_item.block);
                     w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                     if (tree.getData(cid)) |data| {
-                        data.panel.block_state = BlockState.getDisplayState(gs.carried_item);
+                        data.panel.block_state = BlockState.getDisplayState(gs.carried_item.block);
                     }
                     w.visible = true;
                 } else {
@@ -685,7 +667,7 @@ pub const MenuController = struct {
         if (self.app_state == .inventory) {
             // Return carried item before closing
             if (self.game_state) |gs| {
-                gs.carried_item = BlockState.defaultState(.air);
+                gs.carried_item = GameState.Entity.ItemStack.EMPTY;
             }
             self.game_state = null;
             self.unloadScreen(.inventory);
