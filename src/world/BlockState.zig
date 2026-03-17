@@ -234,6 +234,8 @@ pub fn getFenceConnections(state: StateId) ?struct { n: bool, s: bool, e: bool, 
 
 // ==== Per-State Comptime Properties ====
 
+const Item = @import("../Item.zig");
+
 const StateProps = struct {
     is_opaque: bool,
     is_solid: bool,
@@ -244,6 +246,9 @@ const StateProps = struct {
     render_layer: RenderLayer,
     emitted_light: [3]u8,
     hitbox: ?AABB,
+    hardness: f32,
+    preferred_tool: u4,
+    requires_tool: bool,
 };
 
 fn computeProps(block: Block, props: u8) StateProps {
@@ -317,6 +322,61 @@ fn computeProps(block: Block, props: u8) StateProps {
             else => .{ 0, 0, 0 },
         },
         .hitbox = computeHitbox(block, props),
+        .hardness = computeHardness(block),
+        .preferred_tool = computePreferredTool(block),
+        .requires_tool = computeRequiresTool(block),
+    };
+}
+
+fn computeHardness(block: Block) f32 {
+    return switch (block) {
+        .air, .water, .torch, .ladder => 0.0,
+        .bedrock => -1.0,
+        .obsidian => 50.0,
+        .stone, .cobblestone, .bricks => 1.5,
+        .gold_ore, .iron_ore, .coal_ore, .diamond_ore => 3.0,
+        .iron_block, .gold_block, .diamond_block => 5.0,
+        .oak_log => 2.0,
+        .oak_planks, .oak_fence, .oak_door, .oak_stairs, .oak_slab, .bookshelf => 2.0,
+        .dirt, .grass_block => 0.5,
+        .sand, .gravel => 0.5,
+        .snow => 0.2,
+        .glass => 0.3,
+        .glowstone, .red_glowstone, .crimson_glowstone, .orange_glowstone, .peach_glowstone,
+        .lime_glowstone, .green_glowstone, .teal_glowstone, .cyan_glowstone,
+        .light_blue_glowstone, .blue_glowstone, .navy_glowstone, .indigo_glowstone,
+        .purple_glowstone, .magenta_glowstone, .pink_glowstone, .hot_pink_glowstone,
+        .white_glowstone, .warm_white_glowstone, .light_gray_glowstone, .gray_glowstone,
+        .brown_glowstone, .tan_glowstone, .black_glowstone,
+        => 0.3,
+        .wool, .sponge => 0.8,
+        .oak_leaves => 0.2,
+        .pumice => 0.5,
+    };
+}
+
+/// 0=none, 1=pickaxe, 2=axe, 3=shovel (ToolType ordinal + 1)
+fn computePreferredTool(block: Block) u4 {
+    return switch (block) {
+        .stone, .cobblestone, .bricks, .obsidian,
+        .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
+        .iron_block, .gold_block, .diamond_block, .pumice,
+        => 1, // pickaxe
+        .oak_log, .oak_planks, .oak_fence, .oak_door, .oak_stairs, .oak_slab, .bookshelf,
+        => 2, // axe
+        .dirt, .grass_block, .sand, .gravel, .snow,
+        => 3, // shovel
+        else => 0,
+    };
+}
+
+fn computeRequiresTool(block: Block) bool {
+    return switch (block) {
+        .stone, .cobblestone, .bricks, .obsidian,
+        .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
+        .iron_block, .gold_block, .diamond_block,
+        => true,
+        else => false,
     };
 }
 
@@ -440,6 +500,17 @@ pub inline fn emittedLight(state: StateId) [3]u8 {
 }
 pub inline fn getHitbox(state: StateId) ?AABB {
     return state_props[state].hitbox;
+}
+pub inline fn getHardness(state: StateId) f32 {
+    return state_props[state].hardness;
+}
+pub inline fn getPreferredTool(state: StateId) ?Item.ToolType {
+    const pt = state_props[state].preferred_tool;
+    if (pt == 0) return null;
+    return @enumFromInt(@as(u3, @intCast(pt - 1)));
+}
+pub inline fn requiresTool(state: StateId) bool {
+    return state_props[state].requires_tool;
 }
 
 // ==== Collision ====
