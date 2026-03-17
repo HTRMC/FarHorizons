@@ -21,6 +21,8 @@ pub const HudBinder = struct {
     selection_id: WidgetId = NULL_WIDGET,
     offhand_id: WidgetId = NULL_WIDGET,
     block_name_id: WidgetId = NULL_WIDGET,
+    health_bar_id: WidgetId = NULL_WIDGET,
+    air_bar_id: WidgetId = NULL_WIDGET,
     slot_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
     count_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
 
@@ -31,6 +33,8 @@ pub const HudBinder = struct {
         self.selection_id = tree.findById("selection") orelse NULL_WIDGET;
         self.offhand_id = tree.findById("offhand") orelse NULL_WIDGET;
         self.block_name_id = tree.findById("block_name") orelse NULL_WIDGET;
+        self.health_bar_id = tree.findById("health_bar") orelse NULL_WIDGET;
+        self.air_bar_id = tree.findById("air_bar") orelse NULL_WIDGET;
 
         inline for (0..HOTBAR_SIZE) |i| {
             const name = comptime std.fmt.comptimePrint("slot_{d}", .{i});
@@ -107,6 +111,30 @@ pub const HudBinder = struct {
                     } else {
                         cw.visible = false;
                     }
+                }
+            }
+        }
+
+        // Health bar: visible in survival mode
+        if (self.health_bar_id != NULL_WIDGET) {
+            if (tree.getWidget(self.health_bar_id)) |w| {
+                w.visible = gs.game_mode == .survival;
+            }
+            if (gs.game_mode == .survival) {
+                if (tree.getData(self.health_bar_id)) |data| {
+                    data.progress_bar.value = gs.health / gs.max_health;
+                }
+            }
+        }
+
+        // Air bar: visible in survival when air is depleting
+        if (self.air_bar_id != NULL_WIDGET) {
+            if (tree.getWidget(self.air_bar_id)) |w| {
+                w.visible = gs.game_mode == .survival and gs.air_supply < gs.max_air;
+            }
+            if (gs.game_mode == .survival and gs.air_supply < gs.max_air) {
+                if (tree.getData(self.air_bar_id)) |data| {
+                    data.progress_bar.value = @as(f32, @floatFromInt(gs.air_supply)) / @as(f32, @floatFromInt(gs.max_air));
                 }
             }
         }

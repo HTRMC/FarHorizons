@@ -469,6 +469,9 @@ pub const PlayerData = struct {
     z: f32,
     yaw: f32,
     pitch: f32,
+    game_mode: @import("../../GameState.zig").GameMode = .creative,
+    health: f32 = 20.0,
+    air_supply: u16 = 300,
 };
 
 /// Singleplayer placeholder UUID. Replace with real UUID when auth is added.
@@ -483,12 +486,17 @@ pub fn loadPlayerData(self: *const Storage, uuid: []const u8) ?PlayerData {
     defer self.allocator.free(data);
 
     const r = BinaryTag.Reader.init(data);
+    const GameMode = @import("../../GameState.zig").GameMode;
+    const gm_raw: u8 = @bitCast(r.getI8("game_mode") orelse 0);
     return .{
         .x = r.getF32("x") orelse return null,
         .y = r.getF32("y") orelse return null,
         .z = r.getF32("z") orelse return null,
         .yaw = r.getF32("yaw") orelse return null,
         .pitch = r.getF32("pitch") orelse return null,
+        .game_mode = if (gm_raw == 1) GameMode.survival else GameMode.creative,
+        .health = r.getF32("health") orelse 20.0,
+        .air_supply = @intCast(@as(u32, @bitCast(r.getI32("air_supply") orelse 300))),
     };
 }
 
@@ -504,6 +512,9 @@ pub fn savePlayerData(self: *const Storage, uuid: []const u8, data: PlayerData) 
     w.putF32("z", data.z);
     w.putF32("yaw", data.yaw);
     w.putF32("pitch", data.pitch);
+    w.putI8("game_mode", @bitCast(@intFromEnum(data.game_mode)));
+    w.putF32("health", data.health);
+    w.putI32("air_supply", @bitCast(@as(u32, data.air_supply)));
 
     const tag_data = w.toOwnedSlice() orelse return;
     defer self.allocator.free(tag_data);

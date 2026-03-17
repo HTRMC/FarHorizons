@@ -107,6 +107,8 @@ pub const MenuController = struct {
     create_world_input_id: WidgetId = NULL_WIDGET,
     world_type_label_id: WidgetId = NULL_WIDGET,
     selected_world_type: @import("../world/WorldState.zig").WorldType = .normal,
+    game_mode_label_id: WidgetId = NULL_WIDGET,
+    selected_game_mode: @import("../GameState.zig").GameMode = .creative,
 
     pub fn init(ui_manager: *UiManager, allocator: std.mem.Allocator) MenuController {
         var self = MenuController{
@@ -169,6 +171,7 @@ pub const MenuController = struct {
                 .create_world => {
                     self.cacheCreateWorldWidgetIds();
                     self.selected_world_type = .normal;
+                    self.selected_game_mode = .creative;
                 },
                 .controls => {
                     self.cacheControlsWidgetIds();
@@ -193,6 +196,7 @@ pub const MenuController = struct {
             .create_world => {
                 self.create_world_input_id = NULL_WIDGET;
                 self.world_type_label_id = NULL_WIDGET;
+                self.game_mode_label_id = NULL_WIDGET;
             },
             .controls => self.resetControlsWidgetIds(),
             .pause => {},
@@ -230,6 +234,7 @@ pub const MenuController = struct {
         const tree = self.menuTree() orelse return;
         self.create_world_input_id = tree.findById("create_world_input") orelse NULL_WIDGET;
         self.world_type_label_id = tree.findById("world_type_label") orelse NULL_WIDGET;
+        self.game_mode_label_id = tree.findById("game_mode_label") orelse NULL_WIDGET;
     }
 
     fn cacheControlsWidgetIds(self: *MenuController) void {
@@ -387,6 +392,7 @@ pub const MenuController = struct {
         reg.register("show_create_world", actionShowCreateWorld, ctx);
         reg.register("confirm_create_world", actionConfirmCreateWorld, ctx);
         reg.register("toggle_world_type", actionToggleWorldType, ctx);
+        reg.register("toggle_game_mode", actionToggleGameMode, ctx);
         reg.register("cancel_create_world", actionCancelCreateWorld, ctx);
         reg.register("delete_world", actionDeleteWorld, ctx);
         reg.register("confirm_delete", actionConfirmDelete, ctx);
@@ -955,6 +961,26 @@ pub const MenuController = struct {
             data.label.setText(switch (self.selected_world_type) {
                 .normal => "World Type: Normal",
                 .debug => "World Type: Debug",
+            });
+        }
+    }
+
+    fn actionToggleGameMode(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.selected_game_mode = switch (self.selected_game_mode) {
+            .creative => .survival,
+            .survival => .creative,
+        };
+        self.updateGameModeLabel();
+    }
+
+    fn updateGameModeLabel(self: *MenuController) void {
+        if (self.game_mode_label_id == NULL_WIDGET) return;
+        const tree = self.menuTree() orelse return;
+        if (tree.getData(self.game_mode_label_id)) |data| {
+            data.label.setText(switch (self.selected_game_mode) {
+                .creative => "Game Mode: Creative",
+                .survival => "Game Mode: Survival",
             });
         }
     }

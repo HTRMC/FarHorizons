@@ -50,9 +50,19 @@
              offset_x="-73" offset_y="-2"/>
     </panel>
 
+    <!-- Health bar: left of center, above hotbar -->
+    <progress_bar id="health_bar" width="182" height="9"
+                  anchor_x="center" anchor_y="end" offset_x="-91" offset_y="-60"
+                  fill_color="#CC3333FF" track_color="#33333399" visible="false"/>
+
+    <!-- Air bar: right of center, above hotbar -->
+    <progress_bar id="air_bar" width="182" height="9"
+                  anchor_x="center" anchor_y="end" offset_x="91" offset_y="-60"
+                  fill_color="#3399CCFF" track_color="#33333399" visible="false"/>
+
     <!-- Block name label: centered, above hotbar -->
     <label id="block_name" text="" color="#FFFFFFE6"
-           anchor_x="center" anchor_y="end" offset_y="-66" visible="false"
+           anchor_x="center" anchor_y="end" offset_y="-76" visible="false"
            shadow="true" shadow_color="#000000AA"/>
 
   </panel>

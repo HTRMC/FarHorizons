@@ -24,6 +24,7 @@ const Io = std.Io;
 
 const GameState = @This();
 
+pub const GameMode = enum(u8) { creative = 0, survival = 1 };
 pub const MovementMode = enum { flying, walking };
 pub const EYE_OFFSET: f32 = 1.62;
 pub const TICK_RATE: f32 = 30.0;
@@ -262,6 +263,15 @@ inventory_open: bool = false,
 pickup_ghosts: [MAX_PICKUP_GHOSTS]PickupGhost = .{PickupGhost{}} ** MAX_PICKUP_GHOSTS,
 render_alpha: f32 = 0,
 
+game_mode: GameMode = .creative,
+health: f32 = 20.0,
+max_health: f32 = 20.0,
+air_supply: u16 = 300,
+max_air: u16 = 300,
+damage_cooldown: u8 = 0,
+fall_start_y: f32 = 0.0,
+was_on_ground: bool = true,
+
 world_seed: u64,
 world_type: WorldState.WorldType,
 storage: ?*Storage,
@@ -404,7 +414,7 @@ pub fn quickMove(self: *GameState, slot: u8) void {
     }
 }
 
-pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8, world_type_override: ?WorldState.WorldType) !GameState {
+pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8, world_type_override: ?WorldState.WorldType, game_mode_override: ?GameMode) !GameState {
     var cam = Camera.init(width, height);
     const chunk_map = ChunkMap.init(allocator);
     const chunk_pool = ChunkPool.init(allocator);
@@ -431,6 +441,11 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
 
     // Load saved player position or find a valid spawn on land
     const player_data = if (storage_inst) |s| s.loadPlayerData(Storage.LOCAL_PLAYER_UUID) else null;
+
+    // Determine game mode: override > saved > default
+    const game_mode: GameMode = if (game_mode_override) |gm| gm else if (player_data) |pd| pd.game_mode else .creative;
+    const saved_health: f32 = if (player_data) |pd| pd.health else 20.0;
+    const saved_air: u16 = if (player_data) |pd| pd.air_supply else 300;
 
     const spawn_pos = if (player_data) |pd|
         [3]f32{ pd.x, pd.y, pd.z }
@@ -463,23 +478,31 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
             var store = Entity.EntityStore{};
             _ = store.spawn(.player, .{ spawn_x, spawn_y, spawn_z });
             const inv = allocator.create(Entity.Inventory) catch return error.OutOfMemory;
-            const S = Entity.ItemStack.of;
-            inv.* = .{
-                .hotbar = .{
-                    S(BlockState.defaultState(.grass_block), 64), S(BlockState.defaultState(.dirt), 64),  S(BlockState.defaultState(.stone), 64),
-                    S(BlockState.defaultState(.sand), 64),        S(BlockState.defaultState(.snow), 64),  S(BlockState.defaultState(.gravel), 64),
-                    S(BlockState.defaultState(.glass), 64),       S(BlockState.defaultState(.glowstone), 64), S(BlockState.defaultState(.water), 64),
-                },
-                .main = .{
-                    S(BlockState.defaultState(.cobblestone), 64), S(BlockState.defaultState(.oak_log), 64),      S(BlockState.defaultState(.oak_planks), 64),   S(BlockState.defaultState(.bricks), 64),       S(BlockState.defaultState(.bedrock), 64),       S(BlockState.defaultState(.gold_ore), 64),      S(BlockState.defaultState(.iron_ore), 64),      S(BlockState.defaultState(.coal_ore), 64),      S(BlockState.defaultState(.diamond_ore), 64),
-                    S(BlockState.defaultState(.sponge), 64),      S(BlockState.defaultState(.pumice), 64),       S(BlockState.defaultState(.wool), 64),         S(BlockState.defaultState(.gold_block), 64),   S(BlockState.defaultState(.iron_block), 64),    S(BlockState.defaultState(.diamond_block), 64), S(BlockState.defaultState(.bookshelf), 64),     S(BlockState.defaultState(.obsidian), 64),      S(BlockState.defaultState(.oak_leaves), 64),
-                    S(BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)), 64), S(BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south)), 64), S(BlockState.defaultState(.torch), 64), S(BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south)), 64), S(BlockState.makeDoorState(.south, .bottom, false), 64), S(BlockState.defaultState(.oak_fence), 64), S(BlockState.defaultState(.red_glowstone), 64), S(BlockState.defaultState(.crimson_glowstone), 64), S(BlockState.defaultState(.orange_glowstone), 64),
-                    S(BlockState.defaultState(.peach_glowstone), 64), S(BlockState.defaultState(.lime_glowstone), 64), S(BlockState.defaultState(.green_glowstone), 64), S(BlockState.defaultState(.teal_glowstone), 64), S(BlockState.defaultState(.cyan_glowstone), 64), S(BlockState.defaultState(.light_blue_glowstone), 64), S(BlockState.defaultState(.blue_glowstone), 64), S(BlockState.defaultState(.navy_glowstone), 64), S(BlockState.defaultState(.indigo_glowstone), 64),
-                },
-            };
+            if (game_mode == .creative) {
+                const S = Entity.ItemStack.of;
+                inv.* = .{
+                    .hotbar = .{
+                        S(BlockState.defaultState(.grass_block), 64), S(BlockState.defaultState(.dirt), 64),  S(BlockState.defaultState(.stone), 64),
+                        S(BlockState.defaultState(.sand), 64),        S(BlockState.defaultState(.snow), 64),  S(BlockState.defaultState(.gravel), 64),
+                        S(BlockState.defaultState(.glass), 64),       S(BlockState.defaultState(.glowstone), 64), S(BlockState.defaultState(.water), 64),
+                    },
+                    .main = .{
+                        S(BlockState.defaultState(.cobblestone), 64), S(BlockState.defaultState(.oak_log), 64),      S(BlockState.defaultState(.oak_planks), 64),   S(BlockState.defaultState(.bricks), 64),       S(BlockState.defaultState(.bedrock), 64),       S(BlockState.defaultState(.gold_ore), 64),      S(BlockState.defaultState(.iron_ore), 64),      S(BlockState.defaultState(.coal_ore), 64),      S(BlockState.defaultState(.diamond_ore), 64),
+                        S(BlockState.defaultState(.sponge), 64),      S(BlockState.defaultState(.pumice), 64),       S(BlockState.defaultState(.wool), 64),         S(BlockState.defaultState(.gold_block), 64),   S(BlockState.defaultState(.iron_block), 64),    S(BlockState.defaultState(.diamond_block), 64), S(BlockState.defaultState(.bookshelf), 64),     S(BlockState.defaultState(.obsidian), 64),      S(BlockState.defaultState(.oak_leaves), 64),
+                        S(BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)), 64), S(BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south)), 64), S(BlockState.defaultState(.torch), 64), S(BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south)), 64), S(BlockState.makeDoorState(.south, .bottom, false), 64), S(BlockState.defaultState(.oak_fence), 64), S(BlockState.defaultState(.red_glowstone), 64), S(BlockState.defaultState(.crimson_glowstone), 64), S(BlockState.defaultState(.orange_glowstone), 64),
+                        S(BlockState.defaultState(.peach_glowstone), 64), S(BlockState.defaultState(.lime_glowstone), 64), S(BlockState.defaultState(.green_glowstone), 64), S(BlockState.defaultState(.teal_glowstone), 64), S(BlockState.defaultState(.cyan_glowstone), 64), S(BlockState.defaultState(.light_blue_glowstone), 64), S(BlockState.defaultState(.blue_glowstone), 64), S(BlockState.defaultState(.navy_glowstone), 64), S(BlockState.defaultState(.indigo_glowstone), 64),
+                    },
+                };
+            } else {
+                inv.* = .{};
+            }
             store.inventory[Entity.PLAYER] = inv;
             break :blk store;
         },
+        .game_mode = game_mode,
+        .health = saved_health,
+        .air_supply = saved_air,
+        .fall_start_y = spawn_y,
         .mode = .walking,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .jump_requested = false,
@@ -517,6 +540,9 @@ pub fn save(self: *GameState) void {
         .z = pos[2],
         .yaw = self.camera.yaw,
         .pitch = self.camera.pitch,
+        .game_mode = self.game_mode,
+        .health = self.health,
+        .air_supply = self.air_supply,
     });
 
     s.saveGameTime(self.game_time);
@@ -611,6 +637,7 @@ pub fn waterVision(self: *const GameState) f32 {
 }
 
 pub fn toggleMode(self: *GameState) void {
+    if (self.game_mode == .survival) return; // no flying in survival
     const P = Entity.PLAYER;
     switch (self.mode) {
         .flying => {
@@ -624,6 +651,7 @@ pub fn toggleMode(self: *GameState) void {
             self.entities.flags[P].on_ground = false;
             self.jump_requested = false;
             self.jump_cooldown = 5;
+            self.fall_start_y = self.entities.pos[P][1];
             self.mode = .walking;
         },
         .walking => {
@@ -636,6 +664,87 @@ pub fn toggleMode(self: *GameState) void {
             self.prev_camera_pos = self.camera.position;
             self.mode = .flying;
         },
+    }
+}
+
+pub fn takeDamage(self: *GameState, amount: f32) void {
+    if (self.game_mode != .survival or self.damage_cooldown > 0) return;
+    self.health = @max(self.health - amount, 0.0);
+    self.damage_cooldown = 15; // 0.5s invincibility
+    if (self.health <= 0.0) self.die();
+}
+
+fn die(self: *GameState) void {
+    const P = Entity.PLAYER;
+    const death_pos = self.entities.pos[P];
+    const inv = self.playerInv();
+
+    // Drop all inventory items as item entities
+    for (&inv.hotbar) |*stack| {
+        if (!stack.isEmpty()) {
+            self.entities.spawnItemDrop(death_pos, stack.block, stack.count);
+            stack.* = Entity.ItemStack.EMPTY;
+        }
+    }
+    for (&inv.main) |*stack| {
+        if (!stack.isEmpty()) {
+            self.entities.spawnItemDrop(death_pos, stack.block, stack.count);
+            stack.* = Entity.ItemStack.EMPTY;
+        }
+    }
+    inv.offhand = Entity.ItemStack.EMPTY;
+
+    // Respawn at world spawn
+    const spawn = findSpawn(self.world_seed);
+    self.entities.pos[P] = spawn;
+    self.entities.prev_pos[P] = spawn;
+    self.entities.vel[P] = .{ 0, 0, 0 };
+    self.entities.flags[P].on_ground = true;
+    self.camera.position = zlm.Vec3.init(spawn[0], spawn[1] + EYE_OFFSET, spawn[2]);
+    self.prev_camera_pos = self.camera.position;
+    self.tick_camera_pos = self.camera.position;
+
+    self.health = self.max_health;
+    self.air_supply = self.max_air;
+    self.damage_cooldown = 30; // 1s post-respawn immunity
+    self.was_on_ground = true;
+    self.fall_start_y = spawn[1];
+}
+
+fn updateFallDamage(self: *GameState) void {
+    if (self.game_mode != .survival) return;
+    const P = Entity.PLAYER;
+    const flags = self.entities.flags[P];
+    const pos_y = self.entities.pos[P][1];
+
+    if (!self.was_on_ground and flags.on_ground and !flags.in_water) {
+        const damage = self.fall_start_y - pos_y - 3.0;
+        if (damage > 0) self.takeDamage(damage);
+    }
+
+    if (flags.on_ground or flags.in_water) {
+        self.fall_start_y = pos_y;
+    } else {
+        self.fall_start_y = @max(self.fall_start_y, pos_y);
+    }
+
+    self.was_on_ground = flags.on_ground;
+}
+
+fn updateDrowning(self: *GameState) void {
+    if (self.game_mode != .survival) return;
+    const P = Entity.PLAYER;
+    if (self.entities.flags[P].eyes_in_water) {
+        if (self.air_supply > 0) {
+            self.air_supply -= 1;
+        } else {
+            // Drowning damage: 1 HP every 30 ticks (1 second)
+            if (@mod(self.game_time, 30) == 0) {
+                self.takeDamage(1.0);
+            }
+        }
+    } else {
+        self.air_supply = @min(self.air_supply + 5, self.max_air);
     }
 }
 
@@ -687,6 +796,13 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
                 epos[2],
             );
         },
+    }
+
+    // Survival damage systems
+    if (self.damage_cooldown > 0) self.damage_cooldown -= 1;
+    if (self.mode == .walking) {
+        self.updateFallDamage();
+        self.updateDrowning();
     }
 
     // Update item drop entities (iterate backwards for safe despawn)
@@ -1375,6 +1491,7 @@ pub fn dropSelectedItem(self: *GameState) void {
 }
 
 fn decrementSelectedStack(self: *GameState) void {
+    if (self.game_mode == .creative) return; // infinite blocks in creative
     const stack = &self.playerInv().hotbar[self.selected_slot];
     if (stack.count > 1) {
         stack.count -= 1;

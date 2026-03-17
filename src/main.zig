@@ -201,6 +201,7 @@ const InputState = struct {
     last_space_press_time: f64 = 0.0,
     space_was_held: bool = false,
     mode_toggle_requested: bool = false,
+    gamemode_toggle_requested: bool = false,
     debug_toggle_requested: bool = false,
     overdraw_toggle_requested: bool = false,
     chunk_borders_toggle_requested: bool = false,
@@ -371,7 +372,10 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                     input_state.f3_consumed = true;
                 }
 
-                if (opts.keyMatches(.debug_screen_f4, key) and shift) {
+                if (opts.keyMatches(.debug_screen_f4, key) and input_state.f3_held) {
+                    input_state.gamemode_toggle_requested = true;
+                    input_state.f3_consumed = true;
+                } else if (opts.keyMatches(.debug_screen_f4, key) and shift) {
                     input_state.overdraw_toggle_requested = true;
                 } else if (opts.keyMatches(.debug_screen_f4, key) and !shift) {
                     input_state.debug_screen_toggle = 1;
@@ -754,9 +758,10 @@ pub fn main() !void {
                         menu_ctrl.getSelectedWorldName();
 
                     const world_type_override: ?WorldState.WorldType = if (action == .create_world) menu_ctrl.selected_world_type else null;
+                    const game_mode_override: ?GameState.GameMode = if (action == .create_world) menu_ctrl.selected_game_mode else null;
 
                     if (world_name.len > 0) {
-                        game_state = GameState.init(allocator, 1280, 720, world_name, world_type_override) catch |err| blk: {
+                        game_state = GameState.init(allocator, 1280, 720, world_name, world_type_override, game_mode_override) catch |err| blk: {
                             std.log.err("Failed to load world '{s}': {}", .{ world_name, err });
                             break :blk null;
                         };
@@ -909,6 +914,22 @@ pub fn main() !void {
                 if (input_state.ui_toggle_requested) {
                     input_state.ui_toggle_requested = false;
                     gs.show_ui = !gs.show_ui;
+                }
+
+                if (input_state.gamemode_toggle_requested) {
+                    input_state.gamemode_toggle_requested = false;
+                    switch (gs.game_mode) {
+                        .creative => {
+                            // Creative → Survival: force walking mode first (while still creative, so toggleMode allows it)
+                            if (gs.mode == .flying) gs.toggleMode();
+                            gs.game_mode = .survival;
+                        },
+                        .survival => {
+                            gs.game_mode = .creative;
+                            gs.health = gs.max_health;
+                            gs.air_supply = gs.max_air;
+                        },
+                    }
                 }
 
                 if (input_state.debug_screen_toggle) |bit| {

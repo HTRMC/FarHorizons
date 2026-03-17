@@ -12,6 +12,11 @@
               on_click="toggle_world_type" justify="center">
         <label id="world_type_label" text="World Type: Normal" color="#FFFFFFFF"/>
       </button>
+      <label text="Game Mode" color="#AAAAAAFF"/>
+      <button width="fill" height="36" background="#444466FF" shadow="true"
+              on_click="toggle_game_mode" justify="center">
+        <label id="game_mode_label" text="Game Mode: Creative" color="#FFFFFFFF"/>
+      </button>
       <panel direction="row" gap="8" width="fill">
         <button text="Create" width="fill" height="40" flex_grow="1"
                 background="#338833FF" shadow="true" on_click="confirm_create_world"/>
