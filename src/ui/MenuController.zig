@@ -82,6 +82,12 @@ pub const MenuController = struct {
     inv_armor_ids: [GameState.ARMOR_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS,
     inv_equip_ids: [GameState.EQUIP_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.EQUIP_SLOTS,
     inv_offhand_id: WidgetId = NULL_WIDGET,
+    inv_slot_count_ids: [GameState.HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.HOTBAR_SIZE,
+    inv_main_count_ids: [GameState.INV_SIZE]WidgetId = .{NULL_WIDGET} ** GameState.INV_SIZE,
+    inv_armor_count_ids: [GameState.ARMOR_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS,
+    inv_equip_count_ids: [GameState.EQUIP_SLOTS]WidgetId = .{NULL_WIDGET} ** GameState.EQUIP_SLOTS,
+    inv_offhand_count_id: WidgetId = NULL_WIDGET,
+    cursor_count_id: WidgetId = NULL_WIDGET,
     inv_player_viewport_id: WidgetId = NULL_WIDGET,
     cursor_item_id: WidgetId = NULL_WIDGET,
     // Entity renderer viewport (in UI coords), read by VulkanRenderer
@@ -268,6 +274,7 @@ pub const MenuController = struct {
     }
 
     fn cacheInventoryWidgetIds(self: *MenuController) void {
+        @setEvalBranchQuota(32000);
         const tree = self.menuTree() orelse return;
         const hover_col = Widget.Color.fromHex(0xFFFFFF22);
         inline for (0..GameState.HOTBAR_SIZE) |i| {
@@ -275,27 +282,36 @@ pub const MenuController = struct {
             const id = tree.findById(name) orelse NULL_WIDGET;
             self.inv_slot_ids[i] = id;
             self.makeSlotClickable(tree, id, hover_col);
+            const cname = comptime std.fmt.comptimePrint("hotbar_count_{d}", .{i});
+            self.inv_slot_count_ids[i] = tree.findById(cname) orelse NULL_WIDGET;
         }
         inline for (0..GameState.INV_SIZE) |i| {
             const name = comptime std.fmt.comptimePrint("inv_{d}", .{i});
             const id = tree.findById(name) orelse NULL_WIDGET;
             self.inv_main_ids[i] = id;
             self.makeSlotClickable(tree, id, hover_col);
+            const cname = comptime std.fmt.comptimePrint("inv_count_{d}", .{i});
+            self.inv_main_count_ids[i] = tree.findById(cname) orelse NULL_WIDGET;
         }
         inline for (0..GameState.ARMOR_SLOTS) |i| {
             const name = comptime std.fmt.comptimePrint("armor_{d}", .{i});
             const id = tree.findById(name) orelse NULL_WIDGET;
             self.inv_armor_ids[i] = id;
             self.makeSlotClickable(tree, id, hover_col);
+            const cname = comptime std.fmt.comptimePrint("armor_count_{d}", .{i});
+            self.inv_armor_count_ids[i] = tree.findById(cname) orelse NULL_WIDGET;
         }
         inline for (0..GameState.EQUIP_SLOTS) |i| {
             const name = comptime std.fmt.comptimePrint("equip_{d}", .{i});
             const id = tree.findById(name) orelse NULL_WIDGET;
             self.inv_equip_ids[i] = id;
             self.makeSlotClickable(tree, id, hover_col);
+            const cname = comptime std.fmt.comptimePrint("equip_count_{d}", .{i});
+            self.inv_equip_count_ids[i] = tree.findById(cname) orelse NULL_WIDGET;
         }
         self.inv_offhand_id = tree.findById("inv_offhand") orelse NULL_WIDGET;
         self.makeSlotClickable(tree, self.inv_offhand_id, hover_col);
+        self.inv_offhand_count_id = tree.findById("offhand_count") orelse NULL_WIDGET;
         self.inv_player_viewport_id = tree.findById("player_viewport") orelse NULL_WIDGET;
         if (self.inv_player_viewport_id != NULL_WIDGET) {
             if (tree.getData(self.inv_player_viewport_id)) |data| {
@@ -303,6 +319,7 @@ pub const MenuController = struct {
             }
         }
         self.cursor_item_id = tree.findById("cursor_item") orelse NULL_WIDGET;
+        self.cursor_count_id = tree.findById("cursor_count") orelse NULL_WIDGET;
         if (self.cursor_item_id != NULL_WIDGET) {
             if (tree.getWidget(self.cursor_item_id)) |w| {
                 w.hit_transparent = true;
@@ -346,6 +363,12 @@ pub const MenuController = struct {
         self.inv_armor_ids = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS;
         self.inv_equip_ids = .{NULL_WIDGET} ** GameState.EQUIP_SLOTS;
         self.inv_offhand_id = NULL_WIDGET;
+        self.inv_slot_count_ids = .{NULL_WIDGET} ** GameState.HOTBAR_SIZE;
+        self.inv_main_count_ids = .{NULL_WIDGET} ** GameState.INV_SIZE;
+        self.inv_armor_count_ids = .{NULL_WIDGET} ** GameState.ARMOR_SLOTS;
+        self.inv_equip_count_ids = .{NULL_WIDGET} ** GameState.EQUIP_SLOTS;
+        self.inv_offhand_count_id = NULL_WIDGET;
+        self.cursor_count_id = NULL_WIDGET;
         self.inv_player_viewport_id = NULL_WIDGET;
         self.cursor_item_id = NULL_WIDGET;
         self.ui_manager.cursor_follow_widget = NULL_WIDGET;
@@ -583,6 +606,7 @@ pub const MenuController = struct {
                     updateSlotWidget(w, tree, id, inv.hotbar[i].block);
                 }
             }
+            updateCountLabel(tree, self.inv_slot_count_ids[i], inv.hotbar[i].count);
         }
 
         // Update main inventory
@@ -593,6 +617,7 @@ pub const MenuController = struct {
                     updateSlotWidget(w, tree, id, inv.main[i].block);
                 }
             }
+            updateCountLabel(tree, self.inv_main_count_ids[i], inv.main[i].count);
         }
 
         // Update armor slots
@@ -603,6 +628,7 @@ pub const MenuController = struct {
                     updateSlotWidget(w, tree, id, inv.armor[i].block);
                 }
             }
+            updateCountLabel(tree, self.inv_armor_count_ids[i], inv.armor[i].count);
         }
 
         // Update equip slots
@@ -613,6 +639,7 @@ pub const MenuController = struct {
                     updateSlotWidget(w, tree, id, inv.equip[i].block);
                 }
             }
+            updateCountLabel(tree, self.inv_equip_count_ids[i], inv.equip[i].count);
         }
 
         // Update offhand
@@ -622,6 +649,7 @@ pub const MenuController = struct {
                 updateSlotWidget(w, tree, id, inv.offhand.block);
             }
         }
+        updateCountLabel(tree, self.inv_offhand_count_id, inv.offhand.count);
 
         // Update cursor item (follows mouse when carrying)
         if (self.cursor_item_id != NULL_WIDGET) {
@@ -639,6 +667,7 @@ pub const MenuController = struct {
                 }
             }
         }
+        updateCountLabel(tree, self.cursor_count_id, gs.carried_item.count);
 
         // Player model drag-to-rotate
         const mouse_x = self.ui_manager.last_mouse_x;
@@ -1152,6 +1181,22 @@ pub const MenuController = struct {
     }
 
     const WorldState = @import("../world/WorldState.zig");
+
+    fn updateCountLabel(tree: *WidgetTree, cid: WidgetId, count: u8) void {
+        if (cid == NULL_WIDGET) return;
+        if (tree.getWidget(cid)) |cw| {
+            if (count > 1) {
+                cw.visible = true;
+                if (tree.getData(cid)) |data| {
+                    var buf: [4]u8 = undefined;
+                    const text = std.fmt.bufPrint(&buf, "{d}", .{count}) catch "?";
+                    data.label.setText(text);
+                }
+            } else {
+                cw.visible = false;
+            }
+        }
+    }
 
     fn updateSlotWidget(w: *Widget.Widget, tree: *WidgetTree, id: WidgetId, block: BlockState.StateId) void {
         if (BlockState.getBlock(block) != .air) {
