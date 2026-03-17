@@ -1186,6 +1186,30 @@ pub fn pickBlock(self: *GameState) void {
     self.hotbar[self.selected_slot] = block_state;
 }
 
+/// Sample block light (RGB) and sky light at a world position.
+/// Returns { block_r, block_g, block_b, sky } as floats in [0,1].
+/// Values match the terrain shader encoding: sky and block are both
+/// stored as 0-255, converted to 0-1 via /255.
+pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
+    const bx: i32 = @intFromFloat(@floor(wx));
+    const by: i32 = @intFromFloat(@floor(wy));
+    const bz: i32 = @intFromFloat(@floor(wz));
+    const key = WorldState.ChunkKey.fromWorldPos(bx, by, bz);
+    const lm = self.light_maps.get(key) orelse return .{ 0, 0, 0, 0 };
+    const lx: usize = @intCast(@mod(bx, @as(i32, WorldState.CHUNK_SIZE)));
+    const ly: usize = @intCast(@mod(by, @as(i32, WorldState.CHUNK_SIZE)));
+    const lz: usize = @intCast(@mod(bz, @as(i32, WorldState.CHUNK_SIZE)));
+    const ci = WorldState.chunkIndex(lx, ly, lz);
+    const blk = lm.block_light.get(ci);
+    const sky = lm.sky_light.get(ci);
+    return .{
+        @as(f32, @floatFromInt(blk[0])) / 255.0,
+        @as(f32, @floatFromInt(blk[1])) / 255.0,
+        @as(f32, @floatFromInt(blk[2])) / 255.0,
+        @as(f32, @floatFromInt(sky)) / 255.0,
+    };
+}
+
 fn blockOverlapsPlayer(bx: i32, by: i32, bz: i32, pos: [3]f32) bool {
     const fbx: f32 = @floatFromInt(bx);
     const fby: f32 = @floatFromInt(by);
