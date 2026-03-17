@@ -138,7 +138,7 @@ pub const ItemDropRenderer = struct {
 
             const render_count: u32 = if (item_count <= 1) 1 else if (item_count <= 16) 2 else if (item_count <= 32) 3 else if (item_count <= 48) 4 else 5;
 
-            var seed: u32 = @as(u32, @bitCast(@as(i32, @intFromFloat(pos[0] * 100.0)))) +% @as(u32, @bitCast(@as(i32, @intFromFloat(pos[2] * 100.0)))) *% 7;
+            var seed: u32 = @as(u32, @bitCast(bob_offset)) *% 2654435761;
 
             for (0..render_count) |copy| {
                 var ox: f32 = 0;
