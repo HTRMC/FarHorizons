@@ -202,8 +202,10 @@ pub const HandRenderer = struct {
         // MC view bob (renderHandsWithItems:326-327)
         // Hand sways slightly when looking around due to lag between
         // actual camera angles and smoothed bob values.
-        const view_bob_x = mat4RotX((self.cam_pitch - self.bob_pitch) * 0.1);
-        const view_bob_y = mat4RotY((self.cam_yaw - self.bob_yaw) * 0.1);
+        // Negated vs MC: FH pitch is positive-up (MC positive-down),
+        // FH yaw increases CCW (MC increases CW).
+        const view_bob_x = mat4RotX((self.bob_pitch - self.cam_pitch) * 0.1);
+        const view_bob_y = mat4RotY((self.bob_yaw - self.cam_yaw) * 0.1);
         const view_bob_mat = zlm.Mat4.mul(view_bob_x, view_bob_y);
 
         // Walk bob matrix (shared by arm and held block), applied as outermost
@@ -319,21 +321,41 @@ pub const HandRenderer = struct {
         // --- Draw held block ---
         //
         // HMI renderOverhaul chain for blocks:
-        //   scenePoseMain → itemPose → block positioning → scale(0.3) → offset
+        //   scenePoseMain → itemPose → swing → block positioning → scale(0.3) → offset
         //
-        // itemPose: translate(0.5, -0.15, -0.85)
-        //           rotateAround(X:15°, pivot 0.5,0.5,0.5)
-        //           scale(0.9)
-        // Block:    translate(0.22, 0.25, 0.2)
-        //           translate(-0.25, -0.05, 0)  (non-torch blocks)
-        //           scale(0.3)
-        //           translate(-0.9, -0.45, -0.7)
+        // MC swingArm (ItemInHandRenderer.java:531-537):
+        //   translate swing offsets
+        //   applyItemArmAttackTransform: rotateY(45+swing*-20) → rotateZ → rotateX → rotateY(-45)
         if (has_block) {
+            const invert: f32 = 1.0;
+            const attack_value: f32 = self.swing_progress;
+
             // HMI itemPose (equip offset lowers Y when swapping items)
             const equip_y = (1.0 - self.equip_progress) * -0.6;
             var block_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.5, -0.15 + equip_y, -0.85));
             block_model = zlm.Mat4.mul(block_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
             block_model = zlm.Mat4.mul(block_model, mat4Scale(0.9, 0.9, 0.9));
+
+            // Arm swing applied to block so it tracks with the hand.
+            // Uses the same ARM_SWING offsets + rotations as renderPlayerArm
+            // (not ITEM_SWING which has a different arc).
+            if (attack_value > 0.0) {
+                const sqrt_attack = @sqrt(attack_value);
+                const arm_swing_x = -0.3 * @sin(sqrt_attack * std.math.pi);
+                const arm_swing_y = 0.4 * @sin(sqrt_attack * (std.math.pi * 2.0));
+                const arm_swing_z = -0.4 * @sin(attack_value * std.math.pi);
+                block_model = zlm.Mat4.mul(block_model, mat4Translate(
+                    invert * arm_swing_x,
+                    arm_swing_y,
+                    arm_swing_z,
+                ));
+
+                // Same Y/Z swing rotations as renderPlayerArm
+                const y_swing_rot = @sin(sqrt_attack * std.math.pi);
+                const z_swing_rot = @sin(attack_value * attack_value * std.math.pi);
+                block_model = zlm.Mat4.mul(block_model, mat4RotY(deg(invert * y_swing_rot * 70.0)));
+                block_model = zlm.Mat4.mul(block_model, mat4RotZ(deg(invert * z_swing_rot * -20.0)));
+            }
 
             // HMI block positioning
             block_model = zlm.Mat4.mul(block_model, mat4Translate(0.22, 0.25, 0.2));
