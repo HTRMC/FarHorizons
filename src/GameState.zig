@@ -1202,18 +1202,24 @@ pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
     const fy = sy - @as(f32, @floatFromInt(y0));
     const fz = sz - @as(f32, @floatFromInt(z0));
 
-    // Sample 8 corners
+    // Sample 8 corners, skipping opaque blocks
     var result = [4]f32{ 0, 0, 0, 0 };
+    var total_w: f32 = 0;
     for (0..2) |dz| {
         for (0..2) |dy| {
             for (0..2) |dx| {
                 const bx = x0 + @as(i32, @intCast(dx));
                 const by = y0 + @as(i32, @intCast(dy));
                 const bz = z0 + @as(i32, @intCast(dz));
+
+                // Skip opaque blocks — they have 0 light and would darken the result
+                if (BlockState.isOpaque(self.chunk_map.getBlock(bx, by, bz))) continue;
+
                 const wx_ = if (dx == 0) 1.0 - fx else fx;
                 const wy_ = if (dy == 0) 1.0 - fy else fy;
                 const wz_ = if (dz == 0) 1.0 - fz else fz;
                 const w = wx_ * wy_ * wz_;
+                total_w += w;
 
                 const sample = self.readLightRaw(bx, by, bz);
                 result[0] += sample[0] * w;
@@ -1222,6 +1228,14 @@ pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
                 result[3] += sample[3] * w;
             }
         }
+    }
+    // Normalize by actual weight sum (redistributes opaque block weight)
+    if (total_w > 0.001) {
+        const inv = 1.0 / total_w;
+        result[0] *= inv;
+        result[1] *= inv;
+        result[2] *= inv;
+        result[3] *= inv;
     }
     return result;
 }
