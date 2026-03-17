@@ -315,9 +315,9 @@ pub const MeshWorker = struct {
                 }
 
                 // Compute light for this chunk
+                const offsets = WorldState.face_neighbor_offsets;
                 const light_map: ?*LightMap = local_light_maps.get(key);
                 var neighbor_lights: [6]?*const LightMap = .{null} ** 6;
-                const offsets = WorldState.face_neighbor_offsets;
                 for (0..6) |i| {
                     const nk = ChunkKey{
                         .cx = key.cx + offsets[i][0],

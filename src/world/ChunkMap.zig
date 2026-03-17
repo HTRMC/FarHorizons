@@ -5,14 +5,20 @@ const Chunk = WorldState.Chunk;
 const ChunkKey = WorldState.ChunkKey;
 const CHUNK_SIZE = WorldState.CHUNK_SIZE;
 
+/// Pre-allocated capacity to avoid hash map resizes during gameplay.
+/// Sized for unload-distance sphere: 4/3 * π * 18³ ≈ 24,429 with 2× headroom.
+pub const PREALLOCATED_CAPACITY: u32 = 50_000;
+
 pub const ChunkMap = struct {
     allocator: std.mem.Allocator,
     chunks: std.AutoHashMap(ChunkKey, *Chunk),
 
     pub fn init(allocator: std.mem.Allocator) ChunkMap {
+        var chunks = std.AutoHashMap(ChunkKey, *Chunk).init(allocator);
+        chunks.ensureTotalCapacity(PREALLOCATED_CAPACITY) catch {};
         return .{
             .allocator = allocator,
-            .chunks = std.AutoHashMap(ChunkKey, *Chunk).init(allocator),
+            .chunks = chunks,
         };
     }
 

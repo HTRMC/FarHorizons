@@ -394,7 +394,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     var cam = Camera.init(width, height);
     const chunk_map = ChunkMap.init(allocator);
     const chunk_pool = ChunkPool.init(allocator);
-    const light_maps = std.AutoHashMap(WorldState.ChunkKey, *LightMap).init(allocator);
+    var light_maps = std.AutoHashMap(WorldState.ChunkKey, *LightMap).init(allocator);
+    light_maps.ensureTotalCapacity(@import("world/ChunkMap.zig").PREALLOCATED_CAPACITY) catch {};
     const light_map_pool = LightMapPool.init(allocator);
     const surface_height_map = SurfaceHeightMap.init(allocator);
 
