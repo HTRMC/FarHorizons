@@ -14,6 +14,7 @@ pub const EntityRenderer = @import("EntityRenderer.zig").EntityRenderer;
 pub const SkyRenderer = @import("SkyRenderer.zig").SkyRenderer;
 pub const HandRenderer = @import("HandRenderer.zig").HandRenderer;
 pub const ItemDropRenderer = @import("ItemDropRenderer.zig").ItemDropRenderer;
+pub const BreakRenderer = @import("BreakRenderer.zig").BreakRenderer;
 
 pub const MAX_FRAMES_IN_FLIGHT = 2;
 
@@ -25,6 +26,7 @@ pub const RenderState = struct {
     entity_renderer: EntityRenderer,
     hand_renderer: HandRenderer,
     item_drop_renderer: ItemDropRenderer,
+    break_renderer: BreakRenderer,
     sky_renderer: SkyRenderer,
     command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.VkCommandBuffer,
     image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.VkSemaphore,
@@ -88,6 +90,15 @@ pub const RenderState = struct {
         );
         errdefer self.item_drop_renderer.deinit(ctx.device);
 
+        self.break_renderer = try BreakRenderer.init(
+            &shader_compiler,
+            ctx,
+            swapchain_format,
+            self.world_renderer.texture_manager.texture_image_view,
+            self.world_renderer.texture_manager.texture_sampler,
+        );
+        errdefer self.break_renderer.deinit(ctx.device);
+
         self.sky_renderer = try SkyRenderer.init(allocator, &shader_compiler, ctx, swapchain_format);
         errdefer self.sky_renderer.deinit(ctx.device);
 
@@ -115,6 +126,7 @@ pub const RenderState = struct {
         self.entity_renderer.deinit(device);
         self.hand_renderer.deinit(device);
         self.item_drop_renderer.deinit(device);
+        self.break_renderer.deinit(device);
         self.ui_renderer.deinit(device);
         self.sky_renderer.deinit(device);
         self.model_registry.deinit();

@@ -1018,6 +1018,11 @@ pub const VulkanRenderer = struct {
                 self.render_state.item_drop_renderer.recordDraw(command_buffer, gs, mvp, day_night.ambient_light, sun_dir);
             }
 
+            // Block breaking overlay
+            if (!overdraw) {
+                self.render_state.break_renderer.recordDraw(command_buffer, gs, mvp);
+            }
+
             if (!overdraw) {
                 const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
                 const view_scale = zlm.Mat4{

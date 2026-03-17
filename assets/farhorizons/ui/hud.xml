@@ -60,11 +60,6 @@
                   anchor_x="center" anchor_y="end" offset_x="91" offset_y="-60"
                   fill_color="#3399CCFF" track_color="#33333399" visible="false"/>
 
-    <!-- Break progress bar: centered, below crosshair -->
-    <progress_bar id="break_bar" width="60" height="4"
-                  anchor_x="center" anchor_y="center" offset_y="20"
-                  fill_color="#FFFFFFCC" track_color="#33333366" visible="false"/>
-
     <!-- Block name label: centered, above hotbar -->
     <label id="block_name" text="" color="#FFFFFFE6"
            anchor_x="center" anchor_y="end" offset_y="-76" visible="false"

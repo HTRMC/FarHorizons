@@ -23,7 +23,6 @@ pub const HudBinder = struct {
     block_name_id: WidgetId = NULL_WIDGET,
     health_bar_id: WidgetId = NULL_WIDGET,
     air_bar_id: WidgetId = NULL_WIDGET,
-    break_bar_id: WidgetId = NULL_WIDGET,
     slot_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
     count_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
 
@@ -36,7 +35,6 @@ pub const HudBinder = struct {
         self.block_name_id = tree.findById("block_name") orelse NULL_WIDGET;
         self.health_bar_id = tree.findById("health_bar") orelse NULL_WIDGET;
         self.air_bar_id = tree.findById("air_bar") orelse NULL_WIDGET;
-        self.break_bar_id = tree.findById("break_bar") orelse NULL_WIDGET;
 
         inline for (0..HOTBAR_SIZE) |i| {
             const name = comptime std.fmt.comptimePrint("slot_{d}", .{i});
@@ -76,18 +74,6 @@ pub const HudBinder = struct {
             if (tree.getWidget(self.selection_id)) |w| {
                 const slot_pitch: f32 = 50.0;
                 w.offset_x = @as(f32, @floatFromInt(gs.selected_slot)) * slot_pitch - 2.0;
-            }
-        }
-
-        // Break progress bar
-        if (self.break_bar_id != NULL_WIDGET) {
-            if (tree.getWidget(self.break_bar_id)) |w| {
-                w.visible = gs.break_progress > 0;
-            }
-            if (gs.break_progress > 0) {
-                if (tree.getData(self.break_bar_id)) |data| {
-                    data.progress_bar.value = gs.break_progress;
-                }
             }
         }
 
