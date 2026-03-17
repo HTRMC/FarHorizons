@@ -7,15 +7,14 @@ const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 
 const GRAVITY: f32 = 32.0;
 const Y_DRAG: f32 = 0.9866;
-pub const HALF_W: f32 = 0.4;
-pub const HEIGHT: f32 = 1.8;
-const WALK_SPEED: f32 = 4.3;
-const FRICTION: f32 = 20.0;
 const AIR_CONTROL: f32 = 0.3;
 const EPSILON: f32 = 1.0e-7;
 
+// Default player dimensions (used by blockOverlapsPlayer and debug hitbox)
+pub const PLAYER_HALF_W: f32 = 0.4;
+pub const PLAYER_HEIGHT: f32 = 1.8;
+
 // Water physics (matched to Minecraft constants)
-const WATER_GRAVITY: f32 = 2.0; // GRAVITY / 16
 const WATER_SPEED: f32 = 2.0; // terminal horizontal velocity in water
 const WATER_SWIM_SPEED: f32 = 3.0; // vertical swim speed
 const WATER_FRICTION: f32 = 12.0; // approach rate for velocity
@@ -34,6 +33,7 @@ pub fn updateEntity(
     camera_yaw: f32,
     dt: f32,
 ) void {
+    const params = entities.physics[id];
     const forward_input = input_move[0];
     const right_input = input_move[2];
 
@@ -68,9 +68,9 @@ pub fn updateEntity(
         }
     } else {
         // Land horizontal movement
-        const target_vx = wish_x * WALK_SPEED;
-        const target_vz = wish_z * WALK_SPEED;
-        const control = if (flags.on_ground) FRICTION else FRICTION * AIR_CONTROL;
+        const target_vx = wish_x * params.walk_speed;
+        const target_vz = wish_z * params.walk_speed;
+        const control = if (flags.on_ground) params.friction else params.friction * AIR_CONTROL;
         const max_delta = control * dt;
         entities.vel[id][0] = approach(entities.vel[id][0], target_vx, max_delta);
         entities.vel[id][2] = approach(entities.vel[id][2], target_vz, max_delta);
@@ -99,7 +99,7 @@ pub fn updateEntity(
         const desired = movement[axis];
         if (desired == 0.0) continue;
 
-        const result = collideAxis(chunk_map, entities.pos[id], desired, axis);
+        const result = collideAxis(chunk_map, entities.pos[id], desired, axis, params.half_width, params.height);
         entities.pos[id][axis] += result.distance;
 
         if (result.hit) {
@@ -110,13 +110,15 @@ pub fn updateEntity(
         }
     }
 
+    const gravity = GRAVITY * params.gravity_scale;
+
     if (flags.in_water) {
-        entities.vel[id][1] -= WATER_GRAVITY * dt;
+        entities.vel[id][1] -= (gravity / 16.0) * dt;
         entities.vel[id][0] *= WATER_XZ_DRAG;
         entities.vel[id][1] *= WATER_Y_DRAG;
         entities.vel[id][2] *= WATER_XZ_DRAG;
     } else if (flags.on_ladder) {
-        entities.vel[id][1] -= GRAVITY * dt;
+        entities.vel[id][1] -= gravity * dt;
         entities.vel[id][1] *= Y_DRAG;
         // Cap fall speed on ladder
         if (entities.vel[id][1] < LADDER_MAX_FALL) {
@@ -127,14 +129,14 @@ pub fn updateEntity(
             entities.vel[id][1] = 0.0;
         }
     } else {
-        entities.vel[id][1] -= GRAVITY * dt;
+        entities.vel[id][1] -= gravity * dt;
         entities.vel[id][1] *= Y_DRAG;
     }
 }
 
-fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usize) struct { distance: f32, hit: bool } {
-    const aabb_min = [3]f32{ pos[0] - HALF_W, pos[1], pos[2] - HALF_W };
-    const aabb_max = [3]f32{ pos[0] + HALF_W, pos[1] + HEIGHT, pos[2] + HALF_W };
+fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usize, half_w: f32, height: f32) struct { distance: f32, hit: bool } {
+    const aabb_min = [3]f32{ pos[0] - half_w, pos[1], pos[2] - half_w };
+    const aabb_max = [3]f32{ pos[0] + half_w, pos[1] + height, pos[2] + half_w };
 
     var scan_min = aabb_min;
     var scan_max = aabb_max;
@@ -330,7 +332,7 @@ test "collideAxis: no collision in empty chunk" {
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     const pos = [3]f32{ 5.0, 5.0, 5.0 };
-    const result = collideAxis(&map, pos, 1.0, 0);
+    const result = collideAxis(&map, pos, 1.0, 0, PLAYER_HALF_W, PLAYER_HEIGHT);
     try testing.expectEqual(@as(f32, 1.0), result.distance);
     try testing.expect(!result.hit);
 }
@@ -350,7 +352,7 @@ test "collideAxis: collision with solid block" {
     // Entity at x=8.0 (HALF_W=0.4, so right edge at 8.4), moving +x toward block at x=10
     // Block face at x=10, entity AABB max x = 8.4 + movement
     const pos = [3]f32{ 8.0, 5.0, 5.5 };
-    const result = collideAxis(&map, pos, 5.0, 0);
+    const result = collideAxis(&map, pos, 5.0, 0, PLAYER_HALF_W, PLAYER_HEIGHT);
 
     // Should hit: gap = 10.0 - 8.4 = 1.6, so distance should be 1.6
     try testing.expect(result.hit);
@@ -371,7 +373,7 @@ test "collideAxis: negative movement collision" {
 
     // Entity at x=5.0 (left edge at 4.6), moving -x toward block ending at x=4
     const pos = [3]f32{ 5.0, 5.0, 5.5 };
-    const result = collideAxis(&map, pos, -5.0, 0);
+    const result = collideAxis(&map, pos, -5.0, 0, PLAYER_HALF_W, PLAYER_HEIGHT);
 
     // Should hit: block top at x=4, entity min at 4.6, gap = 4.0 - 4.6 = -0.6
     try testing.expect(result.hit);
@@ -391,7 +393,7 @@ test "collideAxis: water is not solid" {
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     const pos = [3]f32{ 8.0, 5.0, 5.5 };
-    const result = collideAxis(&map, pos, 5.0, 0);
+    const result = collideAxis(&map, pos, 5.0, 0, PLAYER_HALF_W, PLAYER_HEIGHT);
 
     // Water is not solid, so no collision
     try testing.expect(!result.hit);

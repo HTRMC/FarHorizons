@@ -998,7 +998,7 @@ pub fn main() !void {
             // Sync hand renderer with held block + all hand animations
             const hr = &vk_impl.render_state.hand_renderer;
             if (game_state) |*gs| {
-                hr.setPendingBlock(gs.hotbar[gs.selected_slot]);
+                hr.setPendingBlock(gs.playerInv().hotbar[gs.selected_slot]);
                 if (gs.swing_requested) {
                     hr.triggerSwing();
                     gs.swing_requested = false;

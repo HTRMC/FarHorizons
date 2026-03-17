@@ -547,8 +547,9 @@ pub const MenuController = struct {
         // Return carried item to inventory when closing
         if (gs) |g| {
             if (g.carried_item != BlockState.defaultState(.air)) {
+                const inv = g.playerInv();
                 // Find first empty slot to place carried item
-                for (&g.hotbar) |*slot| {
+                for (&inv.hotbar) |*slot| {
                     if (slot.* == BlockState.defaultState(.air)) {
                         slot.* = g.carried_item;
                         g.carried_item = BlockState.defaultState(.air);
@@ -556,7 +557,7 @@ pub const MenuController = struct {
                     }
                 }
                 if (g.carried_item != BlockState.defaultState(.air)) {
-                    for (&g.inventory) |*slot| {
+                    for (&inv.main) |*slot| {
                         if (slot.* == BlockState.defaultState(.air)) {
                             slot.* = g.carried_item;
                             g.carried_item = BlockState.defaultState(.air);
@@ -590,12 +591,14 @@ pub const MenuController = struct {
             }
         }
 
+        const inv = gs.playerInv();
+
         // Update hotbar row
         for (0..GameState.HOTBAR_SIZE) |i| {
             const id = self.inv_slot_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, gs.hotbar[i]);
+                    updateSlotWidget(w, tree, id, inv.hotbar[i]);
                 }
             }
         }
@@ -605,7 +608,7 @@ pub const MenuController = struct {
             const id = self.inv_main_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, gs.inventory[i]);
+                    updateSlotWidget(w, tree, id, inv.main[i]);
                 }
             }
         }
@@ -615,7 +618,7 @@ pub const MenuController = struct {
             const id = self.inv_armor_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, gs.armor[i]);
+                    updateSlotWidget(w, tree, id, inv.armor[i]);
                 }
             }
         }
@@ -625,7 +628,7 @@ pub const MenuController = struct {
             const id = self.inv_equip_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    updateSlotWidget(w, tree, id, gs.equip[i]);
+                    updateSlotWidget(w, tree, id, inv.equip[i]);
                 }
             }
         }
@@ -634,7 +637,7 @@ pub const MenuController = struct {
         if (self.inv_offhand_id != NULL_WIDGET) {
             const id = self.inv_offhand_id;
             if (tree.getWidget(id)) |w| {
-                updateSlotWidget(w, tree, id, gs.offhand);
+                updateSlotWidget(w, tree, id, inv.offhand);
             }
         }
 

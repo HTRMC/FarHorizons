@@ -73,7 +73,7 @@ pub const HudBinder = struct {
             const id = self.slot_ids[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    const block = gs.hotbar[i];
+                    const block = gs.playerInv().hotbar[i];
                     if (block != BlockState.defaultState(.air)) {
                         const c = GameState.blockColor(block);
                         w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
@@ -91,7 +91,7 @@ pub const HudBinder = struct {
         }
 
         if (self.block_name_id != NULL_WIDGET) {
-            const selected_block = gs.hotbar[gs.selected_slot];
+            const selected_block = gs.playerInv().hotbar[gs.selected_slot];
             if (tree.getWidget(self.block_name_id)) |w| {
                 w.visible = (selected_block != BlockState.defaultState(.air));
             }

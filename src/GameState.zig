@@ -28,12 +28,12 @@ pub const MovementMode = enum { flying, walking };
 pub const EYE_OFFSET: f32 = 1.62;
 pub const TICK_RATE: f32 = 30.0;
 pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
-pub const HOTBAR_SIZE: u8 = 9;
-pub const INV_ROWS: u8 = 4;
-pub const INV_COLS: u8 = 9;
-pub const INV_SIZE: u8 = INV_ROWS * INV_COLS; // 36
-pub const ARMOR_SLOTS: u8 = 4; // head, chest, legs, feet
-pub const EQUIP_SLOTS: u8 = 4;
+pub const HOTBAR_SIZE = Entity.HOTBAR_SIZE;
+pub const INV_ROWS = Entity.INV_ROWS;
+pub const INV_COLS = Entity.INV_COLS;
+pub const INV_SIZE = Entity.INV_SIZE;
+pub const ARMOR_SLOTS = Entity.ARMOR_SLOTS;
+pub const EQUIP_SLOTS = Entity.EQUIP_SLOTS;
 
 // Day/night cycle: 36000 ticks at 30Hz = 20 minutes per full day
 pub const DAY_CYCLE: i64 = 36000;
@@ -245,20 +245,6 @@ overdraw_mode: bool,
 saved_camera: Camera,
 
 selected_slot: u8 = 0,
-hotbar: [HOTBAR_SIZE]BlockState.StateId = .{
-    BlockState.defaultState(.grass_block), BlockState.defaultState(.dirt),  BlockState.defaultState(.stone),
-    BlockState.defaultState(.sand),        BlockState.defaultState(.snow),  BlockState.defaultState(.gravel),
-    BlockState.defaultState(.glass),       BlockState.defaultState(.glowstone), BlockState.defaultState(.water),
-},
-inventory: [INV_SIZE]BlockState.StateId = .{
-    BlockState.defaultState(.cobblestone), BlockState.defaultState(.oak_log),      BlockState.defaultState(.oak_planks),   BlockState.defaultState(.bricks),       BlockState.defaultState(.bedrock),       BlockState.defaultState(.gold_ore),      BlockState.defaultState(.iron_ore),      BlockState.defaultState(.coal_ore),      BlockState.defaultState(.diamond_ore),
-    BlockState.defaultState(.sponge),      BlockState.defaultState(.pumice),       BlockState.defaultState(.wool),         BlockState.defaultState(.gold_block),   BlockState.defaultState(.iron_block),    BlockState.defaultState(.diamond_block), BlockState.defaultState(.bookshelf),     BlockState.defaultState(.obsidian),      BlockState.defaultState(.oak_leaves),
-    BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)), BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south)), BlockState.defaultState(.torch), BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south)), BlockState.makeDoorState(.south, .bottom, false), BlockState.defaultState(.oak_fence), BlockState.defaultState(.red_glowstone), BlockState.defaultState(.crimson_glowstone), BlockState.defaultState(.orange_glowstone),
-    BlockState.defaultState(.peach_glowstone), BlockState.defaultState(.lime_glowstone), BlockState.defaultState(.green_glowstone), BlockState.defaultState(.teal_glowstone), BlockState.defaultState(.cyan_glowstone), BlockState.defaultState(.light_blue_glowstone), BlockState.defaultState(.blue_glowstone), BlockState.defaultState(.navy_glowstone), BlockState.defaultState(.indigo_glowstone),
-},
-armor: [ARMOR_SLOTS]BlockState.StateId = .{BlockState.defaultState(.air)} ** ARMOR_SLOTS,
-equip: [EQUIP_SLOTS]BlockState.StateId = .{BlockState.defaultState(.air)} ** EQUIP_SLOTS,
-offhand: BlockState.StateId = BlockState.defaultState(.air),
 carried_item: BlockState.StateId = BlockState.defaultState(.air),
 inventory_open: bool = false,
 
@@ -347,14 +333,19 @@ pub const DirtyChunkSet = struct {
     }
 };
 
+pub fn playerInv(self: anytype) if (@TypeOf(self) == *const GameState) *const Entity.Inventory else *Entity.Inventory {
+    return self.entities.inventory[Entity.PLAYER].?;
+}
+
 /// Get a pointer to the block in a unified slot index.
 /// Slots 0-8: hotbar, 9-44: main inventory, 45-48: armor, 49-52: equip, 53: offhand.
 pub fn slotPtr(self: *GameState, slot: u8) *BlockState.StateId {
-    if (slot < HOTBAR_SIZE) return &self.hotbar[slot];
-    if (slot < HOTBAR_SIZE + INV_SIZE) return &self.inventory[slot - HOTBAR_SIZE];
-    if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS) return &self.armor[slot - HOTBAR_SIZE - INV_SIZE];
-    if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS) return &self.equip[slot - HOTBAR_SIZE - INV_SIZE - ARMOR_SLOTS];
-    return &self.offhand;
+    const inv = self.playerInv();
+    if (slot < HOTBAR_SIZE) return &inv.hotbar[slot];
+    if (slot < HOTBAR_SIZE + INV_SIZE) return &inv.main[slot - HOTBAR_SIZE];
+    if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS) return &inv.armor[slot - HOTBAR_SIZE - INV_SIZE];
+    if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS) return &inv.equip[slot - HOTBAR_SIZE - INV_SIZE - ARMOR_SLOTS];
+    return &inv.offhand;
 }
 
 /// Click a slot: pick up, place, or swap with carried item.
@@ -370,12 +361,13 @@ pub fn clickSlot(self: *GameState, slot: u8) void {
 /// Hotbar items go to first empty main slot, main/armor/offhand items go to first empty hotbar slot.
 pub fn quickMove(self: *GameState, slot: u8) void {
     const air = BlockState.defaultState(.air);
+    const inv = self.playerInv();
     const ptr = self.slotPtr(slot);
     if (ptr.* == air) return;
 
     if (slot < HOTBAR_SIZE) {
         // Hotbar → main inventory
-        for (&self.inventory) |*s| {
+        for (&inv.main) |*s| {
             if (s.* == air) {
                 s.* = ptr.*;
                 ptr.* = air;
@@ -384,7 +376,7 @@ pub fn quickMove(self: *GameState, slot: u8) void {
         }
     } else {
         // Main/armor/offhand → hotbar
-        for (&self.hotbar) |*s| {
+        for (&inv.hotbar) |*s| {
             if (s.* == air) {
                 s.* = ptr.*;
                 ptr.* = air;
@@ -451,6 +443,21 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .entities = blk: {
             var store = Entity.EntityStore{};
             _ = store.spawn(.player, .{ spawn_x, spawn_y, spawn_z });
+            const inv = allocator.create(Entity.Inventory) catch return error.OutOfMemory;
+            inv.* = .{
+                .hotbar = .{
+                    BlockState.defaultState(.grass_block), BlockState.defaultState(.dirt),  BlockState.defaultState(.stone),
+                    BlockState.defaultState(.sand),        BlockState.defaultState(.snow),  BlockState.defaultState(.gravel),
+                    BlockState.defaultState(.glass),       BlockState.defaultState(.glowstone), BlockState.defaultState(.water),
+                },
+                .main = .{
+                    BlockState.defaultState(.cobblestone), BlockState.defaultState(.oak_log),      BlockState.defaultState(.oak_planks),   BlockState.defaultState(.bricks),       BlockState.defaultState(.bedrock),       BlockState.defaultState(.gold_ore),      BlockState.defaultState(.iron_ore),      BlockState.defaultState(.coal_ore),      BlockState.defaultState(.diamond_ore),
+                    BlockState.defaultState(.sponge),      BlockState.defaultState(.pumice),       BlockState.defaultState(.wool),         BlockState.defaultState(.gold_block),   BlockState.defaultState(.iron_block),    BlockState.defaultState(.diamond_block), BlockState.defaultState(.bookshelf),     BlockState.defaultState(.obsidian),      BlockState.defaultState(.oak_leaves),
+                    BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)), BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south)), BlockState.defaultState(.torch), BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south)), BlockState.makeDoorState(.south, .bottom, false), BlockState.defaultState(.oak_fence), BlockState.defaultState(.red_glowstone), BlockState.defaultState(.crimson_glowstone), BlockState.defaultState(.orange_glowstone),
+                    BlockState.defaultState(.peach_glowstone), BlockState.defaultState(.lime_glowstone), BlockState.defaultState(.green_glowstone), BlockState.defaultState(.teal_glowstone), BlockState.defaultState(.cyan_glowstone), BlockState.defaultState(.light_blue_glowstone), BlockState.defaultState(.blue_glowstone), BlockState.defaultState(.navy_glowstone), BlockState.defaultState(.indigo_glowstone),
+                },
+            };
+            store.inventory[Entity.PLAYER] = inv;
             break :blk store;
         },
         .mode = .walking,
@@ -511,6 +518,10 @@ pub fn save(self: *GameState) void {
 }
 
 pub fn deinit(self: *GameState) void {
+    // Free entity inventories
+    for (self.entities.inventory[0..self.entities.count]) |inv| {
+        if (inv) |ptr| self.allocator.destroy(ptr);
+    }
     self.dirty_chunks.deinit();
     self.player_dirty_chunks.deinit();
     if (self.storage) |s| s.deinit();
@@ -1077,7 +1088,7 @@ pub fn placeBlock(self: *GameState) void {
         return;
     }
 
-    var block_state = self.hotbar[self.selected_slot];
+    var block_state = self.playerInv().hotbar[self.selected_slot];
     if (block_state == air) return;
 
     // Double slab: placing a slab on a compatible existing slab merges into a full block
@@ -1174,7 +1185,8 @@ pub fn pickBlock(self: *GameState) void {
     const block_state = BlockState.getCanonicalState(raw_state);
 
     // If already in hotbar, just select that slot
-    for (self.hotbar, 0..) |slot_block, i| {
+    const inv = self.playerInv();
+    for (inv.hotbar, 0..) |slot_block, i| {
         if (slot_block == block_state) {
             self.selected_slot = @intCast(i);
             return;
@@ -1182,7 +1194,7 @@ pub fn pickBlock(self: *GameState) void {
     }
 
     // Otherwise replace the current slot
-    self.hotbar[self.selected_slot] = block_state;
+    inv.hotbar[self.selected_slot] = block_state;
 }
 
 /// Sample block light (RGB) and sky light at a world position with
@@ -1260,9 +1272,9 @@ fn blockOverlapsPlayer(bx: i32, by: i32, bz: i32, pos: [3]f32) bool {
     const fbx: f32 = @floatFromInt(bx);
     const fby: f32 = @floatFromInt(by);
     const fbz: f32 = @floatFromInt(bz);
-    return fbx + 1.0 > pos[0] - Physics.HALF_W and fbx < pos[0] + Physics.HALF_W and
-        fby + 1.0 > pos[1] and fby < pos[1] + Physics.HEIGHT and
-        fbz + 1.0 > pos[2] - Physics.HALF_W and fbz < pos[2] + Physics.HALF_W;
+    return fbx + 1.0 > pos[0] - Physics.PLAYER_HALF_W and fbx < pos[0] + Physics.PLAYER_HALF_W and
+        fby + 1.0 > pos[1] and fby < pos[1] + Physics.PLAYER_HEIGHT and
+        fbz + 1.0 > pos[2] - Physics.PLAYER_HALF_W and fbz < pos[2] + Physics.PLAYER_HALF_W;
 }
 
 fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
@@ -1609,67 +1621,86 @@ const testing = std.testing;
 
 fn makeTestGameState() GameState {
     var gs: GameState = undefined;
-    gs.hotbar = .{BlockState.defaultState(.grass_block)} ** HOTBAR_SIZE;
-    gs.inventory = .{BlockState.defaultState(.air)} ** INV_SIZE;
-    gs.armor = .{BlockState.defaultState(.air)} ** ARMOR_SLOTS;
-    gs.equip = .{BlockState.defaultState(.air)} ** EQUIP_SLOTS;
-    gs.offhand = BlockState.defaultState(.air);
+    gs.entities = Entity.EntityStore{};
+    _ = gs.entities.spawn(.player, .{ 0, 0, 0 });
+    const inv = testing.allocator.create(Entity.Inventory) catch @panic("alloc failed");
+    inv.* = .{
+        .hotbar = .{BlockState.defaultState(.grass_block)} ** HOTBAR_SIZE,
+    };
+    gs.entities.inventory[Entity.PLAYER] = inv;
     gs.carried_item = BlockState.defaultState(.air);
     gs.selected_slot = 0;
     return gs;
 }
 
+fn destroyTestGameState(gs: *GameState) void {
+    if (gs.entities.inventory[Entity.PLAYER]) |inv| {
+        testing.allocator.destroy(inv);
+    }
+}
+
 test "slotPtr: hotbar slots 0-8" {
     var gs = makeTestGameState();
+    defer destroyTestGameState(&gs);
+    const inv = gs.playerInv();
     for (0..HOTBAR_SIZE) |i| {
         const ptr = gs.slotPtr(@intCast(i));
-        try testing.expectEqual(&gs.hotbar[i], ptr);
+        try testing.expectEqual(&inv.hotbar[i], ptr);
     }
 }
 
 test "slotPtr: inventory slots 9-44" {
     var gs = makeTestGameState();
+    defer destroyTestGameState(&gs);
+    const inv = gs.playerInv();
     for (0..INV_SIZE) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + i);
         const ptr = gs.slotPtr(slot);
-        try testing.expectEqual(&gs.inventory[i], ptr);
+        try testing.expectEqual(&inv.main[i], ptr);
     }
 }
 
 test "slotPtr: armor slots 45-48" {
     var gs = makeTestGameState();
+    defer destroyTestGameState(&gs);
+    const inv = gs.playerInv();
     for (0..ARMOR_SLOTS) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + INV_SIZE + i);
         const ptr = gs.slotPtr(slot);
-        try testing.expectEqual(&gs.armor[i], ptr);
+        try testing.expectEqual(&inv.armor[i], ptr);
     }
 }
 
 test "slotPtr: equip slots 49-52" {
     var gs = makeTestGameState();
+    defer destroyTestGameState(&gs);
+    const inv = gs.playerInv();
     for (0..EQUIP_SLOTS) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + i);
         const ptr = gs.slotPtr(slot);
-        try testing.expectEqual(&gs.equip[i], ptr);
+        try testing.expectEqual(&inv.equip[i], ptr);
     }
 }
 
 test "slotPtr: offhand slot 53" {
     var gs = makeTestGameState();
+    defer destroyTestGameState(&gs);
+    const inv = gs.playerInv();
     const ptr = gs.slotPtr(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS);
-    try testing.expectEqual(&gs.offhand, ptr);
+    try testing.expectEqual(&inv.offhand, ptr);
 }
 
 test "clickSlot: pick up item from hotbar" {
     const air = BlockState.defaultState(.air);
     const stone = BlockState.defaultState(.stone);
     var gs = makeTestGameState();
-    gs.hotbar[0] = stone;
+    defer destroyTestGameState(&gs);
+    gs.playerInv().hotbar[0] = stone;
     gs.carried_item = air;
 
     gs.clickSlot(0);
 
-    try testing.expectEqual(air, gs.hotbar[0]);
+    try testing.expectEqual(air, gs.playerInv().hotbar[0]);
     try testing.expectEqual(stone, gs.carried_item);
 }
 
@@ -1677,24 +1708,26 @@ test "clickSlot: swap carried with slot" {
     const stone = BlockState.defaultState(.stone);
     const dirt = BlockState.defaultState(.dirt);
     var gs = makeTestGameState();
-    gs.hotbar[0] = stone;
+    defer destroyTestGameState(&gs);
+    gs.playerInv().hotbar[0] = stone;
     gs.carried_item = dirt;
 
     gs.clickSlot(0);
 
-    try testing.expectEqual(dirt, gs.hotbar[0]);
+    try testing.expectEqual(dirt, gs.playerInv().hotbar[0]);
     try testing.expectEqual(stone, gs.carried_item);
 }
 
 test "clickSlot: both empty does nothing" {
     const air = BlockState.defaultState(.air);
     var gs = makeTestGameState();
-    gs.hotbar[0] = air;
+    defer destroyTestGameState(&gs);
+    gs.playerInv().hotbar[0] = air;
     gs.carried_item = air;
 
     gs.clickSlot(0);
 
-    try testing.expectEqual(air, gs.hotbar[0]);
+    try testing.expectEqual(air, gs.playerInv().hotbar[0]);
     try testing.expectEqual(air, gs.carried_item);
 }
 
@@ -1702,13 +1735,15 @@ test "quickMove: hotbar to inventory" {
     const air = BlockState.defaultState(.air);
     const stone = BlockState.defaultState(.stone);
     var gs = makeTestGameState();
-    gs.hotbar[0] = stone;
-    gs.inventory[0] = air;
+    defer destroyTestGameState(&gs);
+    const inv = gs.playerInv();
+    inv.hotbar[0] = stone;
+    inv.main[0] = air;
 
     gs.quickMove(0);
 
-    try testing.expectEqual(air, gs.hotbar[0]);
-    try testing.expectEqual(stone, gs.inventory[0]);
+    try testing.expectEqual(air, inv.hotbar[0]);
+    try testing.expectEqual(stone, inv.main[0]);
 }
 
 test "quickMove: inventory to hotbar" {
@@ -1716,27 +1751,31 @@ test "quickMove: inventory to hotbar" {
     const stone = BlockState.defaultState(.stone);
     const dirt = BlockState.defaultState(.dirt);
     var gs = makeTestGameState();
-    gs.hotbar = .{dirt} ** HOTBAR_SIZE; // fill hotbar except slot 2
-    gs.hotbar[2] = air;
-    gs.inventory[0] = stone;
+    defer destroyTestGameState(&gs);
+    const inv = gs.playerInv();
+    inv.hotbar = .{dirt} ** HOTBAR_SIZE; // fill hotbar except slot 2
+    inv.hotbar[2] = air;
+    inv.main[0] = stone;
 
     gs.quickMove(HOTBAR_SIZE); // slot 9 = first inventory slot
 
-    try testing.expectEqual(stone, gs.hotbar[2]);
-    try testing.expectEqual(air, gs.inventory[0]);
+    try testing.expectEqual(stone, inv.hotbar[2]);
+    try testing.expectEqual(air, inv.main[0]);
 }
 
 test "quickMove: no empty target does nothing" {
     const stone = BlockState.defaultState(.stone);
     const dirt = BlockState.defaultState(.dirt);
     var gs = makeTestGameState();
-    gs.hotbar[0] = stone;
-    gs.inventory = .{dirt} ** INV_SIZE; // all full
+    defer destroyTestGameState(&gs);
+    const inv = gs.playerInv();
+    inv.hotbar[0] = stone;
+    inv.main = .{dirt} ** INV_SIZE; // all full
 
     gs.quickMove(0);
 
     // Item stays in place
-    try testing.expectEqual(stone, gs.hotbar[0]);
+    try testing.expectEqual(stone, inv.hotbar[0]);
 }
 
 test "slot boundary constants" {
