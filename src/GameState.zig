@@ -1186,14 +1186,47 @@ pub fn pickBlock(self: *GameState) void {
     self.hotbar[self.selected_slot] = block_state;
 }
 
-/// Sample block light (RGB) and sky light at a world position.
+/// Sample block light (RGB) and sky light at a world position with
+/// trilinear interpolation across the 8 surrounding blocks.
 /// Returns { block_r, block_g, block_b, sky } as floats in [0,1].
-/// Values match the terrain shader encoding: sky and block are both
-/// stored as 0-255, converted to 0-1 via /255.
 pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
-    const bx: i32 = @intFromFloat(@floor(wx));
-    const by: i32 = @intFromFloat(@floor(wy));
-    const bz: i32 = @intFromFloat(@floor(wz));
+    // Center sampling in the block: offset by -0.5 so interpolation
+    // transitions at block centers rather than block edges
+    const sx = wx - 0.5;
+    const sy = wy - 0.5;
+    const sz = wz - 0.5;
+    const x0: i32 = @intFromFloat(@floor(sx));
+    const y0: i32 = @intFromFloat(@floor(sy));
+    const z0: i32 = @intFromFloat(@floor(sz));
+    const fx = sx - @as(f32, @floatFromInt(x0));
+    const fy = sy - @as(f32, @floatFromInt(y0));
+    const fz = sz - @as(f32, @floatFromInt(z0));
+
+    // Sample 8 corners
+    var result = [4]f32{ 0, 0, 0, 0 };
+    for (0..2) |dz| {
+        for (0..2) |dy| {
+            for (0..2) |dx| {
+                const bx = x0 + @as(i32, @intCast(dx));
+                const by = y0 + @as(i32, @intCast(dy));
+                const bz = z0 + @as(i32, @intCast(dz));
+                const wx_ = if (dx == 0) 1.0 - fx else fx;
+                const wy_ = if (dy == 0) 1.0 - fy else fy;
+                const wz_ = if (dz == 0) 1.0 - fz else fz;
+                const w = wx_ * wy_ * wz_;
+
+                const sample = self.readLightRaw(bx, by, bz);
+                result[0] += sample[0] * w;
+                result[1] += sample[1] * w;
+                result[2] += sample[2] * w;
+                result[3] += sample[3] * w;
+            }
+        }
+    }
+    return result;
+}
+
+fn readLightRaw(self: *const GameState, bx: i32, by: i32, bz: i32) [4]f32 {
     const key = WorldState.ChunkKey.fromWorldPos(bx, by, bz);
     const lm = self.light_maps.get(key) orelse return .{ 0, 0, 0, 0 };
     const lx: usize = @intCast(@mod(bx, @as(i32, WorldState.CHUNK_SIZE)));
