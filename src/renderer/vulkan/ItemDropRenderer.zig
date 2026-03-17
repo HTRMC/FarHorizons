@@ -110,35 +110,69 @@ pub const ItemDropRenderer = struct {
 
             const pos = gs.entities.render_pos[i];
             const age_f: f32 = @floatFromInt(gs.entities.age_ticks[i]);
-            const spin = age_f * 0.05;
+            const bob_offset = gs.entities.bob_offset[i];
 
-            const scale: f32 = 0.25;
-            const cos_s = @cos(spin);
-            const sin_s = @sin(spin);
-
-            const model = zlm.Mat4{ .m = .{
-                cos_s * scale,  0,                    sin_s * scale,  0,
-                0,              scale,                0,              0,
-                -sin_s * scale, 0,                    cos_s * scale,  0,
-                pos[0],         pos[1] + scale * 0.5, pos[2],         1,
-            } };
-
-            const drop_mvp = zlm.Mat4.mul(mvp, model);
-
-            // Sample light at drop position
-            const light = gs.sampleLightAt(pos[0], pos[1] + scale * 0.5, pos[2]);
-            const block_light = [3]f32{ light[0], light[1], light[2] };
-            const sky_level = light[3];
+            const bob = @sin(age_f * 0.1 + bob_offset) * 0.05 + 0.0625;
+            const spin = age_f / 20.0 + bob_offset;
 
             const item_block = gs.entities.item_block[i];
             const display_state = BlockState.getDisplayState(item_block);
+            const is_shaped = BlockState.isShaped(display_state);
+            const item_count = gs.entities.item_count[i];
 
-            if (BlockState.isShaped(display_state)) {
-                self.drawShapedDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, display_state);
-            } else {
-                self.drawCubeDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, item_block);
+            // Shaped blocks (torch, ladder, etc.) get a larger scale since their
+            // model geometry is already smaller than a full cube
+            const scale: f32 = if (is_shaped) 0.35 else 0.25;
+
+            const cos_s = @cos(spin);
+            const sin_s = @sin(spin);
+
+            // Sample light at drop position
+            const center_y = pos[1] + bob + scale * 0.5;
+            const light = gs.sampleLightAt(pos[0], center_y, pos[2]);
+            const block_light = [3]f32{ light[0], light[1], light[2] };
+            const sky_level = light[3];
+
+            // Number of copies to render based on stack count (Minecraft-style)
+            const render_count: u32 = if (item_count <= 1) 1 else if (item_count <= 16) 2 else if (item_count <= 32) 3 else if (item_count <= 48) 4 else 5;
+
+            // Deterministic offsets for stacked copies using a simple hash
+            var seed: u32 = @as(u32, @bitCast(@as(i32, @intFromFloat(pos[0] * 100.0)))) +% @as(u32, @bitCast(@as(i32, @intFromFloat(pos[2] * 100.0)))) *% 7;
+
+            for (0..render_count) |copy| {
+                var ox: f32 = 0;
+                var oy: f32 = 0;
+                var oz: f32 = 0;
+                if (copy > 0) {
+                    // Random-ish offsets for extra copies (±0.15 * scale)
+                    ox = hashFloat(&seed) * 0.15 * scale;
+                    oy = hashFloat(&seed) * 0.15 * scale;
+                    oz = hashFloat(&seed) * 0.15 * scale;
+                }
+
+                const model = zlm.Mat4{ .m = .{
+                    cos_s * scale,  0,                 sin_s * scale,  0,
+                    0,              scale,             0,              0,
+                    -sin_s * scale, 0,                 cos_s * scale,  0,
+                    pos[0] + ox,    center_y + oy,     pos[2] + oz,    1,
+                } };
+
+                const drop_mvp = zlm.Mat4.mul(mvp, model);
+
+                if (BlockState.isShaped(display_state)) {
+                    self.drawShapedDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, display_state);
+                } else {
+                    self.drawCubeDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, item_block);
+                }
             }
         }
+    }
+
+    /// Simple hash to generate deterministic float in [-1, 1] from a seed.
+    fn hashFloat(seed: *u32) f32 {
+        seed.* = seed.* *% 1103515245 +% 12345;
+        const bits: i32 = @bitCast(seed.* >> 16);
+        return @as(f32, @floatFromInt(@mod(bits, 200) - 100)) / 100.0;
     }
 
     fn drawCubeDrop(

@@ -80,6 +80,7 @@ pub const EntityStore = struct {
     item_count: [MAX_ENTITIES]u8 = .{0} ** MAX_ENTITIES,
     age_ticks: [MAX_ENTITIES]u32 = .{0} ** MAX_ENTITIES,
     pickup_cooldown: [MAX_ENTITIES]u8 = .{0} ** MAX_ENTITIES,
+    bob_offset: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
 
     count: u32 = 0,
 
@@ -100,6 +101,7 @@ pub const EntityStore = struct {
         self.item_count[id] = 0;
         self.age_ticks[id] = 0;
         self.pickup_cooldown[id] = 0;
+        self.bob_offset[id] = 0;
         self.count += 1;
         return id;
     }
@@ -121,6 +123,11 @@ pub const EntityStore = struct {
         self.item_count[id] = count;
         self.age_ticks[id] = 0;
         self.pickup_cooldown[id] = PICKUP_COOLDOWN;
+        // Unique bob phase so nearby drops don't animate in sync
+        const hash = @as(u32, @bitCast(@as(i32, @intFromFloat(drop_pos[0] * 100.0)))) +%
+            @as(u32, @bitCast(@as(i32, @intFromFloat(drop_pos[2] * 100.0)))) *% 7 +%
+            @as(u32, @bitCast(@as(i32, @intFromFloat(drop_pos[1] * 100.0)))) *% 13;
+        self.bob_offset[id] = @as(f32, @floatFromInt(hash % 628)) / 100.0;
     }
 
     /// Remove an entity by swap-removing with the last entity.
@@ -143,6 +150,7 @@ pub const EntityStore = struct {
             self.item_count[id] = self.item_count[last];
             self.age_ticks[id] = self.age_ticks[last];
             self.pickup_cooldown[id] = self.pickup_cooldown[last];
+            self.bob_offset[id] = self.bob_offset[last];
         }
         self.count -= 1;
     }

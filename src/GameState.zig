@@ -734,6 +734,12 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
 fn updateItemDrops(self: *GameState) void {
     const P = Entity.PLAYER;
     const player_pos = self.entities.pos[P];
+    const player_center = [3]f32{ player_pos[0], player_pos[1] + 0.9, player_pos[2] };
+
+    const ATTRACT_RADIUS: f32 = 2.0;
+    const COLLECT_RADIUS: f32 = 0.3;
+    const ATTRACT_SPEED: f32 = 5.0;
+    const MERGE_RADIUS: f32 = 0.5;
 
     // Iterate backwards so swap-remove is safe
     var i: u32 = self.entities.count;
@@ -757,18 +763,68 @@ fn updateItemDrops(self: *GameState) void {
         self.entities.prev_pos[i] = self.entities.pos[i];
         Physics.updateEntity(&self.entities, i, &self.chunk_map, .{ 0, 0, 0 }, 0, TICK_INTERVAL);
 
-        // Pickup check
+        // Merge nearby item drops of the same type
+        if (self.entities.pickup_cooldown[i] == 0 and self.entities.item_count[i] < Entity.MAX_STACK) {
+            var j: u32 = 1;
+            while (j < i) {
+                if (self.entities.kind[j] != .item_drop or
+                    self.entities.item_block[j] != self.entities.item_block[i] or
+                    self.entities.pickup_cooldown[j] > 0)
+                {
+                    j += 1;
+                    continue;
+                }
+                const dp = self.entities.pos[j];
+                const ip = self.entities.pos[i];
+                const mdx = dp[0] - ip[0];
+                const mdy = dp[1] - ip[1];
+                const mdz = dp[2] - ip[2];
+                if (mdx * mdx + mdy * mdy + mdz * mdz < MERGE_RADIUS * MERGE_RADIUS) {
+                    const space = Entity.MAX_STACK - self.entities.item_count[i];
+                    if (space > 0) {
+                        const transfer = @min(space, self.entities.item_count[j]);
+                        self.entities.item_count[i] += transfer;
+                        self.entities.item_count[j] -= transfer;
+                        if (self.entities.item_count[j] == 0) {
+                            // If i is the last entity, swap-remove will move it to j
+                            const was_last = (i == self.entities.count - 1);
+                            self.entities.despawn(j);
+                            if (was_last) {
+                                i = j; // entity i was moved to slot j
+                                break; // restart merge scan would be complex; just break
+                            }
+                            // j now has a different entity; don't increment
+                            continue;
+                        }
+                    }
+                }
+                j += 1;
+            }
+        }
+
+        // Pickup: attract toward player, collect when close
         if (self.entities.pickup_cooldown[i] == 0) {
             const dp = self.entities.pos[i];
-            const dx = dp[0] - player_pos[0];
-            const dy = dp[1] - (player_pos[1] + 0.9); // check against player center
-            const dz = dp[2] - player_pos[2];
+            const dx = dp[0] - player_center[0];
+            const dy = dp[1] - player_center[1];
+            const dz = dp[2] - player_center[2];
             const dist_sq = dx * dx + dy * dy + dz * dz;
-            if (dist_sq < Entity.PICKUP_RADIUS * Entity.PICKUP_RADIUS) {
+
+            if (dist_sq < COLLECT_RADIUS * COLLECT_RADIUS) {
+                // Close enough to collect
                 const item = Entity.ItemStack.of(self.entities.item_block[i], self.entities.item_count[i]);
                 if (self.addToInventory(item)) {
                     self.entities.despawn(i);
                 }
+            } else if (dist_sq < ATTRACT_RADIUS * ATTRACT_RADIUS) {
+                // Attract toward player
+                const dist = @sqrt(dist_sq);
+                const inv_dist = ATTRACT_SPEED / dist;
+                self.entities.vel[i] = .{
+                    -dx * inv_dist,
+                    -dy * inv_dist,
+                    -dz * inv_dist,
+                };
             }
         }
     }
