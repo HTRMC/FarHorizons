@@ -5,6 +5,7 @@ const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const zlm = @import("zlm");
 const GameState = @import("../../GameState.zig");
 const Entity = GameState.Entity;
+const Item = @import("../../Item.zig");
 const WorldState = @import("../../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
 const EntityRenderer = @import("EntityRenderer.zig");
@@ -122,6 +123,7 @@ pub const ItemDropRenderer = struct {
             const spin = age_f / 20.0 + bob_offset;
 
             const item_block = gs.entities.item_block[i];
+            if (Item.isToolItem(item_block)) continue; // TODO: tool drop rendering
             const display_state = BlockState.getDisplayState(item_block);
             const is_shaped = BlockState.isShaped(display_state);
             const item_count = gs.entities.item_count[i];
@@ -173,6 +175,7 @@ pub const ItemDropRenderer = struct {
 
         for (gs.pickup_ghosts) |ghost| {
             if (!ghost.active) continue;
+            if (Item.isToolItem(ghost.block)) continue; // TODO: tool ghost rendering
 
             // Quadratic easing: t goes 0→1 over 3 ticks, interpolated with render alpha
             const t: f32 = (@as(f32, @floatFromInt(ghost.tick)) + gs.render_alpha) / 3.0;

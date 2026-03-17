@@ -101,7 +101,7 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     y += LINE_HEIGHT;
 
     const sel_stack = gs.playerInv().hotbar[gs.selected_slot];
-    const sel_name = GameState.blockName(sel_stack.block);
+    const sel_name = GameState.itemName(sel_stack.block);
     const sel_text = std.fmt.bufPrint(&buf, "Selected: [{d}] {s} x{d}", .{ gs.selected_slot + 1, sel_name, sel_stack.count }) catch "Selected: ?";
     text.drawText(x, y, sel_text, yellow);
     y += LINE_HEIGHT;

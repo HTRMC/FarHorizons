@@ -11,6 +11,7 @@ const app_config = @import("../../app_config.zig");
 const EntityVertex = @import("EntityRenderer.zig").EntityVertex;
 const WorldState = @import("../../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
+const Item = @import("../../Item.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
@@ -390,6 +391,14 @@ pub const HandRenderer = struct {
     pub fn updateHeldBlock(self: *HandRenderer, state: BlockState.StateId) void {
         if (state == self.held_block) return;
         self.held_block = state;
+
+        // Tools don't have block textures — render as empty hand
+        if (Item.isToolItem(state)) {
+            self.block_tex_top = -1;
+            self.block_tex_side = -1;
+            self.is_shaped = false;
+            return;
+        }
 
         const tex = BlockState.blockTexIndices(state);
         self.block_tex_top = tex.top;

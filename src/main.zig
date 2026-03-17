@@ -321,12 +321,14 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
         },
         .playing => {
             if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
+                resetAttackState(input_state);
                 input_state.menu_ctrl.showPauseMenu();
                 uncaptureMouse(input_state);
                 return;
             }
 
             if (opts.keyMatches(.open_inventory, key) and action == glfw.GLFW_PRESS) {
+                resetAttackState(input_state);
                 input_state.menu_ctrl.showInventory();
                 uncaptureMouse(input_state);
                 return;
@@ -452,16 +454,29 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     if (input_state.menu_ctrl.app_state != .playing) return;
 
     input_log.debug("Mouse {s} {s}", .{ mouseButtonName(button), actionName(action) });
-    if (action != glfw.GLFW_PRESS) return;
 
     const gs = input_state.game_state orelse return;
     const opts = input_state.options;
 
-    if (opts.mouseMatches(.attack, button) and input_state.mouse_captured) {
-        if (!gs.debug_camera_active) {
-            gs.breakBlock();
+    // Handle attack button held/released for hold-to-break
+    if (opts.mouseMatches(.attack, button) and input_state.mouse_captured and !gs.debug_camera_active) {
+        if (action == glfw.GLFW_PRESS) {
+            gs.attack_held = true;
+            // Creative: instant break on press
+            if (gs.game_mode == .creative) {
+                gs.breakBlock();
+            }
+        } else if (action == glfw.GLFW_RELEASE) {
+            gs.attack_held = false;
+            gs.break_progress = 0;
+            gs.breaking_pos = null;
         }
-    } else if (opts.mouseMatches(.pick_item, button) and input_state.mouse_captured) {
+        return;
+    }
+
+    if (action != glfw.GLFW_PRESS) return;
+
+    if (opts.mouseMatches(.pick_item, button) and input_state.mouse_captured) {
         if (!gs.debug_camera_active) {
             gs.pickBlock();
         }
@@ -487,6 +502,14 @@ fn captureMouse(input_state: *InputState) void {
     glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
 }
 
+fn resetAttackState(input_state: *InputState) void {
+    if (input_state.game_state) |gs| {
+        gs.attack_held = false;
+        gs.break_progress = 0;
+        gs.breaking_pos = null;
+    }
+}
+
 fn uncaptureMouse(input_state: *InputState) void {
     input_state.mouse_captured = false;
     input_state.first_mouse = true;
@@ -505,6 +528,7 @@ fn processGamepadInput(input_state: *InputState) void {
         .playing => {
             // Start → pause
             if (gp.pressed(.start)) {
+                resetAttackState(input_state);
                 input_state.menu_ctrl.showPauseMenu();
                 uncaptureMouse(input_state);
                 return;
@@ -512,6 +536,7 @@ fn processGamepadInput(input_state: *InputState) void {
 
             // Y → inventory
             if (gp.pressed(.y)) {
+                resetAttackState(input_state);
                 input_state.menu_ctrl.showInventory();
                 uncaptureMouse(input_state);
                 return;
@@ -523,8 +548,12 @@ fn processGamepadInput(input_state: *InputState) void {
             if (gp.leftTriggerPressed()) {
                 if (!gs.debug_camera_active) gs.placeBlock();
             }
-            if (gp.rightTriggerPressed()) {
-                if (!gs.debug_camera_active) gs.breakBlock();
+            if (!gs.debug_camera_active) {
+                // Track right trigger held for hold-to-break
+                gs.attack_held = gp.right_trigger >= 0.5;
+                if (gp.rightTriggerPressed() and gs.game_mode == .creative) {
+                    gs.breakBlock();
+                }
             }
 
             // Bumpers → hotbar scroll

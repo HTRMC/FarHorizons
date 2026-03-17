@@ -12,6 +12,7 @@ pub const ChunkStreamer = @import("world/ChunkStreamer.zig").ChunkStreamer;
 const TerrainGen = @import("world/TerrainGen.zig");
 const Physics = @import("Physics.zig");
 pub const Entity = @import("Entity.zig");
+pub const Item = @import("Item.zig");
 const Raycast = @import("Raycast.zig");
 const Storage = @import("world/storage/Storage.zig");
 const WorldRenderer = @import("renderer/vulkan/WorldRenderer.zig").WorldRenderer;
@@ -235,6 +236,16 @@ pub fn blockColor(state: BlockState.StateId) [4]f32 {
     };
 }
 
+pub fn itemName(id: u16) []const u8 {
+    if (Item.isToolItem(id)) return Item.toolName(id);
+    return blockName(id);
+}
+
+pub fn itemColor(id: u16) [4]f32 {
+    if (Item.isToolItem(id)) return Item.toolColor(id);
+    return blockColor(id);
+}
+
 allocator: std.mem.Allocator,
 camera: Camera,
 chunk_map: ChunkMap,
@@ -264,6 +275,10 @@ pickup_ghosts: [MAX_PICKUP_GHOSTS]PickupGhost = .{PickupGhost{}} ** MAX_PICKUP_G
 render_alpha: f32 = 0,
 
 game_mode: GameMode = .creative,
+break_progress: f32 = 0,
+breaking_pos: ?[3]i32 = null,
+attack_held: bool = false,
+attack_damage: f32 = 1.0,
 health: f32 = 20.0,
 max_health: f32 = 20.0,
 air_supply: u16 = 300,
@@ -390,16 +405,19 @@ pub fn quickMove(self: *GameState, slot: u8) void {
 
     const target: []Entity.ItemStack = if (slot < HOTBAR_SIZE) &inv.main else &inv.hotbar;
 
-    // First pass: try to merge into existing matching stacks
-    for (target) |*s| {
-        if (!s.isEmpty() and s.block == ptr.block and s.count < Entity.MAX_STACK) {
-            const space = Entity.MAX_STACK - s.count;
-            const transfer = @min(space, ptr.count);
-            s.count += transfer;
-            ptr.count -= transfer;
-            if (ptr.count == 0) {
-                ptr.* = Entity.ItemStack.EMPTY;
-                return;
+    // Tools: skip merge pass, go straight to empty slot
+    if (!ptr.isTool()) {
+        // First pass: try to merge into existing matching stacks
+        for (target) |*s| {
+            if (!s.isEmpty() and !s.isTool() and s.block == ptr.block and s.count < Entity.MAX_STACK) {
+                const space = Entity.MAX_STACK - s.count;
+                const transfer = @min(space, ptr.count);
+                s.count += transfer;
+                ptr.count -= transfer;
+                if (ptr.count == 0) {
+                    ptr.* = Entity.ItemStack.EMPTY;
+                    return;
+                }
             }
         }
     }
@@ -477,24 +495,34 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .entities = blk: {
             var store = Entity.EntityStore{};
             _ = store.spawn(.player, .{ spawn_x, spawn_y, spawn_z });
-            const inv = allocator.create(Entity.Inventory) catch return error.OutOfMemory;
-            if (game_mode == .creative) {
-                const S = Entity.ItemStack.of;
-                inv.* = .{
-                    .hotbar = .{
-                        S(BlockState.defaultState(.grass_block), 64), S(BlockState.defaultState(.dirt), 64),  S(BlockState.defaultState(.stone), 64),
-                        S(BlockState.defaultState(.sand), 64),        S(BlockState.defaultState(.snow), 64),  S(BlockState.defaultState(.gravel), 64),
-                        S(BlockState.defaultState(.glass), 64),       S(BlockState.defaultState(.glowstone), 64), S(BlockState.defaultState(.water), 64),
-                    },
-                    .main = .{
-                        S(BlockState.defaultState(.cobblestone), 64), S(BlockState.defaultState(.oak_log), 64),      S(BlockState.defaultState(.oak_planks), 64),   S(BlockState.defaultState(.bricks), 64),       S(BlockState.defaultState(.bedrock), 64),       S(BlockState.defaultState(.gold_ore), 64),      S(BlockState.defaultState(.iron_ore), 64),      S(BlockState.defaultState(.coal_ore), 64),      S(BlockState.defaultState(.diamond_ore), 64),
-                        S(BlockState.defaultState(.sponge), 64),      S(BlockState.defaultState(.pumice), 64),       S(BlockState.defaultState(.wool), 64),         S(BlockState.defaultState(.gold_block), 64),   S(BlockState.defaultState(.iron_block), 64),    S(BlockState.defaultState(.diamond_block), 64), S(BlockState.defaultState(.bookshelf), 64),     S(BlockState.defaultState(.obsidian), 64),      S(BlockState.defaultState(.oak_leaves), 64),
-                        S(BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)), 64), S(BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south)), 64), S(BlockState.defaultState(.torch), 64), S(BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south)), 64), S(BlockState.makeDoorState(.south, .bottom, false), 64), S(BlockState.defaultState(.oak_fence), 64), S(BlockState.defaultState(.red_glowstone), 64), S(BlockState.defaultState(.crimson_glowstone), 64), S(BlockState.defaultState(.orange_glowstone), 64),
-                        S(BlockState.defaultState(.peach_glowstone), 64), S(BlockState.defaultState(.lime_glowstone), 64), S(BlockState.defaultState(.green_glowstone), 64), S(BlockState.defaultState(.teal_glowstone), 64), S(BlockState.defaultState(.cyan_glowstone), 64), S(BlockState.defaultState(.light_blue_glowstone), 64), S(BlockState.defaultState(.blue_glowstone), 64), S(BlockState.defaultState(.navy_glowstone), 64), S(BlockState.defaultState(.indigo_glowstone), 64),
-                    },
-                };
-            } else {
-                inv.* = .{};
+            // Use saved inventory if available, otherwise create default
+            const inv = if (player_data != null and player_data.?.inventory != null)
+                player_data.?.inventory.?
+            else
+                allocator.create(Entity.Inventory) catch return error.OutOfMemory;
+            if (player_data == null or player_data.?.inventory == null) {
+                if (game_mode == .creative) {
+                    const S = Entity.ItemStack.of;
+                    const T = Entity.ItemStack.ofTool;
+                    inv.* = .{
+                        .hotbar = .{
+                            S(BlockState.defaultState(.grass_block), 64), S(BlockState.defaultState(.dirt), 64),  S(BlockState.defaultState(.stone), 64),
+                            S(BlockState.defaultState(.sand), 64),        S(BlockState.defaultState(.snow), 64),  S(BlockState.defaultState(.gravel), 64),
+                            S(BlockState.defaultState(.glass), 64),       S(BlockState.defaultState(.glowstone), 64), S(BlockState.defaultState(.water), 64),
+                        },
+                        .equip = .{
+                            T(.pickaxe, .diamond), T(.axe, .diamond), T(.shovel, .diamond), T(.sword, .diamond),
+                        },
+                        .main = .{
+                            S(BlockState.defaultState(.cobblestone), 64), S(BlockState.defaultState(.oak_log), 64),      S(BlockState.defaultState(.oak_planks), 64),   S(BlockState.defaultState(.bricks), 64),       S(BlockState.defaultState(.bedrock), 64),       S(BlockState.defaultState(.gold_ore), 64),      S(BlockState.defaultState(.iron_ore), 64),      S(BlockState.defaultState(.coal_ore), 64),      S(BlockState.defaultState(.diamond_ore), 64),
+                            S(BlockState.defaultState(.sponge), 64),      S(BlockState.defaultState(.pumice), 64),       S(BlockState.defaultState(.wool), 64),         S(BlockState.defaultState(.gold_block), 64),   S(BlockState.defaultState(.iron_block), 64),    S(BlockState.defaultState(.diamond_block), 64), S(BlockState.defaultState(.bookshelf), 64),     S(BlockState.defaultState(.obsidian), 64),      S(BlockState.defaultState(.oak_leaves), 64),
+                            S(BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom)), 64), S(BlockState.fromBlockProps(.oak_stairs, @intFromEnum(BlockState.Facing.south)), 64), S(BlockState.defaultState(.torch), 64), S(BlockState.fromBlockProps(.ladder, @intFromEnum(BlockState.Facing.south)), 64), S(BlockState.makeDoorState(.south, .bottom, false), 64), S(BlockState.defaultState(.oak_fence), 64), S(BlockState.defaultState(.red_glowstone), 64), S(BlockState.defaultState(.crimson_glowstone), 64), S(BlockState.defaultState(.orange_glowstone), 64),
+                            S(BlockState.defaultState(.peach_glowstone), 64), S(BlockState.defaultState(.lime_glowstone), 64), S(BlockState.defaultState(.green_glowstone), 64), S(BlockState.defaultState(.teal_glowstone), 64), S(BlockState.defaultState(.cyan_glowstone), 64), S(BlockState.defaultState(.light_blue_glowstone), 64), S(BlockState.defaultState(.blue_glowstone), 64), S(BlockState.defaultState(.navy_glowstone), 64), S(BlockState.defaultState(.indigo_glowstone), 64),
+                        },
+                    };
+                } else {
+                    inv.* = .{};
+                }
             }
             store.inventory[Entity.PLAYER] = inv;
             break :blk store;
@@ -543,6 +571,7 @@ pub fn save(self: *GameState) void {
         .game_mode = self.game_mode,
         .health = self.health,
         .air_supply = self.air_supply,
+        .inventory = self.entities.inventory[Entity.PLAYER],
     });
 
     s.saveGameTime(self.game_time);
@@ -685,7 +714,7 @@ fn dropInventoryWithScatter(self: *GameState, slots: []Entity.ItemStack, pos: [3
 
 fn spawnScatterDrop(self: *GameState, pos: [3]f32, item: Entity.ItemStack, random: std.Random) void {
     const prev_count = self.entities.count;
-    self.entities.spawnItemDrop(pos, item.block, item.count);
+    self.entities.spawnItemDropWithDurability(pos, item.block, item.count, item.durability);
     if (self.entities.count <= prev_count) return;
 
     // MC death scatter: random direction, random speed 0-0.5, upward 0.2
@@ -826,6 +855,12 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
         self.updateDrowning();
     }
 
+    // Hold-to-break in survival mode
+    self.updateBreakProgress();
+
+    // Update attack damage based on held item
+    self.updateAttackDamage();
+
     // Update item drop entities (iterate backwards for safe despawn)
     self.updateItemDrops();
 
@@ -882,6 +917,98 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.reportPipelineStats();
 }
 
+fn updateBreakProgress(self: *GameState) void {
+    if (self.game_mode != .survival) return;
+    if (!self.attack_held) {
+        if (self.break_progress > 0) {
+            self.break_progress = 0;
+            self.breaking_pos = null;
+        }
+        return;
+    }
+
+    const hit = self.hit_result orelse {
+        self.break_progress = 0;
+        self.breaking_pos = null;
+        return;
+    };
+
+    const target_pos = hit.block_pos;
+
+    // Reset if target changed
+    if (self.breaking_pos) |bp| {
+        if (bp[0] != target_pos[0] or bp[1] != target_pos[1] or bp[2] != target_pos[2]) {
+            self.break_progress = 0;
+        }
+    }
+    self.breaking_pos = target_pos;
+
+    const block_state = self.chunk_map.getBlock(target_pos[0], target_pos[1], target_pos[2]);
+    const hardness = BlockState.getHardness(block_state);
+
+    // Unbreakable
+    if (hardness < 0) return;
+
+    // Instant break
+    if (hardness == 0) {
+        self.breakBlock();
+        self.break_progress = 0;
+        self.breaking_pos = null;
+        return;
+    }
+
+    // Calculate tool multiplier
+    var tool_multiplier: f32 = 1.0;
+    const held_slot = self.playerInv().hotbar[self.selected_slot];
+    if (held_slot.isTool()) {
+        if (Item.toolFromId(held_slot.block)) |tool_info| {
+            const preferred = BlockState.getPreferredTool(block_state);
+            if (preferred != null and preferred.? == tool_info.tool_type) {
+                tool_multiplier = Item.tierStats(tool_info.tier).mining_speed;
+            }
+        }
+    }
+
+    const break_time = hardness * 1.5 / tool_multiplier;
+    const speed_per_tick = 1.0 / (break_time * TICK_RATE);
+    self.break_progress += speed_per_tick;
+
+    if (self.break_progress >= 1.0) {
+        // Check if tool can harvest (requires_tool check)
+        const can_harvest = !BlockState.requiresTool(block_state) or (tool_multiplier > 1.0);
+        if (!can_harvest) {
+            // Break the block but don't drop it
+            self.breakBlockNoDrop();
+        } else {
+            self.breakBlock();
+        }
+
+        // Durability cost
+        if (held_slot.isTool()) {
+            const slot = &self.playerInv().hotbar[self.selected_slot];
+            if (slot.durability > 1) {
+                slot.durability -= 1;
+            } else {
+                slot.* = Entity.ItemStack.EMPTY;
+            }
+        }
+
+        self.break_progress = 0;
+        self.breaking_pos = null;
+    }
+}
+
+fn updateAttackDamage(self: *GameState) void {
+    const held = self.playerInv().hotbar[self.selected_slot];
+    if (held.isTool()) {
+        if (Item.toolFromId(held.block)) |info| {
+            self.attack_damage = Item.baseAttackDamage(info.tool_type) + Item.tierStats(info.tier).attack_bonus;
+            return;
+        }
+    }
+    self.attack_damage = 1.0;
+}
+
 fn updateItemDrops(self: *GameState) void {
     const P = Entity.PLAYER;
     const player_pos = self.entities.pos[P];
@@ -925,7 +1052,11 @@ fn updateItemDrops(self: *GameState) void {
             const dy_min = dp[1] - (player_pos[1] + 1.8); // above player head
             const dy_max = dp[1] - (player_pos[1] - 0.5); // below player feet
             if (dx < 1.0 and dz < 1.0 and dy_min < 0.5 and dy_max > -0.5) {
-                const item = Entity.ItemStack.of(self.entities.item_block[i], self.entities.item_count[i]);
+                const item = Entity.ItemStack{
+                    .block = self.entities.item_block[i],
+                    .count = self.entities.item_count[i],
+                    .durability = self.entities.item_durability[i],
+                };
                 if (self.addToInventory(item)) {
                     // Spawn pickup ghost animation before despawning
                     self.spawnPickupGhost(i);
@@ -935,14 +1066,15 @@ fn updateItemDrops(self: *GameState) void {
             }
         }
 
-        // Merge nearby item drops of the same type
+        // Merge nearby item drops of the same type (skip tools — unique durability)
         // MC-style throttle: every 2 ticks if moving, every 40 ticks if stationary
         const merge_interval: u32 = if (self.entities.flags[i].on_ground) 40 else 2;
-        if (self.entities.item_count[i] < Entity.MAX_STACK and @mod(self.entities.age_ticks[i], merge_interval) == 0) {
+        if (!Item.isToolItem(self.entities.item_block[i]) and self.entities.item_count[i] < Entity.MAX_STACK and @mod(self.entities.age_ticks[i], merge_interval) == 0) {
             var j: u32 = 1;
             while (j < i) {
                 if (self.entities.kind[j] != .item_drop or
-                    self.entities.item_block[j] != self.entities.item_block[i])
+                    self.entities.item_block[j] != self.entities.item_block[i] or
+                    Item.isToolItem(self.entities.item_block[j]))
                 {
                     j += 1;
                     continue;
@@ -1091,7 +1223,15 @@ fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: 
     self.markDirty(wx, wy, wz, true);
 }
 
+fn breakBlockNoDrop(self: *GameState) void {
+    self.breakBlockImpl(false);
+}
+
 pub fn breakBlock(self: *GameState) void {
+    self.breakBlockImpl(true);
+}
+
+fn breakBlockImpl(self: *GameState, allow_drop: bool) void {
     self.swing_requested = true;
     const hit = self.hit_result orelse return;
     const wx = hit.block_pos[0];
@@ -1103,7 +1243,7 @@ pub fn breakBlock(self: *GameState) void {
 
     // Don't drop bedrock or water
     const drop_block = BlockState.getBlock(old_block);
-    const should_drop = drop_block != .bedrock and drop_block != .water and drop_block != .air;
+    const should_drop = allow_drop and drop_block != .bedrock and drop_block != .water and drop_block != .air;
 
     // Door breaking: remove both halves
     if (BlockState.isDoor(old_block)) {
@@ -1386,6 +1526,7 @@ pub fn placeBlock(self: *GameState) void {
 
     const stack = &self.playerInv().hotbar[self.selected_slot];
     if (stack.isEmpty()) return;
+    if (stack.isTool()) return; // tools can't be placed as blocks
     var block_state = stack.block;
 
     // Double slab: placing a slab on a compatible existing slab merges into a full block
@@ -1490,9 +1631,9 @@ pub fn dropFromSlot(self: *GameState, slot: u8, drop_all: bool) void {
         epos[1] + EYE_OFFSET + forward.y * 0.5,
         epos[2] + forward.z * 0.5,
     };
-    const drop_count: u8 = if (drop_all) stack.count else 1;
+    const drop_count: u8 = if (drop_all or stack.isTool()) stack.count else 1;
     const prev_count = self.entities.count;
-    self.entities.spawnItemDrop(drop_pos, stack.block, drop_count);
+    self.entities.spawnItemDropWithDurability(drop_pos, stack.block, drop_count, stack.durability);
     if (self.entities.count <= prev_count) return;
 
     const last = self.entities.count - 1;
@@ -1526,9 +1667,26 @@ pub fn addToInventory(self: *GameState, item: Entity.ItemStack) bool {
     var remaining = item.count;
     const inv = self.playerInv();
 
+    // Tools go to first empty slot only (no merge — unique durability)
+    if (item.isTool()) {
+        for (&inv.hotbar) |*s| {
+            if (s.isEmpty()) {
+                s.* = item;
+                return true;
+            }
+        }
+        for (&inv.main) |*s| {
+            if (s.isEmpty()) {
+                s.* = item;
+                return true;
+            }
+        }
+        return false;
+    }
+
     // First pass: merge into existing matching stacks (hotbar then main)
     for (&inv.hotbar) |*s| {
-        if (!s.isEmpty() and s.block == item.block and s.count < Entity.MAX_STACK) {
+        if (!s.isEmpty() and !s.isTool() and s.block == item.block and s.count < Entity.MAX_STACK) {
             const transfer = @min(Entity.MAX_STACK - s.count, remaining);
             s.count += transfer;
             remaining -= transfer;
@@ -1536,7 +1694,7 @@ pub fn addToInventory(self: *GameState, item: Entity.ItemStack) bool {
         }
     }
     for (&inv.main) |*s| {
-        if (!s.isEmpty() and s.block == item.block and s.count < Entity.MAX_STACK) {
+        if (!s.isEmpty() and !s.isTool() and s.block == item.block and s.count < Entity.MAX_STACK) {
             const transfer = @min(Entity.MAX_STACK - s.count, remaining);
             s.count += transfer;
             remaining -= transfer;
@@ -1582,7 +1740,18 @@ pub fn pickBlock(self: *GameState) void {
     if (self.game_mode == .survival) return;
 
     // Creative: replace the current slot with a full stack
-    inv.hotbar[self.selected_slot] = .{ .block = block_state, .count = Entity.MAX_STACK };
+    // If current slot holds a tool, find first non-tool slot instead
+    var target_slot = self.selected_slot;
+    if (inv.hotbar[target_slot].isTool()) {
+        for (inv.hotbar, 0..) |s, idx| {
+            if (!s.isTool()) {
+                target_slot = @intCast(idx);
+                break;
+            }
+        }
+    }
+    inv.hotbar[target_slot] = .{ .block = block_state, .count = Entity.MAX_STACK };
+    self.selected_slot = target_slot;
 }
 
 /// Sample block light (RGB) and sky light at a world position with
