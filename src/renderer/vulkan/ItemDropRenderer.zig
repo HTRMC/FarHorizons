@@ -17,6 +17,9 @@ const CUBE_VERTICES = 36;
 // Layout: 24 side verts (4 faces) then 12 top/bottom verts (2 faces)
 const SIDE_VERTS = 24;
 const TOPBOT_VERTS = 12;
+// Extra space after cube for shaped block quads (up to 64 faces × 6 verts)
+const MAX_SHAPE_VERTS = 64 * 6;
+const TOTAL_BUFFER_VERTS = CUBE_VERTICES + MAX_SHAPE_VERTS;
 
 const PushConstants = extern struct {
     mvp: [16]f32, // 64 bytes
@@ -127,32 +130,161 @@ pub const ItemDropRenderer = struct {
             const block_light = [3]f32{ light[0], light[1], light[2] };
             const sky_level = light[3];
 
-            // Get texture indices for this block
-            const tex = BlockState.blockTexIndices(gs.entities.item_block[i]);
+            const item_block = gs.entities.item_block[i];
+            const display_state = BlockState.getDisplayState(item_block);
 
-            // Draw 4 side faces with side texture
-            const pc_side = PushConstants{
+            if (BlockState.isShaped(display_state)) {
+                self.drawShapedDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, display_state);
+            } else {
+                self.drawCubeDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, item_block);
+            }
+        }
+    }
+
+    fn drawCubeDrop(
+        self: *const ItemDropRenderer,
+        command_buffer: vk.VkCommandBuffer,
+        drop_mvp: zlm.Mat4,
+        ambient_light: [3]f32,
+        sky_level: f32,
+        block_light: [3]f32,
+        contrast: f32,
+        item_block: BlockState.StateId,
+    ) void {
+        const tex = BlockState.blockTexIndices(item_block);
+
+        // Draw 4 side faces with side texture
+        const pc_side = PushConstants{
+            .mvp = drop_mvp.m,
+            .tex_layer = tex.side,
+            .contrast = contrast,
+            .ambient_light = ambient_light,
+            .sky_level = sky_level,
+            .block_light = block_light,
+        };
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_side));
+        vk.cmdDraw(command_buffer, SIDE_VERTS, 1, 0, 0);
+
+        // Draw top + bottom with top texture
+        const pc_top = PushConstants{
+            .mvp = drop_mvp.m,
+            .tex_layer = tex.top,
+            .contrast = contrast,
+            .ambient_light = ambient_light,
+            .sky_level = sky_level,
+            .block_light = block_light,
+        };
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
+        vk.cmdDraw(command_buffer, TOPBOT_VERTS, 1, SIDE_VERTS, 0);
+    }
+
+    fn drawShapedDrop(
+        self: *const ItemDropRenderer,
+        command_buffer: vk.VkCommandBuffer,
+        drop_mvp: zlm.Mat4,
+        ambient_light: [3]f32,
+        sky_level: f32,
+        block_light: [3]f32,
+        contrast: f32,
+        display_state: BlockState.StateId,
+    ) void {
+        const vertices: [*]EntityVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
+
+        const shape_faces = WorldState.getShapeFaces(display_state);
+        const tex_indices = WorldState.getShapedTexIndices(display_state);
+        if (shape_faces.len == 0) return;
+
+        const block = BlockState.getBlock(display_state);
+        const is_torch = block == .torch;
+
+        // Write shaped model vertices into buffer after the cube
+        var vert_count: u32 = CUBE_VERTICES;
+
+        // Track runs of consecutive faces with the same texture for batched draws
+        const RunInfo = struct { start: u32, count: u32, tex: u8 };
+        var runs: [64]RunInfo = undefined;
+        var run_count: usize = 0;
+
+        for (shape_faces, 0..) |sf, sf_idx| {
+            const mi = sf.model_index;
+            var corners: [4][3]f32 = undefined;
+            var uvs: [4][2]f32 = undefined;
+            var normal: [3]f32 = undefined;
+
+            if (mi < WorldState.EXTRA_MODEL_BASE) {
+                if (mi < 6) {
+                    const n = WorldState.face_neighbor_offsets[mi];
+                    normal = .{ @floatFromInt(n[0]), @floatFromInt(n[1]), @floatFromInt(n[2]) };
+                    for (0..4) |ci| {
+                        const fv = WorldState.face_vertices[mi][ci];
+                        corners[ci] = .{ fv.px, fv.py, fv.pz };
+                        uvs[ci] = .{ fv.u, fv.v };
+                    }
+                } else {
+                    continue; // water models 6-11, skip
+                }
+            } else {
+                const em = WorldState.getRegistry().extra_models[@as(usize, mi) - WorldState.EXTRA_MODEL_BASE];
+                corners = em.corners;
+                uvs = em.uvs;
+                normal = em.normal;
+            }
+
+            // Skip cross quads for torch (diagonal flames look bad as a tiny spinning item)
+            if (is_torch) {
+                if (@abs(normal[0]) > 0.1 and @abs(normal[2]) > 0.1) continue;
+            }
+
+            if (vert_count + 6 > TOTAL_BUFFER_VERTS) break;
+
+            const face_tex: u8 = if (sf_idx < tex_indices.len) tex_indices[sf_idx] else 0;
+
+            // Center the model: shift from [0,1] to [-0.5,0.5]
+            const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = normal[0], .ny = normal[1], .nz = normal[2], .u = 0, .v = 0 };
+            var va = base;
+            va.px = corners[0][0] - 0.5; va.py = corners[0][1] - 0.5; va.pz = corners[0][2] - 0.5;
+            va.u = uvs[0][0]; va.v = uvs[0][1];
+            var vb = base;
+            vb.px = corners[1][0] - 0.5; vb.py = corners[1][1] - 0.5; vb.pz = corners[1][2] - 0.5;
+            vb.u = uvs[1][0]; vb.v = uvs[1][1];
+            var vc = base;
+            vc.px = corners[2][0] - 0.5; vc.py = corners[2][1] - 0.5; vc.pz = corners[2][2] - 0.5;
+            vc.u = uvs[2][0]; vc.v = uvs[2][1];
+            var vd = base;
+            vd.px = corners[3][0] - 0.5; vd.py = corners[3][1] - 0.5; vd.pz = corners[3][2] - 0.5;
+            vd.u = uvs[3][0]; vd.v = uvs[3][1];
+
+            vertices[vert_count + 0] = va;
+            vertices[vert_count + 1] = vb;
+            vertices[vert_count + 2] = vc;
+            vertices[vert_count + 3] = va;
+            vertices[vert_count + 4] = vc;
+            vertices[vert_count + 5] = vd;
+
+            // Try to extend the current run if same texture
+            if (run_count > 0 and runs[run_count - 1].tex == face_tex) {
+                runs[run_count - 1].count += 6;
+            } else {
+                if (run_count >= 64) break;
+                runs[run_count] = .{ .start = vert_count, .count = 6, .tex = face_tex };
+                run_count += 1;
+            }
+
+            vert_count += 6;
+        }
+
+        // Issue draw calls per texture run
+        for (0..run_count) |r| {
+            const pc = PushConstants{
                 .mvp = drop_mvp.m,
-                .tex_layer = tex.side,
+                .tex_layer = @intCast(runs[r].tex),
                 .contrast = contrast,
                 .ambient_light = ambient_light,
                 .sky_level = sky_level,
                 .block_light = block_light,
             };
-            vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_side));
-            vk.cmdDraw(command_buffer, SIDE_VERTS, 1, 0, 0);
-
-            // Draw top + bottom with top texture
-            const pc_top = PushConstants{
-                .mvp = drop_mvp.m,
-                .tex_layer = tex.top,
-                .contrast = contrast,
-                .ambient_light = ambient_light,
-                .sky_level = sky_level,
-                .block_light = block_light,
-            };
-            vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
-            vk.cmdDraw(command_buffer, TOPBOT_VERTS, 1, SIDE_VERTS, 0);
+            vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
+            vk.cmdDraw(command_buffer, runs[r].count, 1, runs[r].start, 0);
         }
     }
 
@@ -205,7 +337,7 @@ pub const ItemDropRenderer = struct {
     }
 
     fn createResources(self: *ItemDropRenderer, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator, block_tex_view: vk.VkImageView, block_tex_sampler: vk.VkSampler) !void {
-        const buffer_size: vk.VkDeviceSize = CUBE_VERTICES * @sizeOf(EntityVertex);
+        const buffer_size: vk.VkDeviceSize = TOTAL_BUFFER_VERTS * @sizeOf(EntityVertex);
         self.vertex_alloc = try gpu_alloc.createBuffer(
             buffer_size,
             vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -275,7 +407,7 @@ pub const ItemDropRenderer = struct {
         const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, .pNext = null, .flags = 0, .vertexBindingDescriptionCount = 0, .pVertexBindingDescriptions = null, .vertexAttributeDescriptionCount = 0, .pVertexAttributeDescriptions = null };
         const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .pNext = null, .flags = 0, .topology = vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, .primitiveRestartEnable = vk.VK_FALSE };
         const viewport_state = vk.VkPipelineViewportStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .pNext = null, .flags = 0, .viewportCount = 1, .pViewports = null, .scissorCount = 1, .pScissors = null };
-        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .pNext = null, .flags = 0, .depthClampEnable = vk.VK_FALSE, .rasterizerDiscardEnable = vk.VK_FALSE, .polygonMode = vk.VK_POLYGON_MODE_FILL, .cullMode = vk.VK_CULL_MODE_BACK_BIT, .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE, .depthBiasEnable = vk.VK_FALSE, .depthBiasConstantFactor = 0, .depthBiasClamp = 0, .depthBiasSlopeFactor = 0, .lineWidth = 1 };
+        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .pNext = null, .flags = 0, .depthClampEnable = vk.VK_FALSE, .rasterizerDiscardEnable = vk.VK_FALSE, .polygonMode = vk.VK_POLYGON_MODE_FILL, .cullMode = vk.VK_CULL_MODE_NONE, .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE, .depthBiasEnable = vk.VK_FALSE, .depthBiasConstantFactor = 0, .depthBiasClamp = 0, .depthBiasSlopeFactor = 0, .lineWidth = 1 };
         const multisampling = vk.VkPipelineMultisampleStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .pNext = null, .flags = 0, .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT, .sampleShadingEnable = vk.VK_FALSE, .minSampleShading = 1, .pSampleMask = null, .alphaToCoverageEnable = vk.VK_FALSE, .alphaToOneEnable = vk.VK_FALSE };
         const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, .pNext = null, .flags = 0, .depthTestEnable = vk.VK_TRUE, .depthWriteEnable = vk.VK_TRUE, .depthCompareOp = vk.VK_COMPARE_OP_LESS, .depthBoundsTestEnable = vk.VK_FALSE, .stencilTestEnable = vk.VK_FALSE, .front = std.mem.zeroes(vk.VkStencilOpState), .back = std.mem.zeroes(vk.VkStencilOpState), .minDepthBounds = 0, .maxDepthBounds = 1 };
         const blend_att = vk.VkPipelineColorBlendAttachmentState{ .blendEnable = vk.VK_FALSE, .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE, .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO, .colorBlendOp = vk.VK_BLEND_OP_ADD, .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE, .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO, .alphaBlendOp = vk.VK_BLEND_OP_ADD, .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT };
