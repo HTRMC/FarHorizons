@@ -463,6 +463,8 @@ fn loadWorldType(io: Io, allocator: std.mem.Allocator, world_dir: []const u8) Wo
 
 const BinaryTag = @import("../../BinaryTag.zig");
 
+const Entity = @import("../../Entity.zig");
+
 pub const PlayerData = struct {
     x: f32,
     y: f32,
@@ -472,6 +474,7 @@ pub const PlayerData = struct {
     game_mode: @import("../../GameState.zig").GameMode = .creative,
     health: f32 = 20.0,
     air_supply: u16 = 300,
+    inventory: ?*Entity.Inventory = null,
 };
 
 /// Singleplayer placeholder UUID. Replace with real UUID when auth is added.
@@ -488,6 +491,47 @@ pub fn loadPlayerData(self: *const Storage, uuid: []const u8) ?PlayerData {
     const r = BinaryTag.Reader.init(data);
     const GameMode = @import("../../GameState.zig").GameMode;
     const gm_raw: u8 = @bitCast(r.getI8("game_mode") orelse 0);
+
+    // Deserialize inventory if present
+    var inv_ptr: ?*Entity.Inventory = null;
+    if (r.getBytes("inventory")) |bytes| {
+        const TOTAL_SLOTS: u16 = @as(u16, Entity.HOTBAR_SIZE) + Entity.INV_SIZE + Entity.ARMOR_SLOTS + Entity.EQUIP_SLOTS + 1;
+        if (bytes.len >= TOTAL_SLOTS * 5) {
+            const inv = self.allocator.create(Entity.Inventory) catch null;
+            if (inv) |inventory| {
+                var offset: usize = 0;
+                for (&inventory.hotbar) |*s| {
+                    s.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                    s.count = bytes[offset + 2];
+                    s.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
+                    offset += 5;
+                }
+                for (&inventory.main) |*s| {
+                    s.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                    s.count = bytes[offset + 2];
+                    s.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
+                    offset += 5;
+                }
+                for (&inventory.armor) |*s| {
+                    s.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                    s.count = bytes[offset + 2];
+                    s.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
+                    offset += 5;
+                }
+                for (&inventory.equip) |*s| {
+                    s.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                    s.count = bytes[offset + 2];
+                    s.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
+                    offset += 5;
+                }
+                inventory.offhand.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                inventory.offhand.count = bytes[offset + 2];
+                inventory.offhand.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
+                inv_ptr = inventory;
+            }
+        }
+    }
+
     return .{
         .x = r.getF32("x") orelse return null,
         .y = r.getF32("y") orelse return null,
@@ -497,6 +541,7 @@ pub fn loadPlayerData(self: *const Storage, uuid: []const u8) ?PlayerData {
         .game_mode = if (gm_raw == 1) GameMode.survival else GameMode.creative,
         .health = r.getF32("health") orelse 20.0,
         .air_supply = @intCast(@as(u32, @bitCast(r.getI32("air_supply") orelse 300))),
+        .inventory = inv_ptr,
     };
 }
 
@@ -515,6 +560,21 @@ pub fn savePlayerData(self: *const Storage, uuid: []const u8, data: PlayerData) 
     w.putI8("game_mode", @bitCast(@intFromEnum(data.game_mode)));
     w.putF32("health", data.health);
     w.putI32("air_supply", @bitCast(@as(u32, data.air_supply)));
+
+    // Serialize inventory: 54 slots × 5 bytes (u16 id + u8 count + u16 durability)
+    if (data.inventory) |inv| {
+        const TOTAL_SLOTS: u16 = @as(u16, Entity.HOTBAR_SIZE) + Entity.INV_SIZE + Entity.ARMOR_SLOTS + Entity.EQUIP_SLOTS + 1;
+        var inv_buf: [TOTAL_SLOTS * 5]u8 = undefined;
+        var offset: usize = 0;
+        const slots = inv.hotbar ++ inv.main ++ inv.armor ++ inv.equip ++ [1]Entity.ItemStack{inv.offhand};
+        for (slots) |stack| {
+            std.mem.writeInt(u16, inv_buf[offset..][0..2], stack.block, .little);
+            inv_buf[offset + 2] = stack.count;
+            std.mem.writeInt(u16, inv_buf[offset + 3 ..][0..2], stack.durability, .little);
+            offset += 5;
+        }
+        w.putBytes("inventory", &inv_buf);
+    }
 
     const tag_data = w.toOwnedSlice() orelse return;
     defer self.allocator.free(tag_data);
