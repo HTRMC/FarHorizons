@@ -1142,28 +1142,34 @@ pub const MenuController = struct {
         }
     }
 
+    /// Resolve a widget ID to a unified inventory slot index.
+    fn resolveSlotFromWidget(self: *const MenuController, widget_id: WidgetId) ?u8 {
+        if (widget_id == NULL_WIDGET) return null;
+        for (self.inv_slot_ids, 0..) |id, i| {
+            if (id == widget_id) return @intCast(i); // hotbar: 0-8
+        }
+        for (self.inv_main_ids, 0..) |id, i| {
+            if (id == widget_id) return @as(u8, GameState.HOTBAR_SIZE) + @as(u8, @intCast(i)); // main: 9-44
+        }
+        for (self.inv_armor_ids, 0..) |id, i| {
+            if (id == widget_id) return @as(u8, GameState.HOTBAR_SIZE + GameState.INV_SIZE) + @as(u8, @intCast(i));
+        }
+        for (self.inv_equip_ids, 0..) |id, i| {
+            if (id == widget_id) return @as(u8, GameState.HOTBAR_SIZE + GameState.INV_SIZE + GameState.ARMOR_SLOTS) + @as(u8, @intCast(i));
+        }
+        if (self.inv_offhand_id == widget_id) return GameState.HOTBAR_SIZE + GameState.INV_SIZE + GameState.ARMOR_SLOTS + GameState.EQUIP_SLOTS;
+        return null;
+    }
+
+    /// Get the inventory slot index under the mouse cursor, if any.
+    pub fn hoveredSlot(self: *const MenuController) ?u8 {
+        return self.resolveSlotFromWidget(self.ui_manager.hover_widget);
+    }
+
     fn actionInvSlotClick(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
         const pressed = self.ui_manager.pressed_widget;
-        if (pressed == NULL_WIDGET) return;
-
-        // Resolve which unified slot index was clicked
-        const slot: ?u8 = blk: {
-            for (self.inv_slot_ids, 0..) |id, i| {
-                if (id == pressed) break :blk @intCast(i); // hotbar: 0-8
-            }
-            for (self.inv_main_ids, 0..) |id, i| {
-                if (id == pressed) break :blk @as(u8, GameState.HOTBAR_SIZE) + @as(u8, @intCast(i)); // main: 9-35
-            }
-            for (self.inv_armor_ids, 0..) |id, i| {
-                if (id == pressed) break :blk @as(u8, GameState.HOTBAR_SIZE + GameState.INV_SIZE) + @as(u8, @intCast(i)); // armor: 36-39
-            }
-            for (self.inv_equip_ids, 0..) |id, i| {
-                if (id == pressed) break :blk @as(u8, GameState.HOTBAR_SIZE + GameState.INV_SIZE + GameState.ARMOR_SLOTS) + @as(u8, @intCast(i)); // equip: 40-43
-            }
-            if (self.inv_offhand_id == pressed) break :blk GameState.HOTBAR_SIZE + GameState.INV_SIZE + GameState.ARMOR_SLOTS + GameState.EQUIP_SLOTS; // offhand: 44
-            break :blk null;
-        };
+        const slot = self.resolveSlotFromWidget(pressed);
 
         if (slot) |s| {
             if (self.game_state) |gs| {

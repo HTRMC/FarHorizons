@@ -210,6 +210,8 @@ const InputState = struct {
     f3_held: bool = false,
     f3_consumed: bool = false,
     debug_screen_toggle: ?u3 = null,
+    drop_key_held: bool = false,
+    drop_key_ctrl: bool = false,
     hotbar_scroll_delta: f32 = 0.0,
     hotbar_slot_requested: ?u8 = null,
     gamepad: Gamepad = .{},
@@ -310,6 +312,11 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 captureMouse(input_state);
                 return;
             }
+            // Track drop key held state for tick-based dropping
+            if (opts.keyMatches(.drop_item, key)) {
+                input_state.drop_key_held = (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT);
+                input_state.drop_key_ctrl = (mods & glfw.GLFW_MOD_CONTROL) != 0;
+            }
         },
         .playing => {
             if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
@@ -324,10 +331,10 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 return;
             }
 
-            if (opts.keyMatches(.drop_item, key) and action == glfw.GLFW_PRESS) {
-                if (input_state.game_state) |gs| {
-                    if (!gs.debug_camera_active) gs.dropSelectedItem();
-                }
+            // Track drop key held state for tick-based dropping
+            if (opts.keyMatches(.drop_item, key)) {
+                input_state.drop_key_held = (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT);
+                input_state.drop_key_ctrl = (mods & glfw.GLFW_MOD_CONTROL) != 0;
             }
 
             if (opts.keyMatches(.toggle_debug_camera, key) and action == glfw.GLFW_PRESS) {
@@ -978,6 +985,10 @@ pub fn main() !void {
                     if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
 
                     while (tick_accumulator >= GameState.TICK_INTERVAL) {
+                        // Poll drop key once per tick (MC-style: 1 drop per tick while held)
+                        if (input_state.drop_key_held and !gs.debug_camera_active) {
+                            gs.dropFromSlot(gs.selected_slot, input_state.drop_key_ctrl);
+                        }
                         gs.fixedUpdate(input_state.move_speed);
                         tick_accumulator -= GameState.TICK_INTERVAL;
                     }
@@ -993,6 +1004,24 @@ pub fn main() !void {
         // Update inventory (must run when app_state is .inventory, not .playing)
         if (menu_ctrl.app_state == .inventory) {
             if (game_state) |*gs| {
+                // Keep the world ticking while inventory is open
+                gs.input_move = .{ 0, 0, 0 };
+                gs.jump_requested = false;
+                tick_accumulator += delta_time;
+                if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
+                while (tick_accumulator >= GameState.TICK_INTERVAL) {
+                    // Poll drop key once per tick from hovered inventory slot
+                    if (input_state.drop_key_held) {
+                        if (menu_ctrl.hoveredSlot()) |slot| {
+                            gs.dropFromSlot(slot, input_state.drop_key_ctrl);
+                        }
+                    }
+                    gs.fixedUpdate(input_state.move_speed);
+                    tick_accumulator -= GameState.TICK_INTERVAL;
+                }
+                const alpha = tick_accumulator / GameState.TICK_INTERVAL;
+                gs.interpolateForRender(alpha);
+
                 menu_ctrl.updateInventory(gs);
                 menu_ctrl.updateHud(gs);
             }

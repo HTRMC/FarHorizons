@@ -674,25 +674,46 @@ pub fn takeDamage(self: *GameState, amount: f32) void {
     if (self.health <= 0.0) self.die();
 }
 
+fn dropInventoryWithScatter(self: *GameState, slots: []Entity.ItemStack, pos: [3]f32, random: std.Random) void {
+    for (slots) |*stack| {
+        if (!stack.isEmpty()) {
+            self.spawnScatterDrop(pos, stack.*, random);
+            stack.* = Entity.ItemStack.EMPTY;
+        }
+    }
+}
+
+fn spawnScatterDrop(self: *GameState, pos: [3]f32, item: Entity.ItemStack, random: std.Random) void {
+    const prev_count = self.entities.count;
+    self.entities.spawnItemDrop(pos, item.block, item.count);
+    if (self.entities.count <= prev_count) return;
+
+    // MC death scatter: random direction, random speed 0-0.5, upward 0.2
+    const last = self.entities.count - 1;
+    const speed = random.float(f32) * 0.5;
+    const angle = random.float(f32) * std.math.tau;
+    self.entities.vel[last] = .{
+        -@sin(angle) * speed,
+        0.2,
+        @cos(angle) * speed,
+    };
+    self.entities.pickup_cooldown[last] = 60; // 2s before pickup (longer than normal drops)
+}
+
 fn die(self: *GameState) void {
     const P = Entity.PLAYER;
     const death_pos = self.entities.pos[P];
     const inv = self.playerInv();
 
-    // Drop all inventory items as item entities
-    for (&inv.hotbar) |*stack| {
-        if (!stack.isEmpty()) {
-            self.entities.spawnItemDrop(death_pos, stack.block, stack.count);
-            stack.* = Entity.ItemStack.EMPTY;
-        }
+    // Drop all inventory items with MC-style random radial explosion
+    var rng = std.Random.DefaultPrng.init(@bitCast(self.game_time));
+    const random = rng.random();
+    self.dropInventoryWithScatter(&inv.hotbar, death_pos, random);
+    self.dropInventoryWithScatter(&inv.main, death_pos, random);
+    if (!inv.offhand.isEmpty()) {
+        self.spawnScatterDrop(death_pos, inv.offhand, random);
+        inv.offhand = Entity.ItemStack.EMPTY;
     }
-    for (&inv.main) |*stack| {
-        if (!stack.isEmpty()) {
-            self.entities.spawnItemDrop(death_pos, stack.block, stack.count);
-            stack.* = Entity.ItemStack.EMPTY;
-        }
-    }
-    inv.offhand = Entity.ItemStack.EMPTY;
 
     // Respawn at world spawn
     const spawn = findSpawn(self.world_seed);
@@ -1457,25 +1478,25 @@ pub fn placeBlock(self: *GameState) void {
     self.decrementSelectedStack();
 }
 
-/// Drop one item from the selected hotbar slot.
-pub fn dropSelectedItem(self: *GameState) void {
-    const stack = &self.playerInv().hotbar[self.selected_slot];
+/// Drop items from an arbitrary inventory slot. If `drop_all` is true, drops the entire stack.
+pub fn dropFromSlot(self: *GameState, slot: u8, drop_all: bool) void {
+    const stack = self.slotPtr(slot);
     if (stack.isEmpty()) return;
     if (self.entities.count >= Entity.MAX_ENTITIES) return;
 
     const P = Entity.PLAYER;
     const epos = self.entities.pos[P];
-    // Spawn in front of the player's eyes
     const forward = self.camera.getForward();
     const drop_pos = [3]f32{
         epos[0] + forward.x * 0.5,
         epos[1] + EYE_OFFSET + forward.y * 0.5,
         epos[2] + forward.z * 0.5,
     };
+    const drop_count: u8 = if (drop_all) stack.count else 1;
     const prev_count = self.entities.count;
-    self.entities.spawnItemDrop(drop_pos, stack.block, 1);
-    if (self.entities.count <= prev_count) return; // spawn failed
-    // Give the drop forward velocity
+    self.entities.spawnItemDrop(drop_pos, stack.block, drop_count);
+    if (self.entities.count <= prev_count) return;
+
     const last = self.entities.count - 1;
     self.entities.vel[last] = .{
         forward.x * 5.0,
@@ -1483,10 +1504,10 @@ pub fn dropSelectedItem(self: *GameState) void {
         forward.z * 5.0,
     };
 
-    if (stack.count > 1) {
-        stack.count -= 1;
-    } else {
+    if (drop_all or stack.count <= 1) {
         stack.* = Entity.ItemStack.EMPTY;
+    } else {
+        stack.count -= 1;
     }
 }
 
@@ -1559,7 +1580,10 @@ pub fn pickBlock(self: *GameState) void {
         }
     }
 
-    // Otherwise replace the current slot (creative pick: full stack)
+    // Survival: only select, never spawn items
+    if (self.game_mode == .survival) return;
+
+    // Creative: replace the current slot with a full stack
     inv.hotbar[self.selected_slot] = .{ .block = block_state, .count = Entity.MAX_STACK };
 }
 
