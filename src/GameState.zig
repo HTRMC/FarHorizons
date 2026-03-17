@@ -936,7 +936,9 @@ fn updateItemDrops(self: *GameState) void {
         }
 
         // Merge nearby item drops of the same type
-        if (self.entities.item_count[i] < Entity.MAX_STACK) {
+        // MC-style throttle: every 2 ticks if moving, every 40 ticks if stationary
+        const merge_interval: u32 = if (self.entities.flags[i].on_ground) 40 else 2;
+        if (self.entities.item_count[i] < Entity.MAX_STACK and @mod(self.entities.age_ticks[i], merge_interval) == 0) {
             var j: u32 = 1;
             while (j < i) {
                 if (self.entities.kind[j] != .item_drop or
@@ -951,19 +953,15 @@ fn updateItemDrops(self: *GameState) void {
                 const mdy = dp[1] - ip[1];
                 const mdz = dp[2] - ip[2];
                 if (mdx * mdx + mdy * mdy + mdz * mdz < MERGE_RADIUS * MERGE_RADIUS) {
-                    const space = Entity.MAX_STACK - self.entities.item_count[i];
+                    // Merge newer (i) into older (j) so the grounded item survives
+                    const space = Entity.MAX_STACK - self.entities.item_count[j];
                     if (space > 0) {
-                        const transfer = @min(space, self.entities.item_count[j]);
-                        self.entities.item_count[i] += transfer;
-                        self.entities.item_count[j] -= transfer;
-                        if (self.entities.item_count[j] == 0) {
-                            const was_last = (i == self.entities.count - 1);
-                            self.entities.despawn(j);
-                            if (was_last) {
-                                i = j;
-                                break;
-                            }
-                            continue;
+                        const transfer = @min(space, self.entities.item_count[i]);
+                        self.entities.item_count[j] += transfer;
+                        self.entities.item_count[i] -= transfer;
+                        if (self.entities.item_count[i] == 0) {
+                            self.entities.despawn(i);
+                            break; // i is gone, move on
                         }
                     }
                 }

@@ -212,6 +212,7 @@ const InputState = struct {
     debug_screen_toggle: ?u3 = null,
     drop_key_held: bool = false,
     drop_key_ctrl: bool = false,
+    drop_cooldown: u8 = 0,
     hotbar_scroll_delta: f32 = 0.0,
     hotbar_slot_requested: ?u8 = null,
     gamepad: Gamepad = .{},
@@ -985,9 +986,12 @@ pub fn main() !void {
                     if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
 
                     while (tick_accumulator >= GameState.TICK_INTERVAL) {
-                        // Poll drop key once per tick (MC-style: 1 drop per tick while held)
-                        if (input_state.drop_key_held and !gs.debug_camera_active) {
+                        // Poll drop key with cooldown (~50ms: every other tick at 30Hz)
+                        if (input_state.drop_cooldown > 0) {
+                            input_state.drop_cooldown -= 1;
+                        } else if (input_state.drop_key_held and !gs.debug_camera_active) {
                             gs.dropFromSlot(gs.selected_slot, input_state.drop_key_ctrl);
+                            input_state.drop_cooldown = 1;
                         }
                         gs.fixedUpdate(input_state.move_speed);
                         tick_accumulator -= GameState.TICK_INTERVAL;
@@ -1010,10 +1014,13 @@ pub fn main() !void {
                 tick_accumulator += delta_time;
                 if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
                 while (tick_accumulator >= GameState.TICK_INTERVAL) {
-                    // Poll drop key once per tick from hovered inventory slot
-                    if (input_state.drop_key_held) {
+                    // Poll drop key with cooldown (~50ms: every other tick at 30Hz)
+                    if (input_state.drop_cooldown > 0) {
+                        input_state.drop_cooldown -= 1;
+                    } else if (input_state.drop_key_held) {
                         if (menu_ctrl.hoveredSlot()) |slot| {
                             gs.dropFromSlot(slot, input_state.drop_key_ctrl);
+                            input_state.drop_cooldown = 1;
                         }
                     }
                     gs.fixedUpdate(input_state.move_speed);
