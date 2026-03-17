@@ -22,6 +22,7 @@ pub const HudBinder = struct {
     offhand_id: WidgetId = NULL_WIDGET,
     block_name_id: WidgetId = NULL_WIDGET,
     slot_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
+    count_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
 
     pub fn init(tree: *WidgetTree) HudBinder {
         var self = HudBinder{};
@@ -40,6 +41,9 @@ pub const HudBinder = struct {
                     data.panel.draw_isometric = true;
                 }
             }
+
+            const count_name = comptime std.fmt.comptimePrint("count_{d}", .{i});
+            self.count_ids[i] = tree.findById(count_name) orelse NULL_WIDGET;
         }
 
         return self;
@@ -71,9 +75,9 @@ pub const HudBinder = struct {
 
         for (0..HOTBAR_SIZE) |i| {
             const id = self.slot_ids[i];
+            const stack = gs.playerInv().hotbar[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
-                    const stack = gs.playerInv().hotbar[i];
                     if (!stack.isEmpty()) {
                         const c = GameState.blockColor(stack.block);
                         w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
@@ -85,6 +89,23 @@ pub const HudBinder = struct {
                         if (tree.getData(id)) |data| {
                             data.panel.block_state = BlockState.defaultState(.air);
                         }
+                    }
+                }
+            }
+
+            // Update stack count label
+            const cid = self.count_ids[i];
+            if (cid != NULL_WIDGET) {
+                if (tree.getWidget(cid)) |cw| {
+                    if (!stack.isEmpty() and stack.count > 1) {
+                        cw.visible = true;
+                        if (tree.getData(cid)) |data| {
+                            var buf: [4]u8 = undefined;
+                            const text = std.fmt.bufPrint(&buf, "{d}", .{stack.count}) catch "?";
+                            data.label.setText(text);
+                        }
+                    } else {
+                        cw.visible = false;
                     }
                 }
             }

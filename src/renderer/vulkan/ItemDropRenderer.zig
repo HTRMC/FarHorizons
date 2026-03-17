@@ -103,11 +103,12 @@ pub const ItemDropRenderer = struct {
             const sin_s = @sin(spin);
 
             // Model = translate * rotateY * scale
+            // Offset Y up by half the scaled height so the cube sits on the ground
             const model = zlm.Mat4{ .m = .{
                 cos_s * scale,  0,              sin_s * scale,  0,
                 0,              scale,          0,              0,
                 -sin_s * scale, 0,              cos_s * scale,  0,
-                pos[0],         pos[1],         pos[2],         1,
+                pos[0],         pos[1] + scale * 0.5, pos[2],  1,
             } };
 
             const drop_mvp = zlm.Mat4.mul(mvp, model);
