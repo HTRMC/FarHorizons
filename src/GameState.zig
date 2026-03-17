@@ -35,6 +35,17 @@ pub const INV_SIZE = Entity.INV_SIZE;
 pub const ARMOR_SLOTS = Entity.ARMOR_SLOTS;
 pub const EQUIP_SLOTS = Entity.EQUIP_SLOTS;
 
+pub const MAX_PICKUP_GHOSTS = 8;
+pub const PickupGhost = struct {
+    active: bool = false,
+    start_pos: [3]f32 = .{ 0, 0, 0 },
+    block: BlockState.StateId = 0,
+    item_count: u8 = 0,
+    bob_offset: f32 = 0,
+    age_ticks: u32 = 0,
+    tick: u8 = 0, // 0-2, animation lasts 3 ticks
+};
+
 // Day/night cycle: 36000 ticks at 30Hz = 20 minutes per full day
 pub const DAY_CYCLE: i64 = 36000;
 
@@ -247,6 +258,9 @@ saved_camera: Camera,
 selected_slot: u8 = 0,
 carried_item: Entity.ItemStack = Entity.ItemStack.EMPTY,
 inventory_open: bool = false,
+
+pickup_ghosts: [MAX_PICKUP_GHOSTS]PickupGhost = .{PickupGhost{}} ** MAX_PICKUP_GHOSTS,
+render_alpha: f32 = 0,
 
 world_seed: u64,
 world_type: WorldState.WorldType,
@@ -734,12 +748,15 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
 fn updateItemDrops(self: *GameState) void {
     const P = Entity.PLAYER;
     const player_pos = self.entities.pos[P];
-    const player_center = [3]f32{ player_pos[0], player_pos[1] + 0.9, player_pos[2] };
+    const MERGE_RADIUS: f32 = 1.0;
 
-    const ATTRACT_RADIUS: f32 = 2.0;
-    const COLLECT_RADIUS: f32 = 0.3;
-    const ATTRACT_SPEED: f32 = 5.0;
-    const MERGE_RADIUS: f32 = 0.5;
+    // Advance pickup ghost animations
+    for (&self.pickup_ghosts) |*ghost| {
+        if (ghost.active) {
+            ghost.tick += 1;
+            if (ghost.tick >= 3) ghost.active = false;
+        }
+    }
 
     // Iterate backwards so swap-remove is safe
     var i: u32 = self.entities.count;
@@ -763,13 +780,30 @@ fn updateItemDrops(self: *GameState) void {
         self.entities.prev_pos[i] = self.entities.pos[i];
         Physics.updateEntity(&self.entities, i, &self.chunk_map, .{ 0, 0, 0 }, 0, TICK_INTERVAL);
 
+        // AABB-based pickup (1.0 block horizontal, 0.5 block vertical from player feet to head)
+        if (self.entities.pickup_cooldown[i] == 0) {
+            const dp = self.entities.pos[i];
+            const dx = @abs(dp[0] - player_pos[0]);
+            const dz = @abs(dp[2] - player_pos[2]);
+            const dy_min = dp[1] - (player_pos[1] + 1.8); // above player head
+            const dy_max = dp[1] - (player_pos[1] - 0.5); // below player feet
+            if (dx < 1.0 and dz < 1.0 and dy_min < 0.5 and dy_max > -0.5) {
+                const item = Entity.ItemStack.of(self.entities.item_block[i], self.entities.item_count[i]);
+                if (self.addToInventory(item)) {
+                    // Spawn pickup ghost animation before despawning
+                    self.spawnPickupGhost(i);
+                    self.entities.despawn(i);
+                    continue;
+                }
+            }
+        }
+
         // Merge nearby item drops of the same type
-        if (self.entities.pickup_cooldown[i] == 0 and self.entities.item_count[i] < Entity.MAX_STACK) {
+        if (self.entities.item_count[i] < Entity.MAX_STACK) {
             var j: u32 = 1;
             while (j < i) {
                 if (self.entities.kind[j] != .item_drop or
-                    self.entities.item_block[j] != self.entities.item_block[i] or
-                    self.entities.pickup_cooldown[j] > 0)
+                    self.entities.item_block[j] != self.entities.item_block[i])
                 {
                     j += 1;
                     continue;
@@ -786,14 +820,12 @@ fn updateItemDrops(self: *GameState) void {
                         self.entities.item_count[i] += transfer;
                         self.entities.item_count[j] -= transfer;
                         if (self.entities.item_count[j] == 0) {
-                            // If i is the last entity, swap-remove will move it to j
                             const was_last = (i == self.entities.count - 1);
                             self.entities.despawn(j);
                             if (was_last) {
-                                i = j; // entity i was moved to slot j
-                                break; // restart merge scan would be complex; just break
+                                i = j;
+                                break;
                             }
-                            // j now has a different entity; don't increment
                             continue;
                         }
                     }
@@ -801,36 +833,36 @@ fn updateItemDrops(self: *GameState) void {
                 j += 1;
             }
         }
-
-        // Pickup: attract toward player, collect when close
-        if (self.entities.pickup_cooldown[i] == 0) {
-            const dp = self.entities.pos[i];
-            const dx = dp[0] - player_center[0];
-            const dy = dp[1] - player_center[1];
-            const dz = dp[2] - player_center[2];
-            const dist_sq = dx * dx + dy * dy + dz * dz;
-
-            if (dist_sq < COLLECT_RADIUS * COLLECT_RADIUS) {
-                // Close enough to collect
-                const item = Entity.ItemStack.of(self.entities.item_block[i], self.entities.item_count[i]);
-                if (self.addToInventory(item)) {
-                    self.entities.despawn(i);
-                }
-            } else if (dist_sq < ATTRACT_RADIUS * ATTRACT_RADIUS) {
-                // Attract toward player
-                const dist = @sqrt(dist_sq);
-                const inv_dist = ATTRACT_SPEED / dist;
-                self.entities.vel[i] = .{
-                    -dx * inv_dist,
-                    -dy * inv_dist,
-                    -dz * inv_dist,
-                };
-            }
-        }
     }
 }
 
+fn spawnPickupGhost(self: *GameState, entity_idx: u32) void {
+    // Find first inactive slot (or oldest if all active)
+    var best: usize = 0;
+    var best_tick: u8 = 0;
+    for (self.pickup_ghosts, 0..) |ghost, idx| {
+        if (!ghost.active) {
+            best = idx;
+            break;
+        }
+        if (ghost.tick > best_tick) {
+            best_tick = ghost.tick;
+            best = idx;
+        }
+    }
+    self.pickup_ghosts[best] = .{
+        .active = true,
+        .start_pos = self.entities.render_pos[entity_idx],
+        .block = self.entities.item_block[entity_idx],
+        .item_count = self.entities.item_count[entity_idx],
+        .bob_offset = self.entities.bob_offset[entity_idx],
+        .age_ticks = self.entities.age_ticks[entity_idx],
+        .tick = 0,
+    };
+}
+
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
+    self.render_alpha = alpha;
     const P = Entity.PLAYER;
     self.tick_camera_pos = self.camera.position;
     // Interpolate all entities

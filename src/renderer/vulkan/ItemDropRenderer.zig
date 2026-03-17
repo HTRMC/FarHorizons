@@ -83,12 +83,17 @@ pub const ItemDropRenderer = struct {
         ambient_light: [3]f32,
         sun_dir: [3]f32,
     ) void {
-        // Count item drops
-        var drop_count: u32 = 0;
+        // Count item drops and active ghosts
+        var has_work = false;
         for (1..gs.entities.count) |i| {
-            if (gs.entities.kind[i] == .item_drop) drop_count += 1;
+            if (gs.entities.kind[i] == .item_drop) { has_work = true; break; }
         }
-        if (drop_count == 0) return;
+        if (!has_work) {
+            for (gs.pickup_ghosts) |ghost| {
+                if (ghost.active) { has_work = true; break; }
+            }
+        }
+        if (!has_work) return;
 
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
         vk.cmdBindDescriptorSets(
@@ -105,6 +110,7 @@ pub const ItemDropRenderer = struct {
         _ = sun_dir;
         const contrast: f32 = 0.0;
 
+        // Draw live item drops
         for (1..gs.entities.count) |i| {
             if (gs.entities.kind[i] != .item_drop) continue;
 
@@ -120,23 +126,18 @@ pub const ItemDropRenderer = struct {
             const is_shaped = BlockState.isShaped(display_state);
             const item_count = gs.entities.item_count[i];
 
-            // Shaped blocks (torch, ladder, etc.) get a larger scale since their
-            // model geometry is already smaller than a full cube
             const scale: f32 = if (is_shaped) 0.35 else 0.25;
 
             const cos_s = @cos(spin);
             const sin_s = @sin(spin);
 
-            // Sample light at drop position
             const center_y = pos[1] + bob + scale * 0.5;
             const light = gs.sampleLightAt(pos[0], center_y, pos[2]);
             const block_light = [3]f32{ light[0], light[1], light[2] };
             const sky_level = light[3];
 
-            // Number of copies to render based on stack count (Minecraft-style)
             const render_count: u32 = if (item_count <= 1) 1 else if (item_count <= 16) 2 else if (item_count <= 32) 3 else if (item_count <= 48) 4 else 5;
 
-            // Deterministic offsets for stacked copies using a simple hash
             var seed: u32 = @as(u32, @bitCast(@as(i32, @intFromFloat(pos[0] * 100.0)))) +% @as(u32, @bitCast(@as(i32, @intFromFloat(pos[2] * 100.0)))) *% 7;
 
             for (0..render_count) |copy| {
@@ -144,7 +145,6 @@ pub const ItemDropRenderer = struct {
                 var oy: f32 = 0;
                 var oz: f32 = 0;
                 if (copy > 0) {
-                    // Random-ish offsets for extra copies (±0.15 * scale)
                     ox = hashFloat(&seed) * 0.15 * scale;
                     oy = hashFloat(&seed) * 0.15 * scale;
                     oz = hashFloat(&seed) * 0.15 * scale;
@@ -159,11 +159,56 @@ pub const ItemDropRenderer = struct {
 
                 const drop_mvp = zlm.Mat4.mul(mvp, model);
 
-                if (BlockState.isShaped(display_state)) {
+                if (is_shaped) {
                     self.drawShapedDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, display_state);
                 } else {
                     self.drawCubeDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, item_block);
                 }
+            }
+        }
+
+        // Draw pickup ghost animations (items flying to player)
+        const player_pos = gs.entities.render_pos[0];
+        const player_target = [3]f32{ player_pos[0], player_pos[1] + 0.9, player_pos[2] };
+
+        for (gs.pickup_ghosts) |ghost| {
+            if (!ghost.active) continue;
+
+            // Quadratic easing: t goes 0→1 over 3 ticks, interpolated with render alpha
+            const t: f32 = (@as(f32, @floatFromInt(ghost.tick)) + gs.render_alpha) / 3.0;
+            const eased = t * t;
+
+            // Lerp from start position to player
+            const gx = ghost.start_pos[0] + (player_target[0] - ghost.start_pos[0]) * eased;
+            const gy = ghost.start_pos[1] + (player_target[1] - ghost.start_pos[1]) * eased;
+            const gz = ghost.start_pos[2] + (player_target[2] - ghost.start_pos[2]) * eased;
+
+            const display_state = BlockState.getDisplayState(ghost.block);
+            const is_shaped = BlockState.isShaped(display_state);
+            const scale: f32 = (if (is_shaped) @as(f32, 0.35) else @as(f32, 0.25)) * (1.0 - eased * 0.5);
+
+            const age_f: f32 = @floatFromInt(ghost.age_ticks);
+            const spin = age_f / 20.0 + ghost.bob_offset;
+            const cos_s = @cos(spin);
+            const sin_s = @sin(spin);
+
+            const light = gs.sampleLightAt(gx, gy, gz);
+            const block_light = [3]f32{ light[0], light[1], light[2] };
+            const sky_level = light[3];
+
+            const model = zlm.Mat4{ .m = .{
+                cos_s * scale,  0,              sin_s * scale,  0,
+                0,              scale,          0,              0,
+                -sin_s * scale, 0,              cos_s * scale,  0,
+                gx,             gy,             gz,             1,
+            } };
+
+            const drop_mvp = zlm.Mat4.mul(mvp, model);
+
+            if (is_shaped) {
+                self.drawShapedDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, display_state);
+            } else {
+                self.drawCubeDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, ghost.block);
             }
         }
     }
