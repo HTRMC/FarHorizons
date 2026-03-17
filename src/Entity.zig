@@ -1,6 +1,7 @@
 const std = @import("std");
 const WorldState = @import("world/WorldState.zig");
 const BlockState = WorldState.BlockState;
+pub const Item = @import("Item.zig");
 
 pub const EntityId = u32;
 pub const PLAYER: EntityId = 0;
@@ -39,15 +40,34 @@ pub const MAX_STACK: u8 = 64;
 pub const ItemStack = struct {
     block: BlockState.StateId = BlockState.defaultState(.air),
     count: u8 = 0,
+    durability: u16 = 0,
 
     pub const EMPTY: ItemStack = .{};
 
     pub fn isEmpty(self: ItemStack) bool {
-        return self.count == 0 or BlockState.getBlock(self.block) == .air;
+        if (self.count == 0) return true;
+        if (self.isTool()) return false;
+        return BlockState.getBlock(self.block) == .air;
+    }
+
+    pub fn isTool(self: ItemStack) bool {
+        return Item.isToolItem(self.block);
+    }
+
+    pub fn maxStack(self: ItemStack) u8 {
+        return if (self.isTool()) 1 else MAX_STACK;
     }
 
     pub fn of(block: BlockState.StateId, count: u8) ItemStack {
         return .{ .block = block, .count = count };
+    }
+
+    pub fn ofTool(tool_type: Item.ToolType, tier: Item.ToolTier) ItemStack {
+        return .{
+            .block = Item.idFromTool(tool_type, tier),
+            .count = 1,
+            .durability = Item.tierStats(tier).durability,
+        };
     }
 };
 
@@ -78,6 +98,7 @@ pub const EntityStore = struct {
     // Item drop specific arrays
     item_block: [MAX_ENTITIES]BlockState.StateId = .{BlockState.defaultState(.air)} ** MAX_ENTITIES,
     item_count: [MAX_ENTITIES]u8 = .{0} ** MAX_ENTITIES,
+    item_durability: [MAX_ENTITIES]u16 = .{0} ** MAX_ENTITIES,
     age_ticks: [MAX_ENTITIES]u32 = .{0} ** MAX_ENTITIES,
     pickup_cooldown: [MAX_ENTITIES]u8 = .{0} ** MAX_ENTITIES,
     bob_offset: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
@@ -99,6 +120,7 @@ pub const EntityStore = struct {
         self.inventory[id] = null;
         self.item_block[id] = BlockState.defaultState(.air);
         self.item_count[id] = 0;
+        self.item_durability[id] = 0;
         self.age_ticks[id] = 0;
         self.pickup_cooldown[id] = 0;
         self.bob_offset[id] = 0;
@@ -108,6 +130,10 @@ pub const EntityStore = struct {
 
     /// Spawn an item drop entity at a position with upward velocity.
     pub fn spawnItemDrop(self: *EntityStore, drop_pos: [3]f32, block: BlockState.StateId, count: u8) void {
+        self.spawnItemDropWithDurability(drop_pos, block, count, 0);
+    }
+
+    pub fn spawnItemDropWithDurability(self: *EntityStore, drop_pos: [3]f32, block: BlockState.StateId, count: u8, durability: u16) void {
         if (self.count >= MAX_ENTITIES) return;
         const id = self.spawn(.item_drop, drop_pos);
         self.physics[id] = .{
@@ -121,6 +147,7 @@ pub const EntityStore = struct {
         self.vel[id] = .{ 0.0, 4.0, 0.0 };
         self.item_block[id] = block;
         self.item_count[id] = count;
+        self.item_durability[id] = durability;
         self.age_ticks[id] = 0;
         self.pickup_cooldown[id] = PICKUP_COOLDOWN;
         // Unique bob phase so nearby drops don't animate in sync
@@ -148,6 +175,7 @@ pub const EntityStore = struct {
             self.inventory[id] = self.inventory[last];
             self.item_block[id] = self.item_block[last];
             self.item_count[id] = self.item_count[last];
+            self.item_durability[id] = self.item_durability[last];
             self.age_ticks[id] = self.age_ticks[last];
             self.pickup_cooldown[id] = self.pickup_cooldown[last];
             self.bob_offset[id] = self.bob_offset[last];
