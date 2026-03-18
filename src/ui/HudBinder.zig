@@ -25,6 +25,9 @@ pub const HudBinder = struct {
     air_bar_id: WidgetId = NULL_WIDGET,
     slot_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
     count_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
+    block_name_timer: f32 = 0,
+    prev_selected_slot: u8 = 0,
+    prev_selected_block: u16 = 0,
 
     pub fn init(tree: *WidgetTree) HudBinder {
         var self = HudBinder{};
@@ -62,7 +65,7 @@ pub const HudBinder = struct {
         setImageAtlas(tree, self.offhand_id, ui_renderer.offhand_rect);
     }
 
-    pub fn update(self: *const HudBinder, tree: *WidgetTree, gs: *const GameState) void {
+    pub fn update(self: *HudBinder, tree: *WidgetTree, gs: *const GameState) void {
         // Hide crosshair in third person unless explicitly enabled
         if (self.crosshair_id != NULL_WIDGET) {
             if (tree.getWidget(self.crosshair_id)) |w| {
@@ -144,12 +147,37 @@ pub const HudBinder = struct {
 
         if (self.block_name_id != NULL_WIDGET) {
             const selected_stack = gs.playerInv().hotbar[gs.selected_slot];
-            if (tree.getWidget(self.block_name_id)) |w| {
-                w.visible = !selected_stack.isEmpty();
+            const cur_block = selected_stack.block;
+
+            // Reset timer when slot or item changes
+            if (gs.selected_slot != self.prev_selected_slot or cur_block != self.prev_selected_block) {
+                self.prev_selected_slot = gs.selected_slot;
+                self.prev_selected_block = cur_block;
+                if (!selected_stack.isEmpty()) {
+                    self.block_name_timer = 2.0;
+                }
             }
-            if (!selected_stack.isEmpty()) {
+
+            // Tick down the timer
+            if (self.block_name_timer > 0) {
+                self.block_name_timer -= gs.delta_time;
+                if (self.block_name_timer < 0) self.block_name_timer = 0;
+            }
+
+            const show = !selected_stack.isEmpty() and !gs.inventory_open and self.block_name_timer > 0;
+            if (tree.getWidget(self.block_name_id)) |w| {
+                w.visible = show;
+            }
+            if (show) {
                 if (tree.getData(self.block_name_id)) |data| {
-                    data.label.setText(GameState.itemName(selected_stack.block));
+                    data.label.setText(GameState.itemName(cur_block));
+                    // Fade out during last 0.5s
+                    const alpha: f32 = if (self.block_name_timer < 0.5)
+                        self.block_name_timer / 0.5
+                    else
+                        1.0;
+                    data.label.color.a = alpha * (230.0 / 255.0);
+                    data.label.shadow_color.a = alpha * (170.0 / 255.0);
                 }
             }
         }

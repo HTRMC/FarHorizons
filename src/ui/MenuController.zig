@@ -679,7 +679,8 @@ pub const MenuController = struct {
         self.app_state = .playing;
     }
 
-    pub fn showInventory(self: *MenuController) void {
+    pub fn showInventory(self: *MenuController, gs: *GameState) void {
+        gs.inventory_open = true;
         self.loadScreen(.inventory);
         self.app_state = .inventory;
     }
@@ -687,6 +688,7 @@ pub const MenuController = struct {
     pub fn hideInventory(self: *MenuController, gs: ?*GameState) void {
         // Return carried item to inventory when closing
         if (gs) |g| {
+            g.inventory_open = false;
             if (!g.carried_item.isEmpty()) {
                 _ = g.addToInventory(g.carried_item);
                 g.carried_item = GameState.Entity.ItemStack.EMPTY;
@@ -871,12 +873,12 @@ pub const MenuController = struct {
     }
 
     pub fn updateHud(self: *MenuController, gs: *const GameState) void {
-        const binder = self.hud_binder orelse return;
+        if (self.hud_binder == null) return;
         const tree = self.hudTree() orelse return;
         if (tree.getWidget(tree.root)) |root| {
             root.visible = gs.show_ui;
         }
-        binder.update(tree, gs);
+        (&self.hud_binder.?).update(tree, gs);
     }
 
     pub fn getSelectedWorldName(self: *const MenuController) []const u8 {
