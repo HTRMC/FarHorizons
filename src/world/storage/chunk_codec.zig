@@ -1,5 +1,6 @@
 const std = @import("std");
 const WorldState = @import("../WorldState.zig");
+const BlockState = WorldState.BlockState;
 const StateId = WorldState.StateId;
 const storage_types = @import("types.zig");
 
@@ -12,9 +13,75 @@ pub const Encoding = enum(u8) {
     single_block = 3,
 };
 
+const V1Encoding = enum(u8) {
+    raw = 0,
+    palette8 = 1,
+    single_block = 3,
+};
+
 
 const CODEC_HEADER_SIZE = 4;
 const CODEC_FORMAT_VERSION: u8 = 2;
+
+// Registry version tracks block enum/state layout changes within codec v2.
+// Bump this when adding, removing, or reordering blocks so old chunks can be migrated.
+// data[2] in the codec header stores this value.
+//   0 = initial v2 registry (current)
+// When bumping: add a migration function in the v2 migration section below.
+pub const REGISTRY_VERSION: u8 = 0;
+
+// V1 stored BlockType as u8. This table maps each old u8 value to the current StateId.
+// Old registry (34 blocks):
+//   0:air 1:glass 2:grass_block 3:dirt 4:stone 5:glowstone 6:sand 7:snow
+//   8:water 9:gravel 10:cobblestone 11:oak_log 12:oak_planks 13:bricks
+//   14:bedrock 15:gold_ore 16:iron_ore 17:coal_ore 18:diamond_ore 19:sponge
+//   20:pumice 21:wool 22:gold_block 23:iron_block 24:diamond_block 25:bookshelf
+//   26:obsidian 27:oak_leaves 28:oak_slab_bottom 29:oak_slab_top
+//   30:oak_stairs_south 31:oak_stairs_north 32:oak_stairs_east 33:oak_stairs_west
+const V1_BLOCK_COUNT = 34;
+const v1_to_v2: [V1_BLOCK_COUNT]StateId = blk: {
+    var table: [V1_BLOCK_COUNT]StateId = undefined;
+    table[0] = BlockState.defaultState(.air);
+    table[1] = BlockState.defaultState(.glass);
+    table[2] = BlockState.defaultState(.grass_block);
+    table[3] = BlockState.defaultState(.dirt);
+    table[4] = BlockState.defaultState(.stone);
+    table[5] = BlockState.defaultState(.glowstone);
+    table[6] = BlockState.defaultState(.sand);
+    table[7] = BlockState.defaultState(.snow);
+    table[8] = BlockState.defaultState(.water);
+    table[9] = BlockState.defaultState(.gravel);
+    table[10] = BlockState.defaultState(.cobblestone);
+    table[11] = BlockState.defaultState(.oak_log);
+    table[12] = BlockState.defaultState(.oak_planks);
+    table[13] = BlockState.defaultState(.bricks);
+    table[14] = BlockState.defaultState(.bedrock);
+    table[15] = BlockState.defaultState(.gold_ore);
+    table[16] = BlockState.defaultState(.iron_ore);
+    table[17] = BlockState.defaultState(.coal_ore);
+    table[18] = BlockState.defaultState(.diamond_ore);
+    table[19] = BlockState.defaultState(.sponge);
+    table[20] = BlockState.defaultState(.pumice);
+    table[21] = BlockState.defaultState(.wool);
+    table[22] = BlockState.defaultState(.gold_block);
+    table[23] = BlockState.defaultState(.iron_block);
+    table[24] = BlockState.defaultState(.diamond_block);
+    table[25] = BlockState.defaultState(.bookshelf);
+    table[26] = BlockState.defaultState(.obsidian);
+    table[27] = BlockState.defaultState(.oak_leaves);
+    table[28] = BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom));
+    table[29] = BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top));
+    table[30] = BlockState.makeStairState(.south, .bottom, .straight);
+    table[31] = BlockState.makeStairState(.north, .bottom, .straight);
+    table[32] = BlockState.makeStairState(.east, .bottom, .straight);
+    table[33] = BlockState.makeStairState(.west, .bottom, .straight);
+    break :blk table;
+};
+
+fn migrateV1(old: u8) StateId {
+    if (old < V1_BLOCK_COUNT) return v1_to_v2[old];
+    return 0; // unknown → air
+}
 
 
 pub const EncodeResult = struct {
@@ -49,7 +116,7 @@ fn encodeSingleBlock(allocator: std.mem.Allocator, state: StateId) !EncodeResult
     const data = try allocator.alloc(u8, CODEC_HEADER_SIZE + 2);
     data[0] = CODEC_FORMAT_VERSION;
     data[1] = @intFromEnum(Encoding.single_block);
-    data[2] = 0;
+    data[2] = REGISTRY_VERSION;
     data[3] = 0;
     // Store u16 little-endian
     std.mem.writeInt(u16, data[4..6], state, .little);
@@ -83,7 +150,7 @@ fn encodePalette16(
 
     data[0] = CODEC_FORMAT_VERSION;
     data[1] = @intFromEnum(Encoding.palette16);
-    data[2] = 0;
+    data[2] = REGISTRY_VERSION;
     data[3] = 0;
 
     data[4] = palette_size;
@@ -108,7 +175,7 @@ fn encodeRaw16(
 
     data[0] = CODEC_FORMAT_VERSION;
     data[1] = @intFromEnum(Encoding.raw16);
-    data[2] = 0;
+    data[2] = REGISTRY_VERSION;
     data[3] = 0;
 
     const block_bytes: [*]const u8 = @ptrCast(blocks);
@@ -127,6 +194,11 @@ pub const DecodeError = error{
 
 pub fn decode(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeError!void {
     if (data.len < CODEC_HEADER_SIZE) return error.DataTruncated;
+
+    if (data[0] == 1) {
+        return decodeV1(data, out_blocks);
+    }
+
     if (data[0] != CODEC_FORMAT_VERSION) return error.InvalidFormat;
 
     const raw_encoding = data[1];
@@ -183,9 +255,65 @@ fn decodeRaw16(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeE
 }
 
 
+// ---- V1 migration decoders (u8 BlockType → u16 StateId) ----
+
+fn decodeV1(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeError!void {
+    const raw_encoding = data[1];
+    const valid = inline for (@typeInfo(V1Encoding).@"enum".fields) |f| {
+        if (raw_encoding == f.value) break true;
+    } else false;
+    if (!valid) return error.UnknownEncoding;
+    const encoding: V1Encoding = @enumFromInt(raw_encoding);
+
+    switch (encoding) {
+        .single_block => decodeV1SingleBlock(data, out_blocks),
+        .palette8 => try decodeV1Palette8(data, out_blocks),
+        .raw => try decodeV1Raw(data, out_blocks),
+    }
+}
+
+fn decodeV1SingleBlock(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) void {
+    if (data.len < CODEC_HEADER_SIZE + 1) {
+        @memset(out_blocks, 0);
+        return;
+    }
+    @memset(out_blocks, migrateV1(data[4]));
+}
+
+fn decodeV1Palette8(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeError!void {
+    if (data.len < CODEC_HEADER_SIZE + 1) return error.DataTruncated;
+
+    const palette_size: usize = data[4];
+    if (palette_size == 0) return error.InvalidPalette;
+
+    const palette_end = 5 + palette_size;
+    if (data.len < palette_end) return error.DataTruncated;
+
+    const indices_end = palette_end + BLOCKS_PER_CHUNK;
+    if (data.len < indices_end) return error.DataTruncated;
+
+    var palette: [256]StateId = undefined;
+    for (0..palette_size) |i| {
+        palette[i] = migrateV1(data[5 + i]);
+    }
+
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        const idx = data[palette_end + i];
+        if (idx >= palette_size) return error.InvalidPalette;
+        out_blocks[i] = palette[idx];
+    }
+}
+
+fn decodeV1Raw(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeError!void {
+    if (data.len < CODEC_HEADER_SIZE + BLOCKS_PER_CHUNK) return error.DataTruncated;
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        out_blocks[i] = migrateV1(data[CODEC_HEADER_SIZE + i]);
+    }
+}
+
+
 test "single_block encode/decode round-trip" {
     const allocator = std.testing.allocator;
-    const BlockState = WorldState.BlockState;
 
     var blocks: [BLOCKS_PER_CHUNK]StateId = undefined;
     const stone = BlockState.defaultState(.stone);
@@ -207,7 +335,6 @@ test "single_block encode/decode round-trip" {
 
 test "palette16 encode/decode round-trip" {
     const allocator = std.testing.allocator;
-    const BlockState = WorldState.BlockState;
 
     var blocks: [BLOCKS_PER_CHUNK]StateId = undefined;
     const stone = BlockState.defaultState(.stone);
@@ -232,7 +359,6 @@ test "palette16 encode/decode round-trip" {
 
 test "air chunk encodes as single_block" {
     const allocator = std.testing.allocator;
-    const BlockState = WorldState.BlockState;
 
     var blocks: [BLOCKS_PER_CHUNK]StateId = undefined;
     const air = BlockState.defaultState(.air);
@@ -244,4 +370,82 @@ test "air chunk encodes as single_block" {
     try std.testing.expectEqual(@as(usize, 6), result.data.len);
     try std.testing.expectEqual(@intFromEnum(Encoding.single_block), result.data[1]);
     try std.testing.expectEqual(air, std.mem.readInt(u16, result.data[4..6], .little));
+}
+
+test "v1 single_block migration" {
+    // V1 format: [version=1][encoding=3][0][0][block_u8]
+    var data = [_]u8{ 1, 3, 0, 0, 4 }; // stone was v1 id 4
+    var decoded: [BLOCKS_PER_CHUNK]StateId = undefined;
+    try decode(&data, &decoded);
+    try std.testing.expectEqual(BlockState.defaultState(.stone), decoded[0]);
+    try std.testing.expectEqual(BlockState.defaultState(.stone), decoded[BLOCKS_PER_CHUNK - 1]);
+}
+
+test "v1 slab and stair migration" {
+    // V1 palette8: [1][1][0][0][palette_size][palette...][indices...]
+    const palette_size: u8 = 4;
+    const header = [_]u8{ 1, 1, 0, 0, palette_size };
+    // palette: oak_slab_bottom(28), oak_slab_top(29), oak_stairs_south(30), oak_stairs_east(32)
+    const palette = [_]u8{ 28, 29, 30, 32 };
+    var data: [header.len + palette.len + BLOCKS_PER_CHUNK]u8 = undefined;
+    @memcpy(data[0..header.len], &header);
+    @memcpy(data[header.len..][0..palette.len], &palette);
+    // Fill indices: alternating 0,1,2,3
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        data[header.len + palette.len + i] = @intCast(i % 4);
+    }
+
+    var decoded: [BLOCKS_PER_CHUNK]StateId = undefined;
+    try decode(&data, &decoded);
+
+    const slab_bottom = BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.bottom));
+    const slab_top = BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.top));
+    const stairs_south = BlockState.makeStairState(.south, .bottom, .straight);
+    const stairs_east = BlockState.makeStairState(.east, .bottom, .straight);
+
+    try std.testing.expectEqual(slab_bottom, decoded[0]);
+    try std.testing.expectEqual(slab_top, decoded[1]);
+    try std.testing.expectEqual(stairs_south, decoded[2]);
+    try std.testing.expectEqual(stairs_east, decoded[3]);
+}
+
+test "v1 raw migration" {
+    // V1 raw: [1][0][0][0][block_bytes...]
+    var data: [CODEC_HEADER_SIZE + BLOCKS_PER_CHUNK]u8 = undefined;
+    data[0] = 1;
+    data[1] = 0;
+    data[2] = 0;
+    data[3] = 0;
+    // Fill with sand(6) and cobblestone(10)
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        data[CODEC_HEADER_SIZE + i] = if (i % 2 == 0) 6 else 10;
+    }
+
+    var decoded: [BLOCKS_PER_CHUNK]StateId = undefined;
+    try decode(&data, &decoded);
+
+    const sand = BlockState.defaultState(.sand);
+    const cobblestone = BlockState.defaultState(.cobblestone);
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        const expected: StateId = if (i % 2 == 0) sand else cobblestone;
+        try std.testing.expectEqual(expected, decoded[i]);
+    }
+}
+
+test "v1 migration table correctness" {
+    // Verify all 34 entries map to the correct block
+    try std.testing.expectEqual(BlockState.Block.air, BlockState.getBlock(v1_to_v2[0]));
+    try std.testing.expectEqual(BlockState.Block.glass, BlockState.getBlock(v1_to_v2[1]));
+    try std.testing.expectEqual(BlockState.Block.grass_block, BlockState.getBlock(v1_to_v2[2]));
+    try std.testing.expectEqual(BlockState.Block.stone, BlockState.getBlock(v1_to_v2[4]));
+    try std.testing.expectEqual(BlockState.Block.glowstone, BlockState.getBlock(v1_to_v2[5]));
+    try std.testing.expectEqual(BlockState.Block.sand, BlockState.getBlock(v1_to_v2[6]));
+    try std.testing.expectEqual(BlockState.Block.oak_leaves, BlockState.getBlock(v1_to_v2[27]));
+    try std.testing.expectEqual(BlockState.Block.oak_slab, BlockState.getBlock(v1_to_v2[28]));
+    try std.testing.expectEqual(BlockState.Block.oak_slab, BlockState.getBlock(v1_to_v2[29]));
+    try std.testing.expectEqual(BlockState.Block.oak_stairs, BlockState.getBlock(v1_to_v2[30]));
+    try std.testing.expectEqual(BlockState.Block.oak_stairs, BlockState.getBlock(v1_to_v2[33]));
+
+    // Unknown v1 id maps to air
+    try std.testing.expectEqual(BlockState.defaultState(.air), migrateV1(255));
 }
