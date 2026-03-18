@@ -7,6 +7,9 @@
       <label text="World Name" color="#AAAAAAFF"/>
       <text_input id="create_world_input" placeholder="My World"
                   width="fill" height="32" max_len="32"/>
+      <label text="Seed (optional)" color="#AAAAAAFF"/>
+      <text_input id="create_seed_input" placeholder="Leave empty for random"
+                  width="fill" height="32" max_len="20"/>
       <label text="World Type" color="#AAAAAAFF"/>
       <button width="fill" height="36" background="#444466FF" shadow="true"
               on_click="toggle_world_type" justify="center">

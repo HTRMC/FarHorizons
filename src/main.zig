@@ -797,6 +797,13 @@ pub fn main() !void {
                     const world_type_override: ?WorldState.WorldType = if (action == .create_world) menu_ctrl.selected_world_type else null;
                     const game_mode_override: ?GameState.GameMode = if (action == .create_world) menu_ctrl.selected_game_mode else null;
 
+                    // Write seed before Storage.init so it gets loaded instead of generated
+                    if (action == .create_world) {
+                        if (menu_ctrl.getInputSeed()) |seed| {
+                            app_config.saveSeed(allocator, world_name, seed);
+                        }
+                    }
+
                     if (world_name.len > 0) {
                         game_state = GameState.init(allocator, 1280, 720, world_name, world_type_override, game_mode_override) catch |err| blk: {
                             std.log.err("Failed to load world '{s}': {}", .{ world_name, err });
@@ -835,7 +842,6 @@ pub fn main() !void {
                 .edit_world => {
                     const name = menu_ctrl.getEditWorldName();
                     if (name.len > 0) {
-                        app_config.saveWorldType(allocator, name, menu_ctrl.edit_world_type);
                         app_config.saveWorldGameMode(allocator, name, menu_ctrl.edit_game_mode);
                     }
                     menu_ctrl.transitionTo(.singleplayer_menu);

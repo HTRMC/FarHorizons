@@ -5,11 +5,6 @@
            padding="24" background="#1A1A2ECC" border_width="1" border_color="#444466FF">
       <label text="Edit World" color="#FFFFFFFF" font_size="2"/>
       <label id="edit_world_name_label" text="" color="#AAAAAAFF"/>
-      <label text="World Type" color="#AAAAAAFF"/>
-      <button width="fill" height="36" background="#444466FF" shadow="true"
-              on_click="edit_toggle_world_type" justify="center">
-        <label id="edit_world_type_label" text="World Type: Normal" color="#FFFFFFFF"/>
-      </button>
       <label text="Game Mode" color="#AAAAAAFF"/>
       <button width="fill" height="36" background="#444466FF" shadow="true"
               on_click="edit_toggle_game_mode" justify="center">
