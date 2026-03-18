@@ -17,7 +17,7 @@ const log = std.log.scoped(.UI);
 
 pub const MAX_WORLDS: u8 = 32;
 pub const MAX_NAME_LEN: u8 = 32;
-pub const MAX_DISPLAY_LEN: u8 = 64;
+pub const MAX_DISPLAY_LEN: u8 = 32;
 
 pub const AppState = enum {
     title_menu,

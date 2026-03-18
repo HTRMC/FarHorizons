@@ -233,13 +233,14 @@ pub fn backupWorld(allocator: std.mem.Allocator, name: []const u8) !void {
         return err;
     };
 
-    // Write display name for the backup (use source display name or folder name)
-    const source_display = loadDisplayName(allocator, name);
-    defer if (source_display) |d| allocator.free(d);
-    const base_name = if (source_display) |d| d else name;
-    var display_buf: [96]u8 = undefined;
-    const display = std.fmt.bufPrint(&display_buf, "Backup of {s} ({d:0>4}-{d:0>2}-{d:0>2})", .{ base_name, year, month, day }) catch "Backup";
-    saveDisplayName(allocator, backup_folder, display);
+    // Copy the original display name (or folder name) as-is
+    if (loadDisplayName(allocator, name)) |d| {
+        allocator.free(d);
+        // display_name.dat was already copied by copyDir
+    } else {
+        // No display_name.dat in source — write the folder name as display name
+        saveDisplayName(allocator, backup_folder, name);
+    }
 }
 
 fn copyDir(allocator: std.mem.Allocator, io: anytype, src_path: []const u8, dst_path: []const u8) !void {
