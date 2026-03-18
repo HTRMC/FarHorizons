@@ -11,6 +11,85 @@ pub const TRIGGER_DEADZONE: f32 = 0.1;
 /// Gamepad look sensitivity (radians per second at full deflection).
 pub const LOOK_SPEED: f32 = 3.0;
 
+pub const ControllerType = enum {
+    xbox,
+    playstation,
+    nintendo,
+    unknown,
+
+    /// Return the display label for a face button on this controller type.
+    pub fn buttonLabel(self: ControllerType, btn: Button) []const u8 {
+        return switch (self) {
+            .playstation => switch (btn) {
+                .a => "X",
+                .b => "O",
+                .x => "[]",
+                .y => "/\\",
+                .left_bumper => "L1",
+                .right_bumper => "R1",
+                .back => "Select",
+                .start => "Options",
+                .guide => "PS",
+                .left_thumb => "L3",
+                .right_thumb => "R3",
+                .dpad_up => "Up",
+                .dpad_right => "Right",
+                .dpad_down => "Down",
+                .dpad_left => "Left",
+            },
+            .nintendo => switch (btn) {
+                .a => "B",
+                .b => "A",
+                .x => "Y",
+                .y => "X",
+                .left_bumper => "L",
+                .right_bumper => "R",
+                .back => "-",
+                .start => "+",
+                .guide => "Home",
+                .left_thumb => "LS",
+                .right_thumb => "RS",
+                .dpad_up => "Up",
+                .dpad_right => "Right",
+                .dpad_down => "Down",
+                .dpad_left => "Left",
+            },
+            else => switch (btn) {
+                .a => "A",
+                .b => "B",
+                .x => "X",
+                .y => "Y",
+                .left_bumper => "LB",
+                .right_bumper => "RB",
+                .back => "Back",
+                .start => "Menu",
+                .guide => "Xbox",
+                .left_thumb => "LS",
+                .right_thumb => "RS",
+                .dpad_up => "Up",
+                .dpad_right => "Right",
+                .dpad_down => "Down",
+                .dpad_left => "Left",
+            },
+        };
+    }
+
+    pub fn triggerLabel(self: ControllerType, left: bool) []const u8 {
+        return switch (self) {
+            .playstation => if (left) "L2" else "R2",
+            .nintendo => if (left) "ZL" else "ZR",
+            else => if (left) "LT" else "RT",
+        };
+    }
+
+    pub fn stickLabel(self: ControllerType) []const u8 {
+        return switch (self) {
+            .playstation => "Stick",
+            else => "Stick",
+        };
+    }
+};
+
 pub const Button = enum(u5) {
     a = c.GLFW_GAMEPAD_BUTTON_A,
     b = c.GLFW_GAMEPAD_BUTTON_B,
@@ -29,11 +108,11 @@ pub const Button = enum(u5) {
     dpad_left = c.GLFW_GAMEPAD_BUTTON_DPAD_LEFT,
 
     pub const count = @typeInfo(Button).@"enum".fields.len;
-
 };
 
 /// Joystick ID of the connected gamepad, or null.
 jid: ?c_int = null,
+controller_type: ControllerType = .unknown,
 
 // Stick axes after deadzone
 left_x: f32 = 0,
@@ -59,8 +138,9 @@ pub fn init(self: *Gamepad) void {
     while (jid <= c.GLFW_JOYSTICK_LAST) : (jid += 1) {
         if (c.glfwJoystickIsGamepad(jid) == c.GLFW_TRUE) {
             const name = c.glfwGetGamepadName(jid);
+            self.controller_type = detectControllerType(jid);
             if (name != null) {
-                log.info("Gamepad detected: {s}", .{name});
+                log.info("Gamepad detected: {s} (type: {s})", .{ name, @tagName(self.controller_type) });
             } else {
                 log.info("Gamepad detected: (unknown)", .{});
             }
@@ -69,6 +149,70 @@ pub fn init(self: *Gamepad) void {
         }
     }
     log.info("No gamepad detected", .{});
+}
+
+fn detectControllerType(jid: c_int) ControllerType {
+    const name_ptr = c.glfwGetGamepadName(jid);
+    if (name_ptr == null) return .unknown;
+    const name = std.mem.span(name_ptr);
+
+    // PlayStation: "PS3", "PS4", "PS5", "DualShock", "DualSense", "Wireless Controller" (PS4 default)
+    if (containsIgnoreCase(name, "PS3") or
+        containsIgnoreCase(name, "PS4") or
+        containsIgnoreCase(name, "PS5") or
+        containsIgnoreCase(name, "DualShock") or
+        containsIgnoreCase(name, "DualSense") or
+        std.mem.eql(u8, name, "Wireless Controller"))
+        return .playstation;
+
+    // Nintendo: "Pro Controller", "Joy-Con", "Nintendo"
+    if (containsIgnoreCase(name, "Nintendo") or
+        containsIgnoreCase(name, "Pro Controller") or
+        containsIgnoreCase(name, "Joy-Con"))
+        return .nintendo;
+
+    // Xbox: "Xbox", "X-Box", "xinput"
+    if (containsIgnoreCase(name, "Xbox") or
+        containsIgnoreCase(name, "X-Box") or
+        containsIgnoreCase(name, "xinput"))
+        return .xbox;
+
+    // Also check GUID — Sony vendor ID is 054c
+    const guid_ptr = c.glfwGetJoystickGUID(jid);
+    if (guid_ptr != null) {
+        const guid = std.mem.span(guid_ptr);
+        // SDL GUID format: bustype(4) vendor(4) product(4) version(4) ...
+        // Vendor bytes are at positions 8..12 (but byte-swapped in SDL format)
+        if (guid.len >= 12) {
+            // Sony vendor: 4c05 in SDL byte-swapped format = 054c
+            if (std.mem.startsWith(u8, guid[8..12], "4c05"))
+                return .playstation;
+            // Nintendo vendor: 7e05 = 057e
+            if (std.mem.startsWith(u8, guid[8..12], "7e05"))
+                return .nintendo;
+            // Microsoft vendor: 5e04 = 045e
+            if (std.mem.startsWith(u8, guid[8..12], "5e04"))
+                return .xbox;
+        }
+    }
+
+    return .unknown;
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        var match = true;
+        for (0..needle.len) |j| {
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(needle[j])) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return true;
+    }
+    return false;
 }
 
 /// Returns true if a gamepad is connected.
@@ -142,6 +286,7 @@ pub fn poll(self: *Gamepad) void {
     if (!found) {
         if (self.jid != null) {
             log.info("Gamepad disconnected", .{});
+            self.controller_type = .unknown;
         }
         self.jid = null;
         self.buttons = 0;
@@ -155,9 +300,10 @@ pub fn poll(self: *Gamepad) void {
     }
 
     if (self.jid == null or self.jid.? != jid) {
+        self.controller_type = detectControllerType(jid);
         const name = c.glfwGetGamepadName(jid);
         if (name != null) {
-            log.info("Gamepad connected: {s}", .{name});
+            log.info("Gamepad connected: {s} (type: {s})", .{ name, @tagName(self.controller_type) });
         } else {
             log.info("Gamepad connected: (unknown)", .{});
         }

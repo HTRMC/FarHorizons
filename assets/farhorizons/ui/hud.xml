@@ -5,9 +5,9 @@
     <image id="crosshair" src="hud:crosshair" blend="inverted"
            width="30" height="30" anchor_x="center" anchor_y="center"/>
 
-    <!-- Hotbar container: bottom-center, flush at bottom (182x22 at 2.5x = 455x55) -->
+    <!-- Hotbar container: bottom-center, raised 10px from bottom -->
     <panel width="455" height="55" layout="anchor"
-           anchor_x="center" anchor_y="end">
+           anchor_x="center" anchor_y="end" offset_y="-10">
 
       <!-- Hotbar background image -->
       <image id="hotbar_bg" src="hud:hotbar" width="455" height="55"/>
@@ -64,6 +64,33 @@
     <label id="block_name" text="" color="#FFFFFFE6"
            anchor_x="center" anchor_y="end" offset_y="-76" visible="false"
            shadow="true" shadow_color="#000000AA"/>
+
+    <!-- Gamepad button hints: bottom-left -->
+    <panel id="gamepad_hints" width="fill" height="20"
+           anchor_x="start" anchor_y="end" offset_x="8" offset_y="-2" visible="false"
+           layout="flex" direction="row" gap="16"
+           cross_align="center" justify="start">
+      <panel id="hint_group_0" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_btn_0" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <label id="hint_act_0" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+      </panel>
+      <panel id="hint_group_1" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_btn_1" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <label id="hint_act_1" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+      </panel>
+      <panel id="hint_group_2" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_btn_2" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <label id="hint_act_2" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+      </panel>
+      <panel id="hint_group_3" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_btn_3" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <label id="hint_act_3" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+      </panel>
+      <panel id="hint_group_4" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_btn_4" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <label id="hint_act_4" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+      </panel>
+    </panel>
 
   </panel>
 </screen>

@@ -10,10 +10,12 @@ const SpriteRect = ui_renderer_mod.SpriteRect;
 const GameState = @import("../GameState.zig");
 const WorldState = @import("../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
+const Gamepad = @import("../Gamepad.zig");
 
 const log = std.log.scoped(.UI);
 
 const HOTBAR_SIZE = GameState.HOTBAR_SIZE;
+const MAX_HINTS = 5;
 
 pub const HudBinder = struct {
     crosshair_id: WidgetId = NULL_WIDGET,
@@ -25,6 +27,10 @@ pub const HudBinder = struct {
     air_bar_id: WidgetId = NULL_WIDGET,
     slot_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
     count_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
+    hints_panel_id: WidgetId = NULL_WIDGET,
+    hint_group_ids: [MAX_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_HINTS,
+    hint_btn_ids: [MAX_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_HINTS,
+    hint_act_ids: [MAX_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_HINTS,
     block_name_timer: f32 = 0,
     prev_selected_slot: u8 = 0,
     prev_selected_block: u16 = 0,
@@ -53,6 +59,13 @@ pub const HudBinder = struct {
             self.count_ids[i] = tree.findById(count_name) orelse NULL_WIDGET;
         }
 
+        self.hints_panel_id = tree.findById("gamepad_hints") orelse NULL_WIDGET;
+        inline for (0..MAX_HINTS) |i| {
+            self.hint_group_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_group_{d}", .{i})) orelse NULL_WIDGET;
+            self.hint_btn_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_btn_{d}", .{i})) orelse NULL_WIDGET;
+            self.hint_act_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_act_{d}", .{i})) orelse NULL_WIDGET;
+        }
+
         return self;
     }
 
@@ -65,7 +78,7 @@ pub const HudBinder = struct {
         setImageAtlas(tree, self.offhand_id, ui_renderer.offhand_rect);
     }
 
-    pub fn update(self: *HudBinder, tree: *WidgetTree, gs: *const GameState) void {
+    pub fn update(self: *HudBinder, tree: *WidgetTree, gs: *const GameState, gamepad: *const Gamepad) void {
         // Hide crosshair in third person unless explicitly enabled
         if (self.crosshair_id != NULL_WIDGET) {
             if (tree.getWidget(self.crosshair_id)) |w| {
@@ -181,6 +194,98 @@ pub const HudBinder = struct {
                 }
             }
         }
+
+        self.updateHints(tree, gs, gamepad);
+    }
+
+    const Hint = struct {
+        btn: Gamepad.Button,
+        is_trigger: bool = false,
+        trigger_left: bool = false,
+        action: []const u8,
+    };
+
+    fn updateHints(self: *HudBinder, tree: *WidgetTree, gs: *const GameState, gamepad: *const Gamepad) void {
+        const show = gamepad.connected();
+        if (self.hints_panel_id != NULL_WIDGET) {
+            if (tree.getWidget(self.hints_panel_id)) |w| {
+                w.visible = show;
+            }
+        }
+        if (!show) return;
+
+        const ct = gamepad.controller_type;
+
+        // Build hints based on game context
+        var hints: [MAX_HINTS]?Hint = .{null} ** MAX_HINTS;
+
+        if (gs.inventory_open) {
+            hints[0] = .{ .btn = .a, .action = "Select" };
+            hints[1] = .{ .btn = .b, .action = "Close" };
+        } else {
+            hints[0] = .{ .btn = .y, .action = "Inventory" };
+            hints[1] = .{ .btn = .x, .action = "Crafting" };
+            hints[2] = .{ .is_trigger = true, .trigger_left = true, .btn = .a, .action = "Place" };
+            hints[3] = .{ .is_trigger = true, .trigger_left = false, .btn = .a, .action = "Mine" };
+            hints[4] = .{ .btn = .left_bumper, .action = "Pick Block" };
+        }
+
+        for (0..MAX_HINTS) |i| {
+            const group_id = self.hint_group_ids[i];
+            if (group_id == NULL_WIDGET) continue;
+
+            if (hints[i]) |hint| {
+                if (tree.getWidget(group_id)) |w| w.visible = true;
+
+                // Button label text
+                const btn_id = self.hint_btn_ids[i];
+                if (btn_id != NULL_WIDGET) {
+                    if (tree.getData(btn_id)) |data| {
+                        var buf: [16]u8 = undefined;
+                        const label = if (hint.is_trigger)
+                            ct.triggerLabel(hint.trigger_left)
+                        else
+                            ct.buttonLabel(hint.btn);
+                        const text = std.fmt.bufPrint(&buf, "[{s}]", .{label}) catch "";
+                        data.label.setText(text);
+                        data.label.color = if (hint.is_trigger)
+                            Color.white
+                        else
+                            buttonColor(ct, hint.btn);
+                    }
+                }
+
+                // Action label text
+                const act_id = self.hint_act_ids[i];
+                if (act_id != NULL_WIDGET) {
+                    if (tree.getData(act_id)) |data| {
+                        data.label.setText(hint.action);
+                    }
+                }
+            } else {
+                if (tree.getWidget(group_id)) |w| w.visible = false;
+            }
+        }
+    }
+
+    fn buttonColor(ct: Gamepad.ControllerType, btn: Gamepad.Button) Color {
+        return switch (ct) {
+            .playstation => switch (btn) {
+                .a => Color.fromHex(0x6699FFFF), // X - blue
+                .b => Color.fromHex(0xFF6666FF), // O - red
+                .x => Color.fromHex(0xFF88CCFF), // Square - pink
+                .y => Color.fromHex(0x66DD99FF), // Triangle - green
+                else => Color.white,
+            },
+            .xbox => switch (btn) {
+                .a => Color.fromHex(0x66CC66FF), // A - green
+                .b => Color.fromHex(0xFF6666FF), // B - red
+                .x => Color.fromHex(0x6699FFFF), // X - blue
+                .y => Color.fromHex(0xFFCC44FF), // Y - yellow
+                else => Color.white,
+            },
+            else => Color.white,
+        };
     }
 
     fn setImageAtlas(tree: *WidgetTree, id: WidgetId, rect: SpriteRect) void {

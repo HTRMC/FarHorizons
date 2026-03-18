@@ -329,8 +329,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
 
             if (opts.keyMatches(.open_inventory, key) and action == glfw.GLFW_PRESS) {
                 resetAttackState(input_state);
-                const gs = input_state.game_state orelse return;
-                input_state.menu_ctrl.showInventory(gs);
+                if (input_state.game_state) |gs| input_state.menu_ctrl.showInventory(gs);
                 uncaptureMouse(input_state);
                 return;
             }
@@ -539,8 +538,7 @@ fn processGamepadInput(input_state: *InputState) void {
             // Y → inventory
             if (gp.pressed(.y)) {
                 resetAttackState(input_state);
-                const gs = input_state.game_state orelse return;
-                input_state.menu_ctrl.showInventory(gs);
+                if (input_state.game_state) |gs| input_state.menu_ctrl.showInventory(gs);
                 uncaptureMouse(input_state);
                 return;
             }
@@ -1063,7 +1061,7 @@ pub fn main() !void {
                     gs.interpolateForRender(alpha);
                 }
 
-                menu_ctrl.updateHud(gs);
+                menu_ctrl.updateHud(gs, &input_state.gamepad);
             }
         }
 
@@ -1092,7 +1090,7 @@ pub fn main() !void {
                 gs.interpolateForRender(alpha);
 
                 menu_ctrl.updateInventory(gs);
-                menu_ctrl.updateHud(gs);
+                menu_ctrl.updateHud(gs, &input_state.gamepad);
             }
         }
 

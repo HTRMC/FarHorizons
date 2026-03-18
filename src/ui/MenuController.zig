@@ -12,6 +12,7 @@ const BlockState = @import("../world/WorldState.zig").BlockState;
 const app_config = @import("../app_config.zig");
 const Options = @import("../Options.zig");
 const glfw = @import("../platform/glfw.zig");
+const Gamepad = @import("../Gamepad.zig");
 
 const log = std.log.scoped(.UI);
 
@@ -872,13 +873,13 @@ pub const MenuController = struct {
         self.hud_binder = null;
     }
 
-    pub fn updateHud(self: *MenuController, gs: *const GameState) void {
+    pub fn updateHud(self: *MenuController, gs: *const GameState, gamepad: *const Gamepad) void {
         if (self.hud_binder == null) return;
         const tree = self.hudTree() orelse return;
         if (tree.getWidget(tree.root)) |root| {
             root.visible = gs.show_ui;
         }
-        (&self.hud_binder.?).update(tree, gs);
+        (&self.hud_binder.?).update(tree, gs, gamepad);
     }
 
     pub fn getSelectedWorldName(self: *const MenuController) []const u8 {
