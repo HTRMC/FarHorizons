@@ -53,6 +53,24 @@ prev_right_trigger: f32 = 0,
 buttons: u16 = 0,
 prev_buttons: u16 = 0,
 
+/// Scan for an already-connected gamepad and log its name.
+pub fn init(self: *Gamepad) void {
+    var jid: c_int = c.GLFW_JOYSTICK_1;
+    while (jid <= c.GLFW_JOYSTICK_LAST) : (jid += 1) {
+        if (c.glfwJoystickIsGamepad(jid) == c.GLFW_TRUE) {
+            const name = c.glfwGetGamepadName(jid);
+            if (name != null) {
+                log.info("Gamepad detected: {s}", .{name});
+            } else {
+                log.info("Gamepad detected: (unknown)", .{});
+            }
+            self.jid = jid;
+            return;
+        }
+    }
+    log.info("No gamepad detected", .{});
+}
+
 /// Returns true if a gamepad is connected.
 pub fn connected(self: *const Gamepad) bool {
     return self.jid != null;
