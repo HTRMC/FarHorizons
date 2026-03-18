@@ -69,10 +69,12 @@ pub fn build(b: *std.Build) void {
     const tracy_enabled = b.option(bool, "tracy", "Enable Tracy profiling") orelse false;
     const zstd_enabled = b.option(bool, "zstd", "Enable ZSTD compression") orelse true;
     const console_enabled = b.option(bool, "console", "Show console window on Windows") orelse false;
+    const gamepad_type = b.option([]const u8, "gamepad_type", "Force gamepad HUD type: xbox, playstation, nintendo") orelse null;
 
     const options = b.addOptions();
     options.addOption(bool, "tracy_enabled", tracy_enabled);
     options.addOption(bool, "zstd_enabled", zstd_enabled);
+    options.addOption(?[]const u8, "gamepad_type", gamepad_type);
     exe.root_module.addOptions("build_options", options);
 
     linkDependencies(b, exe, tracy_enabled);

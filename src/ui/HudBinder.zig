@@ -15,7 +15,8 @@ const Gamepad = @import("../Gamepad.zig");
 const log = std.log.scoped(.UI);
 
 const HOTBAR_SIZE = GameState.HOTBAR_SIZE;
-const MAX_HINTS = 5;
+const MAX_LEFT_HINTS = 2;
+const MAX_RIGHT_HINTS = 4;
 
 pub const HudBinder = struct {
     crosshair_id: WidgetId = NULL_WIDGET,
@@ -27,10 +28,14 @@ pub const HudBinder = struct {
     air_bar_id: WidgetId = NULL_WIDGET,
     slot_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
     count_ids: [HOTBAR_SIZE]WidgetId = .{NULL_WIDGET} ** HOTBAR_SIZE,
-    hints_panel_id: WidgetId = NULL_WIDGET,
-    hint_group_ids: [MAX_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_HINTS,
-    hint_btn_ids: [MAX_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_HINTS,
-    hint_act_ids: [MAX_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_HINTS,
+    hints_left_id: WidgetId = NULL_WIDGET,
+    hints_right_id: WidgetId = NULL_WIDGET,
+    left_group_ids: [MAX_LEFT_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_LEFT_HINTS,
+    left_btn_ids: [MAX_LEFT_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_LEFT_HINTS,
+    left_act_ids: [MAX_LEFT_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_LEFT_HINTS,
+    right_group_ids: [MAX_RIGHT_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_RIGHT_HINTS,
+    right_btn_ids: [MAX_RIGHT_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_RIGHT_HINTS,
+    right_act_ids: [MAX_RIGHT_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_RIGHT_HINTS,
     block_name_timer: f32 = 0,
     prev_selected_slot: u8 = 0,
     prev_selected_block: u16 = 0,
@@ -59,11 +64,17 @@ pub const HudBinder = struct {
             self.count_ids[i] = tree.findById(count_name) orelse NULL_WIDGET;
         }
 
-        self.hints_panel_id = tree.findById("gamepad_hints") orelse NULL_WIDGET;
-        inline for (0..MAX_HINTS) |i| {
-            self.hint_group_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_group_{d}", .{i})) orelse NULL_WIDGET;
-            self.hint_btn_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_btn_{d}", .{i})) orelse NULL_WIDGET;
-            self.hint_act_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_act_{d}", .{i})) orelse NULL_WIDGET;
+        self.hints_left_id = tree.findById("gamepad_hints_left") orelse NULL_WIDGET;
+        self.hints_right_id = tree.findById("gamepad_hints_right") orelse NULL_WIDGET;
+        inline for (0..MAX_LEFT_HINTS) |i| {
+            self.left_group_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_left_{d}", .{i})) orelse NULL_WIDGET;
+            self.left_btn_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_left_btn_{d}", .{i})) orelse NULL_WIDGET;
+            self.left_act_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_left_act_{d}", .{i})) orelse NULL_WIDGET;
+        }
+        inline for (0..MAX_RIGHT_HINTS) |i| {
+            self.right_group_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_right_{d}", .{i})) orelse NULL_WIDGET;
+            self.right_btn_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_right_btn_{d}", .{i})) orelse NULL_WIDGET;
+            self.right_act_ids[i] = tree.findById(comptime std.fmt.comptimePrint("hint_right_act_{d}", .{i})) orelse NULL_WIDGET;
         }
 
         return self;
@@ -207,47 +218,56 @@ pub const HudBinder = struct {
 
     fn updateHints(self: *HudBinder, tree: *WidgetTree, gs: *const GameState, gamepad: *const Gamepad) void {
         const show = gamepad.connected();
-        if (self.hints_panel_id != NULL_WIDGET) {
-            if (tree.getWidget(self.hints_panel_id)) |w| {
-                w.visible = show;
-            }
-        }
+        setVisible(tree, self.hints_left_id, show);
+        setVisible(tree, self.hints_right_id, show);
         if (!show) return;
 
         const ct = gamepad.controller_type;
 
-        // Build hints based on game context
-        var hints: [MAX_HINTS]?Hint = .{null} ** MAX_HINTS;
+        // Build hints for left (movement) and right (actions) panels
+        var left: [MAX_LEFT_HINTS]?Hint = .{null} ** MAX_LEFT_HINTS;
+        var right: [MAX_RIGHT_HINTS]?Hint = .{null} ** MAX_RIGHT_HINTS;
 
         if (gs.inventory_open) {
-            hints[0] = .{ .btn = .a, .action = "Select" };
-            hints[1] = .{ .btn = .b, .action = "Close" };
+            left[0] = .{ .btn = .a, .action = "Select" };
+            right[0] = .{ .btn = .b, .action = "Close" };
         } else {
-            hints[0] = .{ .btn = .y, .action = "Inventory" };
-            hints[1] = .{ .btn = .x, .action = "Crafting" };
-            hints[2] = .{ .is_trigger = true, .trigger_left = true, .btn = .a, .action = "Place" };
-            hints[3] = .{ .is_trigger = true, .trigger_left = false, .btn = .a, .action = "Mine" };
-            hints[4] = .{ .btn = .left_bumper, .action = "Pick Block" };
+            // Top-left: movement
+            left[0] = .{ .btn = .a, .action = "Jump" };
+            left[1] = .{ .btn = .b, .action = "Sneak" };
+            // Top-right: actions
+            right[0] = .{ .btn = .y, .action = "Inventory" };
+            right[1] = .{ .btn = .x, .action = "Crafting" };
+            right[2] = .{ .is_trigger = true, .trigger_left = true, .btn = .a, .action = "Place" };
+            right[3] = .{ .is_trigger = true, .trigger_left = false, .btn = .a, .action = "Mine" };
         }
 
-        for (0..MAX_HINTS) |i| {
-            const group_id = self.hint_group_ids[i];
+        applyHints(tree, ct, &left, &self.left_group_ids, &self.left_btn_ids, &self.left_act_ids);
+        applyHints(tree, ct, &right, &self.right_group_ids, &self.right_btn_ids, &self.right_act_ids);
+    }
+
+    fn applyHints(
+        tree: *WidgetTree,
+        ct: Gamepad.ControllerType,
+        hints: anytype,
+        group_ids: anytype,
+        btn_ids: anytype,
+        act_ids: anytype,
+    ) void {
+        for (0..hints.len) |i| {
+            const group_id = group_ids[i];
             if (group_id == NULL_WIDGET) continue;
 
             if (hints[i]) |hint| {
-                if (tree.getWidget(group_id)) |w| w.visible = true;
+                setVisible(tree, group_id, true);
 
-                // Button label text
-                const btn_id = self.hint_btn_ids[i];
-                if (btn_id != NULL_WIDGET) {
-                    if (tree.getData(btn_id)) |data| {
-                        var buf: [16]u8 = undefined;
+                if (btn_ids[i] != NULL_WIDGET) {
+                    if (tree.getData(btn_ids[i])) |data| {
                         const label = if (hint.is_trigger)
                             ct.triggerLabel(hint.trigger_left)
                         else
                             ct.buttonLabel(hint.btn);
-                        const text = std.fmt.bufPrint(&buf, "[{s}]", .{label}) catch "";
-                        data.label.setText(text);
+                        data.label.setText(label);
                         data.label.color = if (hint.is_trigger)
                             Color.white
                         else
@@ -255,17 +275,20 @@ pub const HudBinder = struct {
                     }
                 }
 
-                // Action label text
-                const act_id = self.hint_act_ids[i];
-                if (act_id != NULL_WIDGET) {
-                    if (tree.getData(act_id)) |data| {
+                if (act_ids[i] != NULL_WIDGET) {
+                    if (tree.getData(act_ids[i])) |data| {
                         data.label.setText(hint.action);
                     }
                 }
             } else {
-                if (tree.getWidget(group_id)) |w| w.visible = false;
+                setVisible(tree, group_id, false);
             }
         }
+    }
+
+    fn setVisible(tree: *WidgetTree, id: WidgetId, visible: bool) void {
+        if (id == NULL_WIDGET) return;
+        if (tree.getWidget(id)) |w| w.visible = visible;
     }
 
     fn buttonColor(ct: Gamepad.ControllerType, btn: Gamepad.Button) Color {

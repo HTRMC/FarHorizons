@@ -65,30 +65,62 @@
            anchor_x="center" anchor_y="end" offset_y="-76" visible="false"
            shadow="true" shadow_color="#000000AA"/>
 
-    <!-- Gamepad button hints: bottom-left -->
-    <panel id="gamepad_hints" width="fill" height="20"
-           anchor_x="start" anchor_y="end" offset_x="8" offset_y="-2" visible="false"
-           layout="flex" direction="row" gap="16"
-           cross_align="center" justify="start">
-      <panel id="hint_group_0" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
-        <label id="hint_btn_0" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
-        <label id="hint_act_0" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+    <!-- Gamepad hints: top-left (movement) -->
+    <panel id="gamepad_hints_left" layout="flex" direction="column" gap="2"
+           anchor_x="start" anchor_y="start" offset_x="8" offset_y="8" visible="false">
+      <panel id="hint_left_0" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <panel layout="flex" direction="row" gap="0" cross_align="center">
+          <label text="[" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label id="hint_left_btn_0" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label text="]" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        </panel>
+        <label id="hint_left_act_0" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hint_group_1" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
-        <label id="hint_btn_1" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
-        <label id="hint_act_1" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+      <panel id="hint_left_1" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <panel layout="flex" direction="row" gap="0" cross_align="center">
+          <label text="[" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label id="hint_left_btn_1" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label text="]" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        </panel>
+        <label id="hint_left_act_1" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hint_group_2" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
-        <label id="hint_btn_2" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
-        <label id="hint_act_2" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+    </panel>
+
+    <!-- Gamepad hints: top-right (actions) -->
+    <panel id="gamepad_hints_right" layout="flex" direction="column" gap="2"
+           anchor_x="end" anchor_y="start" offset_x="-8" offset_y="8" visible="false"
+           cross_align="end">
+      <panel id="hint_right_0" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_right_act_0" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <panel layout="flex" direction="row" gap="0" cross_align="center">
+          <label text="[" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label id="hint_right_btn_0" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label text="]" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        </panel>
       </panel>
-      <panel id="hint_group_3" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
-        <label id="hint_btn_3" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
-        <label id="hint_act_3" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+      <panel id="hint_right_1" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_right_act_1" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <panel layout="flex" direction="row" gap="0" cross_align="center">
+          <label text="[" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label id="hint_right_btn_1" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label text="]" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        </panel>
       </panel>
-      <panel id="hint_group_4" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
-        <label id="hint_btn_4" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
-        <label id="hint_act_4" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+      <panel id="hint_right_2" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_right_act_2" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <panel layout="flex" direction="row" gap="0" cross_align="center">
+          <label text="[" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label id="hint_right_btn_2" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label text="]" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        </panel>
+      </panel>
+      <panel id="hint_right_3" layout="flex" direction="row" gap="4" cross_align="center" visible="false">
+        <label id="hint_right_act_3" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        <panel layout="flex" direction="row" gap="0" cross_align="center">
+          <label text="[" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label id="hint_right_btn_3" text="" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+          <label text="]" color="#FFFFFFDD" shadow="true" shadow_color="#000000AA"/>
+        </panel>
       </panel>
     </panel>
 

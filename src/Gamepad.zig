@@ -1,9 +1,18 @@
 const std = @import("std");
 const c = @import("platform/c.zig").c;
+const build_options = @import("build_options");
 
 const Gamepad = @This();
 
 const log = std.log.scoped(.Gamepad);
+
+const forced_gamepad_type: ?ControllerType = blk: {
+    const val = build_options.gamepad_type orelse break :blk null;
+    if (std.mem.eql(u8, val, "xbox")) break :blk .xbox;
+    if (std.mem.eql(u8, val, "playstation")) break :blk .playstation;
+    if (std.mem.eql(u8, val, "nintendo")) break :blk .nintendo;
+    @compileError("Invalid -Dgamepad_type: must be xbox, playstation, or nintendo");
+};
 
 pub const STICK_DEADZONE: f32 = 0.15;
 pub const TRIGGER_DEADZONE: f32 = 0.1;
@@ -138,7 +147,7 @@ pub fn init(self: *Gamepad) void {
     while (jid <= c.GLFW_JOYSTICK_LAST) : (jid += 1) {
         if (c.glfwJoystickIsGamepad(jid) == c.GLFW_TRUE) {
             const name = c.glfwGetGamepadName(jid);
-            self.controller_type = detectControllerType(jid);
+            self.controller_type = forced_gamepad_type orelse detectControllerType(jid);
             if (name != null) {
                 log.info("Gamepad detected: {s} (type: {s})", .{ name, @tagName(self.controller_type) });
             } else {
@@ -148,7 +157,12 @@ pub fn init(self: *Gamepad) void {
             return;
         }
     }
-    log.info("No gamepad detected", .{});
+    if (forced_gamepad_type) |ft| {
+        self.controller_type = ft;
+        log.info("No gamepad detected, forced type: {s}", .{@tagName(ft)});
+    } else {
+        log.info("No gamepad detected", .{});
+    }
 }
 
 fn detectControllerType(jid: c_int) ControllerType {
@@ -215,9 +229,9 @@ fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return false;
 }
 
-/// Returns true if a gamepad is connected.
+/// Returns true if a gamepad is connected (or a type is forced via build option).
 pub fn connected(self: *const Gamepad) bool {
-    return self.jid != null;
+    return self.jid != null or forced_gamepad_type != null;
 }
 
 /// Returns true on the frame a button was first pressed.
@@ -300,7 +314,7 @@ pub fn poll(self: *Gamepad) void {
     }
 
     if (self.jid == null or self.jid.? != jid) {
-        self.controller_type = detectControllerType(jid);
+        self.controller_type = forced_gamepad_type orelse detectControllerType(jid);
         const name = c.glfwGetGamepadName(jid);
         if (name != null) {
             log.info("Gamepad connected: {s} (type: {s})", .{ name, @tagName(self.controller_type) });

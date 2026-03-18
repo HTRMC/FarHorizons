@@ -21,10 +21,7 @@ const RIGHT_MARGIN: f32 = 10.0;
 pub fn draw(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_alloc: *const GpuAllocator) void {
     if (!gs.show_ui) return;
 
-    if (gs.debug_screens == 0) {
-        text.drawText(10.0, 10.0, "FarHorizons", white);
-        return;
-    }
+    if (gs.debug_screens == 0) return;
 
     var y: f32 = 10.0;
 
