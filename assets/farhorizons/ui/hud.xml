@@ -17,31 +17,31 @@
              offset_x="-2" offset_y="-2"/>
 
       <!-- 9 slot color panels: each 45x45, at slot pitch 50px, centered in 55px height -->
-      <panel id="slot_0" width="45" height="45" offset_x="5"   offset_y="5">
+      <panel id="slot_0" width="45" height="45" offset_x="5"   offset_y="5" layout="anchor">
         <label id="count_0" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="slot_1" width="45" height="45" offset_x="55"  offset_y="5">
+      <panel id="slot_1" width="45" height="45" offset_x="55"  offset_y="5" layout="anchor">
         <label id="count_1" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="slot_2" width="45" height="45" offset_x="105" offset_y="5">
+      <panel id="slot_2" width="45" height="45" offset_x="105" offset_y="5" layout="anchor">
         <label id="count_2" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="slot_3" width="45" height="45" offset_x="155" offset_y="5">
+      <panel id="slot_3" width="45" height="45" offset_x="155" offset_y="5" layout="anchor">
         <label id="count_3" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="slot_4" width="45" height="45" offset_x="205" offset_y="5">
+      <panel id="slot_4" width="45" height="45" offset_x="205" offset_y="5" layout="anchor">
         <label id="count_4" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="slot_5" width="45" height="45" offset_x="255" offset_y="5">
+      <panel id="slot_5" width="45" height="45" offset_x="255" offset_y="5" layout="anchor">
         <label id="count_5" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="slot_6" width="45" height="45" offset_x="305" offset_y="5">
+      <panel id="slot_6" width="45" height="45" offset_x="305" offset_y="5" layout="anchor">
         <label id="count_6" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="slot_7" width="45" height="45" offset_x="355" offset_y="5">
+      <panel id="slot_7" width="45" height="45" offset_x="355" offset_y="5" layout="anchor">
         <label id="count_7" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="slot_8" width="45" height="45" offset_x="405" offset_y="5">
+      <panel id="slot_8" width="45" height="45" offset_x="405" offset_y="5" layout="anchor">
         <label id="count_8" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
 

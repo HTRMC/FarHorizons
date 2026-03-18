@@ -7,30 +7,30 @@
       <image id="inv_player_bg" src="inv:player_panel" width="303" height="312"/>
 
       <!-- Left armor slots: 4 rows, pitch 54 -->
-      <panel id="armor_0" width="45" height="45" offset_x="27"  offset_y="27">
+      <panel id="armor_0" width="45" height="45" layout="anchor" offset_x="27"  offset_y="27">
         <label id="armor_count_0" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="armor_1" width="45" height="45" offset_x="27"  offset_y="81">
+      <panel id="armor_1" width="45" height="45" layout="anchor" offset_x="27"  offset_y="81">
         <label id="armor_count_1" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="armor_2" width="45" height="45" offset_x="27"  offset_y="135">
+      <panel id="armor_2" width="45" height="45" layout="anchor" offset_x="27"  offset_y="135">
         <label id="armor_count_2" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="armor_3" width="45" height="45" offset_x="27"  offset_y="189">
+      <panel id="armor_3" width="45" height="45" layout="anchor" offset_x="27"  offset_y="189">
         <label id="armor_count_3" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
 
       <!-- Right equipment slots: 4 rows, pitch 54 -->
-      <panel id="equip_0" width="45" height="45" offset_x="234" offset_y="27">
+      <panel id="equip_0" width="45" height="45" layout="anchor" offset_x="234" offset_y="27">
         <label id="equip_count_0" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="equip_1" width="45" height="45" offset_x="234" offset_y="81">
+      <panel id="equip_1" width="45" height="45" layout="anchor" offset_x="234" offset_y="81">
         <label id="equip_count_1" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="equip_2" width="45" height="45" offset_x="234" offset_y="135">
+      <panel id="equip_2" width="45" height="45" layout="anchor" offset_x="234" offset_y="135">
         <label id="equip_count_2" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="equip_3" width="45" height="45" offset_x="234" offset_y="189">
+      <panel id="equip_3" width="45" height="45" layout="anchor" offset_x="234" offset_y="189">
         <label id="equip_count_3" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
 
@@ -38,7 +38,7 @@
       <panel id="player_viewport" width="144" height="207" offset_x="81" offset_y="27"/>
 
       <!-- Offhand slot (bottom center) -->
-      <panel id="inv_offhand" width="45" height="45" offset_x="132" offset_y="243">
+      <panel id="inv_offhand" width="45" height="45" layout="anchor" offset_x="132" offset_y="243">
         <label id="offhand_count" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
     </panel>
@@ -52,150 +52,150 @@
              anchor_x="center" offset_y="3"/>
 
       <!-- Main inventory: 4 rows x 9 cols, slot pitch 54, 45x45 slots -->
-      <panel id="inv_0"  width="45" height="45" offset_x="27"  offset_y="33">
+      <panel id="inv_0" width="45" height="45" layout="anchor" offset_x="27"  offset_y="33">
         <label id="inv_count_0" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_1"  width="45" height="45" offset_x="81"  offset_y="33">
+      <panel id="inv_1" width="45" height="45" layout="anchor" offset_x="81"  offset_y="33">
         <label id="inv_count_1" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_2"  width="45" height="45" offset_x="135" offset_y="33">
+      <panel id="inv_2" width="45" height="45" layout="anchor" offset_x="135" offset_y="33">
         <label id="inv_count_2" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_3"  width="45" height="45" offset_x="189" offset_y="33">
+      <panel id="inv_3" width="45" height="45" layout="anchor" offset_x="189" offset_y="33">
         <label id="inv_count_3" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_4"  width="45" height="45" offset_x="243" offset_y="33">
+      <panel id="inv_4" width="45" height="45" layout="anchor" offset_x="243" offset_y="33">
         <label id="inv_count_4" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_5"  width="45" height="45" offset_x="297" offset_y="33">
+      <panel id="inv_5" width="45" height="45" layout="anchor" offset_x="297" offset_y="33">
         <label id="inv_count_5" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_6"  width="45" height="45" offset_x="351" offset_y="33">
+      <panel id="inv_6" width="45" height="45" layout="anchor" offset_x="351" offset_y="33">
         <label id="inv_count_6" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_7"  width="45" height="45" offset_x="405" offset_y="33">
+      <panel id="inv_7" width="45" height="45" layout="anchor" offset_x="405" offset_y="33">
         <label id="inv_count_7" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_8"  width="45" height="45" offset_x="459" offset_y="33">
+      <panel id="inv_8" width="45" height="45" layout="anchor" offset_x="459" offset_y="33">
         <label id="inv_count_8" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
 
-      <panel id="inv_9"  width="45" height="45" offset_x="27"  offset_y="87">
+      <panel id="inv_9" width="45" height="45" layout="anchor" offset_x="27"  offset_y="87">
         <label id="inv_count_9" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_10" width="45" height="45" offset_x="81"  offset_y="87">
+      <panel id="inv_10" width="45" height="45" layout="anchor" offset_x="81"  offset_y="87">
         <label id="inv_count_10" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_11" width="45" height="45" offset_x="135" offset_y="87">
+      <panel id="inv_11" width="45" height="45" layout="anchor" offset_x="135" offset_y="87">
         <label id="inv_count_11" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_12" width="45" height="45" offset_x="189" offset_y="87">
+      <panel id="inv_12" width="45" height="45" layout="anchor" offset_x="189" offset_y="87">
         <label id="inv_count_12" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_13" width="45" height="45" offset_x="243" offset_y="87">
+      <panel id="inv_13" width="45" height="45" layout="anchor" offset_x="243" offset_y="87">
         <label id="inv_count_13" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_14" width="45" height="45" offset_x="297" offset_y="87">
+      <panel id="inv_14" width="45" height="45" layout="anchor" offset_x="297" offset_y="87">
         <label id="inv_count_14" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_15" width="45" height="45" offset_x="351" offset_y="87">
+      <panel id="inv_15" width="45" height="45" layout="anchor" offset_x="351" offset_y="87">
         <label id="inv_count_15" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_16" width="45" height="45" offset_x="405" offset_y="87">
+      <panel id="inv_16" width="45" height="45" layout="anchor" offset_x="405" offset_y="87">
         <label id="inv_count_16" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_17" width="45" height="45" offset_x="459" offset_y="87">
+      <panel id="inv_17" width="45" height="45" layout="anchor" offset_x="459" offset_y="87">
         <label id="inv_count_17" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
 
-      <panel id="inv_18" width="45" height="45" offset_x="27"  offset_y="141">
+      <panel id="inv_18" width="45" height="45" layout="anchor" offset_x="27"  offset_y="141">
         <label id="inv_count_18" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_19" width="45" height="45" offset_x="81"  offset_y="141">
+      <panel id="inv_19" width="45" height="45" layout="anchor" offset_x="81"  offset_y="141">
         <label id="inv_count_19" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_20" width="45" height="45" offset_x="135" offset_y="141">
+      <panel id="inv_20" width="45" height="45" layout="anchor" offset_x="135" offset_y="141">
         <label id="inv_count_20" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_21" width="45" height="45" offset_x="189" offset_y="141">
+      <panel id="inv_21" width="45" height="45" layout="anchor" offset_x="189" offset_y="141">
         <label id="inv_count_21" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_22" width="45" height="45" offset_x="243" offset_y="141">
+      <panel id="inv_22" width="45" height="45" layout="anchor" offset_x="243" offset_y="141">
         <label id="inv_count_22" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_23" width="45" height="45" offset_x="297" offset_y="141">
+      <panel id="inv_23" width="45" height="45" layout="anchor" offset_x="297" offset_y="141">
         <label id="inv_count_23" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_24" width="45" height="45" offset_x="351" offset_y="141">
+      <panel id="inv_24" width="45" height="45" layout="anchor" offset_x="351" offset_y="141">
         <label id="inv_count_24" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_25" width="45" height="45" offset_x="405" offset_y="141">
+      <panel id="inv_25" width="45" height="45" layout="anchor" offset_x="405" offset_y="141">
         <label id="inv_count_25" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_26" width="45" height="45" offset_x="459" offset_y="141">
+      <panel id="inv_26" width="45" height="45" layout="anchor" offset_x="459" offset_y="141">
         <label id="inv_count_26" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
 
-      <panel id="inv_27" width="45" height="45" offset_x="27"  offset_y="195">
+      <panel id="inv_27" width="45" height="45" layout="anchor" offset_x="27"  offset_y="195">
         <label id="inv_count_27" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_28" width="45" height="45" offset_x="81"  offset_y="195">
+      <panel id="inv_28" width="45" height="45" layout="anchor" offset_x="81"  offset_y="195">
         <label id="inv_count_28" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_29" width="45" height="45" offset_x="135" offset_y="195">
+      <panel id="inv_29" width="45" height="45" layout="anchor" offset_x="135" offset_y="195">
         <label id="inv_count_29" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_30" width="45" height="45" offset_x="189" offset_y="195">
+      <panel id="inv_30" width="45" height="45" layout="anchor" offset_x="189" offset_y="195">
         <label id="inv_count_30" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_31" width="45" height="45" offset_x="243" offset_y="195">
+      <panel id="inv_31" width="45" height="45" layout="anchor" offset_x="243" offset_y="195">
         <label id="inv_count_31" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_32" width="45" height="45" offset_x="297" offset_y="195">
+      <panel id="inv_32" width="45" height="45" layout="anchor" offset_x="297" offset_y="195">
         <label id="inv_count_32" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_33" width="45" height="45" offset_x="351" offset_y="195">
+      <panel id="inv_33" width="45" height="45" layout="anchor" offset_x="351" offset_y="195">
         <label id="inv_count_33" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_34" width="45" height="45" offset_x="405" offset_y="195">
+      <panel id="inv_34" width="45" height="45" layout="anchor" offset_x="405" offset_y="195">
         <label id="inv_count_34" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="inv_35" width="45" height="45" offset_x="459" offset_y="195">
+      <panel id="inv_35" width="45" height="45" layout="anchor" offset_x="459" offset_y="195">
         <label id="inv_count_35" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
 
       <!-- Hotbar row -->
-      <panel id="hotbar_0" width="45" height="45" offset_x="27"  offset_y="261">
+      <panel id="hotbar_0" width="45" height="45" layout="anchor" offset_x="27"  offset_y="261">
         <label id="hotbar_count_0" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hotbar_1" width="45" height="45" offset_x="81"  offset_y="261">
+      <panel id="hotbar_1" width="45" height="45" layout="anchor" offset_x="81"  offset_y="261">
         <label id="hotbar_count_1" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hotbar_2" width="45" height="45" offset_x="135" offset_y="261">
+      <panel id="hotbar_2" width="45" height="45" layout="anchor" offset_x="135" offset_y="261">
         <label id="hotbar_count_2" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hotbar_3" width="45" height="45" offset_x="189" offset_y="261">
+      <panel id="hotbar_3" width="45" height="45" layout="anchor" offset_x="189" offset_y="261">
         <label id="hotbar_count_3" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hotbar_4" width="45" height="45" offset_x="243" offset_y="261">
+      <panel id="hotbar_4" width="45" height="45" layout="anchor" offset_x="243" offset_y="261">
         <label id="hotbar_count_4" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hotbar_5" width="45" height="45" offset_x="297" offset_y="261">
+      <panel id="hotbar_5" width="45" height="45" layout="anchor" offset_x="297" offset_y="261">
         <label id="hotbar_count_5" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hotbar_6" width="45" height="45" offset_x="351" offset_y="261">
+      <panel id="hotbar_6" width="45" height="45" layout="anchor" offset_x="351" offset_y="261">
         <label id="hotbar_count_6" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hotbar_7" width="45" height="45" offset_x="405" offset_y="261">
+      <panel id="hotbar_7" width="45" height="45" layout="anchor" offset_x="405" offset_y="261">
         <label id="hotbar_count_7" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
-      <panel id="hotbar_8" width="45" height="45" offset_x="459" offset_y="261">
+      <panel id="hotbar_8" width="45" height="45" layout="anchor" offset_x="459" offset_y="261">
         <label id="hotbar_count_8" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
       </panel>
     </panel>
 
     <!-- Cursor item (follows mouse when carrying) -->
-    <panel id="cursor_item" width="48" height="48"
+    <panel id="cursor_item" width="48" height="48" layout="anchor"
            anchor_x="left" anchor_y="top" visible="false">
       <label id="cursor_count" text="" color="#FFFFFFEE" anchor_x="end" anchor_y="end" shadow="true" shadow_color="#000000AA"/>
     </panel>
