@@ -1120,6 +1120,10 @@ pub fn main() !void {
                     hr.triggerSwing();
                     gs.swing_requested = false;
                 }
+                // Continuous swing while mining in survival
+                if (gs.game_mode == .survival and gs.attack_held and gs.breaking_pos != null and !hr.is_swinging) {
+                    hr.triggerSwing();
+                }
                 const P = GameState.Entity.PLAYER;
                 const vel = gs.entities.vel[P];
                 const hspeed = @sqrt(vel[0] * vel[0] + vel[2] * vel[2]);
