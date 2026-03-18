@@ -517,6 +517,47 @@ fn buildPaddedStates(padded: *[PADDED_BLOCKS]StateId, chunk: *const Chunk, neigh
             @memcpy(dst, src);
         }
     }
+
+    // Fill 12 edges and 8 corners by clamping to nearest face-filled position.
+    const S = PADDED_SIZE - 1;
+    const bounds = [2]usize{ 0, S };
+    for (bounds) |py| {
+        for (bounds) |pz| {
+            const cy = if (py == 0) @as(usize, 1) else S - 1;
+            const cz = if (pz == 0) @as(usize, 1) else S - 1;
+            for (1..S) |px| {
+                padded[paddedIndex(px, py, pz)] = padded[paddedIndex(px, cy, cz)];
+            }
+        }
+    }
+    for (bounds) |px| {
+        for (bounds) |pz| {
+            const cx = if (px == 0) @as(usize, 1) else S - 1;
+            const cz = if (pz == 0) @as(usize, 1) else S - 1;
+            for (1..S) |py| {
+                padded[paddedIndex(px, py, pz)] = padded[paddedIndex(cx, py, cz)];
+            }
+        }
+    }
+    for (bounds) |px| {
+        for (bounds) |py| {
+            const cx = if (px == 0) @as(usize, 1) else S - 1;
+            const cy = if (py == 0) @as(usize, 1) else S - 1;
+            for (1..S) |pz| {
+                padded[paddedIndex(px, py, pz)] = padded[paddedIndex(cx, cy, pz)];
+            }
+        }
+    }
+    for (bounds) |px| {
+        for (bounds) |py| {
+            for (bounds) |pz| {
+                const cx = if (px == 0) @as(usize, 1) else S - 1;
+                const cy = if (py == 0) @as(usize, 1) else S - 1;
+                const cz = if (pz == 0) @as(usize, 1) else S - 1;
+                padded[paddedIndex(px, py, pz)] = padded[paddedIndex(cx, cy, cz)];
+            }
+        }
+    }
 }
 
 fn buildPaddedLight(
@@ -598,6 +639,73 @@ fn buildPaddedLight(
                 const pi = paddedIndex(x + 1, 0, z + 1);
                 padded_sky[pi] = neighbor_borders[5].sky[bi];
                 padded_block[pi] = neighbor_borders[5].block[bi];
+            }
+        }
+    }
+
+    // Fill 12 edges and 8 corners that aren't covered by face copies.
+    // Without diagonal neighbor data, extrapolate from the nearest filled face position
+    // by clamping each boundary coordinate one step inward.
+    fillPaddedEdgesAndCorners(padded_sky, padded_block);
+}
+
+fn fillPaddedEdgesAndCorners(
+    padded_sky: *[PADDED_BLOCKS]u8,
+    padded_block: *[PADDED_BLOCKS][3]u8,
+) void {
+    const S = PADDED_SIZE - 1; // 33
+    const bounds = [2]usize{ 0, S };
+
+    // 4 edges along X (y and z at boundaries)
+    for (bounds) |py| {
+        for (bounds) |pz| {
+            const cy = if (py == 0) @as(usize, 1) else S - 1;
+            const cz = if (pz == 0) @as(usize, 1) else S - 1;
+            for (1..S) |px| {
+                const dst = paddedIndex(px, py, pz);
+                const src = paddedIndex(px, cy, cz);
+                padded_sky[dst] = padded_sky[src];
+                padded_block[dst] = padded_block[src];
+            }
+        }
+    }
+    // 4 edges along Y (x and z at boundaries)
+    for (bounds) |px| {
+        for (bounds) |pz| {
+            const cx = if (px == 0) @as(usize, 1) else S - 1;
+            const cz = if (pz == 0) @as(usize, 1) else S - 1;
+            for (1..S) |py| {
+                const dst = paddedIndex(px, py, pz);
+                const src = paddedIndex(cx, py, cz);
+                padded_sky[dst] = padded_sky[src];
+                padded_block[dst] = padded_block[src];
+            }
+        }
+    }
+    // 4 edges along Z (x and y at boundaries)
+    for (bounds) |px| {
+        for (bounds) |py| {
+            const cx = if (px == 0) @as(usize, 1) else S - 1;
+            const cy = if (py == 0) @as(usize, 1) else S - 1;
+            for (1..S) |pz| {
+                const dst = paddedIndex(px, py, pz);
+                const src = paddedIndex(cx, cy, pz);
+                padded_sky[dst] = padded_sky[src];
+                padded_block[dst] = padded_block[src];
+            }
+        }
+    }
+    // 8 corners
+    for (bounds) |px| {
+        for (bounds) |py| {
+            for (bounds) |pz| {
+                const cx = if (px == 0) @as(usize, 1) else S - 1;
+                const cy = if (py == 0) @as(usize, 1) else S - 1;
+                const cz = if (pz == 0) @as(usize, 1) else S - 1;
+                const dst = paddedIndex(px, py, pz);
+                const src = paddedIndex(cx, cy, cz);
+                padded_sky[dst] = padded_sky[src];
+                padded_block[dst] = padded_block[src];
             }
         }
     }
