@@ -840,9 +840,18 @@ pub fn main() !void {
                     }
                 },
                 .edit_world => {
-                    const name = menu_ctrl.getEditWorldName();
-                    if (name.len > 0) {
-                        app_config.saveWorldGameMode(allocator, name, menu_ctrl.edit_game_mode);
+                    const old_name = menu_ctrl.getEditWorldOriginalName();
+                    const new_name = menu_ctrl.getEditWorldNewName();
+                    if (old_name.len > 0 and new_name.len > 0) {
+                        // Rename if name changed
+                        if (!std.mem.eql(u8, old_name, new_name)) {
+                            app_config.renameWorld(allocator, old_name, new_name) catch |err| {
+                                std.log.err("Failed to rename world: {}", .{err});
+                            };
+                        }
+                        // Save game mode to the (possibly new) name
+                        const target = if (std.mem.eql(u8, old_name, new_name)) old_name else new_name;
+                        app_config.saveWorldGameMode(allocator, target, menu_ctrl.edit_game_mode);
                     }
                     menu_ctrl.transitionTo(.singleplayer_menu);
                 },

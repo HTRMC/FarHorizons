@@ -116,7 +116,7 @@ pub const MenuController = struct {
     selected_game_mode: @import("../GameState.zig").GameMode = .creative,
 
     // Edit world screen state
-    edit_world_name_label_id: WidgetId = NULL_WIDGET,
+    edit_world_name_input_id: WidgetId = NULL_WIDGET,
     edit_game_mode_label_id: WidgetId = NULL_WIDGET,
     edit_game_mode: @import("../GameState.zig").GameMode = .creative,
     edit_world_name: [MAX_NAME_LEN]u8 = undefined,
@@ -218,7 +218,7 @@ pub const MenuController = struct {
                 self.game_mode_label_id = NULL_WIDGET;
             },
             .edit_world => {
-                self.edit_world_name_label_id = NULL_WIDGET;
+                self.edit_world_name_input_id = NULL_WIDGET;
                 self.edit_game_mode_label_id = NULL_WIDGET;
             },
             .controls => self.resetControlsWidgetIds(),
@@ -265,7 +265,7 @@ pub const MenuController = struct {
 
     fn cacheEditWorldWidgetIds(self: *MenuController) void {
         const tree = self.menuTree() orelse return;
-        self.edit_world_name_label_id = tree.findById("edit_world_name_label") orelse NULL_WIDGET;
+        self.edit_world_name_input_id = tree.findById("edit_world_name_input") orelse NULL_WIDGET;
         self.edit_game_mode_label_id = tree.findById("edit_game_mode_label") orelse NULL_WIDGET;
     }
 
@@ -278,13 +278,14 @@ pub const MenuController = struct {
         else
             .creative;
 
-        // Set world name label
+        // Set world name input
         const tree = self.menuTree() orelse return;
-        if (self.edit_world_name_label_id != NULL_WIDGET) {
-            if (tree.getData(self.edit_world_name_label_id)) |data| {
-                var buf: [80]u8 = undefined;
-                const text = std.fmt.bufPrint(&buf, "World: {s}", .{name}) catch "World";
-                data.label.setText(text);
+        if (self.edit_world_name_input_id != NULL_WIDGET) {
+            if (tree.getData(self.edit_world_name_input_id)) |data| {
+                @memcpy(data.text_input.buffer[0..name.len], name);
+                data.text_input.buffer_len = @intCast(name.len);
+                data.text_input.cursor_pos = @intCast(name.len);
+                data.text_input.selection_start = @intCast(name.len);
             }
         }
         self.updateEditGameModeLabel();
@@ -853,9 +854,17 @@ pub const MenuController = struct {
         return self.world_names[sel][0..self.world_name_lens[sel]];
     }
 
-    pub fn getEditWorldName(self: *const MenuController) []const u8 {
+    pub fn getEditWorldOriginalName(self: *const MenuController) []const u8 {
         if (self.edit_world_name_len == 0) return "";
         return self.edit_world_name[0..self.edit_world_name_len];
+    }
+
+    pub fn getEditWorldNewName(self: *const MenuController) []const u8 {
+        if (self.edit_world_name_input_id == NULL_WIDGET) return "";
+        if (self.ui_manager.screen_count == 0) return "";
+        const tree = &self.ui_manager.screens[self.ui_manager.screen_count - 1].tree;
+        const data = tree.getDataConst(self.edit_world_name_input_id) orelse return "";
+        return data.text_input.getText();
     }
 
     pub fn getInputName(self: *const MenuController) []const u8 {

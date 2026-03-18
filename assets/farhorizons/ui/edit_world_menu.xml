@@ -4,7 +4,9 @@
            cross_align="stretch" gap="16" width="400" height="auto"
            padding="24" background="#1A1A2ECC" border_width="1" border_color="#444466FF">
       <label text="Edit World" color="#FFFFFFFF" font_size="2"/>
-      <label id="edit_world_name_label" text="" color="#AAAAAAFF"/>
+      <label text="World Name" color="#AAAAAAFF"/>
+      <text_input id="edit_world_name_input" placeholder=""
+                  width="fill" height="32" max_len="32"/>
       <label text="Game Mode" color="#AAAAAAFF"/>
       <button width="fill" height="36" background="#444466FF" shadow="true"
               on_click="edit_toggle_game_mode" justify="center">

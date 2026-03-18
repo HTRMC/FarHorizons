@@ -95,6 +95,28 @@ pub fn getWorldsDir(allocator: std.mem.Allocator) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "worlds", .{base_path});
 }
 
+pub fn renameWorld(allocator: std.mem.Allocator, old_name: []const u8, new_name: []const u8) !void {
+    const worlds_dir = try getWorldsDir(allocator);
+    defer allocator.free(worlds_dir);
+
+    const io = Io.Threaded.global_single_threaded.io();
+
+    const src = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, old_name }) catch return error.OutOfMemory;
+    defer allocator.free(src);
+    const dst = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, new_name }) catch return error.OutOfMemory;
+    defer allocator.free(dst);
+
+    // Copy to new name, then delete old
+    copyDir(allocator, io, src, dst) catch |err| {
+        std.log.warn("Failed to rename world '{s}' to '{s}': {}", .{ old_name, new_name, err });
+        return err;
+    };
+
+    var dir = Dir.openDirAbsolute(io, worlds_dir, .{}) catch return error.AppDataNotSet;
+    defer dir.close(io);
+    dir.deleteTree(io, old_name) catch {};
+}
+
 pub fn deleteWorld(allocator: std.mem.Allocator, name: []const u8) !void {
     const worlds_dir = try getWorldsDir(allocator);
     defer allocator.free(worlds_dir);
