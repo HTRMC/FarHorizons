@@ -1,5 +1,5 @@
 <screen>
-  <panel width="fill" height="fill" layout="anchor" background="#00000088">
+  <panel id="inv_backdrop" width="fill" height="fill" layout="anchor" background="#00000088">
 
     <!-- ======== Player panel (texture background) ======== -->
     <panel width="303" height="312" anchor_x="center" anchor_y="center"

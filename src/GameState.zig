@@ -1655,6 +1655,39 @@ pub fn dropFromSlot(self: *GameState, slot: u8, drop_all: bool) void {
     }
 }
 
+/// Drop carried item as an entity in the world.
+/// If `drop_all` is false, drops only 1 from the stack.
+pub fn dropCarried(self: *GameState, drop_all: bool) void {
+    if (self.carried_item.isEmpty()) return;
+    if (self.entities.count >= Entity.MAX_ENTITIES) return;
+
+    const P = Entity.PLAYER;
+    const epos = self.entities.pos[P];
+    const forward = self.camera.getForward();
+    const drop_pos = [3]f32{
+        epos[0] + forward.x * 0.5,
+        epos[1] + EYE_OFFSET + forward.y * 0.5,
+        epos[2] + forward.z * 0.5,
+    };
+    const drop_count: u8 = if (drop_all or self.carried_item.isTool()) self.carried_item.count else 1;
+    const prev_count = self.entities.count;
+    self.entities.spawnItemDropWithDurability(drop_pos, self.carried_item.block, drop_count, self.carried_item.durability);
+    if (self.entities.count <= prev_count) return;
+
+    const last = self.entities.count - 1;
+    self.entities.vel[last] = .{
+        forward.x * 5.0,
+        forward.y * 5.0 + 2.0,
+        forward.z * 5.0,
+    };
+
+    if (drop_all or self.carried_item.count <= 1) {
+        self.carried_item = Entity.ItemStack.EMPTY;
+    } else {
+        self.carried_item.count -= 1;
+    }
+}
+
 fn decrementSelectedStack(self: *GameState) void {
     if (self.game_mode == .creative) return; // infinite blocks in creative
     const stack = &self.playerInv().hotbar[self.selected_slot];

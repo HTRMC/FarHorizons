@@ -399,6 +399,14 @@ pub const MenuController = struct {
                 data.panel.setAction("player_viewport_drag");
             }
         }
+        // Backdrop click → drop carried item outside inventory
+        const backdrop_id = tree.findById("inv_backdrop") orelse NULL_WIDGET;
+        if (backdrop_id != NULL_WIDGET) {
+            if (tree.getData(backdrop_id)) |data| {
+                data.panel.setAction("inv_drop_outside");
+            }
+        }
+
         self.cursor_item_id = tree.findById("cursor_item") orelse NULL_WIDGET;
         self.cursor_count_id = tree.findById("cursor_count") orelse NULL_WIDGET;
         if (self.cursor_item_id != NULL_WIDGET) {
@@ -498,6 +506,7 @@ pub const MenuController = struct {
         reg.register("toggle_tp_crosshair_cb", actionToggleTpCrosshairCb, ctx);
         reg.register("change_fov", actionChangeFov, ctx);
         reg.register("inv_slot_click", actionInvSlotClick, ctx);
+        reg.register("inv_drop_outside", actionInvDropOutside, ctx);
     }
 
     // ============================================================
@@ -1399,6 +1408,14 @@ pub const MenuController = struct {
                 }
             }
         }
+    }
+
+    fn actionInvDropOutside(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const gs = self.game_state orelse return;
+        if (gs.carried_item.isEmpty()) return;
+        const drop_all = self.ui_manager.last_button != glfw.GLFW_MOUSE_BUTTON_RIGHT;
+        gs.dropCarried(drop_all);
     }
 
     fn actionResetKeybinds(ctx: ?*anyopaque) void {
