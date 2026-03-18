@@ -16,7 +16,8 @@ const glfw = @import("../platform/glfw.zig");
 const log = std.log.scoped(.UI);
 
 pub const MAX_WORLDS: u8 = 32;
-pub const MAX_NAME_LEN: u8 = 64;
+pub const MAX_NAME_LEN: u8 = 32;
+pub const MAX_DISPLAY_LEN: u8 = 64;
 
 pub const AppState = enum {
     title_menu,
@@ -59,6 +60,8 @@ pub const MenuController = struct {
 
     world_names: [MAX_WORLDS][MAX_NAME_LEN]u8 = undefined,
     world_name_lens: [MAX_WORLDS]u8 = .{0} ** MAX_WORLDS,
+    world_display_names: [MAX_WORLDS][MAX_DISPLAY_LEN]u8 = undefined,
+    world_display_lens: [MAX_WORLDS]u8 = .{0} ** MAX_WORLDS,
     world_count: u8 = 0,
     selection: u8 = 0,
 
@@ -270,22 +273,28 @@ pub const MenuController = struct {
     }
 
     fn populateEditWorldScreen(self: *MenuController) void {
-        const name = self.edit_world_name[0..self.edit_world_name_len];
+        const folder = self.edit_world_name[0..self.edit_world_name_len];
 
         // Load current values from disk
-        self.edit_game_mode = if (app_config.hasWorldGameMode(self.allocator, name))
-            app_config.loadWorldGameMode(self.allocator, name)
+        self.edit_game_mode = if (app_config.hasWorldGameMode(self.allocator, folder))
+            app_config.loadWorldGameMode(self.allocator, folder)
         else
             .creative;
+
+        // Get display name for pre-filling
+        const display = if (app_config.loadDisplayName(self.allocator, folder)) |d| d else null;
+        defer if (display) |d| self.allocator.free(d);
+        const fill_name = if (display) |d| d else folder;
 
         // Set world name input
         const tree = self.menuTree() orelse return;
         if (self.edit_world_name_input_id != NULL_WIDGET) {
             if (tree.getData(self.edit_world_name_input_id)) |data| {
-                @memcpy(data.text_input.buffer[0..name.len], name);
-                data.text_input.buffer_len = @intCast(name.len);
-                data.text_input.cursor_pos = @intCast(name.len);
-                data.text_input.selection_start = @intCast(name.len);
+                const len = @min(fill_name.len, data.text_input.max_len);
+                @memcpy(data.text_input.buffer[0..len], fill_name[0..len]);
+                data.text_input.buffer_len = @intCast(len);
+                data.text_input.cursor_pos = @intCast(len);
+                data.text_input.selection_start = @intCast(len);
             }
         }
         self.updateEditGameModeLabel();
@@ -507,6 +516,18 @@ pub const MenuController = struct {
             const len: u8 = @intCast(@min(name.len, MAX_NAME_LEN));
             @memcpy(self.world_names[i][0..len], name[0..len]);
             self.world_name_lens[i] = len;
+
+            // Load display name; fall back to folder name
+            if (app_config.loadDisplayName(self.allocator, name)) |display| {
+                const dlen: u8 = @intCast(@min(display.len, MAX_DISPLAY_LEN));
+                @memcpy(self.world_display_names[i][0..dlen], display[0..dlen]);
+                self.world_display_lens[i] = dlen;
+                self.allocator.free(display);
+            } else {
+                @memcpy(self.world_display_names[i][0..len], name[0..len]);
+                self.world_display_lens[i] = len;
+            }
+
             self.allocator.free(name);
         }
         self.world_count = count;
@@ -546,8 +567,8 @@ pub const MenuController = struct {
         if (self.world_list_id != NULL_WIDGET) {
             tree.clearChildren(self.world_list_id);
             for (0..self.world_count) |i| {
-                const name = self.world_names[i][0..self.world_name_lens[i]];
-                if (!matchesSearch(name, filter)) continue;
+                const display = self.world_display_names[i][0..self.world_display_lens[i]];
+                if (!matchesSearch(display, filter)) continue;
                 visible_count += 1;
 
                 const row_id = tree.addWidget(.panel, self.world_list_id) orelse break;
@@ -581,7 +602,7 @@ pub const MenuController = struct {
                     w.height = .auto;
                 }
                 if (tree.getData(title_id)) |data| {
-                    data.label.setText(name);
+                    data.label.setText(display);
                     data.label.color = Widget.Color.white;
                 }
 
@@ -854,6 +875,13 @@ pub const MenuController = struct {
         return self.world_names[sel][0..self.world_name_lens[sel]];
     }
 
+    pub fn getSelectedDisplayName(self: *const MenuController) []const u8 {
+        if (self.world_count == 0) return "";
+        const sel = self.selection;
+        if (sel >= self.world_count) return "";
+        return self.world_display_names[sel][0..self.world_display_lens[sel]];
+    }
+
     pub fn getEditWorldOriginalName(self: *const MenuController) []const u8 {
         if (self.edit_world_name_len == 0) return "";
         return self.edit_world_name[0..self.edit_world_name_len];
@@ -1028,9 +1056,9 @@ pub const MenuController = struct {
         }
         if (self.delete_label_id != NULL_WIDGET) {
             if (tree.getData(self.delete_label_id)) |data| {
-                const world_name = self.getSelectedWorldName();
+                const display = self.getSelectedDisplayName();
                 var buf: [96]u8 = undefined;
-                const text = std.fmt.bufPrint(&buf, "Delete \"{s}\"?", .{world_name}) catch "Delete?";
+                const text = std.fmt.bufPrint(&buf, "Delete \"{s}\"?", .{display}) catch "Delete?";
                 data.label.setText(text);
             }
         }
@@ -1050,9 +1078,9 @@ pub const MenuController = struct {
         }
         if (self.backup_label_id != NULL_WIDGET) {
             if (tree.getData(self.backup_label_id)) |data| {
-                const world_name = self.getSelectedWorldName();
+                const display = self.getSelectedDisplayName();
                 var buf: [96]u8 = undefined;
-                const text = std.fmt.bufPrint(&buf, "Backup \"{s}\"?", .{world_name}) catch "Backup?";
+                const text = std.fmt.bufPrint(&buf, "Backup \"{s}\"?", .{display}) catch "Backup?";
                 data.label.setText(text);
             }
         }

@@ -95,26 +95,29 @@ pub fn getWorldsDir(allocator: std.mem.Allocator) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "worlds", .{base_path});
 }
 
-pub fn renameWorld(allocator: std.mem.Allocator, old_name: []const u8, new_name: []const u8) !void {
-    const worlds_dir = try getWorldsDir(allocator);
+pub fn loadDisplayName(allocator: std.mem.Allocator, folder_name: []const u8) ?[]const u8 {
+    const worlds_dir = getWorldsDir(allocator) catch return null;
     defer allocator.free(worlds_dir);
-
     const io = Io.Threaded.global_single_threaded.io();
+    const path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}" ++ sep ++ "display_name.dat", .{ worlds_dir, folder_name }) catch return null;
+    defer allocator.free(path);
+    const file = Dir.openFileAbsolute(io, path, .{}) catch return null;
+    defer file.close(io);
+    var buf: [128]u8 = undefined;
+    const n = file.readPositionalAll(io, &buf, 0) catch return null;
+    if (n == 0) return null;
+    return allocator.dupe(u8, buf[0..n]) catch null;
+}
 
-    const src = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, old_name }) catch return error.OutOfMemory;
-    defer allocator.free(src);
-    const dst = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, new_name }) catch return error.OutOfMemory;
-    defer allocator.free(dst);
-
-    // Copy to new name, then delete old
-    copyDir(allocator, io, src, dst) catch |err| {
-        std.log.warn("Failed to rename world '{s}' to '{s}': {}", .{ old_name, new_name, err });
-        return err;
-    };
-
-    var dir = Dir.openDirAbsolute(io, worlds_dir, .{}) catch return error.AppDataNotSet;
-    defer dir.close(io);
-    dir.deleteTree(io, old_name) catch {};
+pub fn saveDisplayName(allocator: std.mem.Allocator, folder_name: []const u8, display_name: []const u8) void {
+    const worlds_dir = getWorldsDir(allocator) catch return;
+    defer allocator.free(worlds_dir);
+    const io = Io.Threaded.global_single_threaded.io();
+    const path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}" ++ sep ++ "display_name.dat", .{ worlds_dir, folder_name }) catch return;
+    defer allocator.free(path);
+    const file = Dir.createFileAbsolute(io, path, .{}) catch return;
+    defer file.close(io);
+    file.writePositionalAll(io, display_name, 0) catch {};
 }
 
 pub fn deleteWorld(allocator: std.mem.Allocator, name: []const u8) !void {
@@ -200,7 +203,7 @@ pub fn backupWorld(allocator: std.mem.Allocator, name: []const u8) !void {
 
     const io = Io.Threaded.global_single_threaded.io();
 
-    // Get current date for backup name
+    // Get current date for backup folder name
     var now = c_time.time(null);
     var tm: c_time.Tm = undefined;
     const lt = c_time.localtime(&now, &tm) orelse return error.TimeError;
@@ -208,29 +211,35 @@ pub fn backupWorld(allocator: std.mem.Allocator, name: []const u8) !void {
     const month: u8 = @intCast(lt.tm_mon + 1);
     const day: u8 = @intCast(lt.tm_mday);
 
-    // Find available backup name: Backup_YYYYMMDD_N_OriginalName
-    var backup_name_buf: [128]u8 = undefined;
-    var backup_name: []const u8 = undefined;
+    // Short folder name: bak_YYYYMMDD_N (always fits in MAX_NAME_LEN)
+    var backup_folder_buf: [32]u8 = undefined;
+    var backup_folder: []const u8 = undefined;
     var n: u16 = 1;
     while (n < 1000) : (n += 1) {
-        backup_name = std.fmt.bufPrint(&backup_name_buf, "Backup_{d:0>4}{d:0>2}{d:0>2}_{d}_{s}", .{ year, month, day, n, name }) catch return error.NameTooLong;
-        // Check if this directory already exists
-        const check_path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, backup_name }) catch return error.OutOfMemory;
+        backup_folder = std.fmt.bufPrint(&backup_folder_buf, "bak_{d:0>4}{d:0>2}{d:0>2}_{d}", .{ year, month, day, n }) catch return error.NameTooLong;
+        const check_path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, backup_folder }) catch return error.OutOfMemory;
         defer allocator.free(check_path);
-        var check_dir = Dir.openDirAbsolute(io, check_path, .{}) catch break; // doesn't exist, use this name
+        var check_dir = Dir.openDirAbsolute(io, check_path, .{}) catch break;
         check_dir.close(io);
-        // exists, try next number
     }
 
     const src_path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, name }) catch return error.OutOfMemory;
     defer allocator.free(src_path);
-    const dst_path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, backup_name }) catch return error.OutOfMemory;
+    const dst_path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}", .{ worlds_dir, backup_folder }) catch return error.OutOfMemory;
     defer allocator.free(dst_path);
 
     copyDir(allocator, io, src_path, dst_path) catch |err| {
         std.log.warn("Failed to backup world '{s}': {}", .{ name, err });
         return err;
     };
+
+    // Write display name for the backup (use source display name or folder name)
+    const source_display = loadDisplayName(allocator, name);
+    defer if (source_display) |d| allocator.free(d);
+    const base_name = if (source_display) |d| d else name;
+    var display_buf: [96]u8 = undefined;
+    const display = std.fmt.bufPrint(&display_buf, "Backup of {s} ({d:0>4}-{d:0>2}-{d:0>2})", .{ base_name, year, month, day }) catch "Backup";
+    saveDisplayName(allocator, backup_folder, display);
 }
 
 fn copyDir(allocator: std.mem.Allocator, io: anytype, src_path: []const u8, dst_path: []const u8) !void {
