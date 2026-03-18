@@ -417,6 +417,7 @@ pub const MenuController = struct {
                 data.panel.draw_isometric = true;
             }
             self.ui_manager.cursor_follow_widget = self.cursor_item_id;
+            self.ui_manager.cursor_follow_child = self.cursor_count_id;
         }
 
         // Resolve inventory sprite UVs to image widgets
@@ -461,6 +462,7 @@ pub const MenuController = struct {
         self.inv_player_viewport_id = NULL_WIDGET;
         self.cursor_item_id = NULL_WIDGET;
         self.ui_manager.cursor_follow_widget = NULL_WIDGET;
+        self.ui_manager.cursor_follow_child = NULL_WIDGET;
         self.entity_visible = false;
         self.entity_viewport = .{ 0, 0, 0, 0 };
     }

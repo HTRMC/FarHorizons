@@ -41,6 +41,7 @@ pub const UiManager = struct {
     last_mods: c_int = 0,
     last_button: c_int = 0,
     cursor_follow_widget: WidgetId = NULL_WIDGET,
+    cursor_follow_child: WidgetId = NULL_WIDGET,
     text_renderer: ?*const TextRenderer = null,
 
     hover_widget: WidgetId = NULL_WIDGET,
@@ -84,22 +85,17 @@ pub const UiManager = struct {
         self.screen_height = @floatFromInt(height);
     }
 
-    fn snapCursorWidget(t: *WidgetTree, widget_id: WidgetId, mx: f32, my: f32) void {
-        const w = t.getWidget(widget_id) orelse return;
+    fn snapCursorToMouse(self: *const UiManager, t: *WidgetTree) void {
+        const w = t.getWidget(self.cursor_follow_widget) orelse return;
         const half_w = if (w.width == .px) w.width.px * 0.5 else 16;
         const half_h = if (w.height == .px) w.height.px * 0.5 else 16;
-        const new_x = mx - half_w;
-        const new_y = my - half_h;
-        const dx = new_x - w.computed_rect.x;
-        const dy = new_y - w.computed_rect.y;
-        w.computed_rect.x = new_x;
-        w.computed_rect.y = new_y;
-        var child_id = w.first_child;
-        while (child_id != NULL_WIDGET) {
-            const cw = t.getWidget(child_id) orelse break;
-            cw.computed_rect.x += dx;
-            cw.computed_rect.y += dy;
-            child_id = cw.next_sibling;
+        w.computed_rect.x = self.last_mouse_x - half_w;
+        w.computed_rect.y = self.last_mouse_y - half_h;
+        if (self.cursor_follow_child != NULL_WIDGET) {
+            if (t.getWidget(self.cursor_follow_child)) |cw| {
+                cw.computed_rect.x = w.computed_rect.x + w.computed_rect.w - cw.computed_rect.w;
+                cw.computed_rect.y = w.computed_rect.y + w.computed_rect.h - cw.computed_rect.h;
+            }
         }
     }
 
@@ -113,7 +109,7 @@ pub const UiManager = struct {
         // Snap cursor-following widget to latest mouse position after layout
         if (self.cursor_follow_widget != NULL_WIDGET) {
             if (self.topTree()) |t| {
-                snapCursorWidget(t, self.cursor_follow_widget, self.last_mouse_x, self.last_mouse_y);
+                self.snapCursorToMouse(t);
             }
         }
     }
@@ -122,7 +118,7 @@ pub const UiManager = struct {
         // Snap cursor-following widget to latest mouse position before drawing
         if (self.cursor_follow_widget != NULL_WIDGET) {
             if (self.topTree()) |t| {
-                snapCursorWidget(t, self.cursor_follow_widget, self.last_mouse_x, self.last_mouse_y);
+                self.snapCursorToMouse(t);
             }
         }
         for (0..self.screen_count) |i| {
