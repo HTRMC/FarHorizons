@@ -16,7 +16,7 @@ const glfw = @import("../platform/glfw.zig");
 const log = std.log.scoped(.UI);
 
 pub const MAX_WORLDS: u8 = 32;
-pub const MAX_NAME_LEN: u8 = 32;
+pub const MAX_NAME_LEN: u8 = 64;
 
 pub const AppState = enum {
     title_menu,
@@ -282,7 +282,7 @@ pub const MenuController = struct {
         const tree = self.menuTree() orelse return;
         if (self.edit_world_name_label_id != NULL_WIDGET) {
             if (tree.getData(self.edit_world_name_label_id)) |data| {
-                var buf: [48]u8 = undefined;
+                var buf: [80]u8 = undefined;
                 const text = std.fmt.bufPrint(&buf, "World: {s}", .{name}) catch "World";
                 data.label.setText(text);
             }
@@ -1020,7 +1020,7 @@ pub const MenuController = struct {
         if (self.delete_label_id != NULL_WIDGET) {
             if (tree.getData(self.delete_label_id)) |data| {
                 const world_name = self.getSelectedWorldName();
-                var buf: [64]u8 = undefined;
+                var buf: [96]u8 = undefined;
                 const text = std.fmt.bufPrint(&buf, "Delete \"{s}\"?", .{world_name}) catch "Delete?";
                 data.label.setText(text);
             }
@@ -1042,7 +1042,7 @@ pub const MenuController = struct {
         if (self.backup_label_id != NULL_WIDGET) {
             if (tree.getData(self.backup_label_id)) |data| {
                 const world_name = self.getSelectedWorldName();
-                var buf: [64]u8 = undefined;
+                var buf: [96]u8 = undefined;
                 const text = std.fmt.bufPrint(&buf, "Backup \"{s}\"?", .{world_name}) catch "Backup?";
                 data.label.setText(text);
             }
