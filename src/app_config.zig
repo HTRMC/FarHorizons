@@ -129,6 +129,80 @@ pub fn listWorlds(allocator: std.mem.Allocator, names: [][]const u8) !u8 {
     return count;
 }
 
+const WorldType = @import("world/WorldState.zig").WorldType;
+const GameMode = @import("GameState.zig").GameMode;
+
+pub fn loadWorldType(allocator: std.mem.Allocator, name: []const u8) WorldType {
+    const worlds_dir = getWorldsDir(allocator) catch return .normal;
+    defer allocator.free(worlds_dir);
+    const io = Io.Threaded.global_single_threaded.io();
+    const path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}" ++ sep ++ "world_type.dat", .{ worlds_dir, name }) catch return .normal;
+    defer allocator.free(path);
+    const file = Dir.openFileAbsolute(io, path, .{}) catch return .normal;
+    defer file.close(io);
+    var buf: [1]u8 = undefined;
+    const n = file.readPositionalAll(io, &buf, 0) catch return .normal;
+    if (n == 1) {
+        inline for (@typeInfo(WorldType).@"enum".fields) |field| {
+            if (buf[0] == field.value) return @enumFromInt(field.value);
+        }
+    }
+    return .normal;
+}
+
+pub fn hasWorldGameMode(allocator: std.mem.Allocator, name: []const u8) bool {
+    const worlds_dir = getWorldsDir(allocator) catch return false;
+    defer allocator.free(worlds_dir);
+    const io = Io.Threaded.global_single_threaded.io();
+    const path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}" ++ sep ++ "game_mode.dat", .{ worlds_dir, name }) catch return false;
+    defer allocator.free(path);
+    const file = Dir.openFileAbsolute(io, path, .{}) catch return false;
+    file.close(io);
+    return true;
+}
+
+pub fn loadWorldGameMode(allocator: std.mem.Allocator, name: []const u8) GameMode {
+    const worlds_dir = getWorldsDir(allocator) catch return .creative;
+    defer allocator.free(worlds_dir);
+    const io = Io.Threaded.global_single_threaded.io();
+    const path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}" ++ sep ++ "game_mode.dat", .{ worlds_dir, name }) catch return .creative;
+    defer allocator.free(path);
+    const file = Dir.openFileAbsolute(io, path, .{}) catch return .creative;
+    defer file.close(io);
+    var buf: [1]u8 = undefined;
+    const n = file.readPositionalAll(io, &buf, 0) catch return .creative;
+    if (n == 1) {
+        inline for (@typeInfo(GameMode).@"enum".fields) |field| {
+            if (buf[0] == field.value) return @enumFromInt(field.value);
+        }
+    }
+    return .creative;
+}
+
+pub fn saveWorldType(allocator: std.mem.Allocator, name: []const u8, world_type: WorldType) void {
+    const worlds_dir = getWorldsDir(allocator) catch return;
+    defer allocator.free(worlds_dir);
+    const io = Io.Threaded.global_single_threaded.io();
+    const path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}" ++ sep ++ "world_type.dat", .{ worlds_dir, name }) catch return;
+    defer allocator.free(path);
+    const file = Dir.createFileAbsolute(io, path, .{}) catch return;
+    defer file.close(io);
+    const buf = [1]u8{@intFromEnum(world_type)};
+    file.writePositionalAll(io, &buf, 0) catch {};
+}
+
+pub fn saveWorldGameMode(allocator: std.mem.Allocator, name: []const u8, game_mode: GameMode) void {
+    const worlds_dir = getWorldsDir(allocator) catch return;
+    defer allocator.free(worlds_dir);
+    const io = Io.Threaded.global_single_threaded.io();
+    const path = std.fmt.allocPrint(allocator, "{s}" ++ sep ++ "{s}" ++ sep ++ "game_mode.dat", .{ worlds_dir, name }) catch return;
+    defer allocator.free(path);
+    const file = Dir.createFileAbsolute(io, path, .{}) catch return;
+    defer file.close(io);
+    const buf = [1]u8{@intFromEnum(game_mode)};
+    file.writePositionalAll(io, &buf, 0) catch {};
+}
+
 pub fn backupWorld(allocator: std.mem.Allocator, name: []const u8) !void {
     const worlds_dir = try getWorldsDir(allocator);
     defer allocator.free(worlds_dir);

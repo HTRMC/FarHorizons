@@ -15,6 +15,7 @@ pub const Entity = @import("Entity.zig");
 pub const Item = @import("Item.zig");
 const Raycast = @import("Raycast.zig");
 const Storage = @import("world/storage/Storage.zig");
+const app_config = @import("app_config.zig");
 const WorldRenderer = @import("renderer/vulkan/WorldRenderer.zig").WorldRenderer;
 const TlsfAllocator = @import("allocators/TlsfAllocator.zig").TlsfAllocator;
 const MeshWorker = @import("world/MeshWorker.zig").MeshWorker;
@@ -460,8 +461,12 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     // Load saved player position or find a valid spawn on land
     const player_data = if (storage_inst) |s| s.loadPlayerData(Storage.LOCAL_PLAYER_UUID) else null;
 
-    // Determine game mode: override > saved > default
-    const game_mode: GameMode = if (game_mode_override) |gm| gm else if (player_data) |pd| pd.game_mode else .creative;
+    // Determine game mode: override > game_mode.dat > saved > default
+    const game_mode: GameMode = if (game_mode_override) |gm| gm else blk: {
+        if (app_config.hasWorldGameMode(allocator, world_name))
+            break :blk app_config.loadWorldGameMode(allocator, world_name);
+        break :blk if (player_data) |pd| pd.game_mode else .creative;
+    };
     const saved_health: f32 = if (player_data) |pd| pd.health else 20.0;
     const saved_air: u16 = if (player_data) |pd| pd.air_supply else 300;
 

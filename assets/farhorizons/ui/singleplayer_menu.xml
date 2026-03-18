@@ -31,7 +31,7 @@
       <!-- Row 2: Edit | Delete | Backup | Back -->
       <panel direction="row" gap="8" width="fill" height="auto" cross_align="center">
         <button text="Edit" width="fill" height="40" flex_grow="1"
-                background="#335588FF" shadow="true" on_click="show_coming_soon"/>
+                background="#335588FF" shadow="true" on_click="edit_world"/>
         <button text="Delete" width="fill" height="40" flex_grow="1"
                 background="#553333FF" shadow="true" on_click="delete_world"/>
         <button text="Backup" width="fill" height="40" flex_grow="1"

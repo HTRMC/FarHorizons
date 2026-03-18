@@ -22,6 +22,7 @@ pub const AppState = enum {
     title_menu,
     singleplayer_menu,
     create_world,
+    edit_world,
     controls_title,
     controls_pause,
     loading,
@@ -32,18 +33,19 @@ pub const AppState = enum {
 
     pub fn isMenu(self: AppState) bool {
         return switch (self) {
-            .title_menu, .singleplayer_menu, .create_world, .controls_title, .controls_pause, .pause_menu, .inventory => true,
+            .title_menu, .singleplayer_menu, .create_world, .edit_world, .controls_title, .controls_pause, .pause_menu, .inventory => true,
             .loading, .playing, .saving => false,
         };
     }
 };
 
-pub const Action = enum { load_world, create_world, delete_world, backup_world, resume_game, return_to_title, quit };
+pub const Action = enum { load_world, create_world, delete_world, backup_world, edit_world, resume_game, return_to_title, quit };
 
 const ScreenType = enum {
     title,
     singleplayer,
     create_world,
+    edit_world,
     controls,
     pause,
     inventory,
@@ -112,6 +114,15 @@ pub const MenuController = struct {
     game_mode_label_id: WidgetId = NULL_WIDGET,
     selected_game_mode: @import("../GameState.zig").GameMode = .creative,
 
+    // Edit world screen state
+    edit_world_name_label_id: WidgetId = NULL_WIDGET,
+    edit_world_type_label_id: WidgetId = NULL_WIDGET,
+    edit_game_mode_label_id: WidgetId = NULL_WIDGET,
+    edit_world_type: @import("../world/WorldState.zig").WorldType = .normal,
+    edit_game_mode: @import("../GameState.zig").GameMode = .creative,
+    edit_world_name: [MAX_NAME_LEN]u8 = undefined,
+    edit_world_name_len: u8 = 0,
+
     pub fn init(ui_manager: *UiManager, allocator: std.mem.Allocator) MenuController {
         var self = MenuController{
             .ui_manager = ui_manager,
@@ -147,6 +158,7 @@ pub const MenuController = struct {
             .title_menu => .title,
             .singleplayer_menu => .singleplayer,
             .create_world => .create_world,
+            .edit_world => .edit_world,
             .controls_title, .controls_pause => .controls,
             .pause_menu => .pause,
             .inventory => .inventory,
@@ -159,6 +171,7 @@ pub const MenuController = struct {
             .title => "title_menu.xml",
             .singleplayer => "singleplayer_menu.xml",
             .create_world => "create_world_menu.xml",
+            .edit_world => "edit_world_menu.xml",
             .controls => "controls_menu.xml",
             .pause => "pause_menu.xml",
             .inventory => "inventory.xml",
@@ -174,6 +187,10 @@ pub const MenuController = struct {
                     self.cacheCreateWorldWidgetIds();
                     self.selected_world_type = .normal;
                     self.selected_game_mode = .creative;
+                },
+                .edit_world => {
+                    self.cacheEditWorldWidgetIds();
+                    self.populateEditWorldScreen();
                 },
                 .controls => {
                     self.cacheControlsWidgetIds();
@@ -199,6 +216,11 @@ pub const MenuController = struct {
                 self.create_world_input_id = NULL_WIDGET;
                 self.world_type_label_id = NULL_WIDGET;
                 self.game_mode_label_id = NULL_WIDGET;
+            },
+            .edit_world => {
+                self.edit_world_name_label_id = NULL_WIDGET;
+                self.edit_world_type_label_id = NULL_WIDGET;
+                self.edit_game_mode_label_id = NULL_WIDGET;
             },
             .controls => self.resetControlsWidgetIds(),
             .pause => {},
@@ -239,6 +261,58 @@ pub const MenuController = struct {
         self.create_world_input_id = tree.findById("create_world_input") orelse NULL_WIDGET;
         self.world_type_label_id = tree.findById("world_type_label") orelse NULL_WIDGET;
         self.game_mode_label_id = tree.findById("game_mode_label") orelse NULL_WIDGET;
+    }
+
+    fn cacheEditWorldWidgetIds(self: *MenuController) void {
+        const tree = self.menuTree() orelse return;
+        self.edit_world_name_label_id = tree.findById("edit_world_name_label") orelse NULL_WIDGET;
+        self.edit_world_type_label_id = tree.findById("edit_world_type_label") orelse NULL_WIDGET;
+        self.edit_game_mode_label_id = tree.findById("edit_game_mode_label") orelse NULL_WIDGET;
+    }
+
+    fn populateEditWorldScreen(self: *MenuController) void {
+        const name = self.edit_world_name[0..self.edit_world_name_len];
+
+        // Load current values from disk
+        self.edit_world_type = app_config.loadWorldType(self.allocator, name);
+        self.edit_game_mode = if (app_config.hasWorldGameMode(self.allocator, name))
+            app_config.loadWorldGameMode(self.allocator, name)
+        else
+            .creative;
+
+        // Set world name label
+        const tree = self.menuTree() orelse return;
+        if (self.edit_world_name_label_id != NULL_WIDGET) {
+            if (tree.getData(self.edit_world_name_label_id)) |data| {
+                var buf: [48]u8 = undefined;
+                const text = std.fmt.bufPrint(&buf, "World: {s}", .{name}) catch "World";
+                data.label.setText(text);
+            }
+        }
+        self.updateEditWorldTypeLabel();
+        self.updateEditGameModeLabel();
+    }
+
+    fn updateEditWorldTypeLabel(self: *MenuController) void {
+        if (self.edit_world_type_label_id == NULL_WIDGET) return;
+        const tree = self.menuTree() orelse return;
+        if (tree.getData(self.edit_world_type_label_id)) |data| {
+            data.label.setText(switch (self.edit_world_type) {
+                .normal => "World Type: Normal",
+                .debug => "World Type: Debug",
+            });
+        }
+    }
+
+    fn updateEditGameModeLabel(self: *MenuController) void {
+        if (self.edit_game_mode_label_id == NULL_WIDGET) return;
+        const tree = self.menuTree() orelse return;
+        if (tree.getData(self.edit_game_mode_label_id)) |data| {
+            data.label.setText(switch (self.edit_game_mode) {
+                .creative => "Game Mode: Creative",
+                .survival => "Game Mode: Survival",
+            });
+        }
     }
 
     fn cacheControlsWidgetIds(self: *MenuController) void {
@@ -406,6 +480,11 @@ pub const MenuController = struct {
         reg.register("backup_world", actionBackupWorld, ctx);
         reg.register("confirm_backup", actionConfirmBackup, ctx);
         reg.register("cancel_backup", actionCancelBackup, ctx);
+        reg.register("edit_world", actionEditWorld, ctx);
+        reg.register("edit_toggle_world_type", actionEditToggleWorldType, ctx);
+        reg.register("edit_toggle_game_mode", actionEditToggleGameMode, ctx);
+        reg.register("confirm_edit_world", actionConfirmEditWorld, ctx);
+        reg.register("cancel_edit_world", actionCancelEditWorld, ctx);
         reg.register("resume_game", actionResumeGame, ctx);
         reg.register("return_to_title", actionReturnToTitle, ctx);
         reg.register("quit_game", actionQuitGame, ctx);
@@ -789,6 +868,11 @@ pub const MenuController = struct {
         return self.world_names[sel][0..self.world_name_lens[sel]];
     }
 
+    pub fn getEditWorldName(self: *const MenuController) []const u8 {
+        if (self.edit_world_name_len == 0) return "";
+        return self.edit_world_name[0..self.edit_world_name_len];
+    }
+
     pub fn getInputName(self: *const MenuController) []const u8 {
         if (self.app_state != .create_world) return "";
         if (self.ui_manager.screen_count == 0) return "";
@@ -1077,6 +1161,44 @@ pub const MenuController = struct {
                 w.visible = false;
             }
         }
+    }
+
+    fn actionEditWorld(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        if (self.world_count == 0) return;
+        const name = self.getSelectedWorldName();
+        if (name.len == 0) return;
+        const len: u8 = @intCast(@min(name.len, MAX_NAME_LEN));
+        @memcpy(self.edit_world_name[0..len], name[0..len]);
+        self.edit_world_name_len = len;
+        self.transitionTo(.edit_world);
+    }
+
+    fn actionEditToggleWorldType(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.edit_world_type = switch (self.edit_world_type) {
+            .normal => .debug,
+            .debug => .normal,
+        };
+        self.updateEditWorldTypeLabel();
+    }
+
+    fn actionEditToggleGameMode(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.edit_game_mode = switch (self.edit_game_mode) {
+            .creative => .survival,
+            .survival => .creative,
+        };
+        self.updateEditGameModeLabel();
+    }
+
+    fn actionConfirmEditWorld(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.action = .edit_world;
+    }
+
+    fn actionCancelEditWorld(ctx: ?*anyopaque) void {
+        getSelf(ctx).transitionTo(.singleplayer_menu);
     }
 
     fn actionResumeGame(ctx: ?*anyopaque) void {

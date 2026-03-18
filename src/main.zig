@@ -285,7 +285,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 input_state.menu_ctrl.showDeleteConfirm();
             }
         },
-        .create_world => {
+        .create_world, .edit_world => {
             const consumed = input_state.ui_manager.handleKey(key, action, mods);
             if (!consumed and key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.transitionTo(.singleplayer_menu);
@@ -618,7 +618,7 @@ fn processGamepadInput(input_state: *InputState) void {
                 input_state.menu_ctrl.transitionTo(.title_menu);
             }
         },
-        .create_world => {
+        .create_world, .edit_world => {
             gamepadNavigateUi(input_state);
             if (gp.pressed(.b)) {
                 input_state.menu_ctrl.transitionTo(.singleplayer_menu);
@@ -831,6 +831,14 @@ pub fn main() !void {
                         };
                         menu_ctrl.refreshWorldList();
                     }
+                },
+                .edit_world => {
+                    const name = menu_ctrl.getEditWorldName();
+                    if (name.len > 0) {
+                        app_config.saveWorldType(allocator, name, menu_ctrl.edit_world_type);
+                        app_config.saveWorldGameMode(allocator, name, menu_ctrl.edit_game_mode);
+                    }
+                    menu_ctrl.transitionTo(.singleplayer_menu);
                 },
                 .resume_game => {
                     captureMouse(&input_state);
