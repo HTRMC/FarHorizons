@@ -1228,7 +1228,7 @@ fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: 
     self.markDirty(wx, wy, wz, true);
 }
 
-fn breakBlockNoDrop(self: *GameState) void {
+pub fn breakBlockNoDrop(self: *GameState) void {
     self.breakBlockImpl(false);
 }
 

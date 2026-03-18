@@ -462,9 +462,9 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     if (opts.mouseMatches(.attack, button) and input_state.mouse_captured and !gs.debug_camera_active) {
         if (action == glfw.GLFW_PRESS) {
             gs.attack_held = true;
-            // Creative: instant break on press
+            // Creative: instant break on press (no item drop)
             if (gs.game_mode == .creative) {
-                gs.breakBlock();
+                gs.breakBlockNoDrop();
             }
         } else if (action == glfw.GLFW_RELEASE) {
             gs.attack_held = false;
@@ -552,7 +552,7 @@ fn processGamepadInput(input_state: *InputState) void {
                 // Track right trigger held for hold-to-break
                 gs.attack_held = gp.right_trigger >= 0.5;
                 if (gp.rightTriggerPressed() and gs.game_mode == .creative) {
-                    gs.breakBlock();
+                    gs.breakBlockNoDrop();
                 }
             }
 
