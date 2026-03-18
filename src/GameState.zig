@@ -1519,8 +1519,8 @@ fn resolveOrientation(block_state: BlockState.StateId, yaw: f32, hit: Raycast.Bl
 }
 
 pub fn placeBlock(self: *GameState) void {
-    self.swing_requested = true;
     const hit = self.hit_result orelse return;
+    self.swing_requested = true;
 
     // If clicking on a door, toggle it instead of placing
     const clicked_block = self.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);

@@ -462,6 +462,7 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     if (opts.mouseMatches(.attack, button) and input_state.mouse_captured and !gs.debug_camera_active) {
         if (action == glfw.GLFW_PRESS) {
             gs.attack_held = true;
+            gs.swing_requested = true;
             // Creative: instant break on press (no item drop)
             if (gs.game_mode == .creative) {
                 gs.breakBlockNoDrop();
@@ -551,8 +552,11 @@ fn processGamepadInput(input_state: *InputState) void {
             if (!gs.debug_camera_active) {
                 // Track right trigger held for hold-to-break
                 gs.attack_held = gp.right_trigger >= 0.5;
-                if (gp.rightTriggerPressed() and gs.game_mode == .creative) {
-                    gs.breakBlockNoDrop();
+                if (gp.rightTriggerPressed()) {
+                    gs.swing_requested = true;
+                    if (gs.game_mode == .creative) {
+                        gs.breakBlockNoDrop();
+                    }
                 }
             }
 
@@ -769,6 +773,8 @@ pub fn main() !void {
     glfw.setCharCallback(window.handle, charCallback);
     glfw.setMouseButtonCallback(window.handle, mouseButtonCallback);
     glfw.setFramebufferSizeCallback(window.handle, framebufferSizeCallback);
+
+    input_state.gamepad.init();
 
     std.log.info("Entering main loop...", .{});
 
