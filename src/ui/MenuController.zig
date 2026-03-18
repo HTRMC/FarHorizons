@@ -38,7 +38,7 @@ pub const AppState = enum {
     }
 };
 
-pub const Action = enum { load_world, create_world, delete_world, resume_game, return_to_title, quit };
+pub const Action = enum { load_world, create_world, delete_world, backup_world, resume_game, return_to_title, quit };
 
 const ScreenType = enum {
     title,
@@ -103,6 +103,8 @@ pub const MenuController = struct {
     no_worlds_label_id: WidgetId = NULL_WIDGET,
     delete_confirm_id: WidgetId = NULL_WIDGET,
     delete_label_id: WidgetId = NULL_WIDGET,
+    backup_confirm_id: WidgetId = NULL_WIDGET,
+    backup_label_id: WidgetId = NULL_WIDGET,
     world_search_input_id: WidgetId = NULL_WIDGET,
     create_world_input_id: WidgetId = NULL_WIDGET,
     world_type_label_id: WidgetId = NULL_WIDGET,
@@ -227,6 +229,8 @@ pub const MenuController = struct {
         self.no_worlds_label_id = tree.findById("no_worlds_label") orelse NULL_WIDGET;
         self.delete_confirm_id = tree.findById("delete_confirm") orelse NULL_WIDGET;
         self.delete_label_id = tree.findById("delete_label") orelse NULL_WIDGET;
+        self.backup_confirm_id = tree.findById("backup_confirm") orelse NULL_WIDGET;
+        self.backup_label_id = tree.findById("backup_label") orelse NULL_WIDGET;
         self.world_search_input_id = tree.findById("world_search_input") orelse NULL_WIDGET;
     }
 
@@ -267,6 +271,8 @@ pub const MenuController = struct {
         self.no_worlds_label_id = NULL_WIDGET;
         self.delete_confirm_id = NULL_WIDGET;
         self.delete_label_id = NULL_WIDGET;
+        self.backup_confirm_id = NULL_WIDGET;
+        self.backup_label_id = NULL_WIDGET;
         self.world_search_input_id = NULL_WIDGET;
     }
 
@@ -397,6 +403,9 @@ pub const MenuController = struct {
         reg.register("delete_world", actionDeleteWorld, ctx);
         reg.register("confirm_delete", actionConfirmDelete, ctx);
         reg.register("cancel_delete", actionCancelDelete, ctx);
+        reg.register("backup_world", actionBackupWorld, ctx);
+        reg.register("confirm_backup", actionConfirmBackup, ctx);
+        reg.register("cancel_backup", actionCancelBackup, ctx);
         reg.register("resume_game", actionResumeGame, ctx);
         reg.register("return_to_title", actionReturnToTitle, ctx);
         reg.register("quit_game", actionQuitGame, ctx);
@@ -548,6 +557,12 @@ pub const MenuController = struct {
 
         if (self.delete_confirm_id != NULL_WIDGET) {
             if (tree.getWidget(self.delete_confirm_id)) |w| {
+                w.visible = false;
+            }
+        }
+
+        if (self.backup_confirm_id != NULL_WIDGET) {
+            if (tree.getWidget(self.backup_confirm_id)) |w| {
                 w.visible = false;
             }
         }
@@ -926,6 +941,28 @@ pub const MenuController = struct {
     }
 
     // ============================================================
+    // Backup confirm (modal within singleplayer screen)
+    // ============================================================
+
+    pub fn showBackupConfirm(self: *MenuController) void {
+        if (self.world_count == 0) return;
+        const tree = self.menuTree() orelse return;
+        if (self.backup_confirm_id != NULL_WIDGET) {
+            if (tree.getWidget(self.backup_confirm_id)) |w| {
+                w.visible = true;
+            }
+        }
+        if (self.backup_label_id != NULL_WIDGET) {
+            if (tree.getData(self.backup_label_id)) |data| {
+                const world_name = self.getSelectedWorldName();
+                var buf: [64]u8 = undefined;
+                const text = std.fmt.bufPrint(&buf, "Backup \"{s}\"?", .{world_name}) catch "Backup?";
+                data.label.setText(text);
+            }
+        }
+    }
+
+    // ============================================================
     // Action handlers (called from UI button clicks)
     // ============================================================
 
@@ -1012,6 +1049,31 @@ pub const MenuController = struct {
         const tree = self.menuTree() orelse return;
         if (self.delete_confirm_id != NULL_WIDGET) {
             if (tree.getWidget(self.delete_confirm_id)) |w| {
+                w.visible = false;
+            }
+        }
+    }
+
+    fn actionBackupWorld(ctx: ?*anyopaque) void {
+        getSelf(ctx).showBackupConfirm();
+    }
+
+    fn actionConfirmBackup(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.action = .backup_world;
+        const tree = self.menuTree() orelse return;
+        if (self.backup_confirm_id != NULL_WIDGET) {
+            if (tree.getWidget(self.backup_confirm_id)) |w| {
+                w.visible = false;
+            }
+        }
+    }
+
+    fn actionCancelBackup(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const tree = self.menuTree() orelse return;
+        if (self.backup_confirm_id != NULL_WIDGET) {
+            if (tree.getWidget(self.backup_confirm_id)) |w| {
                 w.visible = false;
             }
         }

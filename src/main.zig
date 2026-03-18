@@ -823,6 +823,15 @@ pub fn main() !void {
                         menu_ctrl.refreshWorldList();
                     }
                 },
+                .backup_world => {
+                    const name = menu_ctrl.getSelectedWorldName();
+                    if (name.len > 0) {
+                        app_config.backupWorld(allocator, name) catch |err| {
+                            std.log.err("Failed to backup world '{s}': {}", .{ name, err });
+                        };
+                        menu_ctrl.refreshWorldList();
+                    }
+                },
                 .resume_game => {
                     captureMouse(&input_state);
                 },

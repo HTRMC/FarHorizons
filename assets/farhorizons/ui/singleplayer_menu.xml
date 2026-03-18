@@ -35,7 +35,7 @@
         <button text="Delete" width="fill" height="40" flex_grow="1"
                 background="#553333FF" shadow="true" on_click="delete_world"/>
         <button text="Backup" width="fill" height="40" flex_grow="1"
-                background="#335588FF" shadow="true" on_click="show_coming_soon"/>
+                background="#335588FF" shadow="true" on_click="backup_world"/>
         <button text="Back" width="fill" height="40" flex_grow="1"
                 background="#555555FF" shadow="true" on_click="back_to_title"/>
       </panel>
@@ -49,6 +49,17 @@
                 on_click="confirm_delete"/>
         <button text="No" width="60" height="28" background="#555555FF" shadow="true"
                 on_click="cancel_delete"/>
+      </panel>
+
+      <!-- Backup confirmation (hidden by default) -->
+      <panel id="backup_confirm" direction="row" gap="8" width="fill" height="auto"
+             cross_align="center" visible="false">
+        <label id="backup_label" text="Backup world?" color="#55AAFFFF"
+               width="fill" flex_grow="1"/>
+        <button text="Yes" width="60" height="28" background="#335588FF" shadow="true"
+                on_click="confirm_backup"/>
+        <button text="No" width="60" height="28" background="#555555FF" shadow="true"
+                on_click="cancel_backup"/>
       </panel>
 
     </panel>
