@@ -1028,6 +1028,11 @@ pub const VulkanRenderer = struct {
                 self.render_state.break_renderer.recordDraw(command_buffer, gs, mvp);
             }
 
+            // Translucent world pass (water) — after entities so water tints things behind it
+            if (!overdraw) {
+                self.render_state.world_renderer.recordTranslucent(command_buffer, &mvp.m, day_night.ambient_light, fog_color, fog_start, fog_end);
+            }
+
             if (!overdraw) {
                 const VIEW_SHRINK = 1.0 - (1.0 / 256.0);
                 const view_scale = zlm.Mat4{

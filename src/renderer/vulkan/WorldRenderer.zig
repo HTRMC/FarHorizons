@@ -408,19 +408,45 @@ pub const WorldRenderer = struct {
             );
         }
 
-        // Pass 3: Translucent (alpha blend, no depth write)
-        if (self.draw_counts[2] > 0 and !overdraw_active) {
-            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.translucent_pipeline);
-            vk.cmdDrawIndexedIndirectCount(
-                command_buffer,
-                self.indirect_alloc.buffer,
-                @as(vk.VkDeviceSize, 2) * MAX_INDIRECT_COMMANDS * cmd_stride,
-                self.indirect_count_alloc.buffer,
-                @as(vk.VkDeviceSize, 2) * count_stride,
-                MAX_INDIRECT_COMMANDS,
-                cmd_stride,
-            );
-        }
+    }
+
+    pub fn recordTranslucent(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, ambient_light: [3]f32, fog_color: [3]f32, fog_start: f32, fog_end: f32) void {
+        if (self.draw_counts[2] == 0) return;
+
+        const cmd_stride: u32 = @sizeOf(vk.VkDrawIndexedIndirectCommand);
+        const count_stride: u32 = @sizeOf(u32);
+
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.texture_manager.bindless_descriptor_set},
+            0,
+            null,
+        );
+        vk.cmdBindIndexBuffer(command_buffer, self.static_index_alloc.buffer, 0, vk.VK_INDEX_TYPE_UINT16);
+
+        // Re-push constants (may have been invalidated by entity pipeline layouts)
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(zlm.Mat4), mvp);
+        const contrast: f32 = 0.25;
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, @sizeOf(zlm.Mat4), @sizeOf(f32), @ptrCast(&contrast));
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 80, @sizeOf([3]f32), @ptrCast(&ambient_light));
+        const FogPC = extern struct { color: [3]f32, start: f32, end: f32 };
+        const fog_pc = FogPC{ .color = fog_color, .start = fog_start, .end = fog_end };
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 96, @sizeOf(FogPC), @ptrCast(&fog_pc));
+
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.translucent_pipeline);
+        vk.cmdDrawIndexedIndirectCount(
+            command_buffer,
+            self.indirect_alloc.buffer,
+            @as(vk.VkDeviceSize, 2) * MAX_INDIRECT_COMMANDS * cmd_stride,
+            self.indirect_count_alloc.buffer,
+            @as(vk.VkDeviceSize, 2) * count_stride,
+            MAX_INDIRECT_COMMANDS,
+            cmd_stride,
+        );
     }
 
     fn createGraphicsPipeline(
