@@ -1143,6 +1143,16 @@ fn updateMobs(self: *GameState) void {
 
         Physics.updateEntity(&self.entities, i, &self.chunk_map, input_move, self.entities.mob_target_yaw[i], TICK_INTERVAL);
 
+        // Walk animation phase — accumulate based on horizontal distance moved
+        const dx = self.entities.pos[i][0] - self.entities.prev_pos[i][0];
+        const dz = self.entities.pos[i][2] - self.entities.prev_pos[i][2];
+        const horiz_dist = @sqrt(dx * dx + dz * dz);
+        if (ai_state == .walking and horiz_dist > 0.001) {
+            self.entities.walk_anim[i] += horiz_dist * 10.0;
+        } else {
+            self.entities.walk_anim[i] *= 0.8;
+        }
+
         // Smoothly rotate toward target yaw
         const current_yaw = self.entities.rotation[i][0];
         const target_yaw = self.entities.mob_target_yaw[i];

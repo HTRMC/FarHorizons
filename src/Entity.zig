@@ -113,6 +113,7 @@ pub const EntityStore = struct {
     mob_ai_state: [MAX_ENTITIES]MobAiState = .{.idle} ** MAX_ENTITIES,
     mob_ai_timer: [MAX_ENTITIES]u16 = .{0} ** MAX_ENTITIES,
     mob_target_yaw: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
+    walk_anim: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
 
     count: u32 = 0,
 
@@ -138,6 +139,7 @@ pub const EntityStore = struct {
         self.mob_ai_state[id] = .idle;
         self.mob_ai_timer[id] = 0;
         self.mob_target_yaw[id] = 0;
+        self.walk_anim[id] = 0;
         self.count += 1;
         return id;
     }
@@ -209,6 +211,7 @@ pub const EntityStore = struct {
             self.mob_ai_state[id] = self.mob_ai_state[last];
             self.mob_ai_timer[id] = self.mob_ai_timer[last];
             self.mob_target_yaw[id] = self.mob_target_yaw[last];
+            self.walk_anim[id] = self.walk_anim[last];
         }
         self.count -= 1;
     }
