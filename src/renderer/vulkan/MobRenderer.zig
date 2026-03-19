@@ -123,7 +123,7 @@ pub const MobRenderer = struct {
                 .sky_level = sky_level,
                 .block_light = block_light,
                 .model_yaw = angle,
-                .leg_phase = gs.entities.walk_anim[i],
+                .leg_phase = gs.entities.render_walk_anim[i],
             };
             vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
             vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);

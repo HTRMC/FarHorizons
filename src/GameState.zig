@@ -1144,6 +1144,7 @@ fn updateMobs(self: *GameState) void {
         Physics.updateEntity(&self.entities, i, &self.chunk_map, input_move, self.entities.mob_target_yaw[i], TICK_INTERVAL);
 
         // Walk animation phase — accumulate based on horizontal distance moved
+        self.entities.prev_walk_anim[i] = self.entities.walk_anim[i];
         const dx = self.entities.pos[i][0] - self.entities.prev_pos[i][0];
         const dz = self.entities.pos[i][2] - self.entities.prev_pos[i][2];
         const horiz_dist = @sqrt(dx * dx + dz * dz);
@@ -1224,6 +1225,7 @@ pub fn interpolateForRender(self: *GameState, alpha: f32) void {
     // Interpolate all entities
     for (0..self.entities.count) |i| {
         self.entities.render_pos[i] = lerpArray3(self.entities.prev_pos[i], self.entities.pos[i], alpha);
+        self.entities.render_walk_anim[i] = self.entities.prev_walk_anim[i] + (self.entities.walk_anim[i] - self.entities.prev_walk_anim[i]) * alpha;
     }
     switch (self.mode) {
         .flying => {
