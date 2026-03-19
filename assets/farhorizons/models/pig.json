@@ -1,0 +1,14 @@
+{
+  "format": "simple_boxes",
+  "texture": "textures/entity/pig.png",
+  "texture_size": [80, 32],
+  "parts": [
+    {"name": "head", "min": [-4, 8, 8], "size": [8, 8, 8], "uv": [0, 0]},
+    {"name": "snout", "min": [-2, 9, 16], "size": [4, 3, 1], "uv": [17, 17]},
+    {"name": "body", "min": [-5, 6, -5], "size": [10, 8, 14], "uv": [28, 8]},
+    {"name": "leg_fr", "min": [-5, 0, 4], "size": [4, 6, 4], "uv": [0, 16]},
+    {"name": "leg_fl", "min": [1, 0, 4], "size": [4, 6, 4], "uv": [0, 16]},
+    {"name": "leg_br", "min": [-5, 0, -4], "size": [4, 6, 4], "uv": [0, 16]},
+    {"name": "leg_bl", "min": [1, 0, -4], "size": [4, 6, 4], "uv": [0, 16]}
+  ]
+}

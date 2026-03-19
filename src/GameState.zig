@@ -530,6 +530,13 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
                 }
             }
             store.inventory[Entity.PLAYER] = inv;
+
+            // Spawn a few pigs near the player
+            store.spawnPig(.{ spawn_x + 5.0, spawn_y + 1.0, spawn_z + 3.0 });
+            store.spawnPig(.{ spawn_x - 4.0, spawn_y + 1.0, spawn_z + 6.0 });
+            store.spawnPig(.{ spawn_x + 3.0, spawn_y + 1.0, spawn_z - 5.0 });
+            store.spawnPig(.{ spawn_x - 6.0, spawn_y + 1.0, spawn_z - 3.0 });
+
             break :blk store;
         },
         .game_mode = game_mode,
@@ -869,6 +876,9 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     // Update item drop entities (iterate backwards for safe despawn)
     self.updateItemDrops();
 
+    // Update mob AI
+    self.updateMobs();
+
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
 
     // Request load for missing chunks within render distance (runs at tick rate).
@@ -1103,6 +1113,70 @@ fn updateItemDrops(self: *GameState) void {
                     }
                 }
                 j += 1;
+            }
+        }
+    }
+}
+
+fn updateMobs(self: *GameState) void {
+    for (1..self.entities.count) |idx| {
+        const i: u32 = @intCast(idx);
+        if (self.entities.kind[i] != .pig) continue;
+
+        // Physics
+        self.entities.prev_pos[i] = self.entities.pos[i];
+
+        const ai_state = self.entities.mob_ai_state[i];
+        var input_move = [3]f32{ 0, 0, 0 };
+        if (ai_state == .walking) {
+            input_move[0] = 1.0; // forward
+        }
+
+        // Jump if walking, on ground, and blocked (low horizontal velocity)
+        if (ai_state == .walking and self.entities.flags[i].on_ground) {
+            const vx = self.entities.vel[i][0];
+            const vz = self.entities.vel[i][2];
+            if (vx * vx + vz * vz < 0.1) {
+                self.entities.vel[i][1] = 8.0;
+            }
+        }
+
+        Physics.updateEntity(&self.entities, i, &self.chunk_map, input_move, self.entities.mob_target_yaw[i], TICK_INTERVAL);
+
+        // Smoothly rotate toward target yaw
+        const current_yaw = self.entities.rotation[i][0];
+        const target_yaw = self.entities.mob_target_yaw[i];
+        var diff = target_yaw - current_yaw;
+        // Normalize to [-pi, pi]
+        while (diff > std.math.pi) diff -= std.math.tau;
+        while (diff < -std.math.pi) diff += std.math.tau;
+        const turn_speed: f32 = 0.15;
+        if (@abs(diff) < turn_speed) {
+            self.entities.rotation[i][0] = target_yaw;
+        } else {
+            self.entities.rotation[i][0] += if (diff > 0) turn_speed else -turn_speed;
+        }
+
+        // AI timer
+        if (self.entities.mob_ai_timer[i] > 0) {
+            self.entities.mob_ai_timer[i] -= 1;
+        } else {
+            // Switch state
+            if (ai_state == .idle) {
+                self.entities.mob_ai_state[i] = .walking;
+                // Pick random yaw using game_time + entity index as seed
+                const seed = @as(u32, @bitCast(@as(i32, @truncate(self.game_time)))) +% i *% 2654435761;
+                const angle_bits = seed *% 1103515245 +% 12345;
+                self.entities.mob_target_yaw[i] = @as(f32, @floatFromInt(@mod(@as(i32, @bitCast(angle_bits >> 16)), @as(i32, 628)))) / 100.0;
+                // Walk for 60-150 ticks (2-5s)
+                const timer_bits = angle_bits *% 1103515245 +% 12345;
+                self.entities.mob_ai_timer[i] = @as(u16, @intCast(60 + (timer_bits >> 16) % 91));
+            } else {
+                self.entities.mob_ai_state[i] = .idle;
+                // Idle for 60-300 ticks (2-10s)
+                const seed = @as(u32, @bitCast(@as(i32, @truncate(self.game_time)))) +% i *% 2654435761;
+                const timer_bits = seed *% 1103515245 +% 12345;
+                self.entities.mob_ai_timer[i] = @as(u16, @intCast(60 + (timer_bits >> 16) % 241));
             }
         }
     }

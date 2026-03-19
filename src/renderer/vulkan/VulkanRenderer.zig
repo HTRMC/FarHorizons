@@ -1018,6 +1018,11 @@ pub const VulkanRenderer = struct {
                 self.render_state.item_drop_renderer.recordDraw(command_buffer, gs, mvp, day_night.ambient_light, sun_dir);
             }
 
+            // Mob entities (rendered with world depth)
+            if (!overdraw) {
+                self.render_state.mob_renderer.recordDraw(command_buffer, gs, mvp, day_night.ambient_light, sun_dir);
+            }
+
             // Block breaking overlay
             if (!overdraw) {
                 self.render_state.break_renderer.recordDraw(command_buffer, gs, mvp);

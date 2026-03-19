@@ -10,6 +10,12 @@ pub const MAX_ENTITIES: u32 = 256;
 pub const EntityKind = enum(u8) {
     player,
     item_drop,
+    pig,
+};
+
+pub const MobAiState = enum(u8) {
+    idle,
+    walking,
 };
 
 pub const EntityFlags = packed struct(u8) {
@@ -103,6 +109,11 @@ pub const EntityStore = struct {
     pickup_cooldown: [MAX_ENTITIES]u8 = .{0} ** MAX_ENTITIES,
     bob_offset: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
 
+    // Mob AI arrays
+    mob_ai_state: [MAX_ENTITIES]MobAiState = .{.idle} ** MAX_ENTITIES,
+    mob_ai_timer: [MAX_ENTITIES]u16 = .{0} ** MAX_ENTITIES,
+    mob_target_yaw: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
+
     count: u32 = 0,
 
     pub fn spawn(self: *EntityStore, entity_kind: EntityKind, spawn_pos: [3]f32) EntityId {
@@ -124,6 +135,9 @@ pub const EntityStore = struct {
         self.age_ticks[id] = 0;
         self.pickup_cooldown[id] = 0;
         self.bob_offset[id] = 0;
+        self.mob_ai_state[id] = .idle;
+        self.mob_ai_timer[id] = 0;
+        self.mob_target_yaw[id] = 0;
         self.count += 1;
         return id;
     }
@@ -157,6 +171,19 @@ pub const EntityStore = struct {
         self.bob_offset[id] = @as(f32, @floatFromInt(hash % 628)) / 100.0;
     }
 
+    pub fn spawnPig(self: *EntityStore, spawn_pos: [3]f32) void {
+        if (self.count >= MAX_ENTITIES) return;
+        const id = self.spawn(.pig, spawn_pos);
+        self.physics[id] = .{
+            .half_width = 0.45,
+            .height = 0.9,
+            .walk_speed = 1.5,
+            .friction = 20.0,
+            .gravity_scale = 1.0,
+        };
+        self.mob_ai_timer[id] = 60;
+    }
+
     /// Remove an entity by swap-removing with the last entity.
     pub fn despawn(self: *EntityStore, id: EntityId) void {
         std.debug.assert(id != PLAYER);
@@ -179,6 +206,9 @@ pub const EntityStore = struct {
             self.age_ticks[id] = self.age_ticks[last];
             self.pickup_cooldown[id] = self.pickup_cooldown[last];
             self.bob_offset[id] = self.bob_offset[last];
+            self.mob_ai_state[id] = self.mob_ai_state[last];
+            self.mob_ai_timer[id] = self.mob_ai_timer[last];
+            self.mob_target_yaw[id] = self.mob_target_yaw[last];
         }
         self.count -= 1;
     }
