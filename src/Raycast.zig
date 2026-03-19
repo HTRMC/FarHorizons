@@ -3,6 +3,7 @@ const zlm = @import("zlm");
 const WorldState = @import("world/WorldState.zig");
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 const Physics = @import("Physics.zig");
+const Entity = @import("Entity.zig");
 
 const BlockState = WorldState.BlockState;
 const AABB = BlockState.AABB;
@@ -189,6 +190,75 @@ fn testBlockHitbox(
             origin.y + dir.y * best_t,
             origin.z + dir.z * best_t,
         },
+    };
+}
+
+pub const EntityHitResult = struct {
+    entity_id: Entity.EntityId,
+    distance: f32,
+};
+
+/// Test a ray against all non-player entity AABBs. Returns the closest hit within MAX_RANGE.
+pub fn raycastEntities(entities: *const Entity.EntityStore, origin: zlm.Vec3, dir: zlm.Vec3) ?EntityHitResult {
+    const o = [3]f32{ origin.x, origin.y, origin.z };
+    const d = [3]f32{ dir.x, dir.y, dir.z };
+
+    var best_t: f32 = std.math.inf(f32);
+    var best_id: Entity.EntityId = 0;
+
+    for (1..entities.count) |idx| {
+        const i: u32 = @intCast(idx);
+        if (entities.kind[i] == .item_drop) continue;
+
+        const pos = entities.render_pos[i];
+        const hw = entities.physics[i].half_width;
+        const h = entities.physics[i].height;
+
+        const box_min = [3]f32{ pos[0] - hw, pos[1], pos[2] - hw };
+        const box_max = [3]f32{ pos[0] + hw, pos[1] + h, pos[2] + hw };
+
+        var t_near: f32 = -std.math.inf(f32);
+        var t_far: f32 = std.math.inf(f32);
+        var missed = false;
+
+        for (0..3) |axis| {
+            if (@abs(d[axis]) < 1e-9) {
+                if (o[axis] < box_min[axis] or o[axis] > box_max[axis]) {
+                    missed = true;
+                    break;
+                }
+            } else {
+                var t1 = (box_min[axis] - o[axis]) / d[axis];
+                var t2 = (box_max[axis] - o[axis]) / d[axis];
+                if (t1 > t2) {
+                    const tmp = t1;
+                    t1 = t2;
+                    t2 = tmp;
+                }
+                if (t1 > t_near) t_near = t1;
+                if (t2 < t_far) t_far = t2;
+                if (t_near > t_far or t_far < 0) {
+                    missed = true;
+                    break;
+                }
+            }
+        }
+        if (missed) continue;
+
+        const hit_t = if (t_near >= 0) t_near else 0;
+        if (hit_t > MAX_RANGE) continue;
+
+        if (hit_t < best_t) {
+            best_t = hit_t;
+            best_id = i;
+        }
+    }
+
+    if (best_t == std.math.inf(f32)) return null;
+
+    return .{
+        .entity_id = best_id,
+        .distance = best_t,
     };
 }
 

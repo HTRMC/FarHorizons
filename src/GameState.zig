@@ -260,6 +260,7 @@ input_move: [3]f32,
 jump_requested: bool,
 jump_cooldown: u8,
 hit_result: ?Raycast.BlockHitResult,
+entity_hit: ?Raycast.EntityHitResult = null,
 swing_requested: bool,
 dirty_chunks: DirtyChunkSet,
 debug_camera_active: bool,
@@ -285,6 +286,7 @@ max_health: f32 = 20.0,
 air_supply: u16 = 300,
 max_air: u16 = 300,
 damage_cooldown: u8 = 0,
+entity_attack_cooldown: u8 = 0,
 fall_start_y: f32 = 0.0,
 was_on_ground: bool = true,
 
@@ -862,6 +864,7 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
 
     // Survival damage systems
     if (self.damage_cooldown > 0) self.damage_cooldown -= 1;
+    if (self.entity_attack_cooldown > 0) self.entity_attack_cooldown -= 1;
     if (self.mode == .walking) {
         self.updateFallDamage();
         self.updateDrowning();
@@ -876,10 +879,12 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     // Update item drop entities (iterate backwards for safe despawn)
     self.updateItemDrops();
 
-    // Update mob AI
+    // Update mob AI and combat
     self.updateMobs();
+    self.updateMobCombat();
 
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+    self.entity_hit = Raycast.raycastEntities(&self.entities, self.camera.position, self.camera.getForward());
 
     // Request load for missing chunks within render distance (runs at tick rate).
     // Iterates center-outward so the first batch contains chunks near the player,
@@ -1191,6 +1196,72 @@ fn updateMobs(self: *GameState) void {
             }
         }
     }
+}
+
+fn updateMobCombat(self: *GameState) void {
+    // Tick down hurt_time and despawn dead mobs (iterate backwards for safe despawn)
+    var i: u32 = self.entities.count;
+    while (i > 1) {
+        i -= 1;
+        if (self.entities.kind[i] != .pig) continue;
+
+        if (self.entities.hurt_time[i] > 0) {
+            self.entities.hurt_time[i] -= 1;
+        }
+
+        if (self.entities.mob_health[i] <= 0) {
+            self.entities.despawn(i);
+        }
+    }
+}
+
+/// Try to attack the entity the player is looking at. Returns true if an entity
+/// was attacked (so the caller can skip block breaking).
+pub fn attackEntity(self: *GameState) bool {
+    if (self.entity_attack_cooldown > 0) return false;
+
+    const eh = self.entity_hit orelse return false;
+    const id = eh.entity_id;
+    if (id >= self.entities.count) return false;
+    if (self.entities.kind[id] != .pig) return false;
+
+    // Only attack if entity is closer than any block hit
+    if (self.hit_result) |block_hit| {
+        const cam = self.camera.position;
+        const bx = @as(f32, @floatFromInt(block_hit.block_pos[0])) + 0.5;
+        const by = @as(f32, @floatFromInt(block_hit.block_pos[1])) + 0.5;
+        const bz = @as(f32, @floatFromInt(block_hit.block_pos[2])) + 0.5;
+        const dx = bx - cam.x;
+        const dy = by - cam.y;
+        const dz = bz - cam.z;
+        if (eh.distance > @sqrt(dx * dx + dy * dy + dz * dz)) return false;
+    }
+
+    self.swing_requested = true;
+    self.entity_attack_cooldown = 15; // 0.5s at 30Hz
+
+    // Apply damage
+    self.entities.mob_health[id] -= self.attack_damage;
+    self.entities.hurt_time[id] = 10;
+
+    // Knockback: push away from player
+    const player_pos = self.entities.pos[Entity.PLAYER];
+    const mob_pos = self.entities.pos[id];
+    var kx = mob_pos[0] - player_pos[0];
+    var kz = mob_pos[2] - player_pos[2];
+    const len = @sqrt(kx * kx + kz * kz);
+    if (len > 0.001) {
+        kx /= len;
+        kz /= len;
+    } else {
+        kx = 0;
+        kz = 1;
+    }
+    const knockback_strength: f32 = 5.0;
+    self.entities.vel[id][0] += kx * knockback_strength;
+    self.entities.vel[id][1] = 4.0;
+    self.entities.vel[id][2] += kz * knockback_strength;
+    return true;
 }
 
 fn spawnPickupGhost(self: *GameState, entity_idx: u32) void {

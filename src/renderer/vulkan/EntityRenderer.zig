@@ -34,6 +34,8 @@ const EntityPushConstants = extern struct {
     sky_level: f32,            // 92-95  (sunDirSky.w)
     block_light: [3]f32,       // 96-107
     model_yaw: f32 = 0,        // 108-111 (blockLightYaw.w)
+    _pad_leg_phase: f32 = 0,   // 112-115 (legPhase, unused by player)
+    hurt_tint: f32 = 0,        // 116-119
 };
 
 pub const EntityRenderer = struct {

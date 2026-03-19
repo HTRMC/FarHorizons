@@ -9,6 +9,7 @@ layout(push_constant) uniform PushConstants {
     layout(offset = 64) vec4 ambientContrast;   // xyz=ambient, w=contrast
     layout(offset = 80) vec4 sunDirSky;         // xyz=sunDir, w=skyLevel
     layout(offset = 96) vec4 blockLightYaw;     // xyz=blockLight, w=modelYaw
+    layout(offset = 116) float hurtTint;        // damage flash intensity
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -25,5 +26,11 @@ void main() {
     vec3 sky = pc.ambientContrast.xyz * pc.sunDirSky.w * variation;
     vec3 light = min(vec3(1.0), sqrt(sky * sky + pc.blockLightYaw.xyz * pc.blockLightYaw.xyz));
 
-    outColor = vec4(texColor.rgb * light, texColor.a);
+    vec3 color = texColor.rgb * light;
+
+    if (pc.hurtTint > 0.0) {
+        color = mix(color, vec3(1.0, 0.0, 0.0), pc.hurtTint * 0.5);
+    }
+
+    outColor = vec4(color, texColor.a);
 }

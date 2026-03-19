@@ -461,11 +461,13 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     // Handle attack button held/released for hold-to-break
     if (opts.mouseMatches(.attack, button) and input_state.mouse_captured and !gs.debug_camera_active) {
         if (action == glfw.GLFW_PRESS) {
-            gs.attack_held = true;
-            gs.swing_requested = true;
-            // Creative: instant break on press (no item drop)
-            if (gs.game_mode == .creative) {
-                gs.breakBlockNoDrop();
+            if (!gs.attackEntity()) {
+                gs.attack_held = true;
+                gs.swing_requested = true;
+                // Creative: instant break on press (no item drop)
+                if (gs.game_mode == .creative) {
+                    gs.breakBlockNoDrop();
+                }
             }
         } else if (action == glfw.GLFW_RELEASE) {
             gs.attack_held = false;

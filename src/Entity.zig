@@ -117,6 +117,10 @@ pub const EntityStore = struct {
     prev_walk_anim: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
     render_walk_anim: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
 
+    // Mob combat arrays
+    mob_health: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
+    hurt_time: [MAX_ENTITIES]u8 = .{0} ** MAX_ENTITIES,
+
     count: u32 = 0,
 
     pub fn spawn(self: *EntityStore, entity_kind: EntityKind, spawn_pos: [3]f32) EntityId {
@@ -144,6 +148,8 @@ pub const EntityStore = struct {
         self.walk_anim[id] = 0;
         self.prev_walk_anim[id] = 0;
         self.render_walk_anim[id] = 0;
+        self.mob_health[id] = 0;
+        self.hurt_time[id] = 0;
         self.count += 1;
         return id;
     }
@@ -188,6 +194,7 @@ pub const EntityStore = struct {
             .gravity_scale = 1.0,
         };
         self.mob_ai_timer[id] = 60;
+        self.mob_health[id] = 10.0;
     }
 
     /// Remove an entity by swap-removing with the last entity.
@@ -218,6 +225,8 @@ pub const EntityStore = struct {
             self.walk_anim[id] = self.walk_anim[last];
             self.prev_walk_anim[id] = self.prev_walk_anim[last];
             self.render_walk_anim[id] = self.render_walk_anim[last];
+            self.mob_health[id] = self.mob_health[last];
+            self.hurt_time[id] = self.hurt_time[last];
         }
         self.count -= 1;
     }

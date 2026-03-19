@@ -28,6 +28,7 @@ const EntityPushConstants = extern struct {
     block_light: [3]f32,       // 96-107
     model_yaw: f32 = 0,        // 108-111 (blockLightYaw.w)
     leg_phase: f32 = 0,        // 112-115
+    hurt_tint: f32 = 0,        // 116-119
 };
 
 pub const MobRenderer = struct {
@@ -115,6 +116,8 @@ pub const MobRenderer = struct {
             const block_light = [3]f32{ light[0], light[1], light[2] };
             const sky_level = light[3];
 
+            const hurt_tint: f32 = if (gs.entities.hurt_time[i] > 0) 1.0 else 0.0;
+
             const pc = EntityPushConstants{
                 .mvp = mvp.m,
                 .ambient_light = ambient_light,
@@ -124,6 +127,7 @@ pub const MobRenderer = struct {
                 .block_light = block_light,
                 .model_yaw = angle,
                 .leg_phase = gs.entities.render_walk_anim[i],
+                .hurt_tint = hurt_tint,
             };
             vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
             vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
