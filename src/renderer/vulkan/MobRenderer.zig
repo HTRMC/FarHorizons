@@ -20,13 +20,14 @@ const Dir = Io.Dir;
 const MAX_VERTICES = 4096;
 
 const EntityPushConstants = extern struct {
-    mvp: [16]f32,
-    ambient_light: [3]f32,
-    contrast: f32,
-    sun_dir: [3]f32,
-    sky_level: f32,
-    block_light: [3]f32,
-    _pad: f32 = 0,
+    mvp: [16]f32,              // 0-63
+    ambient_light: [3]f32,     // 64-75
+    contrast: f32,             // 76-79  (ambientContrast.w)
+    sun_dir: [3]f32,           // 80-91
+    sky_level: f32,            // 92-95  (sunDirSky.w)
+    block_light: [3]f32,       // 96-107
+    model_yaw: f32 = 0,        // 108-111 (blockLightYaw.w)
+    leg_phase: f32 = 0,        // 112-115
 };
 
 pub const MobRenderer = struct {
@@ -102,8 +103,9 @@ pub const MobRenderer = struct {
             const pos = gs.entities.render_pos[i];
             const yaw = gs.entities.rotation[i][0];
 
-            const sin_y = @sin(yaw + std.math.pi);
-            const cos_y = @cos(yaw + std.math.pi);
+            const angle = yaw + std.math.pi;
+            const sin_y = @sin(angle);
+            const cos_y = @cos(angle);
             const model = zlm.Mat4{
                 .m = .{ cos_y, 0, -sin_y, 0, 0, 1, 0, 0, sin_y, 0, cos_y, 0, pos[0], pos[1], pos[2], 1 },
             };
@@ -116,10 +118,12 @@ pub const MobRenderer = struct {
             const pc = EntityPushConstants{
                 .mvp = mvp.m,
                 .ambient_light = ambient_light,
-                .contrast = 0.25,
+                .contrast = 1.0,
                 .sun_dir = sun_dir,
                 .sky_level = sky_level,
                 .block_light = block_light,
+                .model_yaw = angle,
+                .leg_phase = gs.entities.walk_anim[i],
             };
             vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
             vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
@@ -425,7 +429,7 @@ pub const MobRenderer = struct {
     fn createPipeline(self: *MobRenderer, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !void {
         const device = ctx.device;
 
-        const vert_spirv = try shader_compiler.compile("entity.vert", .vertex);
+        const vert_spirv = try shader_compiler.compile("mob.vert", .vertex);
         defer shader_compiler.allocator.free(vert_spirv);
 
         const frag_spirv = try shader_compiler.compile("entity.frag", .fragment);
@@ -458,7 +462,7 @@ pub const MobRenderer = struct {
         const color_blending = vk.VkPipelineColorBlendStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .pNext = null, .flags = 0, .logicOpEnable = vk.VK_FALSE, .logicOp = 0, .attachmentCount = 1, .pAttachments = &blend_att, .blendConstants = .{ 0, 0, 0, 0 } };
 
         const push_ranges = [_]vk.VkPushConstantRange{
-            .{ .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = 64 },
+            .{ .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT, .offset = 0, .size = @sizeOf(EntityPushConstants) },
             .{ .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 64, .size = @sizeOf(EntityPushConstants) - 64 },
         };
         self.pipeline_layout = try vk.createPipelineLayout(device, &.{
