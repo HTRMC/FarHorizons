@@ -1045,9 +1045,9 @@ pub const MenuController = struct {
                     const can = Crafting.canCraft(gs, &Crafting.recipes[recipe_idx]);
                     if (tree.getWidget(self.craft_btn_id)) |w| {
                         if (can) {
-                            w.background = .{ .r = 0.25, .g = 0.25, .b = 0.25, .a = 1.0 };
+                            w.background = .{ .r = 0.16, .g = 0.16, .b = 0.16, .a = 1.0 };
                         } else {
-                            w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.5 };
+                            w.background = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 0.5 };
                         }
                     }
                 }

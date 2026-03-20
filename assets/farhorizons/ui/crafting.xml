@@ -23,7 +23,7 @@
 
           <!-- Right column: detail + button (600-16*2-280-12 = 276) -->
           <panel width="276" height="378" direction="column" gap="6">
-            <panel width="fill" height="340" direction="column" gap="8" padding="8">
+            <panel width="fill" height="337" direction="column" gap="8" padding="8">
               <panel direction="row" gap="8" cross_align="center">
                 <panel id="detail_icon" width="45" height="45" background="#00000000"/>
                 <label id="detail_name" text="Select a recipe" color="#FFFFFFFF" font_size="1"/>
@@ -34,8 +34,9 @@
             </panel>
 
             <!-- Craft button -->
-            <button id="craft_btn" text="CRAFT" width="fill" height="32"
-                    background="#333333FF" on_click="craft_item" shadow="true"/>
+            <button id="craft_btn" text="CRAFT" width="273" height="30"
+                    background="#2A2A2AFF" on_click="craft_item" shadow="true"
+                    margin="0,0,0,1"/>
           </panel>
 
         </panel>

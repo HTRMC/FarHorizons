@@ -219,7 +219,7 @@
 
       <!-- Craft button -->
       <button id="craft_btn" text="CRAFT" width="fill" height="32"
-              background="#335588FF" on_click="craft_item" shadow="true"/>
+              background="#2A2A2AFF" on_click="craft_item" shadow="true"/>
       </panel>
     </panel>
 
