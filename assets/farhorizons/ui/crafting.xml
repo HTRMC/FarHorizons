@@ -1,0 +1,45 @@
+<screen>
+  <panel id="crafting_backdrop" width="fill" height="fill" layout="anchor" background="#00000088">
+
+    <!-- Main crafting panel -->
+    <panel width="600" height="450" anchor_x="center" anchor_y="center" layout="anchor">
+      <image id="workbench_bg" src="inv:workbench_bg" width="600" height="450"/>
+      <panel width="600" height="450" padding="16" direction="column"
+             cross_align="center" gap="8">
+
+        <!-- Title -->
+        <label id="crafting_title" text="WORKBENCH" color="#FFFFFFFF" font_size="2"/>
+
+        <!-- Content area: fixed height to fit within texture -->
+        <panel width="fill" height="378" direction="row" gap="12">
+
+          <!-- Left: recipe scroll list -->
+          <panel width="280" height="378" direction="column" gap="4" padding="0,8,0,0">
+            <label text="Recipes" color="#AAAACC" font_size="1"/>
+            <scroll_view id="crafting_scroll" width="fill" height="354" scroll_bar_visible="true">
+              <panel id="recipe_list" width="fill" height="auto" direction="column" gap="2"/>
+            </scroll_view>
+          </panel>
+
+          <!-- Right column: detail + button (600-16*2-280-12 = 276) -->
+          <panel width="276" height="378" direction="column" gap="6">
+            <panel width="fill" height="340" direction="column" gap="8" padding="8">
+              <panel direction="row" gap="8" cross_align="center">
+                <panel id="detail_icon" width="45" height="45" background="#00000000"/>
+                <label id="detail_name" text="Select a recipe" color="#FFFFFFFF" font_size="1"/>
+              </panel>
+
+              <label text="Materials:" color="#AAAACC"/>
+              <panel id="material_list" width="fill" height="auto" direction="column" gap="2"/>
+            </panel>
+
+            <!-- Craft button -->
+            <button id="craft_btn" text="CRAFT" width="fill" height="32"
+                    background="#333333FF" on_click="craft_item" shadow="true"/>
+          </panel>
+
+        </panel>
+      </panel>
+    </panel>
+  </panel>
+</screen>

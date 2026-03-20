@@ -194,6 +194,35 @@
       </panel>
     </panel>
 
+    <!-- ======== Crafting panel (right side) ======== -->
+    <panel width="303" height="420" anchor_x="center" anchor_y="center"
+           offset_x="428" layout="anchor">
+      <image id="crafting_bg" src="inv:crafting_bg" width="303" height="420"/>
+      <panel width="303" height="420" padding="8" direction="column" gap="4">
+
+      <label id="crafting_title" text="CRAFTING" color="#CCCCCCE6" shadow="true" shadow_color="#000000AA"
+             anchor_x="center"/>
+
+      <!-- Recipe scroll list -->
+      <scroll_view id="crafting_scroll" width="fill" height="200" scroll_bar_visible="true">
+        <panel id="recipe_list" width="fill" height="auto" direction="column" gap="2"/>
+      </scroll_view>
+
+      <!-- Detail panel -->
+      <panel width="fill" height="auto" direction="column" gap="4" padding="4">
+        <panel direction="row" gap="6" cross_align="center">
+          <panel id="detail_icon" width="32" height="32" background="#00000000"/>
+          <label id="detail_name" text="Select a recipe" color="#AAAAAAFF"/>
+        </panel>
+        <panel id="material_list" width="fill" height="auto" direction="column" gap="2"/>
+      </panel>
+
+      <!-- Craft button -->
+      <button id="craft_btn" text="CRAFT" width="fill" height="32"
+              background="#335588FF" on_click="craft_item" shadow="true"/>
+      </panel>
+    </panel>
+
     <!-- Cursor item (follows mouse when carrying) -->
     <panel id="cursor_item" width="48" height="48" layout="anchor"
            anchor_x="left" anchor_y="top" visible="false">

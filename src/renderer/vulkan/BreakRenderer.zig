@@ -6,7 +6,7 @@ const zlm = @import("zlm");
 const GameState = @import("../../GameState.zig");
 
 pub const BREAK_STAGE_COUNT = 10;
-pub const BREAK_TEX_BASE: u32 = 57; // first break texture index in array
+pub const BREAK_TEX_BASE: u32 = 58; // first break texture index in array
 
 const PushConstants = extern struct {
     mvp: [16]f32, // 64 bytes

@@ -14,6 +14,7 @@ const Options = @import("../Options.zig");
 const glfw = @import("../platform/glfw.zig");
 const Gamepad = @import("../Gamepad.zig");
 
+const Crafting = @import("../Crafting.zig");
 const log = std.log.scoped(.UI);
 
 pub const MAX_WORLDS: u8 = 32;
@@ -31,11 +32,12 @@ pub const AppState = enum {
     playing,
     pause_menu,
     inventory,
+    crafting,
     saving,
 
     pub fn isMenu(self: AppState) bool {
         return switch (self) {
-            .title_menu, .singleplayer_menu, .create_world, .edit_world, .controls_title, .controls_pause, .pause_menu, .inventory => true,
+            .title_menu, .singleplayer_menu, .create_world, .edit_world, .controls_title, .controls_pause, .pause_menu, .inventory, .crafting => true,
             .loading, .playing, .saving => false,
         };
     }
@@ -51,9 +53,13 @@ const ScreenType = enum {
     controls,
     pause,
     inventory,
+    crafting,
 };
 
 pub const MenuController = struct {
+    pub const CraftingMode = enum { hand, workbench };
+    pub const MAX_RECIPES: u8 = 64;
+
     ui_manager: *UiManager,
     allocator: std.mem.Allocator,
     app_state: AppState = .title_menu,
@@ -102,6 +108,20 @@ pub const MenuController = struct {
     player_rotation: f32 = 0.4,
     dragging_player: bool = false,
     drag_start_x: f32 = 0,
+
+    // Crafting screen state
+    crafting_mode: CraftingMode = .hand,
+    selected_recipe: ?u8 = null,
+    crafting_title_id: WidgetId = NULL_WIDGET,
+    recipe_list_id: WidgetId = NULL_WIDGET,
+    detail_icon_id: WidgetId = NULL_WIDGET,
+    detail_name_id: WidgetId = NULL_WIDGET,
+    material_list_id: WidgetId = NULL_WIDGET,
+    craft_btn_id: WidgetId = NULL_WIDGET,
+    recipe_row_ids: [MAX_RECIPES]WidgetId = .{NULL_WIDGET} ** MAX_RECIPES,
+    recipe_indices: [MAX_RECIPES]u8 = .{0} ** MAX_RECIPES,
+    visible_recipe_count: u8 = 0,
+    crafting_details_dirty: bool = true,
 
     coming_soon_modal_id: WidgetId = NULL_WIDGET,
 
@@ -165,6 +185,7 @@ pub const MenuController = struct {
             .controls_title, .controls_pause => .controls,
             .pause_menu => .pause,
             .inventory => .inventory,
+            .crafting => .crafting,
             .loading, .playing, .saving => null,
         };
     }
@@ -178,6 +199,7 @@ pub const MenuController = struct {
             .controls => "controls_menu.xml",
             .pause => "pause_menu.xml",
             .inventory => "inventory.xml",
+            .crafting => "crafting.xml",
         };
         if (self.ui_manager.loadScreenFromFile(file, self.allocator)) {
             switch (screen) {
@@ -201,6 +223,7 @@ pub const MenuController = struct {
                 },
                 .pause => {},
                 .inventory => self.cacheInventoryWidgetIds(),
+                .crafting => self.cacheCraftingWidgetIds(),
             }
         } else {
             log.err("Failed to load {s}", .{file});
@@ -228,6 +251,7 @@ pub const MenuController = struct {
             .controls => self.resetControlsWidgetIds(),
             .pause => {},
             .inventory => self.resetInventoryWidgetIds(),
+            .crafting => self.resetCraftingWidgetIds(),
         }
     }
 
@@ -428,6 +452,25 @@ pub const MenuController = struct {
                 setImageAtlas(tree, tree.findById("inv_player_bg") orelse NULL_WIDGET, ur.inv_player_rect);
             }
         }
+
+        // Resolve crafting panel background
+        if (self.ui_renderer) |ur| {
+            if (ur.hud_atlas_loaded) {
+                setImageAtlas(tree, tree.findById("crafting_bg") orelse NULL_WIDGET, ur.crafting_bg_rect);
+            }
+        }
+
+        // Cache crafting widget IDs (embedded in inventory screen)
+        self.crafting_title_id = tree.findById("crafting_title") orelse NULL_WIDGET;
+        self.recipe_list_id = tree.findById("recipe_list") orelse NULL_WIDGET;
+        self.detail_icon_id = tree.findById("detail_icon") orelse NULL_WIDGET;
+        self.detail_name_id = tree.findById("detail_name") orelse NULL_WIDGET;
+        self.material_list_id = tree.findById("material_list") orelse NULL_WIDGET;
+        self.craft_btn_id = tree.findById("craft_btn") orelse NULL_WIDGET;
+        self.crafting_mode = .hand;
+        self.selected_recipe = null;
+        self.crafting_details_dirty = true;
+        self.populateRecipeList();
     }
 
     fn setImageAtlas(tree: *WidgetTree, id: WidgetId, rect: @import("../renderer/vulkan/UiRenderer.zig").SpriteRect) void {
@@ -466,6 +509,8 @@ pub const MenuController = struct {
         self.ui_manager.cursor_follow_child = NULL_WIDGET;
         self.entity_visible = false;
         self.entity_viewport = .{ 0, 0, 0, 0 };
+        // Reset crafting state
+        self.resetCraftingWidgetIds();
     }
 
     // ============================================================
@@ -510,6 +555,9 @@ pub const MenuController = struct {
         reg.register("change_fov", actionChangeFov, ctx);
         reg.register("inv_slot_click", actionInvSlotClick, ctx);
         reg.register("inv_drop_outside", actionInvDropOutside, ctx);
+        reg.register("craft_recipe_select", actionCraftRecipeSelect, ctx);
+        reg.register("craft_item", actionCraftItem, ctx);
+        reg.register("crafting_close", actionCraftingClose, ctx);
     }
 
     // ============================================================
@@ -810,6 +858,362 @@ pub const MenuController = struct {
         } else {
             self.dragging_player = false;
         }
+
+        // Update crafting panel (embedded in inventory)
+        self.updateCrafting(gs);
+    }
+
+    // ============================================================
+    // Crafting screen
+    // ============================================================
+
+    fn cacheCraftingWidgetIds(self: *MenuController) void {
+        const tree = self.menuTree() orelse return;
+        self.crafting_title_id = tree.findById("crafting_title") orelse NULL_WIDGET;
+        self.recipe_list_id = tree.findById("recipe_list") orelse NULL_WIDGET;
+        self.detail_icon_id = tree.findById("detail_icon") orelse NULL_WIDGET;
+        self.detail_name_id = tree.findById("detail_name") orelse NULL_WIDGET;
+        self.material_list_id = tree.findById("material_list") orelse NULL_WIDGET;
+        self.craft_btn_id = tree.findById("craft_btn") orelse NULL_WIDGET;
+
+        // Resolve workbench background texture
+        if (self.ui_renderer) |ur| {
+            if (ur.hud_atlas_loaded) {
+                setImageAtlas(tree, tree.findById("workbench_bg") orelse NULL_WIDGET, ur.workbench_bg_rect);
+            }
+        }
+    }
+
+    fn resetCraftingWidgetIds(self: *MenuController) void {
+        self.crafting_title_id = NULL_WIDGET;
+        self.recipe_list_id = NULL_WIDGET;
+        self.detail_icon_id = NULL_WIDGET;
+        self.detail_name_id = NULL_WIDGET;
+        self.material_list_id = NULL_WIDGET;
+        self.craft_btn_id = NULL_WIDGET;
+        self.recipe_row_ids = .{NULL_WIDGET} ** MAX_RECIPES;
+        self.visible_recipe_count = 0;
+        self.selected_recipe = null;
+        self.game_state = null;
+    }
+
+    pub fn showCrafting(self: *MenuController, gs: *GameState, mode: CraftingMode) void {
+        self.crafting_mode = mode;
+        self.selected_recipe = null;
+        self.crafting_details_dirty = true;
+        self.game_state = gs;
+        self.loadScreen(.crafting);
+        self.app_state = .crafting;
+
+        // Set title
+        if (self.crafting_title_id != NULL_WIDGET) {
+            const tree = self.menuTree() orelse return;
+            if (tree.getData(self.crafting_title_id)) |data| {
+                data.label.setText(switch (mode) {
+                    .hand => "HAND CRAFTING",
+                    .workbench => "WORKBENCH",
+                });
+            }
+        }
+
+        self.populateRecipeList();
+    }
+
+    pub fn hideCrafting(self: *MenuController) void {
+        self.game_state = null;
+        self.unloadScreen(.crafting);
+        self.app_state = .playing;
+    }
+
+    fn populateRecipeList(self: *MenuController) void {
+        const tree = self.menuTree() orelse return;
+        if (self.recipe_list_id == NULL_WIDGET) return;
+
+        tree.clearChildren(self.recipe_list_id);
+        self.visible_recipe_count = 0;
+
+        for (Crafting.recipes, 0..) |*recipe, i| {
+            if (self.visible_recipe_count >= MAX_RECIPES) break;
+            // In hand mode, skip workbench-only recipes
+            if (self.crafting_mode == .hand and recipe.requires_workbench) continue;
+
+            const idx: u8 = @intCast(self.visible_recipe_count);
+            self.recipe_indices[idx] = @intCast(i);
+
+            const row_id = tree.addWidget(.panel, self.recipe_list_id) orelse return;
+            if (tree.getWidget(row_id)) |w| {
+                w.width = .fill;
+                w.height = .{ .px = 32 };
+                w.flex_direction = .row;
+                w.cross_align = .center;
+                w.padding = .{ .top = 2, .right = 16, .bottom = 2, .left = 8 };
+                w.background = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 0.6 };
+            }
+            if (tree.getData(row_id)) |data| {
+                data.panel.setAction("craft_recipe_select");
+                data.panel.hover_color = .{ .r = 1.0, .g = 1.0, .b = 1.0, .a = 0.1 };
+            }
+
+            // Output icon (colored panel)
+            const icon_id = tree.addWidget(.panel, row_id) orelse return;
+            if (tree.getWidget(icon_id)) |w| {
+                w.width = .{ .px = 24 };
+                w.height = .{ .px = 24 };
+                const c = GameState.itemColor(recipe.output.item);
+                w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+            }
+            if (tree.getData(icon_id)) |data| {
+                if (!GameState.Item.isToolItem(recipe.output.item)) {
+                    data.panel.block_state = BlockState.getDisplayState(recipe.output.item);
+                }
+                data.panel.draw_isometric = true;
+            }
+
+            // Recipe name label
+            const name_id = tree.addWidget(.label, row_id) orelse return;
+            if (tree.getWidget(name_id)) |w| {
+                w.width = .fill;
+                w.height = .auto;
+                w.flex_grow = 1.0;
+                w.margin = .{ .left = 8 };
+            }
+            if (tree.getData(name_id)) |data| {
+                const output_name = GameState.itemName(recipe.output.item);
+                data.label.setText(output_name);
+                data.label.color = .{ .r = 0.9, .g = 0.9, .b = 0.9, .a = 1.0 };
+            }
+
+            // Count label
+            if (recipe.output.count > 1) {
+                const count_id = tree.addWidget(.label, row_id) orelse return;
+                if (tree.getWidget(count_id)) |w| {
+                    w.width = .auto;
+                    w.height = .auto;
+                }
+                if (tree.getData(count_id)) |data| {
+                    var buf: [8]u8 = undefined;
+                    const text = std.fmt.bufPrint(&buf, "x{d}", .{recipe.output.count}) catch "?";
+                    data.label.setText(text);
+                    data.label.color = .{ .r = 0.7, .g = 0.7, .b = 0.5, .a = 1.0 };
+                }
+            }
+
+            self.recipe_row_ids[idx] = row_id;
+            self.visible_recipe_count += 1;
+        }
+    }
+
+    pub fn updateCrafting(self: *MenuController, gs: *GameState) void {
+        if (self.app_state != .crafting and self.app_state != .inventory) {
+            self.game_state = null;
+            return;
+        }
+        self.game_state = gs;
+        const tree = self.menuTree() orelse return;
+
+        // Update recipe row colors based on craftability
+        for (0..self.visible_recipe_count) |i| {
+            const row_id = self.recipe_row_ids[i];
+            if (row_id == NULL_WIDGET) continue;
+            const recipe_idx = self.recipe_indices[i];
+            const recipe = &Crafting.recipes[recipe_idx];
+            const can = Crafting.canCraft(gs, recipe);
+            const selected = if (self.selected_recipe) |sel| sel == i else false;
+
+            if (tree.getWidget(row_id)) |w| {
+                if (selected) {
+                    w.background = .{ .r = 0.25, .g = 0.25, .b = 0.25, .a = 0.8 };
+                } else if (can) {
+                    w.background = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 0.6 };
+                } else {
+                    w.background = .{ .r = 0.08, .g = 0.06, .b = 0.06, .a = 0.4 };
+                }
+            }
+        }
+
+        // Update detail panel only when selection or inventory changes
+        if (self.crafting_details_dirty) {
+            self.crafting_details_dirty = false;
+            self.updateCraftingDetails(gs, tree);
+        }
+
+        // Update craft button state every frame (cheap)
+        if (self.craft_btn_id != NULL_WIDGET) {
+            if (self.selected_recipe) |sel| {
+                if (sel < self.visible_recipe_count) {
+                    const recipe_idx = self.recipe_indices[sel];
+                    const can = Crafting.canCraft(gs, &Crafting.recipes[recipe_idx]);
+                    if (tree.getWidget(self.craft_btn_id)) |w| {
+                        if (can) {
+                            w.background = .{ .r = 0.25, .g = 0.25, .b = 0.25, .a = 1.0 };
+                        } else {
+                            w.background = .{ .r = 0.15, .g = 0.15, .b = 0.15, .a = 0.5 };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn updateCraftingDetails(self: *MenuController, gs: *GameState, tree: *WidgetTree) void {
+        const sel = self.selected_recipe orelse {
+            // No selection — clear detail panel
+            if (self.detail_name_id != NULL_WIDGET) {
+                if (tree.getData(self.detail_name_id)) |data| {
+                    data.label.setText("Select a recipe");
+                    data.label.color = .{ .r = 0.6, .g = 0.6, .b = 0.6, .a = 1.0 };
+                }
+            }
+            if (self.detail_icon_id != NULL_WIDGET) {
+                if (tree.getWidget(self.detail_icon_id)) |w| {
+                    w.background = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+                }
+                if (tree.getData(self.detail_icon_id)) |data| {
+                    data.panel.block_state = BlockState.defaultState(.air);
+                }
+            }
+            if (self.material_list_id != NULL_WIDGET) {
+                tree.clearChildren(self.material_list_id);
+            }
+            // Disable craft button
+            if (self.craft_btn_id != NULL_WIDGET) {
+                if (tree.getWidget(self.craft_btn_id)) |w| {
+                    w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 0.5 };
+                }
+            }
+            return;
+        };
+
+        if (sel >= self.visible_recipe_count) return;
+        const recipe_idx = self.recipe_indices[sel];
+        const recipe = &Crafting.recipes[recipe_idx];
+        const can = Crafting.canCraft(gs, recipe);
+
+        // Update output icon
+        if (self.detail_icon_id != NULL_WIDGET) {
+            if (tree.getWidget(self.detail_icon_id)) |w| {
+                const c = GameState.itemColor(recipe.output.item);
+                w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+            }
+            if (tree.getData(self.detail_icon_id)) |data| {
+                if (!GameState.Item.isToolItem(recipe.output.item)) {
+                    data.panel.block_state = BlockState.getDisplayState(recipe.output.item);
+                } else {
+                    data.panel.block_state = BlockState.defaultState(.air);
+                }
+                data.panel.draw_isometric = true;
+            }
+        }
+
+        // Update output name
+        if (self.detail_name_id != NULL_WIDGET) {
+            if (tree.getData(self.detail_name_id)) |data| {
+                const name = GameState.itemName(recipe.output.item);
+                var buf: [72]u8 = undefined;
+                if (recipe.output.count > 1) {
+                    const text = std.fmt.bufPrint(&buf, "{s} x{d}", .{ name, recipe.output.count }) catch name;
+                    data.label.setText(text);
+                } else {
+                    data.label.setText(name);
+                }
+                data.label.color = .{ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
+            }
+        }
+
+        // Update material list
+        if (self.material_list_id != NULL_WIDGET) {
+            tree.clearChildren(self.material_list_id);
+            for (0..recipe.input_count) |i| {
+                const inp = recipe.inputs[i];
+                const have = Crafting.countItem(gs, inp.item);
+                const enough = have >= inp.count;
+
+                const mat_row = tree.addWidget(.panel, self.material_list_id) orelse return;
+                if (tree.getWidget(mat_row)) |w| {
+                    w.width = .fill;
+                    w.height = .{ .px = 24 };
+                    w.flex_direction = .row;
+                    w.cross_align = .center;
+                    w.padding = .{ .left = 4 };
+                    w.gap = 6;
+                }
+
+                // Material icon
+                const mat_icon = tree.addWidget(.panel, mat_row) orelse return;
+                if (tree.getWidget(mat_icon)) |w| {
+                    w.width = .{ .px = 18 };
+                    w.height = .{ .px = 18 };
+                    const c = GameState.itemColor(inp.item);
+                    w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
+                }
+                if (tree.getData(mat_icon)) |data| {
+                    if (!GameState.Item.isToolItem(inp.item)) {
+                        data.panel.block_state = BlockState.getDisplayState(inp.item);
+                    }
+                    data.panel.draw_isometric = true;
+                }
+
+                // Material text: "name  have/need"
+                const mat_label = tree.addWidget(.label, mat_row) orelse return;
+                if (tree.getWidget(mat_label)) |w| {
+                    w.width = .fill;
+                    w.height = .auto;
+                    w.flex_grow = 1.0;
+                }
+                if (tree.getData(mat_label)) |data| {
+                    const mat_name = GameState.itemName(inp.item);
+                    var mat_buf: [80]u8 = undefined;
+                    const text = std.fmt.bufPrint(&mat_buf, "{s}  {d}/{d}", .{ mat_name, have, inp.count }) catch mat_name;
+                    data.label.setText(text);
+                    if (enough) {
+                        data.label.color = .{ .r = 0.5, .g = 1.0, .b = 0.5, .a = 1.0 };
+                    } else {
+                        data.label.color = .{ .r = 1.0, .g = 0.4, .b = 0.4, .a = 1.0 };
+                    }
+                }
+            }
+        }
+
+        // Update craft button
+        if (self.craft_btn_id != NULL_WIDGET) {
+            if (tree.getWidget(self.craft_btn_id)) |w| {
+                if (can) {
+                    w.background = .{ .r = 0.2, .g = 0.33, .b = 0.53, .a = 1.0 };
+                } else {
+                    w.background = .{ .r = 0.2, .g = 0.2, .b = 0.3, .a = 0.5 };
+                }
+            }
+        }
+    }
+
+    fn actionCraftRecipeSelect(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const pressed = self.ui_manager.pressed_widget;
+        if (pressed == NULL_WIDGET) return;
+
+        for (0..self.visible_recipe_count) |i| {
+            if (self.recipe_row_ids[i] == pressed) {
+                self.selected_recipe = @intCast(i);
+                self.crafting_details_dirty = true;
+                return;
+            }
+        }
+    }
+
+    fn actionCraftItem(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const gs = self.game_state orelse return;
+        const sel = self.selected_recipe orelse return;
+        if (sel >= self.visible_recipe_count) return;
+        const recipe_idx = self.recipe_indices[sel];
+        if (Crafting.craft(gs, &Crafting.recipes[recipe_idx])) {
+            self.crafting_details_dirty = true;
+        }
+    }
+
+    fn actionCraftingClose(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        self.hideCrafting();
     }
 
     pub fn showTitleMenu(self: *MenuController) void {
@@ -824,6 +1228,10 @@ pub const MenuController = struct {
             }
             self.game_state = null;
             self.unloadScreen(.inventory);
+        }
+        if (self.app_state == .crafting) {
+            self.game_state = null;
+            self.unloadScreen(.crafting);
         }
         if (self.hud_binder != null) {
             self.unloadHud();

@@ -69,6 +69,8 @@ pub const UiRenderer = struct {
     inv_player_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     inv_slot_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     inv_slot_hover_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    crafting_bg_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
+    workbench_bg_rect: SpriteRect = .{ .u0 = 0, .v0 = 0, .u1 = 0, .v1 = 0 },
     crosshair_size: [2]f32 = .{ 0, 0 },
     hotbar_size: [2]f32 = .{ 0, 0 },
     selection_size: [2]f32 = .{ 0, 0 },
@@ -632,8 +634,8 @@ pub const UiRenderer = struct {
         const hud_dir = sep ++ "textures" ++ sep ++ "gui" ++ sep ++ "sprites" ++ sep ++ "hud" ++ sep;
         const inv_dir = sep ++ "textures" ++ sep ++ "gui" ++ sep ++ "sprites" ++ sep ++ "inventory" ++ sep;
 
-        const sprite_dirs = [_][]const u8{ hud_dir, hud_dir, hud_dir, hud_dir, inv_dir, inv_dir, inv_dir, inv_dir };
-        const sprite_names = [_][]const u8{ "crosshair.png", "hotbar.png", "hotbar_selection.png", "hotbar_offhand_left.png", "inventory_bg.png", "player_panel_bg.png", "slot.png", "slot_hover.png" };
+        const sprite_dirs = [_][]const u8{ hud_dir, hud_dir, hud_dir, hud_dir, inv_dir, inv_dir, inv_dir, inv_dir, inv_dir, inv_dir };
+        const sprite_names = [_][]const u8{ "crosshair.png", "hotbar.png", "hotbar_selection.png", "hotbar_offhand_left.png", "inventory_bg.png", "player_panel_bg.png", "slot.png", "slot_hover.png", "crafting_bg.png", "workbench_bg.png" };
         const sprite_count = sprite_names.len;
 
         var widths: [sprite_count]c_int = undefined;
@@ -885,6 +887,12 @@ pub const UiRenderer = struct {
         y_off += @floatFromInt(heights[6]);
 
         self.inv_slot_hover_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[7])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[7]))) / fah };
+        y_off += @floatFromInt(heights[7]);
+
+        self.crafting_bg_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[8])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[8]))) / fah };
+        y_off += @floatFromInt(heights[8]);
+
+        self.workbench_bg_rect = .{ .u0 = 0, .v0 = y_off / fah, .u1 = @as(f32, @floatFromInt(widths[9])) / faw, .v1 = (y_off + @as(f32, @floatFromInt(heights[9]))) / fah };
 
         self.hud_atlas_loaded = true;
         std.log.info("HUD atlas loaded: {}x{} ({} sprites)", .{ aw, ah, sprite_count });

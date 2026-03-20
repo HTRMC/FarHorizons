@@ -172,6 +172,8 @@ pub fn blockName(state: BlockState.StateId) []const u8 {
         .ladder => "Ladder",
         .oak_door => "Oak Door",
         .oak_fence => "Oak Fence",
+        .crafting_table => "Crafting Table",
+        .stick => "Stick",
     };
 }
 
@@ -234,6 +236,8 @@ pub fn blockColor(state: BlockState.StateId) [4]f32 {
         .ladder => .{ 0.6, 0.45, 0.25, 1.0 },
         .oak_door => .{ 0.7, 0.55, 0.33, 1.0 },
         .oak_fence => .{ 0.7, 0.55, 0.33, 1.0 },
+        .crafting_table => .{ 0.6, 0.45, 0.25, 1.0 },
+        .stick => .{ 0.55, 0.4, 0.2, 1.0 },
     };
 }
 
@@ -290,6 +294,7 @@ entity_attack_cooldown: u8 = 0,
 fall_start_y: f32 = 0.0,
 was_on_ground: bool = true,
 
+open_workbench_requested: bool = false,
 world_seed: u64,
 world_type: WorldState.WorldType,
 storage: ?*Storage,
@@ -1686,9 +1691,16 @@ pub fn placeBlock(self: *GameState) void {
         return;
     }
 
+    // If clicking on a crafting table, open workbench crafting
+    if (BlockState.getBlock(clicked_block) == .crafting_table) {
+        self.open_workbench_requested = true;
+        return;
+    }
+
     const stack = &self.playerInv().hotbar[self.selected_slot];
     if (stack.isEmpty()) return;
     if (stack.isTool()) return; // tools can't be placed as blocks
+    if (BlockState.getBlock(stack.block).isNonPlaceable()) return; // non-placeable items
     var block_state = stack.block;
 
     // Double slab: placing a slab on a compatible existing slab merges into a full block

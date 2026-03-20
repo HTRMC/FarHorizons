@@ -9,7 +9,7 @@ const tracy = @import("../../platform/tracy.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
-const BLOCK_TEXTURE_COUNT = 67; // 57 block textures + 10 break stages
+const BLOCK_TEXTURE_COUNT = 68; // 58 block textures + 10 break stages
 const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "glass.png",      "grass_block.png", "dirt.png",       "stone.png",        // 0-3
     "glowstone.png",  "sand.png",        "snow.png",       "water.png",        // 4-7
@@ -27,11 +27,11 @@ const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "purple_glowstone.png",  "magenta_glowstone.png",  "pink_glowstone.png",       // 46-48
     "hot_pink_glowstone.png","white_glowstone.png",    "warm_white_glowstone.png", // 49-51
     "light_gray_glowstone.png","gray_glowstone.png",   "brown_glowstone.png",      // 52-54
-    "tan_glowstone.png",     "black_glowstone.png",                                // 55-56
-    "destroy_stage_0.png", "destroy_stage_1.png", "destroy_stage_2.png",        // 57-59
-    "destroy_stage_3.png", "destroy_stage_4.png", "destroy_stage_5.png",        // 60-62
-    "destroy_stage_6.png", "destroy_stage_7.png", "destroy_stage_8.png",        // 63-65
-    "destroy_stage_9.png",                                                       // 66
+    "tan_glowstone.png",     "black_glowstone.png",    "crafting_table.png",       // 55-57
+    "destroy_stage_0.png", "destroy_stage_1.png", "destroy_stage_2.png",        // 58-60
+    "destroy_stage_3.png", "destroy_stage_4.png", "destroy_stage_5.png",        // 61-63
+    "destroy_stage_6.png", "destroy_stage_7.png", "destroy_stage_8.png",        // 64-66
+    "destroy_stage_9.png",                                                       // 67
 };
 
 const TEX_W = 16;

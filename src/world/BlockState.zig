@@ -69,12 +69,18 @@ pub const Block = enum(u8) {
     ladder,
     oak_door,
     oak_fence,
+    crafting_table,
+    stick,
 
     pub fn isShaped(self: Block) bool {
         return switch (self) {
             .oak_slab, .oak_stairs, .torch, .ladder, .oak_door, .oak_fence => true,
             else => false,
         };
+    }
+
+    pub fn isNonPlaceable(self: Block) bool {
+        return self == .stick;
     }
 };
 
@@ -261,13 +267,13 @@ fn computeProps(block: Block, props: u8) StateProps {
 
     return .{
         .is_opaque = switch (block) {
-            .air, .glass, .water, .oak_leaves => false,
+            .air, .glass, .water, .oak_leaves, .stick => false,
             .oak_slab => is_double_slab,
             .oak_stairs, .torch, .ladder, .oak_door, .oak_fence => false,
             else => true,
         },
         .is_solid = switch (block) {
-            .air, .water, .torch, .ladder => false,
+            .air, .water, .torch, .ladder, .stick => false,
             .oak_door => !door_open,
             else => true,
         },
@@ -282,7 +288,7 @@ fn computeProps(block: Block, props: u8) StateProps {
             .oak_stairs, .torch, .ladder, .oak_door, .oak_fence => false,
             else => true,
         },
-        .is_targetable = block != .air and block != .water,
+        .is_targetable = block != .air and block != .water and block != .stick,
         .is_shaped = switch (block) {
             .oak_slab => !is_double_slab,
             .oak_stairs, .torch, .ladder, .oak_door, .oak_fence => true,
@@ -337,7 +343,8 @@ fn computeHardness(block: Block) f32 {
         .gold_ore, .iron_ore, .coal_ore, .diamond_ore => 3.0,
         .iron_block, .gold_block, .diamond_block => 5.0,
         .oak_log => 2.0,
-        .oak_planks, .oak_fence, .oak_door, .oak_stairs, .oak_slab, .bookshelf => 2.0,
+        .oak_planks, .oak_fence, .oak_door, .oak_stairs, .oak_slab, .bookshelf, .crafting_table => 2.0,
+        .stick => 0.0,
         .dirt, .grass_block => 0.5,
         .sand, .gravel => 0.5,
         .snow => 0.2,
@@ -362,7 +369,7 @@ fn computePreferredTool(block: Block) u4 {
         .gold_ore, .iron_ore, .coal_ore, .diamond_ore,
         .iron_block, .gold_block, .diamond_block, .pumice,
         => 1, // pickaxe
-        .oak_log, .oak_planks, .oak_fence, .oak_door, .oak_stairs, .oak_slab, .bookshelf,
+        .oak_log, .oak_planks, .oak_fence, .oak_door, .oak_stairs, .oak_slab, .bookshelf, .crafting_table,
         => 2, // axe
         .dirt, .grass_block, .sand, .gravel, .snow,
         => 3, // shovel
@@ -709,6 +716,8 @@ fn computeTexIndices(block: Block, props: u8) TexIndices {
             break :blk if (half == .bottom) .{ .top = 32, .side = 32 } else .{ .top = 33, .side = 33 };
         },
         .oak_fence => .{ .top = 11, .side = 11 },
+        .crafting_table => .{ .top = 57, .side = 57 },
+        .stick => .{ .top = -1, .side = -1 },
     };
 }
 

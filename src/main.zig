@@ -307,6 +307,13 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             }
             _ = input_state.ui_manager.handleKey(key, action, mods);
         },
+        .crafting => {
+            if (opts.keyMatches(.pause, key) and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.hideCrafting();
+                captureMouse(input_state);
+                return;
+            }
+        },
         .inventory => {
             if ((opts.keyMatches(.open_inventory, key) or opts.keyMatches(.pause, key)) and action == glfw.GLFW_PRESS) {
                 input_state.menu_ctrl.hideInventory(input_state.game_state);
@@ -333,6 +340,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 uncaptureMouse(input_state);
                 return;
             }
+
 
             // Track drop key held state for tick-based dropping
             if (opts.keyMatches(.drop_item, key)) {
@@ -605,6 +613,13 @@ fn processGamepadInput(input_state: *InputState) void {
             if (gp.pressed(.start) or gp.pressed(.b)) {
                 input_state.menu_ctrl.hidePauseMenu();
                 input_state.menu_ctrl.action = .resume_game;
+            }
+        },
+        .crafting => {
+            gamepadNavigateUi(input_state);
+            if (gp.pressed(.b)) {
+                input_state.menu_ctrl.hideCrafting();
+                captureMouse(input_state);
             }
         },
         .inventory => {
@@ -1093,6 +1108,38 @@ pub fn main() !void {
 
                 menu_ctrl.updateInventory(gs);
                 menu_ctrl.updateHud(gs, &input_state.gamepad);
+            }
+        }
+
+        // Update crafting screen
+        if (menu_ctrl.app_state == .crafting) {
+            if (game_state) |*gs| {
+                // Keep the world ticking while crafting is open
+                gs.input_move = .{ 0, 0, 0 };
+                gs.jump_requested = false;
+                tick_accumulator += delta_time;
+                if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
+                while (tick_accumulator >= GameState.TICK_INTERVAL) {
+                    gs.fixedUpdate(input_state.move_speed);
+                    tick_accumulator -= GameState.TICK_INTERVAL;
+                }
+                const alpha = tick_accumulator / GameState.TICK_INTERVAL;
+                gs.interpolateForRender(alpha);
+
+                menu_ctrl.updateCrafting(gs);
+                menu_ctrl.updateHud(gs, &input_state.gamepad);
+            }
+        }
+
+        // Poll workbench request after game tick
+        if (menu_ctrl.app_state == .playing) {
+            if (game_state) |*gs| {
+                if (gs.open_workbench_requested) {
+                    gs.open_workbench_requested = false;
+                    resetAttackState(&input_state);
+                    menu_ctrl.showCrafting(gs, .workbench);
+                    uncaptureMouse(&input_state);
+                }
             }
         }
 
