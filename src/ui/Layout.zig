@@ -153,7 +153,8 @@ fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, t
         const sv = &tree.data[id].scroll_view;
         const content_x = w.computed_rect.x + w.padding.left;
         const content_y = w.computed_rect.y + w.padding.top;
-        const content_w = w.computed_rect.w - w.padding.horizontal();
+        const bar_reserved: f32 = if (sv.scroll_bar_visible) 6 else 0;
+        const content_w = w.computed_rect.w - w.padding.horizontal() - bar_reserved;
         const content_h = w.computed_rect.h - w.padding.vertical();
 
         layoutFlexChildrenOffset(tree, id, content_x, content_y - sv.scroll_y, content_w, content_h, text_renderer);

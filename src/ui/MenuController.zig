@@ -946,7 +946,7 @@ pub const MenuController = struct {
                 w.height = .{ .px = 32 };
                 w.flex_direction = .row;
                 w.cross_align = .center;
-                w.padding = .{ .top = 2, .right = 16, .bottom = 2, .left = 8 };
+                w.padding = .{ .top = 2, .right = 4, .bottom = 2, .left = 6 };
                 w.background = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 0.6 };
             }
             if (tree.getData(row_id)) |data| {

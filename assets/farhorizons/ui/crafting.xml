@@ -17,7 +17,7 @@
           <panel width="280" height="378" direction="column" gap="4" padding="0,8,0,0">
             <label text="Recipes" color="#AAAACC" font_size="1"/>
             <scroll_view id="crafting_scroll" width="fill" height="354" scroll_bar_visible="true">
-              <panel id="recipe_list" width="fill" height="auto" direction="column" gap="2"/>
+              <panel id="recipe_list" width="fill" height="auto" direction="column" gap="2" padding="0,0,0,2"/>
             </scroll_view>
           </panel>
 
