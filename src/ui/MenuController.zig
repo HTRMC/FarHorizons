@@ -946,7 +946,7 @@ pub const MenuController = struct {
                 w.height = .{ .px = 32 };
                 w.flex_direction = .row;
                 w.cross_align = .center;
-                w.padding = .{ .top = 2, .right = 4, .bottom = 2, .left = 6 };
+                w.padding = .{ .top = 2, .right = 8, .bottom = 2, .left = 6 };
                 w.background = .{ .r = 0.1, .g = 0.1, .b = 0.1, .a = 0.6 };
             }
             if (tree.getData(row_id)) |data| {
@@ -981,6 +981,7 @@ pub const MenuController = struct {
                 const output_name = GameState.itemName(recipe.output.item);
                 data.label.setText(output_name);
                 data.label.color = .{ .r = 0.9, .g = 0.9, .b = 0.9, .a = 1.0 };
+                data.label.wrap = true;
             }
 
             // Count label
@@ -989,6 +990,7 @@ pub const MenuController = struct {
                 if (tree.getWidget(count_id)) |w| {
                     w.width = .auto;
                     w.height = .auto;
+                    w.margin = .{ .right = 4 };
                 }
                 if (tree.getData(count_id)) |data| {
                     var buf: [8]u8 = undefined;
