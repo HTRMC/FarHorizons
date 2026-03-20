@@ -52,7 +52,7 @@
 
     <!-- Health bar: left of center, above hotbar -->
     <progress_bar id="health_bar" width="182" height="9"
-                  anchor_x="center" anchor_y="end" offset_x="-91" offset_y="-60"
+                  anchor_x="center" anchor_y="end" offset_x="-123" offset_y="-76"
                   fill_color="#CC3333FF" track_color="#33333399" visible="false"/>
 
     <!-- Air bar: right of center, above hotbar -->
