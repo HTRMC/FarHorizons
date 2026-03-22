@@ -102,11 +102,17 @@ pub const ItemDropRenderer = struct {
     ) void {
         var has_work = false;
         for (1..gs.entities.count) |i| {
-            if (gs.entities.kind[i] == .item_drop) { has_work = true; break; }
+            if (gs.entities.kind[i] == .item_drop) {
+                has_work = true;
+                break;
+            }
         }
         if (!has_work) {
             for (gs.pickup_ghosts) |ghost| {
-                if (ghost.active) { has_work = true; break; }
+                if (ghost.active) {
+                    has_work = true;
+                    break;
+                }
             }
         }
         if (!has_work) return;
@@ -179,10 +185,10 @@ pub const ItemDropRenderer = struct {
                 }
 
                 const model = zlm.Mat4{ .m = .{
-                    cos_s * scale,  0,                 sin_s * scale,  0,
-                    0,              scale,             0,              0,
-                    -sin_s * scale, 0,                 cos_s * scale,  0,
-                    pos[0] + ox,    center_y + oy,     pos[2] + oz,    1,
+                    cos_s * scale,  0,             sin_s * scale, 0,
+                    0,              scale,         0,             0,
+                    -sin_s * scale, 0,             cos_s * scale, 0,
+                    pos[0] + ox,    center_y + oy, pos[2] + oz,   1,
                 } };
 
                 const drop_mvp = zlm.Mat4.mul(mvp, model);
@@ -227,10 +233,10 @@ pub const ItemDropRenderer = struct {
             const sky_level = light[3];
 
             const model = zlm.Mat4{ .m = .{
-                cos_s * scale,  0,              sin_s * scale,  0,
-                0,              scale,          0,              0,
-                -sin_s * scale, 0,              cos_s * scale,  0,
-                gx,             gy,             gz,             1,
+                cos_s * scale,  0,     sin_s * scale, 0,
+                0,              scale, 0,             0,
+                -sin_s * scale, 0,     cos_s * scale, 0,
+                gx,             gy,    gz,            1,
             } };
 
             const drop_mvp = zlm.Mat4.mul(mvp, model);
@@ -383,17 +389,29 @@ pub const ItemDropRenderer = struct {
 
             const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = normal[0], .ny = normal[1], .nz = normal[2], .u = 0, .v = 0 };
             var va = base;
-            va.px = corners[0][0] - 0.5; va.py = corners[0][1] - 0.5; va.pz = corners[0][2] - 0.5;
-            va.u = uvs[0][0]; va.v = uvs[0][1];
+            va.px = corners[0][0] - 0.5;
+            va.py = corners[0][1] - 0.5;
+            va.pz = corners[0][2] - 0.5;
+            va.u = uvs[0][0];
+            va.v = uvs[0][1];
             var vb = base;
-            vb.px = corners[1][0] - 0.5; vb.py = corners[1][1] - 0.5; vb.pz = corners[1][2] - 0.5;
-            vb.u = uvs[1][0]; vb.v = uvs[1][1];
+            vb.px = corners[1][0] - 0.5;
+            vb.py = corners[1][1] - 0.5;
+            vb.pz = corners[1][2] - 0.5;
+            vb.u = uvs[1][0];
+            vb.v = uvs[1][1];
             var vc = base;
-            vc.px = corners[2][0] - 0.5; vc.py = corners[2][1] - 0.5; vc.pz = corners[2][2] - 0.5;
-            vc.u = uvs[2][0]; vc.v = uvs[2][1];
+            vc.px = corners[2][0] - 0.5;
+            vc.py = corners[2][1] - 0.5;
+            vc.pz = corners[2][2] - 0.5;
+            vc.u = uvs[2][0];
+            vc.v = uvs[2][1];
             var vd = base;
-            vd.px = corners[3][0] - 0.5; vd.py = corners[3][1] - 0.5; vd.pz = corners[3][2] - 0.5;
-            vd.u = uvs[3][0]; vd.v = uvs[3][1];
+            vd.px = corners[3][0] - 0.5;
+            vd.py = corners[3][1] - 0.5;
+            vd.pz = corners[3][2] - 0.5;
+            vd.u = uvs[3][0];
+            vd.v = uvs[3][1];
 
             vertices[vert_count + 0] = va;
             vertices[vert_count + 1] = vb;
@@ -439,11 +457,11 @@ pub const ItemDropRenderer = struct {
         var vert_offset: u32 = CUBE_VERTICES;
 
         const item_texture_names = [ITEM_TEXTURE_COUNT][]const u8{
-            "wood_pickaxe.png",   "wood_axe.png",    "wood_shovel.png",    "wood_sword.png",    "wood_hoe.png",
-            "stone_pickaxe.png",  "stone_axe.png",   "stone_shovel.png",   "stone_sword.png",   "stone_hoe.png",
-            "iron_pickaxe.png",   "iron_axe.png",    "iron_shovel.png",    "iron_sword.png",    "iron_hoe.png",
-            "gold_pickaxe.png",   "gold_axe.png",    "gold_shovel.png",    "gold_sword.png",    "gold_hoe.png",
-            "diamond_pickaxe.png","diamond_axe.png",  "diamond_shovel.png", "diamond_sword.png", "diamond_hoe.png",
+            "wooden_pickaxe.png",  "wooden_axe.png",  "wooden_shovel.png",  "wooden_sword.png",  "wooden_hoe.png",
+            "stone_pickaxe.png",   "stone_axe.png",   "stone_shovel.png",   "stone_sword.png",   "stone_hoe.png",
+            "iron_pickaxe.png",    "iron_axe.png",    "iron_shovel.png",    "iron_sword.png",    "iron_hoe.png",
+            "gold_pickaxe.png",    "gold_axe.png",    "gold_shovel.png",    "gold_sword.png",    "gold_hoe.png",
+            "diamond_pickaxe.png", "diamond_axe.png", "diamond_shovel.png", "diamond_sword.png", "diamond_hoe.png",
             "stick.png",
         };
 
@@ -583,13 +601,29 @@ pub const ItemDropRenderer = struct {
     ) u32 {
         const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = n[0], .ny = n[1], .nz = n[2], .u = 0, .v = 0 };
         var va = base;
-        va.px = p0[0]; va.py = p0[1]; va.pz = p0[2]; va.u = uvs[0][0]; va.v = uvs[0][1];
+        va.px = p0[0];
+        va.py = p0[1];
+        va.pz = p0[2];
+        va.u = uvs[0][0];
+        va.v = uvs[0][1];
         var vb = base;
-        vb.px = p1[0]; vb.py = p1[1]; vb.pz = p1[2]; vb.u = uvs[1][0]; vb.v = uvs[1][1];
+        vb.px = p1[0];
+        vb.py = p1[1];
+        vb.pz = p1[2];
+        vb.u = uvs[1][0];
+        vb.v = uvs[1][1];
         var vc = base;
-        vc.px = p2[0]; vc.py = p2[1]; vc.pz = p2[2]; vc.u = uvs[2][0]; vc.v = uvs[2][1];
+        vc.px = p2[0];
+        vc.py = p2[1];
+        vc.pz = p2[2];
+        vc.u = uvs[2][0];
+        vc.v = uvs[2][1];
         var vd = base;
-        vd.px = p3[0]; vd.py = p3[1]; vd.pz = p3[2]; vd.u = uvs[3][0]; vd.v = uvs[3][1];
+        vd.px = p3[0];
+        vd.py = p3[1];
+        vd.pz = p3[2];
+        vd.u = uvs[3][0];
+        vd.v = uvs[3][1];
         vertices[start + 0] = va;
         vertices[start + 1] = vb;
         vertices[start + 2] = vc;
@@ -618,19 +652,53 @@ pub const ItemDropRenderer = struct {
     fn addCubeQuad(
         vertices: [*]EntityVertex,
         start: u32,
-        x0: f32, y0: f32, z0: f32,
-        x1: f32, y1: f32, z1: f32,
-        x2: f32, y2: f32, z2: f32,
-        x3: f32, y3: f32, z3: f32,
-        nx: f32, ny: f32, nz: f32,
+        x0: f32,
+        y0: f32,
+        z0: f32,
+        x1: f32,
+        y1: f32,
+        z1: f32,
+        x2: f32,
+        y2: f32,
+        z2: f32,
+        x3: f32,
+        y3: f32,
+        z3: f32,
+        nx: f32,
+        ny: f32,
+        nz: f32,
     ) u32 {
         const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = nx, .ny = ny, .nz = nz, .u = 0, .v = 0 };
-        var va = base; va.px = x0; va.py = y0; va.pz = z0; va.u = 0; va.v = 1;
-        var vb = base; vb.px = x1; vb.py = y1; vb.pz = z1; vb.u = 1; vb.v = 1;
-        var vc = base; vc.px = x2; vc.py = y2; vc.pz = z2; vc.u = 1; vc.v = 0;
-        var vd = base; vd.px = x3; vd.py = y3; vd.pz = z3; vd.u = 0; vd.v = 0;
-        vertices[start + 0] = va; vertices[start + 1] = vb; vertices[start + 2] = vc;
-        vertices[start + 3] = va; vertices[start + 4] = vc; vertices[start + 5] = vd;
+        var va = base;
+        va.px = x0;
+        va.py = y0;
+        va.pz = z0;
+        va.u = 0;
+        va.v = 1;
+        var vb = base;
+        vb.px = x1;
+        vb.py = y1;
+        vb.pz = z1;
+        vb.u = 1;
+        vb.v = 1;
+        var vc = base;
+        vc.px = x2;
+        vc.py = y2;
+        vc.pz = z2;
+        vc.u = 1;
+        vc.v = 0;
+        var vd = base;
+        vd.px = x3;
+        vd.py = y3;
+        vd.pz = z3;
+        vd.u = 0;
+        vd.v = 0;
+        vertices[start + 0] = va;
+        vertices[start + 1] = vb;
+        vertices[start + 2] = vc;
+        vertices[start + 3] = va;
+        vertices[start + 4] = vc;
+        vertices[start + 5] = vd;
         return start + 6;
     }
 
@@ -647,8 +715,11 @@ pub const ItemDropRenderer = struct {
             .{ .binding = 1, .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .pImmutableSamplers = null },
         };
         self.descriptor_set_layout = try vk.createDescriptorSetLayout(ctx.device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .pNext = null, .flags = 0,
-            .bindingCount = 2, .pBindings = &bindings,
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .bindingCount = 2,
+            .pBindings = &bindings,
         }, null);
 
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
@@ -656,14 +727,20 @@ pub const ItemDropRenderer = struct {
             .{ .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1 },
         };
         self.descriptor_pool = try vk.createDescriptorPool(ctx.device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .pNext = null, .flags = 0,
-            .maxSets = 1, .poolSizeCount = 2, .pPoolSizes = &pool_sizes,
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .maxSets = 1,
+            .poolSizeCount = 2,
+            .pPoolSizes = &pool_sizes,
         }, null);
 
         var set: vk.VkDescriptorSet = undefined;
         try vk.allocateDescriptorSets(ctx.device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .pNext = null,
-            .descriptorPool = self.descriptor_pool, .descriptorSetCount = 1,
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.descriptor_pool,
+            .descriptorSetCount = 1,
             .pSetLayouts = &self.descriptor_set_layout,
         }, @ptrCast(&set));
         self.descriptor_set = set;
@@ -712,9 +789,13 @@ pub const ItemDropRenderer = struct {
             .{ .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 64, .size = @sizeOf(PushConstants) - 64 },
         };
         self.pipeline_layout = try vk.createPipelineLayout(device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .pNext = null, .flags = 0,
-            .setLayoutCount = 1, .pSetLayouts = &self.descriptor_set_layout,
-            .pushConstantRangeCount = 2, .pPushConstantRanges = &push_ranges,
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &self.descriptor_set_layout,
+            .pushConstantRangeCount = 2,
+            .pPushConstantRanges = &push_ranges,
         }, null);
 
         const color_fmt = [_]vk.VkFormat{swapchain_format};
@@ -723,15 +804,25 @@ pub const ItemDropRenderer = struct {
         const dyn_info = vk.VkPipelineDynamicStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .pNext = null, .flags = 0, .dynamicStateCount = 2, .pDynamicStates = &dyn_states };
 
         const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &rendering_info, .flags = 0,
-            .stageCount = 2, .pStages = &shader_stages,
-            .pVertexInputState = &vertex_input_info, .pInputAssemblyState = &input_assembly,
-            .pTessellationState = null, .pViewportState = &viewport_state,
-            .pRasterizationState = &rasterizer, .pMultisampleState = &multisampling,
-            .pDepthStencilState = &depth_stencil, .pColorBlendState = &color_blending,
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &rendering_info,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_stencil,
+            .pColorBlendState = &color_blending,
             .pDynamicState = @ptrCast(&dyn_info),
-            .layout = self.pipeline_layout, .renderPass = null, .subpass = 0,
-            .basePipelineHandle = null, .basePipelineIndex = -1,
+            .layout = self.pipeline_layout,
+            .renderPass = null,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
         };
 
         var pipeline: vk.VkPipeline = undefined;

@@ -15,37 +15,37 @@ pub const STICK_TEXTURE_LAYER = 68 + 25;
 const TOTAL_TEXTURE_COUNT = 68 + ITEM_TEXTURE_COUNT;
 
 const item_texture_names = [ITEM_TEXTURE_COUNT][]const u8{
-    "wood_pickaxe.png",  "wood_axe.png",  "wood_shovel.png",  "wood_sword.png",  "wood_hoe.png",
-    "stone_pickaxe.png", "stone_axe.png", "stone_shovel.png", "stone_sword.png", "stone_hoe.png",
-    "iron_pickaxe.png",  "iron_axe.png",  "iron_shovel.png",  "iron_sword.png",  "iron_hoe.png",
-    "gold_pickaxe.png",  "gold_axe.png",  "gold_shovel.png",  "gold_sword.png",  "gold_hoe.png",
-    "diamond_pickaxe.png","diamond_axe.png","diamond_shovel.png","diamond_sword.png","diamond_hoe.png",
+    "wooden_pickaxe.png",  "wooden_axe.png",  "wooden_shovel.png",  "wooden_sword.png",  "wooden_hoe.png",
+    "stone_pickaxe.png",   "stone_axe.png",   "stone_shovel.png",   "stone_sword.png",   "stone_hoe.png",
+    "iron_pickaxe.png",    "iron_axe.png",    "iron_shovel.png",    "iron_sword.png",    "iron_hoe.png",
+    "gold_pickaxe.png",    "gold_axe.png",    "gold_shovel.png",    "gold_sword.png",    "gold_hoe.png",
+    "diamond_pickaxe.png", "diamond_axe.png", "diamond_shovel.png", "diamond_sword.png", "diamond_hoe.png",
     "stick.png",
 };
 
 const BLOCK_TEXTURE_COUNT = 68;
 const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
-    "glass.png",      "grass_block.png", "dirt.png",       "stone.png",        // 0-3
-    "glowstone.png",  "sand.png",        "snow.png",       "water.png",        // 4-7
-    "gravel.png",     "cobblestone.png", "oak_log.png",    "oak_planks.png",   // 8-11
-    "bricks.png",     "bedrock.png",     "gold_ore.png",   "iron_ore.png",     // 12-15
-    "coal_ore.png",   "diamond_ore.png", "sponge.png",     "pumice.png",       // 16-19
-    "wool.png",       "gold_block.png",  "iron_block.png", "diamond_block.png",// 20-23
-    "bookshelf.png",  "obsidian.png",    "oak_leaves.png", "oak_log_top.png",  // 24-27
-    "torch.png",      "ladder.png",      "torch_fire.png", "torch_fire_particle.png", // 28-31
-    "oak_door_bottom.png", "oak_door_top.png",                                 // 32-33
-    "red_glowstone.png",     "crimson_glowstone.png",  "orange_glowstone.png",     // 34-36
-    "peach_glowstone.png",   "lime_glowstone.png",     "green_glowstone.png",      // 37-39
-    "teal_glowstone.png",    "cyan_glowstone.png",     "light_blue_glowstone.png", // 40-42
-    "blue_glowstone.png",    "navy_glowstone.png",     "indigo_glowstone.png",     // 43-45
-    "purple_glowstone.png",  "magenta_glowstone.png",  "pink_glowstone.png",       // 46-48
-    "hot_pink_glowstone.png","white_glowstone.png",    "warm_white_glowstone.png", // 49-51
-    "light_gray_glowstone.png","gray_glowstone.png",   "brown_glowstone.png",      // 52-54
-    "tan_glowstone.png",     "black_glowstone.png",    "crafting_table.png",       // 55-57
-    "destroy_stage_0.png", "destroy_stage_1.png", "destroy_stage_2.png",        // 58-60
-    "destroy_stage_3.png", "destroy_stage_4.png", "destroy_stage_5.png",        // 61-63
-    "destroy_stage_6.png", "destroy_stage_7.png", "destroy_stage_8.png",        // 64-66
-    "destroy_stage_9.png",                                                       // 67
+    "glass.png", "grass_block.png", "dirt.png", "stone.png", // 0-3
+    "glowstone.png", "sand.png", "snow.png", "water.png", // 4-7
+    "gravel.png", "cobblestone.png", "oak_log.png", "oak_planks.png", // 8-11
+    "bricks.png", "bedrock.png", "gold_ore.png", "iron_ore.png", // 12-15
+    "coal_ore.png", "diamond_ore.png", "sponge.png", "pumice.png", // 16-19
+    "wool.png", "gold_block.png", "iron_block.png", "diamond_block.png", // 20-23
+    "bookshelf.png", "obsidian.png", "oak_leaves.png", "oak_log_top.png", // 24-27
+    "torch.png", "ladder.png", "torch_fire.png", "torch_fire_particle.png", // 28-31
+    "oak_door_bottom.png", "oak_door_top.png", // 32-33
+    "red_glowstone.png", "crimson_glowstone.png", "orange_glowstone.png", // 34-36
+    "peach_glowstone.png", "lime_glowstone.png", "green_glowstone.png", // 37-39
+    "teal_glowstone.png", "cyan_glowstone.png", "light_blue_glowstone.png", // 40-42
+    "blue_glowstone.png", "navy_glowstone.png", "indigo_glowstone.png", // 43-45
+    "purple_glowstone.png", "magenta_glowstone.png", "pink_glowstone.png", // 46-48
+    "hot_pink_glowstone.png", "white_glowstone.png", "warm_white_glowstone.png", // 49-51
+    "light_gray_glowstone.png", "gray_glowstone.png", "brown_glowstone.png", // 52-54
+    "tan_glowstone.png", "black_glowstone.png", "crafting_table.png", // 55-57
+    "destroy_stage_0.png", "destroy_stage_1.png", "destroy_stage_2.png", // 58-60
+    "destroy_stage_3.png", "destroy_stage_4.png", "destroy_stage_5.png", // 61-63
+    "destroy_stage_6.png", "destroy_stage_7.png", "destroy_stage_8.png", // 64-66
+    "destroy_stage_9.png", // 67
 };
 
 const TEX_W = 16;
