@@ -549,7 +549,6 @@ pub const HandRenderer = struct {
                 item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0)));
                 item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(25.0)));
                 item_model = zlm.Mat4.mul(item_model, mat4Scale(0.68, 0.68, 0.68));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.5, -0.5, -0.5));
 
                 const mvp = zlm.Mat4.mul(proj, item_model);
                 const pc = PushConstants{
