@@ -492,7 +492,7 @@ pub const ItemDropRenderer = struct {
         std.log.info("Item meshes generated: {d} vertices for {d} items", .{ vert_offset - CUBE_VERTICES, ITEM_TEXTURE_COUNT });
     }
 
-    fn generateMeshFromTexture(vertices: [*]EntityVertex, start: u32, pixels: [*]const u8) u32 {
+    pub fn generateMeshFromTexture(vertices: [*]EntityVertex, start: u32, pixels: [*]const u8) u32 {
         var count = start;
         const px_size: f32 = 1.0 / 16.0;
         const depth: f32 = 0.5 / 16.0; // half-pixel thick, total 1/16
@@ -589,7 +589,7 @@ pub const ItemDropRenderer = struct {
         return count;
     }
 
-    fn emitQuad(
+    pub fn emitQuad(
         vertices: [*]EntityVertex,
         start: u32,
         p0: [3]f32,

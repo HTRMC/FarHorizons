@@ -13,10 +13,12 @@ const WorldState = @import("../../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
 const Item = @import("../../Item.zig");
 const TextureManager = @import("TextureManager.zig");
+const ItemDropRenderer = @import("ItemDropRenderer.zig").ItemDropRenderer;
+const stbi = @import("../../platform/stb_image.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
-const MAX_VERTICES = 512; // arm (36) + block (36) + headroom
+const MAX_VERTICES = 2048; // arm (36) + block/shaped (384) + item mesh (1500)
 
 const PushConstants = extern struct {
     mvp: [16]f32,
@@ -76,8 +78,9 @@ pub const HandRenderer = struct {
     is_shaped: bool = false,
     tex_groups: [8]TexGroup = undefined,
     tex_group_count: u8 = 0,
-    item_quad_start: u32 = 0,
-    item_quad_count: u32 = 0,
+    item_mesh_start: u32 = 0,
+    item_mesh_count: u32 = 0,
+    allocator: std.mem.Allocator = undefined,
 
     const TexGroup = struct { start: u32, count: u32, tex_layer: i16 };
 
@@ -107,6 +110,7 @@ pub const HandRenderer = struct {
 
         try self.createResources(ctx, gpu_alloc, skin_image_view, skin_sampler, block_tex_view, block_tex_sampler);
         try self.createPipeline(shader_compiler, ctx, swapchain_format);
+        self.allocator = allocator;
         self.buildGeometry(allocator);
 
         return self;
@@ -524,7 +528,7 @@ pub const HandRenderer = struct {
                 item_tex_layer = @intCast(TextureManager.STICK_TEXTURE_LAYER);
             }
 
-            if (item_tex_layer >= 0) {
+            if (item_tex_layer >= 0 and self.item_mesh_count > 0) {
                 // HMI itemPose: items use scene_mat + itemPose + handheld.json display transform
                 // (NOT the arm bone chain — that's only for the arm mesh)
                 var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0, inverse_arm_height * -0.6, 0));
@@ -541,12 +545,12 @@ pub const HandRenderer = struct {
                 }
 
                 // MC handheld.json firstperson_righthand display transform
+                // 3D mesh is already centered (-0.5 to 0.5), so no centering translate needed
                 const s16 = 1.0 / 16.0;
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(1.13 * s16, 3.2 * s16, 1.13 * s16));
                 item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0 * l)));
                 item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(25.0)));
                 item_model = zlm.Mat4.mul(item_model, mat4Scale(0.68, 0.68, 0.68));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.5, -0.5, -0.5));
 
                 const mvp = zlm.Mat4.mul(proj, item_model);
                 const pc = PushConstants{
@@ -560,7 +564,7 @@ pub const HandRenderer = struct {
                     .block_light = block_light,
                 };
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
-                vk.cmdDraw(command_buffer, self.item_quad_count, 1, self.item_quad_start, 0);
+                vk.cmdDraw(command_buffer, self.item_mesh_count, 1, self.item_mesh_start, 0);
             }
         }
     }
@@ -569,11 +573,22 @@ pub const HandRenderer = struct {
         if (state == self.held_block) return;
         self.held_block = state;
 
-        // Tools don't have block textures — render as empty hand
+        // Tools don't have block textures — generate 3D item mesh instead
         if (Item.isToolItem(state)) {
             self.block_tex_top = -1;
             self.block_tex_side = -1;
             self.is_shaped = false;
+            self.generateItemMesh();
+            return;
+        }
+        self.item_mesh_count = 0; // Clear item mesh when switching to a block
+
+        // Sticks are items, not blocks — generate 3D item mesh
+        if (BlockState.getBlock(state) == .stick) {
+            self.block_tex_top = -1;
+            self.block_tex_side = -1;
+            self.is_shaped = false;
+            self.generateItemMesh();
             return;
         }
 
@@ -583,6 +598,7 @@ pub const HandRenderer = struct {
 
         if (BlockState.getBlock(state) == .air) {
             self.is_shaped = false;
+            self.item_mesh_count = 0;
             return;
         }
 
@@ -599,6 +615,56 @@ pub const HandRenderer = struct {
         self.block_vertex_count = count - self.block_vertex_start;
     }
 
+    fn generateItemMesh(self: *HandRenderer) void {
+        const vertices: [*]EntityVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
+
+        // Determine texture filename from tool type/tier or stick
+        const item_texture_names = [_][]const u8{
+            "wooden_pickaxe.png",  "wooden_axe.png",  "wooden_shovel.png",  "wooden_sword.png",  "wooden_hoe.png",
+            "stone_pickaxe.png",   "stone_axe.png",   "stone_shovel.png",   "stone_sword.png",   "stone_hoe.png",
+            "iron_pickaxe.png",    "iron_axe.png",    "iron_shovel.png",    "iron_sword.png",    "iron_hoe.png",
+            "gold_pickaxe.png",    "gold_axe.png",    "gold_shovel.png",    "gold_sword.png",    "gold_hoe.png",
+            "diamond_pickaxe.png", "diamond_axe.png", "diamond_shovel.png", "diamond_sword.png", "diamond_hoe.png",
+            "stick.png",
+        };
+
+        var tex_name: []const u8 = "stick.png";
+        if (self.held_tool_type) |tool_type| {
+            if (self.held_tool_tier) |tier| {
+                const idx = @as(usize, @intFromEnum(tier)) * 5 + @intFromEnum(tool_type);
+                if (idx < item_texture_names.len) {
+                    tex_name = item_texture_names[idx];
+                }
+            }
+        }
+
+        const sep = std.fs.path.sep_str;
+        const assets_path = app_config.getAssetsPath(self.allocator) catch return;
+        defer self.allocator.free(assets_path);
+
+        const texture_path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "textures" ++ sep ++ "item" ++ sep ++ "{s}", .{ assets_path, tex_name }, 0) catch return;
+        defer self.allocator.free(texture_path);
+
+        var tw: c_int = 0;
+        var th: c_int = 0;
+        var tc: c_int = 0;
+        const pixels = stbi.load(texture_path.ptr, &tw, &th, &tc, 4) orelse {
+            std.log.warn("Hand item mesh: missing texture {s}", .{tex_name});
+            self.item_mesh_count = 0;
+            return;
+        };
+        defer stbi.free(pixels);
+
+        if (tw != 16 or th != 16) {
+            std.log.warn("Hand item mesh: {s} is {d}x{d}, expected 16x16", .{ tex_name, tw, th });
+            self.item_mesh_count = 0;
+            return;
+        }
+
+        const end = ItemDropRenderer.generateMeshFromTexture(vertices, self.item_mesh_start, pixels);
+        self.item_mesh_count = end - self.item_mesh_start;
+    }
+
     // ============================================================
     // Geometry building
     // ============================================================
@@ -611,15 +677,17 @@ pub const HandRenderer = struct {
         count = self.buildArmGeometry(allocator, vertices, count);
         self.arm_vertex_count = count;
 
-        self.item_quad_start = count;
-        count = buildItemQuad(vertices, count);
-        self.item_quad_count = count - self.item_quad_start;
+        // Item mesh area — generated dynamically when held tool changes
+        self.item_mesh_start = count;
+        self.item_mesh_count = 0;
 
-        self.block_vertex_start = count;
+        // Block geometry starts after max item mesh space
+        self.block_vertex_start = count + 1500;
+        count = self.block_vertex_start;
         count = buildUnitBlock(vertices, count);
         self.block_vertex_count = count - self.block_vertex_start;
 
-        std.log.info("Hand geometry: {} arm, {} block, {} item quad verts", .{ self.arm_vertex_count, self.block_vertex_count, self.item_quad_count });
+        std.log.info("Hand geometry: {} arm, {} block verts", .{ self.arm_vertex_count, self.block_vertex_count });
     }
 
     fn buildArmGeometry(self: *HandRenderer, allocator: std.mem.Allocator, vertices: [*]EntityVertex, start: u32) u32 {
@@ -708,30 +776,6 @@ pub const HandRenderer = struct {
         }
 
         return count;
-    }
-
-    fn buildItemQuad(vertices: [*]EntityVertex, start: u32) u32 {
-        const nf = [3]f32{ 0, 0, 1 };
-        const nb = [3]f32{ 0, 0, -1 };
-        const v = struct {
-            fn make(px: f32, py: f32, pz: f32, u_: f32, v_: f32, n: [3]f32) EntityVertex {
-                return .{ .px = px, .py = py, .pz = pz, .nx = n[0], .ny = n[1], .nz = n[2], .u = u_, .v = v_ };
-            }
-        };
-        // 0-1 corner-origin to match MC item sprite space
-        vertices[start + 0] = v.make(0, 0, 0, 0, 1, nf);
-        vertices[start + 1] = v.make(1, 0, 0, 1, 1, nf);
-        vertices[start + 2] = v.make(1, 1, 0, 1, 0, nf);
-        vertices[start + 3] = v.make(0, 0, 0, 0, 1, nf);
-        vertices[start + 4] = v.make(1, 1, 0, 1, 0, nf);
-        vertices[start + 5] = v.make(0, 1, 0, 0, 0, nf);
-        vertices[start + 6] = v.make(1, 0, 0, 1, 1, nb);
-        vertices[start + 7] = v.make(0, 0, 0, 0, 1, nb);
-        vertices[start + 8] = v.make(1, 1, 0, 1, 0, nb);
-        vertices[start + 9] = v.make(1, 1, 0, 1, 0, nb);
-        vertices[start + 10] = v.make(0, 0, 0, 0, 1, nb);
-        vertices[start + 11] = v.make(0, 1, 0, 0, 0, nb);
-        return start + 12;
     }
 
     fn buildUnitBlock(vertices: [*]EntityVertex, start: u32) u32 {
