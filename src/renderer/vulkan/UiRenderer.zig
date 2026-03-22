@@ -394,8 +394,47 @@ pub const UiRenderer = struct {
 
         const WorldState = @import("../../world/WorldState.zig");
         const BlockState = WorldState.BlockState;
+        const Item = @import("../../Item.zig");
+        const TextureManager = @import("TextureManager.zig");
+
+        if (Item.isToolItem(state)) {
+            if (Item.toolFromId(state)) |info| {
+                const layer: f32 = @floatFromInt(TextureManager.ITEM_TEXTURE_BASE + @as(u32, @intFromEnum(info.tier)) * 5 + @intFromEnum(info.tool_type));
+                const pad = @min(w, h) * 0.1;
+                self.drawTexturedQuad(
+                    .{ x + pad, y + pad },
+                    .{ x + w - pad, y + pad },
+                    .{ x + w - pad, y + h - pad },
+                    .{ x + pad, y + h - pad },
+                    .{ 0, 0 },
+                    .{ 1, 0 },
+                    .{ 1, 1 },
+                    .{ 0, 1 },
+                    layer,
+                    .{ 1, 1, 1, 1 },
+                );
+            }
+            return;
+        }
 
         const block = BlockState.getBlock(state);
+        if (block == .stick) {
+            const layer: f32 = @floatFromInt(TextureManager.STICK_TEXTURE_LAYER);
+            const pad = @min(w, h) * 0.1;
+            self.drawTexturedQuad(
+                .{ x + pad, y + pad },
+                .{ x + w - pad, y + pad },
+                .{ x + w - pad, y + h - pad },
+                .{ x + pad, y + h - pad },
+                .{ 0, 0 },
+                .{ 1, 0 },
+                .{ 1, 1 },
+                .{ 0, 1 },
+                layer,
+                .{ 1, 1, 1, 1 },
+            );
+            return;
+        }
         if (block == .air) return;
 
         const tex_info = BlockState.blockTexIndices(state);

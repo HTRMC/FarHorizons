@@ -114,7 +114,7 @@ pub const HudBinder = struct {
                         w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                         if (tree.getData(id)) |data| {
                             data.panel.block_state = if (stack.isTool())
-                                BlockState.defaultState(.air)
+                                stack.block
                             else
                                 BlockState.getDisplayState(stack.block);
                         }

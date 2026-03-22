@@ -829,7 +829,7 @@ pub const MenuController = struct {
                     w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                     if (tree.getData(cid)) |data| {
                         data.panel.block_state = if (gs.carried_item.isTool())
-                            BlockState.defaultState(.air)
+                            gs.carried_item.block
                         else
                             BlockState.getDisplayState(gs.carried_item.block);
                     }
@@ -963,9 +963,10 @@ pub const MenuController = struct {
                 w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
             }
             if (tree.getData(icon_id)) |data| {
-                if (!GameState.Item.isToolItem(recipe.output.item)) {
-                    data.panel.block_state = BlockState.getDisplayState(recipe.output.item);
-                }
+                data.panel.block_state = if (GameState.Item.isToolItem(recipe.output.item))
+                    recipe.output.item
+                else
+                    BlockState.getDisplayState(recipe.output.item);
                 data.panel.draw_isometric = true;
             }
 
@@ -1098,11 +1099,10 @@ pub const MenuController = struct {
                 w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
             }
             if (tree.getData(self.detail_icon_id)) |data| {
-                if (!GameState.Item.isToolItem(recipe.output.item)) {
-                    data.panel.block_state = BlockState.getDisplayState(recipe.output.item);
-                } else {
-                    data.panel.block_state = BlockState.defaultState(.air);
-                }
+                data.panel.block_state = if (GameState.Item.isToolItem(recipe.output.item))
+                    recipe.output.item
+                else
+                    BlockState.getDisplayState(recipe.output.item);
                 data.panel.draw_isometric = true;
             }
         }
@@ -1149,9 +1149,10 @@ pub const MenuController = struct {
                     w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                 }
                 if (tree.getData(mat_icon)) |data| {
-                    if (!GameState.Item.isToolItem(inp.item)) {
-                        data.panel.block_state = BlockState.getDisplayState(inp.item);
-                    }
+                    data.panel.block_state = if (GameState.Item.isToolItem(inp.item))
+                        inp.item
+                    else
+                        BlockState.getDisplayState(inp.item);
                     data.panel.draw_isometric = true;
                 }
 
@@ -1886,7 +1887,7 @@ pub const MenuController = struct {
             w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
             if (tree.getData(id)) |data| {
                 data.panel.block_state = if (stack.isTool())
-                    BlockState.defaultState(.air)
+                    stack.block
                 else
                     BlockState.getDisplayState(stack.block);
             }
