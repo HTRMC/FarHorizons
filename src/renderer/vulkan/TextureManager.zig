@@ -9,7 +9,20 @@ const tracy = @import("../../platform/tracy.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
-const BLOCK_TEXTURE_COUNT = 68; // 58 block textures + 10 break stages
+const ITEM_TEXTURE_COUNT = 25; // 5 tiers × 5 tool types
+pub const ITEM_TEXTURE_BASE = 68; // first item layer in the texture array
+const TOTAL_TEXTURE_COUNT = 68 + ITEM_TEXTURE_COUNT; // blocks + items
+
+const item_texture_names = [ITEM_TEXTURE_COUNT][]const u8{
+    // Ordered by tier * 5 + tool_type (matches Item.idFromTool encoding)
+    "wood_pickaxe.png",  "wood_axe.png",  "wood_shovel.png",  "wood_sword.png",  "wood_hoe.png",
+    "stone_pickaxe.png", "stone_axe.png", "stone_shovel.png", "stone_sword.png", "stone_hoe.png",
+    "iron_pickaxe.png",  "iron_axe.png",  "iron_shovel.png",  "iron_sword.png",  "iron_hoe.png",
+    "gold_pickaxe.png",  "gold_axe.png",  "gold_shovel.png",  "gold_sword.png",  "gold_hoe.png",
+    "diamond_pickaxe.png","diamond_axe.png","diamond_shovel.png","diamond_sword.png","diamond_hoe.png",
+};
+
+const BLOCK_TEXTURE_COUNT = 68;
 const block_texture_names = [BLOCK_TEXTURE_COUNT][]const u8{
     "glass.png",      "grass_block.png", "dirt.png",       "stone.png",        // 0-3
     "glowstone.png",  "sand.png",        "snow.png",       "water.png",        // 4-7
@@ -337,7 +350,7 @@ pub const TextureManager = struct {
         const sep = std.fs.path.sep_str;
 
         const layer_size: vk.VkDeviceSize = FRAME_SIZE;
-        const total_size: vk.VkDeviceSize = layer_size * BLOCK_TEXTURE_COUNT;
+        const total_size: vk.VkDeviceSize = layer_size * TOTAL_TEXTURE_COUNT;
 
         var staging_buffer: vk.VkBuffer = undefined;
         var staging_buffer_memory: vk.VkDeviceMemory = undefined;
@@ -392,6 +405,25 @@ pub const TextureManager = struct {
             }
         }
 
+        for (0..ITEM_TEXTURE_COUNT) |i| {
+            const texture_path = try std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "textures" ++ sep ++ "item" ++ sep ++ "{s}", .{ assets_path, item_texture_names[i] }, 0);
+            defer allocator.free(texture_path);
+
+            var tw: c_int = 0;
+            var th: c_int = 0;
+            var tc: c_int = 0;
+            const pixels = stbi.load(texture_path.ptr, &tw, &th, &tc, 4) orelse {
+                std.log.warn("Missing item texture: {s}", .{item_texture_names[i]});
+                const offset = (BLOCK_TEXTURE_COUNT + i) * @as(usize, @intCast(layer_size));
+                @memset(dst[offset..][0..FRAME_SIZE], 0);
+                continue;
+            };
+            defer stbi.free(pixels);
+
+            const offset = (BLOCK_TEXTURE_COUNT + i) * @as(usize, @intCast(layer_size));
+            const src: [*]const u8 = @ptrCast(pixels);
+            @memcpy(dst[offset..][0..FRAME_SIZE], src[0..FRAME_SIZE]);
+        }
 
         vk.unmapMemory(ctx.device, staging_buffer_memory);
 
@@ -403,7 +435,7 @@ pub const TextureManager = struct {
             .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
             .extent = .{ .width = TEX_W, .height = TEX_H, .depth = 1 },
             .mipLevels = 1,
-            .arrayLayers = BLOCK_TEXTURE_COUNT,
+            .arrayLayers = TOTAL_TEXTURE_COUNT,
             .samples = vk.VK_SAMPLE_COUNT_1_BIT,
             .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
             .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -469,7 +501,7 @@ pub const TextureManager = struct {
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = BLOCK_TEXTURE_COUNT,
+                .layerCount = TOTAL_TEXTURE_COUNT,
             },
         };
 
@@ -486,8 +518,8 @@ pub const TextureManager = struct {
             &[_]vk.VkImageMemoryBarrier{to_transfer_barrier},
         );
 
-        var regions: [BLOCK_TEXTURE_COUNT]vk.VkBufferImageCopy = undefined;
-        for (0..BLOCK_TEXTURE_COUNT) |i| {
+        var regions: [TOTAL_TEXTURE_COUNT]vk.VkBufferImageCopy = undefined;
+        for (0..TOTAL_TEXTURE_COUNT) |i| {
             regions[i] = .{
                 .bufferOffset = @intCast(i * @as(usize, @intCast(layer_size))),
                 .bufferRowLength = 0,
@@ -508,7 +540,7 @@ pub const TextureManager = struct {
             staging_buffer,
             self.texture_image,
             vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            BLOCK_TEXTURE_COUNT,
+            TOTAL_TEXTURE_COUNT,
             &regions,
         );
 
@@ -527,7 +559,7 @@ pub const TextureManager = struct {
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = BLOCK_TEXTURE_COUNT,
+                .layerCount = TOTAL_TEXTURE_COUNT,
             },
         };
 
@@ -580,7 +612,7 @@ pub const TextureManager = struct {
                 .baseMipLevel = 0,
                 .levelCount = 1,
                 .baseArrayLayer = 0,
-                .layerCount = BLOCK_TEXTURE_COUNT,
+                .layerCount = TOTAL_TEXTURE_COUNT,
             },
         };
 
@@ -815,6 +847,6 @@ pub const TextureManager = struct {
         };
 
         vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
-        std.log.info("Descriptor set created (texture array with {} layers, {} animated)", .{ BLOCK_TEXTURE_COUNT, self.animation_count });
+        std.log.info("Descriptor set created (texture array with {} layers, {} animated)", .{ TOTAL_TEXTURE_COUNT, self.animation_count });
     }
 };

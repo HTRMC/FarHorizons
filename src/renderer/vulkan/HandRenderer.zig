@@ -12,6 +12,7 @@ const EntityVertex = @import("EntityRenderer.zig").EntityVertex;
 const WorldState = @import("../../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
 const Item = @import("../../Item.zig");
+const TextureManager = @import("TextureManager.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
@@ -74,6 +75,8 @@ pub const HandRenderer = struct {
     is_shaped: bool = false,
     tex_groups: [8]TexGroup = undefined,
     tex_group_count: u8 = 0,
+    item_quad_start: u32 = 0,
+    item_quad_count: u32 = 0,
 
     const TexGroup = struct { start: u32, count: u32, tex_layer: i16 };
 
@@ -179,11 +182,11 @@ pub const HandRenderer = struct {
             self.equip_progress = @min(1.0, self.equip_progress + equip_rate);
         }
 
-        // Fall spring-damper
-        self.fall_speed += (-vertical_speed + @sin(self.sneak_smoother * std.math.pi) * 0.14) * 0.27 * tdt;
-        self.fall_speed -= 0.1 * self.fall_smoother * tdt;
-        self.fall_speed *= std.math.pow(f32, 0.82, tdt);
+        self.fall_speed += (-vertical_speed * 0.08 + @sin(self.sneak_smoother * std.math.pi) * 0.04) * tdt;
+        self.fall_speed -= 0.15 * self.fall_smoother * tdt;
+        self.fall_speed *= std.math.pow(f32, 0.7, tdt);
         self.fall_smoother += self.fall_speed * tdt;
+        self.fall_smoother = std.math.clamp(self.fall_smoother, -3.0, 3.0);
 
         // Sneak smoother
         if (is_sneaking) {
@@ -503,10 +506,56 @@ pub const HandRenderer = struct {
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
                 vk.cmdDraw(command_buffer, 12, 1, self.block_vertex_start + 24, 0);
             }
+        } else if (self.held_tool_type != null) {
+            const tool_info = Item.toolFromId(self.held_block) orelse null;
+            if (tool_info) |info| {
+                const tex_layer: i32 = @intCast(TextureManager.ITEM_TEXTURE_BASE + @as(u32, @intFromEnum(info.tier)) * 5 + @intFromEnum(info.tool_type));
+
+                var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
+                item_model = zlm.Mat4.mul(item_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
+
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0, 0, -0.05));
+                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(6.0 * l)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-8.0)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(1.1, 1.1, 1.1));
+
+                if (sp > 0.001) {
+                    if (info.tool_type == .sword) {
+                        const sw = easeInOutBack(@sin(sp * pi));
+                        item_model = zlm.Mat4.mul(item_model, mat4Translate(0, -0.1 * sw, 0));
+                        item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-60.0 * sw)));
+                    } else {
+                        item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-30.0 * swing_overall)));
+                        item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(20.0 * swing_rot)));
+                    }
+                }
+
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.22 * l, 0.25, 0.2));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.25 * l, -0.05, 0.0));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.3, 0.3, 0.3));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.9 * l, -0.45, -0.7));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5, 0.5, 0.5));
+
+                const mvp = zlm.Mat4.mul(proj, item_model);
+                const pc = PushConstants{
+                    .mvp = mvp.m,
+                    .use_block_texture = 1,
+                    .tex_layer = tex_layer,
+                    .ambient_light = ambient_light,
+                    .contrast = 0.25,
+                    .sun_dir = sun_dir,
+                    .sky_level = sky_level,
+                    .block_light = block_light,
+                };
+                vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
+                vk.cmdDraw(command_buffer, self.item_quad_count, 1, self.item_quad_start, 0);
+            }
         }
     }
 
-    /// Update the held block, rebuilding geometry if the shape changes.
     pub fn updateHeldBlock(self: *HandRenderer, state: BlockState.StateId) void {
         if (state == self.held_block) return;
         self.held_block = state;
@@ -553,12 +602,15 @@ pub const HandRenderer = struct {
         count = self.buildArmGeometry(allocator, vertices, count);
         self.arm_vertex_count = count;
 
-        // Build unit block (1x1x1 cube at origin with 0-1 UVs)
         self.block_vertex_start = count;
         count = buildUnitBlock(vertices, count);
         self.block_vertex_count = count - self.block_vertex_start;
 
-        std.log.info("Hand geometry: {} arm verts, {} block verts", .{ self.arm_vertex_count, self.block_vertex_count });
+        self.item_quad_start = count;
+        count = buildItemQuad(vertices, count);
+        self.item_quad_count = count - self.item_quad_start;
+
+        std.log.info("Hand geometry: {} arm, {} block, {} item quad verts", .{ self.arm_vertex_count, self.block_vertex_count, self.item_quad_count });
     }
 
     fn buildArmGeometry(self: *HandRenderer, allocator: std.mem.Allocator, vertices: [*]EntityVertex, start: u32) u32 {
@@ -649,8 +701,22 @@ pub const HandRenderer = struct {
         return count;
     }
 
-    /// Build a unit cube (1x1x1) centered at origin with 0-1 UVs.
-    /// Order: 4 side faces (front, back, right, left = 24 verts), then top + bottom (12 verts).
+    fn buildItemQuad(vertices: [*]EntityVertex, start: u32) u32 {
+        const n = [3]f32{ 0, 0, 1 };
+        const v = struct {
+            fn make(px: f32, py: f32, u: f32, uv: f32, norm: [3]f32) EntityVertex {
+                return .{ .px = px, .py = py, .pz = 0, .nx = norm[0], .ny = norm[1], .nz = norm[2], .u = u, .v = uv };
+            }
+        };
+        vertices[start + 0] = v.make(-0.5, -0.5, 0, 1, n);
+        vertices[start + 1] = v.make(0.5, -0.5, 1, 1, n);
+        vertices[start + 2] = v.make(0.5, 0.5, 1, 0, n);
+        vertices[start + 3] = v.make(-0.5, -0.5, 0, 1, n);
+        vertices[start + 4] = v.make(0.5, 0.5, 1, 0, n);
+        vertices[start + 5] = v.make(-0.5, 0.5, 0, 0, n);
+        return start + 6;
+    }
+
     fn buildUnitBlock(vertices: [*]EntityVertex, start: u32) u32 {
         var count = start;
         const s: f32 = 0.5;
