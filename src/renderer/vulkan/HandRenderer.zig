@@ -43,20 +43,17 @@ pub const HandRenderer = struct {
     block_vertex_start: u32 = 0,
     block_vertex_count: u32 = 0,
     visible: bool = true,
-    // Walk animation state (HMI-style)
-    walk_phase: f32 = 0.0, // continuous phase accumulator
-    walk_smoother: f32 = 0.0, // 0=idle, 1=full walk blend
-    // View bob state (MC renderHandsWithItems xBob/yBob)
-    bob_pitch: f32 = 0.0, // smoothed pitch (MC: xBob)
-    bob_yaw: f32 = 0.0, // smoothed yaw (MC: yBob)
-    cam_pitch: f32 = 0.0, // current camera pitch (for view bob delta)
-    cam_yaw: f32 = 0.0, // current camera yaw
-    // Swing animation state
-    swing_progress: f32 = 0.0, // 0=idle, 0→1 during swing
-    swing_ticks: f32 = 0.0, // current swing timer
+    walk_phase: f32 = 0.0,
+    walk_smoother: f32 = 0.0,
+    bob_pitch: f32 = 0.0,
+    bob_yaw: f32 = 0.0,
+    cam_pitch: f32 = 0.0,
+    cam_yaw: f32 = 0.0,
+    swing_progress: f32 = 0.0,
+    swing_ticks: f32 = 0.0,
     is_swinging: bool = false,
-    // Equip animation state (MC: mainHandHeight)
-    equip_progress: f32 = 1.0, // 0=lowered, 1=raised
+    equip_progress: f32 = 1.0,
+    idle_tick: f32 = 0.0,
     pending_block: BlockState.StateId = BlockState.defaultState(.air),
     block_tex_top: i16 = -1,
     block_tex_side: i16 = -1,
@@ -106,14 +103,12 @@ pub const HandRenderer = struct {
         self.gpu_alloc.destroyBuffer(self.vertex_alloc);
     }
 
-    /// Update all hand animation state. Call once per frame.
     pub fn updateAnimations(self: *HandRenderer, dt: f32, horizontal_speed: f32, vertical_speed: f32, on_ground: bool, cam_pitch: f32, cam_yaw: f32) void {
-        // --- Walk bob ---
-        // MC threshold 0.08 b/tick × 20 = 1.6 b/s
+        self.idle_tick += dt * 30.0;
+
         const speed_threshold: f32 = 1.6;
         const vert_threshold: f32 = 1.6;
-        const smooth_rate: f32 = 3.0; // MC: 0.1 * 30
-
+        const smooth_rate: f32 = 3.0;
         const walking = horizontal_speed > speed_threshold and @abs(vertical_speed) < vert_threshold and on_ground;
 
         if (walking) {
@@ -123,41 +118,31 @@ pub const HandRenderer = struct {
             self.walk_smoother = @max(0.0, self.walk_smoother - smooth_rate * dt);
         }
 
-        // --- View bob (MC: xBob/yBob) ---
-        // MC: xBob += (xRot - xBob) * 0.5  per tick (20tps)
-        // Continuous: factor = 1 - (1-0.5)^(dt*20) ≈ min(1, 10*dt)
         self.cam_pitch = cam_pitch;
         self.cam_yaw = cam_yaw;
-        const bob_rate = @min(1.0, 10.0 * dt);
+        const bob_rate = @min(1.0, 15.0 * dt);
         self.bob_pitch += (cam_pitch - self.bob_pitch) * bob_rate;
         self.bob_yaw += (cam_yaw - self.bob_yaw) * bob_rate;
 
-        // --- Swing animation ---
-        // MC: 6 tick swing duration = 0.3s
         if (self.is_swinging) {
-            self.swing_ticks += dt * 20.0; // convert to MC ticks
-            if (self.swing_ticks >= 6.0) {
+            self.swing_ticks += dt * 30.0;
+            if (self.swing_ticks >= 9.0) {
                 self.swing_ticks = 0.0;
                 self.swing_progress = 0.0;
                 self.is_swinging = false;
             } else {
-                self.swing_progress = self.swing_ticks / 6.0;
+                self.swing_progress = self.swing_ticks / 9.0;
             }
         }
 
-        // --- Equip animation ---
-        // MC: mainHandHeight moves at ±0.4/tick (±8/s) toward target
         const equip_rate: f32 = 8.0 * dt;
         if (self.pending_block != self.held_block) {
-            // Lowering: target is 0
             self.equip_progress = @max(0.0, self.equip_progress - equip_rate);
             if (self.equip_progress < 0.05) {
-                // At bottom: swap to new block
                 self.updateHeldBlock(self.pending_block);
                 self.equip_progress = 0.0;
             }
         } else {
-            // Raising: target is 1
             self.equip_progress = @min(1.0, self.equip_progress + equip_rate);
         }
     }
@@ -208,54 +193,45 @@ pub const HandRenderer = struct {
         const aspect = screen_width / @max(screen_height, 1.0);
         const proj = zlm.Mat4.perspective(std.math.degreesToRadians(70.0), aspect, 0.05, 100.0);
 
-        // MC view bob (renderHandsWithItems:326-327)
-        // Hand sways slightly when looking around due to lag between
-        // actual camera angles and smoothed bob values.
-        // Negated vs MC: FH pitch is positive-up (MC positive-down),
-        // FH yaw increases CCW (MC increases CW).
         const view_bob_x = mat4RotX((self.bob_pitch - self.cam_pitch) * 0.1);
         const view_bob_y = mat4RotY((self.bob_yaw - self.cam_yaw) * 0.1);
         const view_bob_mat = zlm.Mat4.mul(view_bob_x, view_bob_y);
 
-        // Walk bob matrix (shared by arm and held block), applied as outermost
-        // transform matching HMI's scene pose: rotate around pivot (0, -0.4, 0).
         var walk_mat = zlm.Mat4.identity();
         if (self.walk_smoother > 0.001) {
             const ws = self.walk_smoother;
             const wp = self.walk_phase;
-            const l: f32 = -1.0; // right hand: l = -1 in HMI
-            const walk_val = wp - 0.75; // right hand phase offset (walk - 0.5 * 1.5)
-            // JOML rotateAround(quat, ox, oy, oz): M = M * T(ox,oy,oz) * R * T(-ox,-oy,-oz)
-            // pivot = (0, -0.4, 0)
+            const wl: f32 = -1.0;
+            const walk_val = wp - 0.75;
             const t_to_pivot = mat4Translate(0, -0.4, 0);
             const t_from_pivot = mat4Translate(0, 0.4, 0);
-            const deg = std.math.degreesToRadians;
-            // HMI: rotateX uses walk_val, rotateY/Z use walk*1.5, Y and Z are multiplied by l
-            const bob_x = mat4RotX(deg(1.5 * @sin(walk_val) * ws));
-            const bob_y = mat4RotY(deg(-0.5 * @cos(wp * 1.5) * ws * l));
-            const bob_z = mat4RotZ(deg(1.0 * @cos(wp * 1.5) * ws * l));
+            const d = std.math.degreesToRadians;
             walk_mat = t_to_pivot;
-            walk_mat = zlm.Mat4.mul(walk_mat, bob_x);
-            walk_mat = zlm.Mat4.mul(walk_mat, bob_y);
-            walk_mat = zlm.Mat4.mul(walk_mat, bob_z);
+            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotX(d(1.5 * @sin(walk_val) * ws)));
+            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotY(d(-0.5 * @cos(wp * 1.5) * ws * wl)));
+            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotZ(d(1.0 * @cos(wp * 1.5) * ws * wl)));
             walk_mat = zlm.Mat4.mul(walk_mat, t_from_pivot);
-        }
-
-        // HMI scenePoseMain: shared base transform for arm + block when holding an item
-        // translate(0, -0.35, 0.2) only when holding something
-        // View bob is outermost: applied before walk bob and scene transforms
-        var scene_mat = zlm.Mat4.mul(view_bob_mat, walk_mat);
-        if (has_block) {
-            scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.35, 0.2));
         }
 
         const deg = std.math.degreesToRadians;
 
-        // --- Compute arm world matrix (shared by arm draw + block derive) ---
-        //
-        // scenePoseMain → mainHandPose → MC renderPlayerArm
-        // The block is a child of this matrix so it follows all arm motion.
-        const invert: f32 = 1.0; // right arm
+        const idle_t = self.idle_tick * 0.04;
+        const ipx: f32 = 0.3;
+        const ipy: f32 = -0.4;
+        const ipz: f32 = 0.0;
+        var idle_mat = mat4Translate(0, 0.01 * @sin(idle_t), 0);
+        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotX(deg(-1.1 * @cos(idle_t))), ipx, ipy, ipz));
+        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotY(deg(0.5 * @sin(idle_t))), ipx, ipy, ipz));
+        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotZ(deg(2.0 * @sin(idle_t * 0.3))), ipx, ipy, ipz));
+
+        var scene_mat = zlm.Mat4.mul(view_bob_mat, walk_mat);
+        scene_mat = zlm.Mat4.mul(scene_mat, idle_mat);
+        if (has_block) {
+            scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.35, 0.2));
+        }
+
+        // l = +1 for right hand (MC uses -1, FH X axis is mirrored)
+        const l: f32 = 1.0;
         const attack_value: f32 = self.swing_progress;
         const inverse_arm_height: f32 = 1.0 - self.equip_progress;
 
@@ -264,39 +240,36 @@ pub const HandRenderer = struct {
         const y_swing_pos = 0.4 * @sin(sqrt_attack * (std.math.pi * 2.0));
         const z_swing_pos = -0.4 * @sin(attack_value * std.math.pi);
 
+        // Arm matrix: scene_mat → mainHandPose → arm bone chain
         var m = scene_mat;
 
-        // HMI mainHandPose: reposition arm when holding a block
         if (has_block) {
-            m = zlm.Mat4.mul(m, mat4Translate(1.5, -0.3, -0.6));
-            m = zlm.Mat4.mul(m, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
-            m = zlm.Mat4.mul(m, rotateAround(mat4RotY(deg(35.0)), 0.5, 0.5, 0.5));
-            m = zlm.Mat4.mul(m, rotateAround(mat4RotZ(deg(-65.0)), 0.5, 0.5, 0.5));
+            m = zlm.Mat4.mul(m, mat4Translate(1.5 * l, -0.3, -0.6));
+            m = zlm.Mat4.mul(m, rotateAround(mat4RotX(deg(15.0)), 0.5 * l, 0.5, 0.5));
+            m = zlm.Mat4.mul(m, rotateAround(mat4RotY(deg(35.0 * l)), 0.5 * l, 0.5, 0.5));
+            m = zlm.Mat4.mul(m, rotateAround(mat4RotZ(deg(-65.0 * l)), 0.5 * l, 0.5, 0.5));
             m = zlm.Mat4.mul(m, mat4Scale(0.9, 0.9, 0.9));
         }
 
-        // MC renderPlayerArm transforms (ItemInHandRenderer.java:240-251)
         m = zlm.Mat4.mul(m, mat4Translate(
-            invert * (x_swing_pos + 0.64000005),
+            l * (x_swing_pos + 0.64000005),
             y_swing_pos + -0.6 + inverse_arm_height * -0.6,
             z_swing_pos + -0.71999997,
         ));
-        m = zlm.Mat4.mul(m, mat4RotY(deg(invert * 45.0)));
+        m = zlm.Mat4.mul(m, mat4RotY(deg(l * 45.0)));
 
         const z_swing_rot = @sin(attack_value * attack_value * std.math.pi);
         const y_swing_rot = @sin(sqrt_attack * std.math.pi);
-        m = zlm.Mat4.mul(m, mat4RotY(deg(invert * y_swing_rot * 70.0)));
-        m = zlm.Mat4.mul(m, mat4RotZ(deg(invert * z_swing_rot * -20.0)));
+        m = zlm.Mat4.mul(m, mat4RotY(deg(l * y_swing_rot * 70.0)));
+        m = zlm.Mat4.mul(m, mat4RotZ(deg(l * z_swing_rot * -20.0)));
 
-        m = zlm.Mat4.mul(m, mat4Translate(invert * -1.0, 3.6, 3.5));
-        m = zlm.Mat4.mul(m, mat4RotZ(deg(invert * 120.0)));
+        m = zlm.Mat4.mul(m, mat4Translate(l * -1.0, 3.6, 3.5));
+        m = zlm.Mat4.mul(m, mat4RotZ(deg(l * 120.0)));
         m = zlm.Mat4.mul(m, mat4RotX(deg(200.0)));
-        m = zlm.Mat4.mul(m, mat4RotY(deg(invert * -135.0)));
-        m = zlm.Mat4.mul(m, mat4Translate(invert * 5.6, 0.0, 0.0));
+        m = zlm.Mat4.mul(m, mat4RotY(deg(l * -135.0)));
+        m = zlm.Mat4.mul(m, mat4Translate(l * 5.6, 0.0, 0.0));
 
-        // --- Draw arm ---
         {
-            // Pre-transform: convert our vertex space → MC's ModelPart space
             const mc_scale: f32 = 10.0 / 9.0;
             const s_pre = mat4Scale(mc_scale, -mc_scale, mc_scale);
             const t_cube = mat4Translate(-0.0625, -0.125, 0);
@@ -323,19 +296,35 @@ pub const HandRenderer = struct {
             vk.cmdDraw(command_buffer, self.arm_vertex_count, 1, 0, 0);
         }
 
-        // --- Draw held block ---
-        //
-        // Block is a child of the arm matrix m — it inherits all swing,
-        // equip, and walk bob motion. We offset to the hand position
-        // (bottom of arm in m-space) then scale and orient the block.
-        //
-        // Hand position in m-space: the arm model's pre-transform maps
-        // our vertex (0, -0.675, 0) to ~(-0.31, 0.75, 0) in m-space.
-        // We offset there, then orient and scale the block.
         if (has_block) {
-            var block_model = zlm.Mat4.mul(m, mat4Translate(-0.3, 0.75, 0.0));
-            block_model = zlm.Mat4.mul(block_model, mat4RotY(deg(45.0)));
+            const is_torch = BlockState.getBlock(self.held_block) == .torch;
+
+            var block_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
+            block_model = zlm.Mat4.mul(block_model, mat4Translate(0.5 * l, -0.15, -0.85));
+            block_model = zlm.Mat4.mul(block_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
+            block_model = zlm.Mat4.mul(block_model, mat4Scale(0.9, 0.9, 0.9));
+
+            block_model = zlm.Mat4.mul(block_model, mat4Translate(0, 0, -0.05));
+            if (!is_torch) {
+                block_model = zlm.Mat4.mul(block_model, mat4Translate(0, -0.15, 0));
+                block_model = zlm.Mat4.mul(block_model, mat4RotZ(deg(6.0 * l)));
+                block_model = zlm.Mat4.mul(block_model, mat4RotX(deg(-8.0)));
+            }
+            block_model = zlm.Mat4.mul(block_model, mat4RotY(deg(25.0 * l)));
+            block_model = zlm.Mat4.mul(block_model, mat4Scale(1.1, 1.1, 1.1));
+
+            block_model = zlm.Mat4.mul(block_model, mat4Translate(0.22 * l, 0.25, 0.2));
+
+            if (is_torch) {
+                block_model = zlm.Mat4.mul(block_model, mat4Translate(-0.05 * l, 0.0, 0.0));
+                block_model = zlm.Mat4.mul(block_model, mat4Scale(1.75, 1.75, 1.75));
+            } else {
+                block_model = zlm.Mat4.mul(block_model, mat4Translate(-0.25 * l, -0.05, 0.0));
+            }
+
             block_model = zlm.Mat4.mul(block_model, mat4Scale(0.3, 0.3, 0.3));
+            block_model = zlm.Mat4.mul(block_model, mat4Translate(-0.9 * l, -0.45, -0.7));
+            block_model = zlm.Mat4.mul(block_model, mat4Translate(0.5, 0.5, 0.5));
 
             const mvp = zlm.Mat4.mul(proj, block_model);
 
@@ -779,7 +768,6 @@ pub const HandRenderer = struct {
         } };
     }
 
-    /// JOML rotateAround: M = T(pivot) * R * T(-pivot)
     fn rotateAround(rot: zlm.Mat4, ox: f32, oy: f32, oz: f32) zlm.Mat4 {
         const t_to = mat4Translate(ox, oy, oz);
         const t_from = mat4Translate(-ox, -oy, -oz);
