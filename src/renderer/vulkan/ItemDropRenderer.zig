@@ -478,6 +478,8 @@ pub const ItemDropRenderer = struct {
         var count = start;
         const px_size: f32 = 1.0 / 16.0;
         const depth: f32 = 0.5 / 16.0; // half-pixel thick, total 1/16
+        const expand: f32 = 0.002; // slightly expand quads to hide sub-pixel gaps
+        const indent: f32 = 0.0001; // indent front/back faces to avoid z-fighting with sides
 
         // Build opacity grid
         var is_opaque: [16][16]bool = undefined;
@@ -504,22 +506,24 @@ pub const ItemDropRenderer = struct {
                 if (count + 12 > TOTAL_BUFFER_VERTS) return count;
 
                 // Model coords: x left-to-right, y bottom-to-top (flip texture Y)
-                const x0: f32 = @as(f32, @floatFromInt(span_start)) * px_size - 0.5;
-                const x1: f32 = @as(f32, @floatFromInt(span_end)) * px_size - 0.5;
-                const y0: f32 = @as(f32, @floatFromInt(15 - py)) * px_size - 0.5; // bottom of pixel
-                const y1: f32 = y0 + px_size; // top of pixel
+                // Expand quads slightly to hide gaps between adjacent spans
+                const x0: f32 = @as(f32, @floatFromInt(span_start)) * px_size - 0.5 - expand;
+                const x1: f32 = @as(f32, @floatFromInt(span_end)) * px_size - 0.5 + expand;
+                const y0: f32 = @as(f32, @floatFromInt(15 - py)) * px_size - 0.5 - expand;
+                const y1: f32 = y0 + px_size + expand * 2;
 
                 // UV coords map back to texture space
                 const tu0: f32 = @as(f32, @floatFromInt(span_start)) / 16.0;
                 const tu1: f32 = @as(f32, @floatFromInt(span_end)) / 16.0;
-                const tv0: f32 = @as(f32, @floatFromInt(py)) / 16.0; // top of row
-                const tv1: f32 = @as(f32, @floatFromInt(py + 1)) / 16.0; // bottom of row
+                const tv0: f32 = @as(f32, @floatFromInt(py)) / 16.0;
+                const tv1: f32 = @as(f32, @floatFromInt(py + 1)) / 16.0;
 
-                // Front face (+Z) — CCW winding from +Z
-                count = emitQuad(vertices, count, .{ x0, y0, depth }, .{ x1, y0, depth }, .{ x1, y1, depth }, .{ x0, y1, depth }, .{ 0, 0, 1 }, .{ .{ tu0, tv1 }, .{ tu1, tv1 }, .{ tu1, tv0 }, .{ tu0, tv0 } });
+                // Front face (+Z) — indent slightly behind side edges
+                const fz: f32 = depth - indent;
+                count = emitQuad(vertices, count, .{ x0, y0, fz }, .{ x1, y0, fz }, .{ x1, y1, fz }, .{ x0, y1, fz }, .{ 0, 0, 1 }, .{ .{ tu0, tv1 }, .{ tu1, tv1 }, .{ tu1, tv0 }, .{ tu0, tv0 } });
 
-                // Back face (-Z) — CCW winding from -Z, mirrored UVs
-                count = emitQuad(vertices, count, .{ x1, y0, -depth }, .{ x0, y0, -depth }, .{ x0, y1, -depth }, .{ x1, y1, -depth }, .{ 0, 0, -1 }, .{ .{ tu0, tv1 }, .{ tu1, tv1 }, .{ tu1, tv0 }, .{ tu0, tv0 } });
+                // Back face (-Z) — indent slightly, flip U so texture isn't mirrored
+                count = emitQuad(vertices, count, .{ x1, y0, -fz }, .{ x0, y0, -fz }, .{ x0, y1, -fz }, .{ x1, y1, -fz }, .{ 0, 0, -1 }, .{ .{ tu1, tv1 }, .{ tu0, tv1 }, .{ tu0, tv0 }, .{ tu1, tv0 } });
             }
         }
 
@@ -528,37 +532,38 @@ pub const ItemDropRenderer = struct {
             for (0..16) |px| {
                 if (!is_opaque[py][px]) continue;
 
-                const x0: f32 = @as(f32, @floatFromInt(px)) * px_size - 0.5;
-                const x1: f32 = x0 + px_size;
-                const y0: f32 = @as(f32, @floatFromInt(15 - py)) * px_size - 0.5;
-                const y1: f32 = y0 + px_size;
+                // Expand side quads slightly to cover gaps
+                const sx0: f32 = @as(f32, @floatFromInt(px)) * px_size - 0.5 - expand;
+                const sx1: f32 = sx0 + px_size + expand * 2;
+                const sy0: f32 = @as(f32, @floatFromInt(15 - py)) * px_size - 0.5 - expand;
+                const sy1: f32 = sy0 + px_size + expand * 2;
 
-                // UV for side edges — sample pixel center to avoid linear filtering blending with transparent neighbors
+                // UV for side edges — sample pixel center to avoid nearest-neighbor boundary snapping
                 const uc: f32 = (@as(f32, @floatFromInt(px)) + 0.5) / 16.0;
                 const vc: f32 = (@as(f32, @floatFromInt(py)) + 0.5) / 16.0;
 
                 // Top edge (py-1 is transparent or OOB)
                 if (py == 0 or !is_opaque[py - 1][px]) {
                     if (count + 6 > TOTAL_BUFFER_VERTS) return count;
-                    count = emitQuad(vertices, count, .{ x0, y1, depth }, .{ x1, y1, depth }, .{ x1, y1, -depth }, .{ x0, y1, -depth }, .{ 0, 1, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
+                    count = emitQuad(vertices, count, .{ sx0, sy1, depth }, .{ sx1, sy1, depth }, .{ sx1, sy1, -depth }, .{ sx0, sy1, -depth }, .{ 0, 1, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
                 }
 
                 // Bottom edge (py+1 is transparent or OOB)
                 if (py == 15 or !is_opaque[py + 1][px]) {
                     if (count + 6 > TOTAL_BUFFER_VERTS) return count;
-                    count = emitQuad(vertices, count, .{ x0, y0, -depth }, .{ x1, y0, -depth }, .{ x1, y0, depth }, .{ x0, y0, depth }, .{ 0, -1, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
+                    count = emitQuad(vertices, count, .{ sx0, sy0, -depth }, .{ sx1, sy0, -depth }, .{ sx1, sy0, depth }, .{ sx0, sy0, depth }, .{ 0, -1, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
                 }
 
                 // Left edge (px-1 is transparent or OOB)
                 if (px == 0 or !is_opaque[py][px - 1]) {
                     if (count + 6 > TOTAL_BUFFER_VERTS) return count;
-                    count = emitQuad(vertices, count, .{ x0, y0, -depth }, .{ x0, y0, depth }, .{ x0, y1, depth }, .{ x0, y1, -depth }, .{ -1, 0, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
+                    count = emitQuad(vertices, count, .{ sx0, sy0, -depth }, .{ sx0, sy0, depth }, .{ sx0, sy1, depth }, .{ sx0, sy1, -depth }, .{ -1, 0, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
                 }
 
                 // Right edge (px+1 is transparent or OOB)
                 if (px == 15 or !is_opaque[py][px + 1]) {
                     if (count + 6 > TOTAL_BUFFER_VERTS) return count;
-                    count = emitQuad(vertices, count, .{ x1, y0, depth }, .{ x1, y0, -depth }, .{ x1, y1, -depth }, .{ x1, y1, depth }, .{ 1, 0, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
+                    count = emitQuad(vertices, count, .{ sx1, sy0, depth }, .{ sx1, sy0, -depth }, .{ sx1, sy1, -depth }, .{ sx1, sy1, depth }, .{ 1, 0, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
                 }
             }
         }
