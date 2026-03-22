@@ -363,18 +363,22 @@ pub const HandRenderer = struct {
             scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotY(deg(-25.0 * l * switch_items)), px, py, 0));
         }
 
-        // Swing translation + holding offset
+        // Swing translation
         scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(l * x_swing_pos, y_swing_pos, z_swing_pos));
-        if (has_block) {
+
+        // HMI scenePoseMain offset — applied for ALL held items (blocks + tools + sticks)
+        const has_item = self.held_tool_type != null or BlockState.getBlock(self.held_block) == .stick;
+        if (has_block or has_item) {
             scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.35, 0.2));
         }
 
         const inverse_arm_height: f32 = 1.0 - self.equip_progress;
 
-        // Arm matrix: scene_mat → mainHandPose → arm bone chain
+        // Arm matrix: scene_mat → HMI mainHandPose → arm bone chain
         var m = scene_mat;
 
-        if (has_block) {
+        // HMI mainHandPose — applied for ALL held items (not just blocks)
+        if (has_block or has_item) {
             m = zlm.Mat4.mul(m, mat4Translate(1.5 * l, -0.3, -0.6));
             m = zlm.Mat4.mul(m, rotateAround(mat4RotX(deg(15.0)), 0.5 * l, 0.5, 0.5));
             m = zlm.Mat4.mul(m, rotateAround(mat4RotY(deg(35.0 * l)), 0.5 * l, 0.5, 0.5));
@@ -521,9 +525,22 @@ pub const HandRenderer = struct {
             }
 
             if (item_tex_layer >= 0) {
-                // Items use arm matrix m directly (same as MC ItemInHandRenderer)
-                // then apply MC handheld.json firstperson_righthand transform
-                var item_model = m;
+                // HMI itemPose: items use scene_mat + itemPose + handheld.json display transform
+                // (NOT the arm bone chain — that's only for the arm mesh)
+                var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0, inverse_arm_height * -0.6, 0));
+
+                // HMI itemPose: position item in hand
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
+                item_model = zlm.Mat4.mul(item_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
+
+                // Swing rotation (same as block swing)
+                if (sp > 0.001) {
+                    item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-30.0 * swing_overall)));
+                    item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(20.0 * swing_rot)));
+                }
+
+                // MC handheld.json firstperson_righthand display transform
                 const s16 = 1.0 / 16.0;
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(1.13 * s16, 3.2 * s16, 1.13 * s16));
                 item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0 * l)));
