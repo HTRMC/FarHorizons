@@ -9,17 +9,18 @@ const tracy = @import("../../platform/tracy.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
-const ITEM_TEXTURE_COUNT = 25; // 5 tiers × 5 tool types
-pub const ITEM_TEXTURE_BASE = 68; // first item layer in the texture array
-const TOTAL_TEXTURE_COUNT = 68 + ITEM_TEXTURE_COUNT; // blocks + items
+const ITEM_TEXTURE_COUNT = 26; // 5 tiers × 5 tool types + stick
+pub const ITEM_TEXTURE_BASE = 68;
+pub const STICK_TEXTURE_LAYER = 68 + 25;
+const TOTAL_TEXTURE_COUNT = 68 + ITEM_TEXTURE_COUNT;
 
 const item_texture_names = [ITEM_TEXTURE_COUNT][]const u8{
-    // Ordered by tier * 5 + tool_type (matches Item.idFromTool encoding)
     "wood_pickaxe.png",  "wood_axe.png",  "wood_shovel.png",  "wood_sword.png",  "wood_hoe.png",
     "stone_pickaxe.png", "stone_axe.png", "stone_shovel.png", "stone_sword.png", "stone_hoe.png",
     "iron_pickaxe.png",  "iron_axe.png",  "iron_shovel.png",  "iron_sword.png",  "iron_hoe.png",
     "gold_pickaxe.png",  "gold_axe.png",  "gold_shovel.png",  "gold_sword.png",  "gold_hoe.png",
     "diamond_pickaxe.png","diamond_axe.png","diamond_shovel.png","diamond_sword.png","diamond_hoe.png",
+    "stick.png",
 };
 
 const BLOCK_TEXTURE_COUNT = 68;

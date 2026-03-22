@@ -555,6 +555,34 @@ pub const HandRenderer = struct {
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
                 vk.cmdDraw(command_buffer, self.item_quad_count, 1, self.item_quad_start, 0);
             }
+        } else if (BlockState.getBlock(self.held_block) == .stick) {
+            const tex_layer: i32 = @intCast(TextureManager.STICK_TEXTURE_LAYER);
+
+            var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
+            item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
+            item_model = zlm.Mat4.mul(item_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
+            item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
+            item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
+            item_model = zlm.Mat4.mul(item_model, mat4Scale(1.1, 1.1, 1.1));
+            item_model = zlm.Mat4.mul(item_model, mat4Translate(0.22 * l, 0.25, 0.2));
+            item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.25 * l, -0.05, 0.0));
+            item_model = zlm.Mat4.mul(item_model, mat4Scale(0.3, 0.3, 0.3));
+            item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.9 * l, -0.45, -0.7));
+            item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5, 0.5, 0.5));
+
+            const mvp = zlm.Mat4.mul(proj, item_model);
+            const pc = PushConstants{
+                .mvp = mvp.m,
+                .use_block_texture = 1,
+                .tex_layer = tex_layer,
+                .ambient_light = ambient_light,
+                .contrast = 0.25,
+                .sun_dir = sun_dir,
+                .sky_level = sky_level,
+                .block_light = block_light,
+            };
+            vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
+            vk.cmdDraw(command_buffer, self.item_quad_count, 1, self.item_quad_start, 0);
         }
     }
 
