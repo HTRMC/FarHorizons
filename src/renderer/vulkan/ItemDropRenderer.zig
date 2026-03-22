@@ -519,6 +519,9 @@ pub const ItemDropRenderer = struct {
         }
 
         // Side edges: per-pixel quads at transparency boundaries (MC approach)
+        // Extend Z slightly past front/back faces to close seam gaps (T-junction fix).
+        // No XY expansion — sides stay at exact pixel boundaries.
+        const depth_ext: f32 = depth + 0.001;
         for (0..16) |py| {
             for (0..16) |px| {
                 if (!is_opaque[py][px]) continue;
@@ -536,25 +539,25 @@ pub const ItemDropRenderer = struct {
                 // Top edge (py-1 is transparent or OOB)
                 if (py == 0 or !is_opaque[py - 1][px]) {
                     if (count + 6 > TOTAL_BUFFER_VERTS) return count;
-                    count = emitQuad(vertices, count, .{ sx0, sy1, depth }, .{ sx1, sy1, depth }, .{ sx1, sy1, -depth }, .{ sx0, sy1, -depth }, .{ 0, 1, 0 }, .{ .{ su0, sv0 }, .{ su1, sv0 }, .{ su1, sv1 }, .{ su0, sv1 } });
+                    count = emitQuad(vertices, count, .{ sx0, sy1, depth_ext }, .{ sx1, sy1, depth_ext }, .{ sx1, sy1, -depth_ext }, .{ sx0, sy1, -depth_ext }, .{ 0, 1, 0 }, .{ .{ su0, sv0 }, .{ su1, sv0 }, .{ su1, sv1 }, .{ su0, sv1 } });
                 }
 
                 // Bottom edge (py+1 is transparent or OOB)
                 if (py == 15 or !is_opaque[py + 1][px]) {
                     if (count + 6 > TOTAL_BUFFER_VERTS) return count;
-                    count = emitQuad(vertices, count, .{ sx0, sy0, -depth }, .{ sx1, sy0, -depth }, .{ sx1, sy0, depth }, .{ sx0, sy0, depth }, .{ 0, -1, 0 }, .{ .{ su0, sv1 }, .{ su1, sv1 }, .{ su1, sv0 }, .{ su0, sv0 } });
+                    count = emitQuad(vertices, count, .{ sx0, sy0, -depth_ext }, .{ sx1, sy0, -depth_ext }, .{ sx1, sy0, depth_ext }, .{ sx0, sy0, depth_ext }, .{ 0, -1, 0 }, .{ .{ su0, sv1 }, .{ su1, sv1 }, .{ su1, sv0 }, .{ su0, sv0 } });
                 }
 
                 // Left edge (px-1 is transparent or OOB)
                 if (px == 0 or !is_opaque[py][px - 1]) {
                     if (count + 6 > TOTAL_BUFFER_VERTS) return count;
-                    count = emitQuad(vertices, count, .{ sx0, sy0, -depth }, .{ sx0, sy0, depth }, .{ sx0, sy1, depth }, .{ sx0, sy1, -depth }, .{ -1, 0, 0 }, .{ .{ su0, sv1 }, .{ su0, sv0 }, .{ su1, sv0 }, .{ su1, sv1 } });
+                    count = emitQuad(vertices, count, .{ sx0, sy0, -depth_ext }, .{ sx0, sy0, depth_ext }, .{ sx0, sy1, depth_ext }, .{ sx0, sy1, -depth_ext }, .{ -1, 0, 0 }, .{ .{ su0, sv1 }, .{ su0, sv0 }, .{ su1, sv0 }, .{ su1, sv1 } });
                 }
 
                 // Right edge (px+1 is transparent or OOB)
                 if (px == 15 or !is_opaque[py][px + 1]) {
                     if (count + 6 > TOTAL_BUFFER_VERTS) return count;
-                    count = emitQuad(vertices, count, .{ sx1, sy0, depth }, .{ sx1, sy0, -depth }, .{ sx1, sy1, -depth }, .{ sx1, sy1, depth }, .{ 1, 0, 0 }, .{ .{ su1, sv1 }, .{ su1, sv0 }, .{ su0, sv0 }, .{ su0, sv1 } });
+                    count = emitQuad(vertices, count, .{ sx1, sy0, depth_ext }, .{ sx1, sy0, -depth_ext }, .{ sx1, sy1, -depth_ext }, .{ sx1, sy1, depth_ext }, .{ 1, 0, 0 }, .{ .{ su1, sv1 }, .{ su1, sv0 }, .{ su0, sv0 }, .{ su0, sv1 } });
                 }
             }
         }
