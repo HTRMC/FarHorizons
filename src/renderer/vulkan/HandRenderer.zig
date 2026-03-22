@@ -521,31 +521,13 @@ pub const HandRenderer = struct {
             }
 
             if (item_tex_layer >= 0) {
-                // MC item arm positioning: translate(0.56, -0.52 + equip, -0.72)
-                var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(
-                    l * 0.56,
-                    -0.52 + (1.0 - self.equip_progress) * -0.6,
-                    -0.72,
-                ));
-
-                if (sp > 0.001) {
-                    if (self.held_tool_type) |tt| {
-                        if (tt == .sword) {
-                            const sw = easeInOutBack(@sin(sp * pi));
-                            item_model = zlm.Mat4.mul(item_model, mat4Translate(0, -0.1 * sw, 0));
-                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-60.0 * sw)));
-                        } else {
-                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-30.0 * swing_overall)));
-                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(20.0 * swing_rot)));
-                        }
-                    }
-                }
-
-                // MC handheld.json firstperson_righthand
+                // Items use arm matrix m directly (same as MC ItemInHandRenderer)
+                // then apply MC handheld.json firstperson_righthand transform
+                var item_model = m;
                 const s16 = 1.0 / 16.0;
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(1.13 * s16, 3.2 * s16, 1.13 * s16));
                 item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0 * l)));
-                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(25.0 * l)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(25.0)));
                 item_model = zlm.Mat4.mul(item_model, mat4Scale(0.68, 0.68, 0.68));
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.5, -0.5, -0.5));
 
