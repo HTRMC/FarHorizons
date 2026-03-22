@@ -163,9 +163,19 @@ pub const ItemDropRenderer = struct {
                 var oy: f32 = 0;
                 var oz: f32 = 0;
                 if (copy > 0) {
-                    ox = hashFloat(&seed) * 0.15 * scale;
-                    oy = hashFloat(&seed) * 0.15 * scale;
-                    oz = hashFloat(&seed) * 0.15 * scale;
+                    if (is_flat) {
+                        // Flat items: stack like a deck of cards along Z with small XY jitter
+                        const layer_spacing: f32 = 0.0625 * 1.5; // model_depth * 1.5
+                        const rc_f: f32 = @floatFromInt(render_count);
+                        const copy_f: f32 = @floatFromInt(copy);
+                        oz = (copy_f - (rc_f - 1.0) * 0.5) * layer_spacing;
+                        ox = hashFloat(&seed) * 0.075 * scale;
+                        oy = hashFloat(&seed) * 0.075 * scale;
+                    } else {
+                        ox = hashFloat(&seed) * 0.15 * scale;
+                        oy = hashFloat(&seed) * 0.15 * scale;
+                        oz = hashFloat(&seed) * 0.15 * scale;
+                    }
                 }
 
                 const model = zlm.Mat4{ .m = .{
