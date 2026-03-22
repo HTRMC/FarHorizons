@@ -523,14 +523,12 @@ pub const HandRenderer = struct {
             if (item_tex_layer >= 0) {
                 var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
-                item_model = zlm.Mat4.mul(item_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
+                item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(15.0)));
                 item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
 
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(0, 0, -0.05));
                 item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(6.0 * l)));
                 item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-8.0)));
                 item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(1.1, 1.1, 1.1));
 
                 if (sp > 0.001) {
                     if (self.held_tool_type) |tt| {
@@ -545,11 +543,7 @@ pub const HandRenderer = struct {
                     }
                 }
 
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.22 * l, 0.25, 0.2));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.25 * l, -0.05, 0.0));
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.3, 0.3, 0.3));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.9 * l, -0.45, -0.7));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5, 0.5, 0.5));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.35, 0.35, 0.35));
 
                 const mvp = zlm.Mat4.mul(proj, item_model);
                 const pc = PushConstants{
