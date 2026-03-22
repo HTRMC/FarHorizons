@@ -521,9 +521,15 @@ pub const HandRenderer = struct {
             }
 
             if (item_tex_layer >= 0) {
+                // Items use arm matrix m directly (same as MC ItemInHandRenderer)
+                // then apply MC handheld.json firstperson_righthand transform
                 var item_model = m;
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.5, 0.5, 0.0));
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.5, 0.5, 0.5));
+                const s16 = 1.0 / 16.0;
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(1.13 * s16, 3.2 * s16, 1.13 * s16));
+                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0 * l)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(25.0)));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.68, 0.68, 0.68));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.5, -0.5, -0.5));
 
                 const mvp = zlm.Mat4.mul(proj, item_model);
                 const pc = PushConstants{
@@ -588,13 +594,13 @@ pub const HandRenderer = struct {
         count = self.buildArmGeometry(allocator, vertices, count);
         self.arm_vertex_count = count;
 
-        self.block_vertex_start = count;
-        count = buildUnitBlock(vertices, count);
-        self.block_vertex_count = count - self.block_vertex_start;
-
         self.item_quad_start = count;
         count = buildItemQuad(vertices, count);
         self.item_quad_count = count - self.item_quad_start;
+
+        self.block_vertex_start = count;
+        count = buildUnitBlock(vertices, count);
+        self.block_vertex_count = count - self.block_vertex_start;
 
         std.log.info("Hand geometry: {} arm, {} block, {} item quad verts", .{ self.arm_vertex_count, self.block_vertex_count, self.item_quad_count });
     }
