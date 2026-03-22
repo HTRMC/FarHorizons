@@ -543,7 +543,13 @@ pub const HandRenderer = struct {
                     }
                 }
 
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.35, 0.35, 0.35));
+                // MC handheld.json firstperson_righthand transform
+                const s16 = 1.0 / 16.0;
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(1.13 * s16, 3.2 * s16, 1.13 * s16));
+                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(25.0)));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.68, 0.68, 0.68));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.5, -0.5, -0.5));
 
                 const mvp = zlm.Mat4.mul(proj, item_model);
                 const pc = PushConstants{
