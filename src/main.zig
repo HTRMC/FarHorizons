@@ -1197,6 +1197,7 @@ pub fn main() !void {
                     flags.in_water,
                     options.isKeyHeld(window.handle, .sneak),
                     if (tool_info) |t| t.tool_type else null,
+                    if (tool_info) |t| t.tier else null,
                     gs.selected_slot,
                 );
             } else {

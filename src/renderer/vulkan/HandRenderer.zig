@@ -56,6 +56,7 @@ pub const HandRenderer = struct {
     equip_progress: f32 = 1.0,
     idle_tick: f32 = 0.0,
     held_tool_type: ?Item.ToolType = null,
+    held_tool_tier: ?Item.ToolTier = null,
     prev_selected_slot: u8 = 0,
     slot_changed: bool = false,
     main_hand_switch: f32 = 1.0,
@@ -131,11 +132,13 @@ pub const HandRenderer = struct {
         in_water: bool,
         is_sneaking: bool,
         tool_type: ?Item.ToolType,
+        tool_tier: ?Item.ToolTier,
         selected_slot: u8,
     ) void {
         const tdt = dt * 30.0;
         self.idle_tick += tdt;
         self.held_tool_type = tool_type;
+        self.held_tool_tier = tool_tier;
 
         self.slot_changed = (selected_slot != self.prev_selected_slot);
         self.prev_selected_slot = selected_slot;
@@ -506,10 +509,9 @@ pub const HandRenderer = struct {
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
                 vk.cmdDraw(command_buffer, 12, 1, self.block_vertex_start + 24, 0);
             }
-        } else if (self.held_tool_type != null) {
-            const tool_info = Item.toolFromId(self.held_block) orelse null;
-            if (tool_info) |info| {
-                const tex_layer: i32 = @intCast(TextureManager.ITEM_TEXTURE_BASE + @as(u32, @intFromEnum(info.tier)) * 5 + @intFromEnum(info.tool_type));
+        } else if (self.held_tool_type) |tool_type| {
+            if (self.held_tool_tier) |tier| {
+                const tex_layer: i32 = @intCast(TextureManager.ITEM_TEXTURE_BASE + @as(u32, @intFromEnum(tier)) * 5 + @intFromEnum(tool_type));
 
                 var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
@@ -523,7 +525,7 @@ pub const HandRenderer = struct {
                 item_model = zlm.Mat4.mul(item_model, mat4Scale(1.1, 1.1, 1.1));
 
                 if (sp > 0.001) {
-                    if (info.tool_type == .sword) {
+                    if (tool_type == .sword) {
                         const sw = easeInOutBack(@sin(sp * pi));
                         item_model = zlm.Mat4.mul(item_model, mat4Translate(0, -0.1 * sw, 0));
                         item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-60.0 * sw)));
