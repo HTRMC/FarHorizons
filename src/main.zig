@@ -13,6 +13,7 @@ const Logger = @import("Logger.zig");
 const app_config = @import("app_config.zig");
 const Options = @import("Options.zig");
 const Gamepad = @import("Gamepad.zig");
+const Item = @import("Item.zig");
 
 var file_logger_instance: ?*Logger.FileLogger = null;
 
@@ -1182,7 +1183,22 @@ pub fn main() !void {
                 const P = GameState.Entity.PLAYER;
                 const vel = gs.entities.vel[P];
                 const hspeed = @sqrt(vel[0] * vel[0] + vel[2] * vel[2]);
-                hr.updateAnimations(delta_time, hspeed, vel[1], gs.entities.flags[P].on_ground, gs.camera.pitch, gs.camera.yaw);
+                const flags = gs.entities.flags[P];
+                const held_item = gs.playerInv().hotbar[gs.selected_slot].block;
+                const tool_info = Item.toolFromId(held_item);
+                hr.updateAnimations(
+                    delta_time,
+                    hspeed,
+                    vel[1],
+                    flags.on_ground,
+                    gs.camera.pitch,
+                    gs.camera.yaw,
+                    flags.on_ladder,
+                    flags.in_water,
+                    options.isKeyHeld(window.handle, .sneak),
+                    if (tool_info) |t| t.tool_type else null,
+                    gs.selected_slot,
+                );
             } else {
                 hr.setPendingBlock(WorldState.BlockState.defaultState(.air));
             }

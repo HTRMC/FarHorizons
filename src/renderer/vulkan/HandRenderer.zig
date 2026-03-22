@@ -54,6 +54,19 @@ pub const HandRenderer = struct {
     is_swinging: bool = false,
     equip_progress: f32 = 1.0,
     idle_tick: f32 = 0.0,
+    held_tool_type: ?Item.ToolType = null,
+    prev_selected_slot: u8 = 0,
+    slot_changed: bool = false,
+    main_hand_switch: f32 = 1.0,
+    fall_smoother: f32 = 0.0,
+    fall_speed: f32 = 0.0,
+    sneak_smoother: f32 = 0.0,
+    climb_smoother: f32 = 0.0,
+    crawler: f32 = 0.0,
+    swim_smoother: f32 = 0.0,
+    swim_counter: f32 = 0.0,
+    pt_angle: f32 = 0.0,
+    pt_velocity: f32 = 0.0,
     pending_block: BlockState.StateId = BlockState.defaultState(.air),
     block_tex_top: i16 = -1,
     block_tex_side: i16 = -1,
@@ -103,8 +116,28 @@ pub const HandRenderer = struct {
         self.gpu_alloc.destroyBuffer(self.vertex_alloc);
     }
 
-    pub fn updateAnimations(self: *HandRenderer, dt: f32, horizontal_speed: f32, vertical_speed: f32, on_ground: bool, cam_pitch: f32, cam_yaw: f32) void {
-        self.idle_tick += dt * 30.0;
+    pub fn updateAnimations(
+        self: *HandRenderer,
+        dt: f32,
+        horizontal_speed: f32,
+        vertical_speed: f32,
+        on_ground: bool,
+        cam_pitch: f32,
+        cam_yaw: f32,
+        on_ladder: bool,
+        in_water: bool,
+        is_sneaking: bool,
+        tool_type: ?Item.ToolType,
+        selected_slot: u8,
+    ) void {
+        const tdt = dt * 30.0;
+        self.idle_tick += tdt;
+        self.held_tool_type = tool_type;
+
+        self.slot_changed = (selected_slot != self.prev_selected_slot);
+        self.prev_selected_slot = selected_slot;
+        if (self.slot_changed) self.main_hand_switch = 0;
+        self.main_hand_switch = @min(1.0, self.main_hand_switch + 0.015 * tdt);
 
         const speed_threshold: f32 = 1.6;
         const vert_threshold: f32 = 1.6;
@@ -125,7 +158,7 @@ pub const HandRenderer = struct {
         self.bob_yaw += (cam_yaw - self.bob_yaw) * bob_rate;
 
         if (self.is_swinging) {
-            self.swing_ticks += dt * 30.0;
+            self.swing_ticks += tdt;
             if (self.swing_ticks >= 9.0) {
                 self.swing_ticks = 0.0;
                 self.swing_progress = 0.0;
@@ -145,6 +178,45 @@ pub const HandRenderer = struct {
         } else {
             self.equip_progress = @min(1.0, self.equip_progress + equip_rate);
         }
+
+        // Fall spring-damper
+        self.fall_speed += (-vertical_speed + @sin(self.sneak_smoother * std.math.pi) * 0.14) * 0.27 * tdt;
+        self.fall_speed -= 0.1 * self.fall_smoother * tdt;
+        self.fall_speed *= std.math.pow(f32, 0.82, tdt);
+        self.fall_smoother += self.fall_speed * tdt;
+
+        // Sneak smoother
+        if (is_sneaking) {
+            self.sneak_smoother = @min(1.0, self.sneak_smoother + 0.1 * tdt);
+        } else {
+            self.sneak_smoother = @max(0.0, self.sneak_smoother - 0.1 * tdt);
+        }
+
+        // Climb smoother
+        if (on_ladder) {
+            self.climb_smoother = @min(1.0, self.climb_smoother + 0.1 * tdt);
+            if (@abs(vertical_speed) > 0.5) self.crawler += vertical_speed * tdt;
+        } else {
+            self.climb_smoother = @max(0.0, self.climb_smoother - 0.1 * tdt);
+        }
+
+        // Swim smoother
+        const swimming = in_water and horizontal_speed > 1.0 and !on_ground;
+        if (swimming) {
+            self.swim_smoother = @min(1.0, self.swim_smoother + 0.1 * tdt);
+            self.swim_counter += horizontal_speed * tdt;
+        } else {
+            self.swim_smoother = @max(0.0, self.swim_smoother - 0.1 * tdt);
+        }
+
+        // Pitch/yaw spring-damper for item wobble
+        const pt_gravity: f32 = 0.04;
+        const pt_damping: f32 = 0.85;
+        const pt_intensity: f32 = 0.15;
+        self.pt_velocity += (-self.swing_progress * 30.0 + horizontal_speed * 2.0) * pt_intensity * tdt;
+        self.pt_velocity -= pt_gravity * self.pt_angle * tdt;
+        self.pt_velocity *= std.math.pow(f32, pt_damping, tdt);
+        self.pt_angle += self.pt_velocity * tdt;
     }
 
     /// Trigger an arm swing (call on block break/place).
@@ -197,48 +269,101 @@ pub const HandRenderer = struct {
         const view_bob_y = mat4RotY((self.bob_yaw - self.cam_yaw) * 0.1);
         const view_bob_mat = zlm.Mat4.mul(view_bob_x, view_bob_y);
 
+        const deg = std.math.degreesToRadians;
+        const l: f32 = 1.0;
+        const pi = std.math.pi;
+        const px: f32 = 0.3 * l;
+        const py: f32 = -0.4;
+
+        // Walk bob (right hand: walk_val = walk_phase, not offset)
         var walk_mat = zlm.Mat4.identity();
         if (self.walk_smoother > 0.001) {
             const ws = self.walk_smoother;
             const wp = self.walk_phase;
-            const wl: f32 = -1.0;
-            const walk_val = wp - 0.75;
-            const t_to_pivot = mat4Translate(0, -0.4, 0);
-            const t_from_pivot = mat4Translate(0, 0.4, 0);
-            const d = std.math.degreesToRadians;
-            walk_mat = t_to_pivot;
-            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotX(d(1.5 * @sin(walk_val) * ws)));
-            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotY(d(-0.5 * @cos(wp * 1.5) * ws * wl)));
-            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotZ(d(1.0 * @cos(wp * 1.5) * ws * wl)));
-            walk_mat = zlm.Mat4.mul(walk_mat, t_from_pivot);
+            walk_mat = mat4Translate(0, -0.4, 0);
+            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotX(deg(1.5 * @sin(wp) * ws)));
+            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotY(deg(-0.5 * @cos(wp * 1.5) * ws * l)));
+            walk_mat = zlm.Mat4.mul(walk_mat, mat4RotZ(deg(1.0 * @cos(wp * 1.5) * ws * l)));
+            walk_mat = zlm.Mat4.mul(walk_mat, mat4Translate(0, 0.4, 0));
         }
 
-        const deg = std.math.degreesToRadians;
-
+        // Idle sway
         const idle_t = self.idle_tick * 0.04;
-        const ipx: f32 = 0.3;
-        const ipy: f32 = -0.4;
-        const ipz: f32 = 0.0;
         var idle_mat = mat4Translate(0, 0.01 * @sin(idle_t), 0);
-        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotX(deg(-1.1 * @cos(idle_t))), ipx, ipy, ipz));
-        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotY(deg(0.5 * @sin(idle_t))), ipx, ipy, ipz));
-        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotZ(deg(2.0 * @sin(idle_t * 0.3))), ipx, ipy, ipz));
+        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotX(deg(-1.1 * @cos(idle_t))), px, py, 0));
+        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotY(deg(0.5 * @sin(idle_t))), px, py, 0));
+        idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotZ(deg(2.0 * @sin(idle_t * 0.3))), px, py, 0));
 
-        const l: f32 = 1.0;
-        const attack_value: f32 = self.swing_progress;
-        const inverse_arm_height: f32 = 1.0 - self.equip_progress;
+        // Swing curves (HMI sinusoidal)
+        const sp = if (self.held_tool_type) |tt|
+            (if (tt == .pickaxe) easeCustom(self.swing_progress) else easeCustomSec(self.swing_progress))
+        else
+            easeCustomSec(self.swing_progress);
 
-        const sqrt_attack = @sqrt(attack_value);
-        const x_swing_pos = -0.3 * @sin(sqrt_attack * std.math.pi);
-        const y_swing_pos = 0.4 * @sin(sqrt_attack * (std.math.pi * 2.0));
-        const z_swing_pos = -0.4 * @sin(attack_value * std.math.pi);
+        const swing_overall = @sin(sp * pi);
+        var swing_rot: f32 = 0;
+        if (sp < 0.70016) {
+            swing_rot = @sin(std.math.clamp(sp, 0.0, 0.308) * 5.1);
+        } else {
+            swing_rot = @sin(std.math.clamp(sp, 0.70016, 1.0) * 5.1 - 2.0);
+        }
+        swing_rot = swing_rot * swing_rot * swing_rot;
+
+        const x_swing_pos = -0.3 * @sin(@sqrt(sp) * pi);
+        const y_swing_pos = 0.4 * @sin(@sqrt(sp) * pi * 2.0);
+        const z_swing_pos = -0.4 * @sin(sp * pi);
 
         var scene_mat = zlm.Mat4.mul(view_bob_mat, walk_mat);
         scene_mat = zlm.Mat4.mul(scene_mat, idle_mat);
+
+        // Sneak
+        if (self.sneak_smoother > 0.001) {
+            scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.08 * self.sneak_smoother, 0));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotX(deg(4.0 * @sin(self.sneak_smoother * pi))), 0, py, 0));
+        }
+
+        // Fall
+        if (@abs(self.fall_smoother) > 0.001) {
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotX(deg(2.0 * self.fall_smoother)), 0, py, 0));
+            scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, 0.06 * self.fall_smoother, 0));
+        }
+
+        // Climb
+        if (self.climb_smoother > 0.001) {
+            const cs = self.climb_smoother;
+            scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, 0, 0.2 * cs));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotX(deg(-30.0 * @sin(self.crawler) * cs)), px, py, 0));
+        }
+
+        // Swim
+        if (self.swim_smoother > 0.001) {
+            const ss = self.swim_smoother;
+            const sc = self.swim_counter * 0.55;
+            scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, 0, 0.3 * @sin(sc) * ss));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotY(deg(-15.0 * l * @cos(sc) * ss)), px, py, 0));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotX(deg(-10.0 * @cos(sc) * ss)), px, py, 0));
+        }
+
+        // Item switch transition
+        if (self.main_hand_switch < 0.99) {
+            const sw = self.main_hand_switch;
+            const switch_items = easeInOutBack(std.math.clamp(@sin(std.math.clamp(sw, 0.0, 0.5) * pi), 0.0, 1.0));
+            const switch_fast = @sin(std.math.clamp(sw, 0.0, 0.125) * 12.56);
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotY(deg(25.0 * l * switch_fast)), px, py, 0));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotX(deg(-55.0 * switch_fast)), px, py, 0));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotZ(deg(40.0 * l * switch_fast)), px, py, 0));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotZ(deg(-40.0 * l * switch_items)), px, py, 0));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotX(deg(55.0 * switch_items)), px, py, 0));
+            scene_mat = zlm.Mat4.mul(scene_mat, rotateAround(mat4RotY(deg(-25.0 * l * switch_items)), px, py, 0));
+        }
+
+        // Swing translation + holding offset
         scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(l * x_swing_pos, y_swing_pos, z_swing_pos));
         if (has_block) {
             scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.35, 0.2));
         }
+
+        const inverse_arm_height: f32 = 1.0 - self.equip_progress;
 
         // Arm matrix: scene_mat → mainHandPose → arm bone chain
         var m = scene_mat;
@@ -258,10 +383,10 @@ pub const HandRenderer = struct {
         ));
         m = zlm.Mat4.mul(m, mat4RotY(deg(l * 45.0)));
 
-        const z_swing_rot = @sin(attack_value * attack_value * std.math.pi);
-        const y_swing_rot = @sin(sqrt_attack * std.math.pi);
-        m = zlm.Mat4.mul(m, mat4RotY(deg(l * y_swing_rot * 70.0)));
-        m = zlm.Mat4.mul(m, mat4RotZ(deg(l * z_swing_rot * -20.0)));
+        const arm_z_rot = @sin(sp * sp * pi);
+        const arm_y_rot = @sin(@sqrt(sp) * pi);
+        m = zlm.Mat4.mul(m, mat4RotY(deg(l * arm_y_rot * 70.0)));
+        m = zlm.Mat4.mul(m, mat4RotZ(deg(l * arm_z_rot * -20.0)));
 
         m = zlm.Mat4.mul(m, mat4Translate(l * -1.0, 3.6, 3.5));
         m = zlm.Mat4.mul(m, mat4RotZ(deg(l * 120.0)));
@@ -312,6 +437,11 @@ pub const HandRenderer = struct {
             }
             block_model = zlm.Mat4.mul(block_model, mat4RotY(deg(25.0 * l)));
             block_model = zlm.Mat4.mul(block_model, mat4Scale(1.1, 1.1, 1.1));
+
+            if (sp > 0.001) {
+                block_model = zlm.Mat4.mul(block_model, mat4RotX(deg(-30.0 * swing_overall)));
+                block_model = zlm.Mat4.mul(block_model, mat4RotX(deg(20.0 * swing_rot)));
+            }
 
             block_model = zlm.Mat4.mul(block_model, mat4Translate(0.22 * l, 0.25, 0.2));
 
@@ -772,6 +902,39 @@ pub const HandRenderer = struct {
         const t_to = mat4Translate(ox, oy, oz);
         const t_from = mat4Translate(-ox, -oy, -oz);
         return zlm.Mat4.mul(zlm.Mat4.mul(t_to, rot), t_from);
+    }
+
+    fn easeInOutBack(x: f32) f32 {
+        const c1: f32 = 1.70158;
+        const c2: f32 = c1 * 1.525;
+        if (x < 0.5) {
+            const t = 2.0 * x;
+            return (t * t * ((c2 + 1.0) * t - c2)) / 2.0;
+        } else {
+            const t = 2.0 * x - 2.0;
+            return (t * t * ((c2 + 1.0) * t + c2) + 2.0) / 2.0;
+        }
+    }
+
+    fn easeCustom(t: f32) f32 {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        const omt = 1.0 - t;
+        return 3.0 * t * omt * omt * 0.44 + 3.0 * t2 * omt * 1.0 + t3;
+    }
+
+    fn easeCustomSec(t: f32) f32 {
+        const t2 = t * t;
+        const t3 = t2 * t;
+        const omt = 1.0 - t;
+        return 3.0 * t * omt * omt * 0.44 + 3.0 * t2 * omt * 0.94 + t3;
+    }
+
+    fn easeInOutExpo(x: f32) f32 {
+        if (x <= 0.0) return 0.0;
+        if (x >= 1.0) return 1.0;
+        if (x < 0.5) return std.math.pow(f32, 2.0, 20.0 * x - 10.0) / 2.0;
+        return (2.0 - std.math.pow(f32, 2.0, -20.0 * x + 10.0)) / 2.0;
     }
 
     // ============================================================
