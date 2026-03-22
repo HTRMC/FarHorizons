@@ -521,14 +521,12 @@ pub const HandRenderer = struct {
             }
 
             if (item_tex_layer >= 0) {
-                var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
-                item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(15.0)));
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
-
-                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(6.0 * l)));
-                item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-8.0)));
-                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
+                // MC item arm positioning: translate(0.56, -0.52 + equip, -0.72)
+                var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(
+                    l * 0.56,
+                    -0.52 + (1.0 - self.equip_progress) * -0.6,
+                    -0.72,
+                ));
 
                 if (sp > 0.001) {
                     if (self.held_tool_type) |tt| {
@@ -543,11 +541,11 @@ pub const HandRenderer = struct {
                     }
                 }
 
-                // MC handheld.json firstperson_righthand transform
+                // MC handheld.json firstperson_righthand
                 const s16 = 1.0 / 16.0;
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(1.13 * s16, 3.2 * s16, 1.13 * s16));
-                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0)));
-                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(25.0)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0 * l)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(25.0 * l)));
                 item_model = zlm.Mat4.mul(item_model, mat4Scale(0.68, 0.68, 0.68));
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.5, -0.5, -0.5));
 
