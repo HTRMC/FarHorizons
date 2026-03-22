@@ -521,9 +521,31 @@ pub const HandRenderer = struct {
             }
 
             if (item_tex_layer >= 0) {
-                // Items use arm matrix m directly (same as MC ItemInHandRenderer)
-                // then apply MC handheld.json firstperson_righthand transform
+                // m (arm bone chain) → HMI itemPose → MC handheld.json
                 var item_model = m;
+
+                // HMI itemPose
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
+                item_model = zlm.Mat4.mul(item_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
+                item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(6.0 * l)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-8.0)));
+                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
+
+                if (sp > 0.001) {
+                    if (self.held_tool_type) |tt| {
+                        if (tt == .sword) {
+                            const sw = easeInOutBack(@sin(sp * pi));
+                            item_model = zlm.Mat4.mul(item_model, mat4Translate(0, -0.1 * sw, 0));
+                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-60.0 * sw)));
+                        } else {
+                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-30.0 * swing_overall)));
+                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(20.0 * swing_rot)));
+                        }
+                    }
+                }
+
+                // MC handheld.json firstperson_righthand
                 const s16 = 1.0 / 16.0;
                 item_model = zlm.Mat4.mul(item_model, mat4Translate(1.13 * s16, 3.2 * s16, 1.13 * s16));
                 item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(-90.0 * l)));
