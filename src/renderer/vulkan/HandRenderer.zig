@@ -509,33 +509,53 @@ pub const HandRenderer = struct {
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
                 vk.cmdDraw(command_buffer, 12, 1, self.block_vertex_start + 24, 0);
             }
-        } else if (self.held_tool_type) |tool_type| {
-            if (self.held_tool_tier) |tier| {
-                const tex_layer: i32 = @intCast(TextureManager.ITEM_TEXTURE_BASE + @as(u32, @intFromEnum(tier)) * 5 + @intFromEnum(tool_type));
+        } else {
+            var item_tex_layer: i32 = -1;
 
-                // Use the arm matrix m as base (block at hand position), same as blocks used to
-                var item_model = zlm.Mat4.mul(m, mat4Translate(-0.3, 0.75, 0.0));
-                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
+            if (self.held_tool_type) |tool_type| {
+                if (self.held_tool_tier) |tier| {
+                    item_tex_layer = @intCast(TextureManager.ITEM_TEXTURE_BASE + @as(u32, @intFromEnum(tier)) * 5 + @intFromEnum(tool_type));
+                }
+            } else if (BlockState.getBlock(self.held_block) == .stick) {
+                item_tex_layer = @intCast(TextureManager.STICK_TEXTURE_LAYER);
+            }
+
+            if (item_tex_layer >= 0) {
+                var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
+                item_model = zlm.Mat4.mul(item_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
+
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0, 0, -0.05));
                 item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(6.0 * l)));
                 item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-8.0)));
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.3, 0.3, 0.3));
+                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(1.1, 1.1, 1.1));
 
                 if (sp > 0.001) {
-                    if (tool_type == .sword) {
-                        const sw = easeInOutBack(@sin(sp * pi));
-                        item_model = zlm.Mat4.mul(item_model, mat4Translate(0, -0.1 * sw, 0));
-                        item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-60.0 * sw)));
-                    } else {
-                        item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-30.0 * swing_overall)));
-                        item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(20.0 * swing_rot)));
+                    if (self.held_tool_type) |tt| {
+                        if (tt == .sword) {
+                            const sw = easeInOutBack(@sin(sp * pi));
+                            item_model = zlm.Mat4.mul(item_model, mat4Translate(0, -0.1 * sw, 0));
+                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-60.0 * sw)));
+                        } else {
+                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-30.0 * swing_overall)));
+                            item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(20.0 * swing_rot)));
+                        }
                     }
                 }
+
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.22 * l, 0.25, 0.2));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.25 * l, -0.05, 0.0));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.3, 0.3, 0.3));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.9 * l, -0.45, -0.7));
+                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5, 0.5, 0.5));
 
                 const mvp = zlm.Mat4.mul(proj, item_model);
                 const pc = PushConstants{
                     .mvp = mvp.m,
                     .use_block_texture = 1,
-                    .tex_layer = tex_layer,
+                    .tex_layer = item_tex_layer,
                     .ambient_light = ambient_light,
                     .contrast = 0.25,
                     .sun_dir = sun_dir,
@@ -545,34 +565,6 @@ pub const HandRenderer = struct {
                 vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
                 vk.cmdDraw(command_buffer, self.item_quad_count, 1, self.item_quad_start, 0);
             }
-        } else if (BlockState.getBlock(self.held_block) == .stick) {
-            const tex_layer: i32 = @intCast(TextureManager.STICK_TEXTURE_LAYER);
-
-            var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
-            item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
-            item_model = zlm.Mat4.mul(item_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
-            item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
-            item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
-            item_model = zlm.Mat4.mul(item_model, mat4Scale(1.1, 1.1, 1.1));
-            item_model = zlm.Mat4.mul(item_model, mat4Translate(0.22 * l, 0.25, 0.2));
-            item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.25 * l, -0.05, 0.0));
-            item_model = zlm.Mat4.mul(item_model, mat4Scale(0.3, 0.3, 0.3));
-            item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.9 * l, -0.45, -0.7));
-            item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5, 0.5, 0.5));
-
-            const mvp = zlm.Mat4.mul(proj, item_model);
-            const pc = PushConstants{
-                .mvp = mvp.m,
-                .use_block_texture = 1,
-                .tex_layer = tex_layer,
-                .ambient_light = ambient_light,
-                .contrast = 0.25,
-                .sun_dir = sun_dir,
-                .sky_level = sky_level,
-                .block_light = block_light,
-            };
-            vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
-            vk.cmdDraw(command_buffer, self.item_quad_count, 1, self.item_quad_start, 0);
         }
     }
 
