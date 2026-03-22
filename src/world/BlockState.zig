@@ -781,6 +781,16 @@ pub fn getCanonicalState(state: StateId) StateId {
     };
 }
 
+/// Map a broken block to its drop item (e.g. stone → cobblestone).
+pub fn blockDrop(block: Block) Block {
+    return switch (block) {
+        .stone => .cobblestone,
+        .glass => .air,
+        .oak_leaves => .air,
+        else => block,
+    };
+}
+
 /// Get the state used for isometric inventory/GUI display.
 /// Chooses facing/orientation that looks best at the isometric view angle (30°, 225°).
 pub fn getDisplayState(state: StateId) StateId {

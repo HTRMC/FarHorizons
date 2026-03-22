@@ -1408,8 +1408,8 @@ fn breakBlockImpl(self: *GameState, allow_drop: bool) void {
 
     const air = BlockState.defaultState(.air);
 
-    // Don't drop bedrock or water
-    const drop_block = BlockState.getBlock(old_block);
+    // Determine what to drop (e.g. stone → cobblestone, glass → nothing)
+    const drop_block = BlockState.blockDrop(BlockState.getBlock(old_block));
     const should_drop = allow_drop and drop_block != .bedrock and drop_block != .water and drop_block != .air;
 
     // Door breaking: remove both halves
@@ -1445,7 +1445,7 @@ fn breakBlockImpl(self: *GameState, allow_drop: bool) void {
                 @as(f32, @floatFromInt(wy)) + 0.5,
                 @as(f32, @floatFromInt(wz)) + 0.5,
             };
-            self.entities.spawnItemDrop(drop_pos, BlockState.getCanonicalState(old_block), 1);
+            self.entities.spawnItemDrop(drop_pos, BlockState.getCanonicalState(BlockState.defaultState(drop_block)), 1);
         }
         return;
     }
@@ -1467,7 +1467,7 @@ fn breakBlockImpl(self: *GameState, allow_drop: bool) void {
             @as(f32, @floatFromInt(wy)) + 0.5,
             @as(f32, @floatFromInt(wz)) + 0.5,
         };
-        self.entities.spawnItemDrop(drop_pos, BlockState.getCanonicalState(old_block), 1);
+        self.entities.spawnItemDrop(drop_pos, BlockState.getCanonicalState(BlockState.defaultState(drop_block)), 1);
     }
 }
 
