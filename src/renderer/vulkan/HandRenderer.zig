@@ -224,13 +224,6 @@ pub const HandRenderer = struct {
         idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotY(deg(0.5 * @sin(idle_t))), ipx, ipy, ipz));
         idle_mat = zlm.Mat4.mul(idle_mat, rotateAround(mat4RotZ(deg(2.0 * @sin(idle_t * 0.3))), ipx, ipy, ipz));
 
-        var scene_mat = zlm.Mat4.mul(view_bob_mat, walk_mat);
-        scene_mat = zlm.Mat4.mul(scene_mat, idle_mat);
-        if (has_block) {
-            scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.35, 0.2));
-        }
-
-        // l = +1 for right hand (MC uses -1, FH X axis is mirrored)
         const l: f32 = 1.0;
         const attack_value: f32 = self.swing_progress;
         const inverse_arm_height: f32 = 1.0 - self.equip_progress;
@@ -239,6 +232,13 @@ pub const HandRenderer = struct {
         const x_swing_pos = -0.3 * @sin(sqrt_attack * std.math.pi);
         const y_swing_pos = 0.4 * @sin(sqrt_attack * (std.math.pi * 2.0));
         const z_swing_pos = -0.4 * @sin(attack_value * std.math.pi);
+
+        var scene_mat = zlm.Mat4.mul(view_bob_mat, walk_mat);
+        scene_mat = zlm.Mat4.mul(scene_mat, idle_mat);
+        scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(l * x_swing_pos, y_swing_pos, z_swing_pos));
+        if (has_block) {
+            scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.35, 0.2));
+        }
 
         // Arm matrix: scene_mat → mainHandPose → arm bone chain
         var m = scene_mat;
@@ -252,9 +252,9 @@ pub const HandRenderer = struct {
         }
 
         m = zlm.Mat4.mul(m, mat4Translate(
-            l * (x_swing_pos + 0.64000005),
-            y_swing_pos + -0.6 + inverse_arm_height * -0.6,
-            z_swing_pos + -0.71999997,
+            l * 0.64000005,
+            -0.6 + inverse_arm_height * -0.6,
+            -0.71999997,
         ));
         m = zlm.Mat4.mul(m, mat4RotY(deg(l * 45.0)));
 
