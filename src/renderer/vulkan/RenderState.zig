@@ -83,6 +83,7 @@ pub const RenderState = struct {
         errdefer self.hand_renderer.deinit(ctx.device);
 
         self.item_drop_renderer = try ItemDropRenderer.init(
+            allocator,
             &shader_compiler,
             ctx,
             swapchain_format,

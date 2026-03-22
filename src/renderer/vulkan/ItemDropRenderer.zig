@@ -13,25 +13,35 @@ const EntityVertex = EntityRenderer.EntityVertex;
 const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
 const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
+const TextureManager = @import("TextureManager.zig");
+const stbi = @import("../../platform/stb_image.zig");
+const app_config = @import("../../app_config.zig");
 
 const CUBE_VERTICES = 36;
-// Layout: 24 side verts (4 faces) then 12 top/bottom verts (2 faces)
 const SIDE_VERTS = 24;
 const TOPBOT_VERTS = 12;
-// Extra space after cube for shaped block quads (up to 64 faces × 6 verts)
 const MAX_SHAPE_VERTS = 64 * 6;
-const TOTAL_BUFFER_VERTS = CUBE_VERTICES + MAX_SHAPE_VERTS;
+// Max verts per item mesh: 16x16 texture, worst case ~256 pixel spans × 2 faces + ~128 edges
+const MAX_ITEM_MESH_VERTS = 1500;
+const ITEM_TEXTURE_COUNT = 26;
+const MAX_TOTAL_ITEM_VERTS = ITEM_TEXTURE_COUNT * MAX_ITEM_MESH_VERTS;
+const TOTAL_BUFFER_VERTS = CUBE_VERTICES + MAX_TOTAL_ITEM_VERTS + MAX_SHAPE_VERTS;
 
 const PushConstants = extern struct {
-    mvp: [16]f32, // 64 bytes
-    tex_layer: i32, // 4 bytes (offset 64)
-    contrast: f32, // 4 bytes (offset 68)
-    _pad0: i32 = 0, // 4 bytes
-    _pad1: i32 = 0, // 4 bytes
-    ambient_light: [3]f32, // 12 bytes (offset 80)
-    sky_level: f32, // 4 bytes (offset 92)
-    block_light: [3]f32, // 12 bytes (offset 96)
-    _pad2: f32 = 0, // 4 bytes (offset 108)
+    mvp: [16]f32,
+    tex_layer: i32,
+    contrast: f32,
+    _pad0: i32 = 0,
+    _pad1: i32 = 0,
+    ambient_light: [3]f32,
+    sky_level: f32,
+    block_light: [3]f32,
+    _pad2: f32 = 0,
+};
+
+const ItemMesh = struct {
+    start: u32,
+    count: u32,
 };
 
 pub const ItemDropRenderer = struct {
@@ -42,8 +52,11 @@ pub const ItemDropRenderer = struct {
     descriptor_set: vk.VkDescriptorSet,
     vertex_alloc: BufferAllocation,
     gpu_alloc: *GpuAllocator,
+    item_meshes: [ITEM_TEXTURE_COUNT]ItemMesh,
+    shaped_vert_start: u32,
 
     pub fn init(
+        allocator: std.mem.Allocator,
         shader_compiler: *ShaderCompiler,
         ctx: *const VulkanContext,
         swapchain_format: vk.VkFormat,
@@ -59,11 +72,14 @@ pub const ItemDropRenderer = struct {
             .descriptor_set = null,
             .vertex_alloc = undefined,
             .gpu_alloc = gpu_alloc,
+            .item_meshes = [_]ItemMesh{.{ .start = 0, .count = 0 }} ** ITEM_TEXTURE_COUNT,
+            .shaped_vert_start = CUBE_VERTICES,
         };
 
         try self.createResources(ctx, gpu_alloc, block_tex_view, block_tex_sampler);
         try self.createPipeline(shader_compiler, ctx, swapchain_format);
         self.uploadCubeVertices();
+        self.generateItemMeshes(allocator);
 
         return self;
     }
@@ -84,7 +100,6 @@ pub const ItemDropRenderer = struct {
         ambient_light: [3]f32,
         sun_dir: [3]f32,
     ) void {
-        // Count item drops and active ghosts
         var has_work = false;
         for (1..gs.entities.count) |i| {
             if (gs.entities.kind[i] == .item_drop) { has_work = true; break; }
@@ -123,12 +138,13 @@ pub const ItemDropRenderer = struct {
             const spin = age_f / 20.0 + bob_offset;
 
             const item_block = gs.entities.item_block[i];
-            if (Item.isToolItem(item_block)) continue; // TODO: tool drop rendering
-            const display_state = BlockState.getDisplayState(item_block);
-            const is_shaped = BlockState.isShaped(display_state);
+            const item_mesh_idx = getItemMeshIndex(item_block);
+            const is_flat = item_mesh_idx != null;
+            const display_state = if (!is_flat) BlockState.getDisplayState(item_block) else 0;
+            const is_shaped = if (!is_flat) BlockState.isShaped(display_state) else false;
             const item_count = gs.entities.item_count[i];
 
-            const scale: f32 = if (is_shaped) 0.35 else 0.25;
+            const scale: f32 = if (is_flat) 0.35 else if (is_shaped) 0.35 else 0.25;
 
             const cos_s = @cos(spin);
             const sin_s = @sin(spin);
@@ -161,7 +177,9 @@ pub const ItemDropRenderer = struct {
 
                 const drop_mvp = zlm.Mat4.mul(mvp, model);
 
-                if (is_shaped) {
+                if (item_mesh_idx) |idx| {
+                    self.drawItemDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, idx);
+                } else if (is_shaped) {
                     self.drawShapedDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, display_state);
                 } else {
                     self.drawCubeDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, item_block);
@@ -175,20 +193,19 @@ pub const ItemDropRenderer = struct {
 
         for (gs.pickup_ghosts) |ghost| {
             if (!ghost.active) continue;
-            if (Item.isToolItem(ghost.block)) continue; // TODO: tool ghost rendering
 
-            // Quadratic easing: t goes 0→1 over 3 ticks, interpolated with render alpha
             const t: f32 = (@as(f32, @floatFromInt(ghost.tick)) + gs.render_alpha) / 3.0;
             const eased = t * t;
 
-            // Lerp from start position to player
             const gx = ghost.start_pos[0] + (player_target[0] - ghost.start_pos[0]) * eased;
             const gy = ghost.start_pos[1] + (player_target[1] - ghost.start_pos[1]) * eased;
             const gz = ghost.start_pos[2] + (player_target[2] - ghost.start_pos[2]) * eased;
 
-            const display_state = BlockState.getDisplayState(ghost.block);
-            const is_shaped = BlockState.isShaped(display_state);
-            const scale: f32 = (if (is_shaped) @as(f32, 0.35) else @as(f32, 0.25)) * (1.0 - eased * 0.5);
+            const ghost_mesh_idx = getItemMeshIndex(ghost.block);
+            const ghost_is_flat = ghost_mesh_idx != null;
+            const display_state = if (!ghost_is_flat) BlockState.getDisplayState(ghost.block) else 0;
+            const is_shaped = if (!ghost_is_flat) BlockState.isShaped(display_state) else false;
+            const scale: f32 = (if (ghost_is_flat) @as(f32, 0.35) else if (is_shaped) @as(f32, 0.35) else @as(f32, 0.25)) * (1.0 - eased * 0.5);
 
             const age_f: f32 = @floatFromInt(ghost.age_ticks);
             const spin = age_f / 20.0 + ghost.bob_offset;
@@ -208,7 +225,9 @@ pub const ItemDropRenderer = struct {
 
             const drop_mvp = zlm.Mat4.mul(mvp, model);
 
-            if (is_shaped) {
+            if (ghost_mesh_idx) |idx| {
+                self.drawItemDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, idx);
+            } else if (is_shaped) {
                 self.drawShapedDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, display_state);
             } else {
                 self.drawCubeDrop(command_buffer, drop_mvp, ambient_light, sky_level, block_light, contrast, ghost.block);
@@ -216,11 +235,21 @@ pub const ItemDropRenderer = struct {
         }
     }
 
-    /// Simple hash to generate deterministic float in [-1, 1] from a seed.
     fn hashFloat(seed: *u32) f32 {
         seed.* = seed.* *% 1103515245 +% 12345;
         const bits: i32 = @bitCast(seed.* >> 16);
         return @as(f32, @floatFromInt(@mod(bits, 200) - 100)) / 100.0;
+    }
+
+    fn getItemMeshIndex(item_block: BlockState.StateId) ?usize {
+        if (Item.isToolItem(item_block)) {
+            const info = Item.toolFromId(item_block) orelse return null;
+            return @as(usize, @intFromEnum(info.tier)) * 5 + @intFromEnum(info.tool_type);
+        }
+        if (BlockState.getBlock(item_block) == .stick) {
+            return 25; // stick is last item texture
+        }
+        return null;
     }
 
     fn drawCubeDrop(
@@ -235,7 +264,6 @@ pub const ItemDropRenderer = struct {
     ) void {
         const tex = BlockState.blockTexIndices(item_block);
 
-        // Draw 4 side faces with side texture
         const pc_side = PushConstants{
             .mvp = drop_mvp.m,
             .tex_layer = tex.side,
@@ -247,7 +275,6 @@ pub const ItemDropRenderer = struct {
         vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_side));
         vk.cmdDraw(command_buffer, SIDE_VERTS, 1, 0, 0);
 
-        // Draw top + bottom with top texture
         const pc_top = PushConstants{
             .mvp = drop_mvp.m,
             .tex_layer = tex.top,
@@ -258,6 +285,32 @@ pub const ItemDropRenderer = struct {
         };
         vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc_top));
         vk.cmdDraw(command_buffer, TOPBOT_VERTS, 1, SIDE_VERTS, 0);
+    }
+
+    fn drawItemDrop(
+        self: *const ItemDropRenderer,
+        command_buffer: vk.VkCommandBuffer,
+        drop_mvp: zlm.Mat4,
+        ambient_light: [3]f32,
+        sky_level: f32,
+        block_light: [3]f32,
+        contrast: f32,
+        mesh_idx: usize,
+    ) void {
+        const mesh = self.item_meshes[mesh_idx];
+        if (mesh.count == 0) return;
+
+        const tex_layer: i32 = @intCast(TextureManager.ITEM_TEXTURE_BASE + mesh_idx);
+        const pc = PushConstants{
+            .mvp = drop_mvp.m,
+            .tex_layer = tex_layer,
+            .contrast = contrast,
+            .ambient_light = ambient_light,
+            .sky_level = sky_level,
+            .block_light = block_light,
+        };
+        vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(PushConstants), @ptrCast(&pc));
+        vk.cmdDraw(command_buffer, mesh.count, 1, mesh.start, 0);
     }
 
     fn drawShapedDrop(
@@ -279,10 +332,8 @@ pub const ItemDropRenderer = struct {
         const block = BlockState.getBlock(display_state);
         const is_torch = block == .torch;
 
-        // Write shaped model vertices into buffer after the cube
-        var vert_count: u32 = CUBE_VERTICES;
+        var vert_count: u32 = self.shaped_vert_start;
 
-        // Track runs of consecutive faces with the same texture for batched draws
         const RunInfo = struct { start: u32, count: u32, tex: u8 };
         var runs: [64]RunInfo = undefined;
         var run_count: usize = 0;
@@ -303,7 +354,7 @@ pub const ItemDropRenderer = struct {
                         uvs[ci] = .{ fv.u, fv.v };
                     }
                 } else {
-                    continue; // water models 6-11, skip
+                    continue;
                 }
             } else {
                 const em = WorldState.getRegistry().extra_models[@as(usize, mi) - WorldState.EXTRA_MODEL_BASE];
@@ -312,7 +363,6 @@ pub const ItemDropRenderer = struct {
                 normal = em.normal;
             }
 
-            // Skip cross quads for torch (diagonal flames look bad as a tiny spinning item)
             if (is_torch) {
                 if (@abs(normal[0]) > 0.1 and @abs(normal[2]) > 0.1) continue;
             }
@@ -321,7 +371,6 @@ pub const ItemDropRenderer = struct {
 
             const face_tex: u8 = if (sf_idx < tex_indices.len) tex_indices[sf_idx] else 0;
 
-            // Center the model: shift from [0,1] to [-0.5,0.5]
             const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = normal[0], .ny = normal[1], .nz = normal[2], .u = 0, .v = 0 };
             var va = base;
             va.px = corners[0][0] - 0.5; va.py = corners[0][1] - 0.5; va.pz = corners[0][2] - 0.5;
@@ -343,7 +392,6 @@ pub const ItemDropRenderer = struct {
             vertices[vert_count + 4] = vc;
             vertices[vert_count + 5] = vd;
 
-            // Try to extend the current run if same texture
             if (run_count > 0 and runs[run_count - 1].tex == face_tex) {
                 runs[run_count - 1].count += 6;
             } else {
@@ -355,7 +403,6 @@ pub const ItemDropRenderer = struct {
             vert_count += 6;
         }
 
-        // Issue draw calls per texture run
         for (0..run_count) |r| {
             const pc = PushConstants{
                 .mvp = drop_mvp.m,
@@ -370,6 +417,173 @@ pub const ItemDropRenderer = struct {
         }
     }
 
+    // ---- Mesh generation from item textures (MC ItemModelGenerator style) ----
+
+    fn generateItemMeshes(self: *ItemDropRenderer, allocator: std.mem.Allocator) void {
+        const vertices: [*]EntityVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
+
+        const sep = std.fs.path.sep_str;
+        const assets_path = app_config.getAssetsPath(allocator) catch return;
+        defer allocator.free(assets_path);
+
+        var vert_offset: u32 = CUBE_VERTICES;
+
+        const item_texture_names = [ITEM_TEXTURE_COUNT][]const u8{
+            "wood_pickaxe.png",   "wood_axe.png",    "wood_shovel.png",    "wood_sword.png",    "wood_hoe.png",
+            "stone_pickaxe.png",  "stone_axe.png",   "stone_shovel.png",   "stone_sword.png",   "stone_hoe.png",
+            "iron_pickaxe.png",   "iron_axe.png",    "iron_shovel.png",    "iron_sword.png",    "iron_hoe.png",
+            "gold_pickaxe.png",   "gold_axe.png",    "gold_shovel.png",    "gold_sword.png",    "gold_hoe.png",
+            "diamond_pickaxe.png","diamond_axe.png",  "diamond_shovel.png", "diamond_sword.png", "diamond_hoe.png",
+            "stick.png",
+        };
+
+        for (0..ITEM_TEXTURE_COUNT) |i| {
+            const texture_path = std.fmt.allocPrintSentinel(allocator, "{s}" ++ sep ++ "textures" ++ sep ++ "item" ++ sep ++ "{s}", .{ assets_path, item_texture_names[i] }, 0) catch continue;
+            defer allocator.free(texture_path);
+
+            var tw: c_int = 0;
+            var th: c_int = 0;
+            var tc: c_int = 0;
+            const pixels = stbi.load(texture_path.ptr, &tw, &th, &tc, 4) orelse {
+                std.log.warn("Item mesh: missing texture {s}", .{item_texture_names[i]});
+                continue;
+            };
+            defer stbi.free(pixels);
+
+            if (tw != 16 or th != 16) {
+                std.log.warn("Item mesh: {s} is {d}x{d}, expected 16x16", .{ item_texture_names[i], tw, th });
+                continue;
+            }
+
+            const start = vert_offset;
+            vert_offset = generateMeshFromTexture(vertices, vert_offset, pixels);
+            self.item_meshes[i] = .{ .start = start, .count = vert_offset - start };
+        }
+
+        self.shaped_vert_start = vert_offset;
+        std.log.info("Item meshes generated: {d} vertices for {d} items", .{ vert_offset - CUBE_VERTICES, ITEM_TEXTURE_COUNT });
+    }
+
+    fn generateMeshFromTexture(vertices: [*]EntityVertex, start: u32, pixels: [*]const u8) u32 {
+        var count = start;
+        const px_size: f32 = 1.0 / 16.0;
+        const depth: f32 = 0.5 / 16.0; // half-pixel thick, total 1/16
+
+        // Build opacity grid
+        var is_opaque: [16][16]bool = undefined;
+        for (0..16) |py| {
+            for (0..16) |px| {
+                const idx = (py * 16 + px) * 4;
+                is_opaque[py][px] = pixels[idx + 3] > 6; // alpha threshold
+            }
+        }
+
+        // Front and back faces: merge is_opaque pixels into row spans
+        for (0..16) |py| {
+            var px: usize = 0;
+            while (px < 16) {
+                if (!is_opaque[py][px]) {
+                    px += 1;
+                    continue;
+                }
+                // Find span end
+                const span_start = px;
+                while (px < 16 and is_opaque[py][px]) px += 1;
+                const span_end = px;
+
+                if (count + 12 > TOTAL_BUFFER_VERTS) return count;
+
+                // Model coords: x left-to-right, y bottom-to-top (flip texture Y)
+                const x0: f32 = @as(f32, @floatFromInt(span_start)) * px_size - 0.5;
+                const x1: f32 = @as(f32, @floatFromInt(span_end)) * px_size - 0.5;
+                const y0: f32 = @as(f32, @floatFromInt(15 - py)) * px_size - 0.5; // bottom of pixel
+                const y1: f32 = y0 + px_size; // top of pixel
+
+                // UV coords map back to texture space
+                const tu0: f32 = @as(f32, @floatFromInt(span_start)) / 16.0;
+                const tu1: f32 = @as(f32, @floatFromInt(span_end)) / 16.0;
+                const tv0: f32 = @as(f32, @floatFromInt(py)) / 16.0; // top of row
+                const tv1: f32 = @as(f32, @floatFromInt(py + 1)) / 16.0; // bottom of row
+
+                // Front face (+Z) — CCW winding from +Z
+                count = emitQuad(vertices, count, .{ x0, y0, depth }, .{ x1, y0, depth }, .{ x1, y1, depth }, .{ x0, y1, depth }, .{ 0, 0, 1 }, .{ .{ tu0, tv1 }, .{ tu1, tv1 }, .{ tu1, tv0 }, .{ tu0, tv0 } });
+
+                // Back face (-Z) — CCW winding from -Z, mirrored UVs
+                count = emitQuad(vertices, count, .{ x1, y0, -depth }, .{ x0, y0, -depth }, .{ x0, y1, -depth }, .{ x1, y1, -depth }, .{ 0, 0, -1 }, .{ .{ tu0, tv1 }, .{ tu1, tv1 }, .{ tu1, tv0 }, .{ tu0, tv0 } });
+            }
+        }
+
+        // Side edges: check each is_opaque pixel for exposed edges
+        for (0..16) |py| {
+            for (0..16) |px| {
+                if (!is_opaque[py][px]) continue;
+
+                const x0: f32 = @as(f32, @floatFromInt(px)) * px_size - 0.5;
+                const x1: f32 = x0 + px_size;
+                const y0: f32 = @as(f32, @floatFromInt(15 - py)) * px_size - 0.5;
+                const y1: f32 = y0 + px_size;
+
+                // UV for side edges — sample pixel center to avoid linear filtering blending with transparent neighbors
+                const uc: f32 = (@as(f32, @floatFromInt(px)) + 0.5) / 16.0;
+                const vc: f32 = (@as(f32, @floatFromInt(py)) + 0.5) / 16.0;
+
+                // Top edge (py-1 is transparent or OOB)
+                if (py == 0 or !is_opaque[py - 1][px]) {
+                    if (count + 6 > TOTAL_BUFFER_VERTS) return count;
+                    count = emitQuad(vertices, count, .{ x0, y1, depth }, .{ x1, y1, depth }, .{ x1, y1, -depth }, .{ x0, y1, -depth }, .{ 0, 1, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
+                }
+
+                // Bottom edge (py+1 is transparent or OOB)
+                if (py == 15 or !is_opaque[py + 1][px]) {
+                    if (count + 6 > TOTAL_BUFFER_VERTS) return count;
+                    count = emitQuad(vertices, count, .{ x0, y0, -depth }, .{ x1, y0, -depth }, .{ x1, y0, depth }, .{ x0, y0, depth }, .{ 0, -1, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
+                }
+
+                // Left edge (px-1 is transparent or OOB)
+                if (px == 0 or !is_opaque[py][px - 1]) {
+                    if (count + 6 > TOTAL_BUFFER_VERTS) return count;
+                    count = emitQuad(vertices, count, .{ x0, y0, -depth }, .{ x0, y0, depth }, .{ x0, y1, depth }, .{ x0, y1, -depth }, .{ -1, 0, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
+                }
+
+                // Right edge (px+1 is transparent or OOB)
+                if (px == 15 or !is_opaque[py][px + 1]) {
+                    if (count + 6 > TOTAL_BUFFER_VERTS) return count;
+                    count = emitQuad(vertices, count, .{ x1, y0, depth }, .{ x1, y0, -depth }, .{ x1, y1, -depth }, .{ x1, y1, depth }, .{ 1, 0, 0 }, .{ .{ uc, vc }, .{ uc, vc }, .{ uc, vc }, .{ uc, vc } });
+                }
+            }
+        }
+
+        return count;
+    }
+
+    fn emitQuad(
+        vertices: [*]EntityVertex,
+        start: u32,
+        p0: [3]f32,
+        p1: [3]f32,
+        p2: [3]f32,
+        p3: [3]f32,
+        n: [3]f32,
+        uvs: [4][2]f32,
+    ) u32 {
+        const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = n[0], .ny = n[1], .nz = n[2], .u = 0, .v = 0 };
+        var va = base;
+        va.px = p0[0]; va.py = p0[1]; va.pz = p0[2]; va.u = uvs[0][0]; va.v = uvs[0][1];
+        var vb = base;
+        vb.px = p1[0]; vb.py = p1[1]; vb.pz = p1[2]; vb.u = uvs[1][0]; vb.v = uvs[1][1];
+        var vc = base;
+        vc.px = p2[0]; vc.py = p2[1]; vc.pz = p2[2]; vc.u = uvs[2][0]; vc.v = uvs[2][1];
+        var vd = base;
+        vd.px = p3[0]; vd.py = p3[1]; vd.pz = p3[2]; vd.u = uvs[3][0]; vd.v = uvs[3][1];
+        vertices[start + 0] = va;
+        vertices[start + 1] = vb;
+        vertices[start + 2] = vc;
+        vertices[start + 3] = va;
+        vertices[start + 4] = vc;
+        vertices[start + 5] = vd;
+        return start + 6;
+    }
+
     fn uploadCubeVertices(self: *ItemDropRenderer) void {
         const vertices: [*]EntityVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
 
@@ -377,16 +591,16 @@ pub const ItemDropRenderer = struct {
         var count: u32 = 0;
 
         // Side faces first (24 verts): front, back, right, left
-        count = addQuad(vertices, count, -s, -s, s, s, -s, s, s, s, s, -s, s, s, 0, 0, 1); // +Z
-        count = addQuad(vertices, count, s, -s, -s, -s, -s, -s, -s, s, -s, s, s, -s, 0, 0, -1); // -Z
-        count = addQuad(vertices, count, s, -s, s, s, -s, -s, s, s, -s, s, s, s, 1, 0, 0); // +X
-        count = addQuad(vertices, count, -s, -s, -s, -s, -s, s, -s, s, s, -s, s, -s, -1, 0, 0); // -X
-        // Top/bottom faces (12 verts)
-        count = addQuad(vertices, count, -s, s, s, s, s, s, s, s, -s, -s, s, -s, 0, 1, 0); // +Y
-        _ = addQuad(vertices, count, -s, -s, -s, s, -s, -s, s, -s, s, -s, -s, s, 0, -1, 0); // -Y
+        count = addCubeQuad(vertices, count, -s, -s, s, s, -s, s, s, s, s, -s, s, s, 0, 0, 1);
+        count = addCubeQuad(vertices, count, s, -s, -s, -s, -s, -s, -s, s, -s, s, s, -s, 0, 0, -1);
+        count = addCubeQuad(vertices, count, s, -s, s, s, -s, -s, s, s, -s, s, s, s, 1, 0, 0);
+        count = addCubeQuad(vertices, count, -s, -s, -s, -s, -s, s, -s, s, s, -s, s, -s, -1, 0, 0);
+        // Top/bottom (12 verts)
+        count = addCubeQuad(vertices, count, -s, s, s, s, s, s, s, s, -s, -s, s, -s, 0, 1, 0);
+        _ = addCubeQuad(vertices, count, -s, -s, -s, s, -s, -s, s, -s, s, -s, -s, s, 0, -1, 0);
     }
 
-    fn addQuad(
+    fn addCubeQuad(
         vertices: [*]EntityVertex,
         start: u32,
         x0: f32, y0: f32, z0: f32,
@@ -396,25 +610,12 @@ pub const ItemDropRenderer = struct {
         nx: f32, ny: f32, nz: f32,
     ) u32 {
         const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = nx, .ny = ny, .nz = nz, .u = 0, .v = 0 };
-
-        var va = base;
-        va.px = x0; va.py = y0; va.pz = z0; va.u = 0; va.v = 1;
-        var vb = base;
-        vb.px = x1; vb.py = y1; vb.pz = z1; vb.u = 1; vb.v = 1;
-        var vc = base;
-        vc.px = x2; vc.py = y2; vc.pz = z2; vc.u = 1; vc.v = 0;
-        var vd = base;
-        vd.px = x3; vd.py = y3; vd.pz = z3; vd.u = 0; vd.v = 0;
-
-        // Triangle 1: a, b, c
-        vertices[start + 0] = va;
-        vertices[start + 1] = vb;
-        vertices[start + 2] = vc;
-        // Triangle 2: a, c, d
-        vertices[start + 3] = va;
-        vertices[start + 4] = vc;
-        vertices[start + 5] = vd;
-
+        var va = base; va.px = x0; va.py = y0; va.pz = z0; va.u = 0; va.v = 1;
+        var vb = base; vb.px = x1; vb.py = y1; vb.pz = z1; vb.u = 1; vb.v = 1;
+        var vc = base; vc.px = x2; vc.py = y2; vc.pz = z2; vc.u = 1; vc.v = 0;
+        var vd = base; vd.px = x3; vd.py = y3; vd.pz = z3; vd.u = 0; vd.v = 0;
+        vertices[start + 0] = va; vertices[start + 1] = vb; vertices[start + 2] = vc;
+        vertices[start + 3] = va; vertices[start + 4] = vc; vertices[start + 5] = vd;
         return start + 6;
     }
 
@@ -426,7 +627,6 @@ pub const ItemDropRenderer = struct {
             .host_visible,
         );
 
-        // Descriptor set layout: SSBO + block texture array
         const bindings = [_]vk.VkDescriptorSetLayoutBinding{
             .{ .binding = 0, .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1, .stageFlags = vk.VK_SHADER_STAGE_VERTEX_BIT, .pImmutableSamplers = null },
             .{ .binding = 1, .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1, .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .pImmutableSamplers = null },
@@ -436,7 +636,6 @@ pub const ItemDropRenderer = struct {
             .bindingCount = 2, .pBindings = &bindings,
         }, null);
 
-        // Descriptor pool
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
             .{ .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1 },
             .{ .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1 },
@@ -446,7 +645,6 @@ pub const ItemDropRenderer = struct {
             .maxSets = 1, .poolSizeCount = 2, .pPoolSizes = &pool_sizes,
         }, null);
 
-        // Allocate descriptor set
         var set: vk.VkDescriptorSet = undefined;
         try vk.allocateDescriptorSets(ctx.device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .pNext = null,
@@ -455,7 +653,6 @@ pub const ItemDropRenderer = struct {
         }, @ptrCast(&set));
         self.descriptor_set = set;
 
-        // Write descriptors
         const buf_info = vk.VkDescriptorBufferInfo{ .buffer = self.vertex_alloc.buffer, .offset = 0, .range = buffer_size };
         const tex_info = vk.VkDescriptorImageInfo{
             .sampler = block_tex_sampler,
@@ -489,7 +686,7 @@ pub const ItemDropRenderer = struct {
         const vertex_input_info = vk.VkPipelineVertexInputStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, .pNext = null, .flags = 0, .vertexBindingDescriptionCount = 0, .pVertexBindingDescriptions = null, .vertexAttributeDescriptionCount = 0, .pVertexAttributeDescriptions = null };
         const input_assembly = vk.VkPipelineInputAssemblyStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .pNext = null, .flags = 0, .topology = vk.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, .primitiveRestartEnable = vk.VK_FALSE };
         const viewport_state = vk.VkPipelineViewportStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .pNext = null, .flags = 0, .viewportCount = 1, .pViewports = null, .scissorCount = 1, .pScissors = null };
-        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .pNext = null, .flags = 0, .depthClampEnable = vk.VK_FALSE, .rasterizerDiscardEnable = vk.VK_FALSE, .polygonMode = vk.VK_POLYGON_MODE_FILL, .cullMode = vk.VK_CULL_MODE_NONE, .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE, .depthBiasEnable = vk.VK_FALSE, .depthBiasConstantFactor = 0, .depthBiasClamp = 0, .depthBiasSlopeFactor = 0, .lineWidth = 1 };
+        const rasterizer = vk.VkPipelineRasterizationStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .pNext = null, .flags = 0, .depthClampEnable = vk.VK_FALSE, .rasterizerDiscardEnable = vk.VK_FALSE, .polygonMode = vk.VK_POLYGON_MODE_FILL, .cullMode = vk.VK_CULL_MODE_BACK_BIT, .frontFace = vk.VK_FRONT_FACE_COUNTER_CLOCKWISE, .depthBiasEnable = vk.VK_FALSE, .depthBiasConstantFactor = 0, .depthBiasClamp = 0, .depthBiasSlopeFactor = 0, .lineWidth = 1 };
         const multisampling = vk.VkPipelineMultisampleStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .pNext = null, .flags = 0, .rasterizationSamples = vk.VK_SAMPLE_COUNT_1_BIT, .sampleShadingEnable = vk.VK_FALSE, .minSampleShading = 1, .pSampleMask = null, .alphaToCoverageEnable = vk.VK_FALSE, .alphaToOneEnable = vk.VK_FALSE };
         const depth_stencil = vk.VkPipelineDepthStencilStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO, .pNext = null, .flags = 0, .depthTestEnable = vk.VK_TRUE, .depthWriteEnable = vk.VK_TRUE, .depthCompareOp = vk.VK_COMPARE_OP_LESS, .depthBoundsTestEnable = vk.VK_FALSE, .stencilTestEnable = vk.VK_FALSE, .front = std.mem.zeroes(vk.VkStencilOpState), .back = std.mem.zeroes(vk.VkStencilOpState), .minDepthBounds = 0, .maxDepthBounds = 1 };
         const blend_att = vk.VkPipelineColorBlendAttachmentState{ .blendEnable = vk.VK_FALSE, .srcColorBlendFactor = vk.VK_BLEND_FACTOR_ONE, .dstColorBlendFactor = vk.VK_BLEND_FACTOR_ZERO, .colorBlendOp = vk.VK_BLEND_OP_ADD, .srcAlphaBlendFactor = vk.VK_BLEND_FACTOR_ONE, .dstAlphaBlendFactor = vk.VK_BLEND_FACTOR_ZERO, .alphaBlendOp = vk.VK_BLEND_OP_ADD, .colorWriteMask = vk.VK_COLOR_COMPONENT_R_BIT | vk.VK_COLOR_COMPONENT_G_BIT | vk.VK_COLOR_COMPONENT_B_BIT | vk.VK_COLOR_COMPONENT_A_BIT };
