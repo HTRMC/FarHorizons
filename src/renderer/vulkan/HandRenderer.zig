@@ -513,16 +513,12 @@ pub const HandRenderer = struct {
             if (self.held_tool_tier) |tier| {
                 const tex_layer: i32 = @intCast(TextureManager.ITEM_TEXTURE_BASE + @as(u32, @intFromEnum(tier)) * 5 + @intFromEnum(tool_type));
 
-                var item_model = zlm.Mat4.mul(scene_mat, mat4Translate(0.0, (1.0 - self.equip_progress) * -0.6, 0.0));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5 * l, -0.15, -0.85));
-                item_model = zlm.Mat4.mul(item_model, rotateAround(mat4RotX(deg(15.0)), 0.5, 0.5, 0.5));
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.9, 0.9, 0.9));
-
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(0, 0, -0.05));
+                // Use the arm matrix m as base (block at hand position), same as blocks used to
+                var item_model = zlm.Mat4.mul(m, mat4Translate(-0.3, 0.75, 0.0));
+                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
                 item_model = zlm.Mat4.mul(item_model, mat4RotZ(deg(6.0 * l)));
                 item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(-8.0)));
-                item_model = zlm.Mat4.mul(item_model, mat4RotY(deg(25.0 * l)));
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(1.1, 1.1, 1.1));
+                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.3, 0.3, 0.3));
 
                 if (sp > 0.001) {
                     if (tool_type == .sword) {
@@ -534,12 +530,6 @@ pub const HandRenderer = struct {
                         item_model = zlm.Mat4.mul(item_model, mat4RotX(deg(20.0 * swing_rot)));
                     }
                 }
-
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.22 * l, 0.25, 0.2));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.25 * l, -0.05, 0.0));
-                item_model = zlm.Mat4.mul(item_model, mat4Scale(0.3, 0.3, 0.3));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(-0.9 * l, -0.45, -0.7));
-                item_model = zlm.Mat4.mul(item_model, mat4Translate(0.5, 0.5, 0.5));
 
                 const mvp = zlm.Mat4.mul(proj, item_model);
                 const pc = PushConstants{
@@ -732,19 +722,28 @@ pub const HandRenderer = struct {
     }
 
     fn buildItemQuad(vertices: [*]EntityVertex, start: u32) u32 {
-        const n = [3]f32{ 0, 0, 1 };
+        const nf = [3]f32{ 0, 0, 1 };
+        const nb = [3]f32{ 0, 0, -1 };
         const v = struct {
-            fn make(px: f32, py: f32, u: f32, uv: f32, norm: [3]f32) EntityVertex {
-                return .{ .px = px, .py = py, .pz = 0, .nx = norm[0], .ny = norm[1], .nz = norm[2], .u = u, .v = uv };
+            fn make(px: f32, py: f32, pz: f32, u_: f32, v_: f32, n: [3]f32) EntityVertex {
+                return .{ .px = px, .py = py, .pz = pz, .nx = n[0], .ny = n[1], .nz = n[2], .u = u_, .v = v_ };
             }
         };
-        vertices[start + 0] = v.make(-0.5, -0.5, 0, 1, n);
-        vertices[start + 1] = v.make(0.5, -0.5, 1, 1, n);
-        vertices[start + 2] = v.make(0.5, 0.5, 1, 0, n);
-        vertices[start + 3] = v.make(-0.5, -0.5, 0, 1, n);
-        vertices[start + 4] = v.make(0.5, 0.5, 1, 0, n);
-        vertices[start + 5] = v.make(-0.5, 0.5, 0, 0, n);
-        return start + 6;
+        // Front face (CCW from +Z)
+        vertices[start + 0] = v.make(-0.5, -0.5, 0, 0, 1, nf);
+        vertices[start + 1] = v.make(0.5, -0.5, 0, 1, 1, nf);
+        vertices[start + 2] = v.make(0.5, 0.5, 0, 1, 0, nf);
+        vertices[start + 3] = v.make(-0.5, -0.5, 0, 0, 1, nf);
+        vertices[start + 4] = v.make(0.5, 0.5, 0, 1, 0, nf);
+        vertices[start + 5] = v.make(-0.5, 0.5, 0, 0, 0, nf);
+        // Back face (CW from +Z = CCW from -Z)
+        vertices[start + 6] = v.make(0.5, -0.5, 0, 1, 1, nb);
+        vertices[start + 7] = v.make(-0.5, -0.5, 0, 0, 1, nb);
+        vertices[start + 8] = v.make(0.5, 0.5, 0, 1, 0, nb);
+        vertices[start + 9] = v.make(0.5, 0.5, 0, 1, 0, nb);
+        vertices[start + 10] = v.make(-0.5, -0.5, 0, 0, 1, nb);
+        vertices[start + 11] = v.make(-0.5, 0.5, 0, 0, 0, nb);
+        return start + 12;
     }
 
     fn buildUnitBlock(vertices: [*]EntityVertex, start: u32) u32 {
