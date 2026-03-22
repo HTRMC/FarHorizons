@@ -715,20 +715,18 @@ pub const HandRenderer = struct {
                 return .{ .px = px, .py = py, .pz = pz, .nx = n[0], .ny = n[1], .nz = n[2], .u = u_, .v = v_ };
             }
         };
-        // Front face (CCW from +Z)
-        vertices[start + 0] = v.make(-0.5, -0.5, 0, 0, 1, nf);
-        vertices[start + 1] = v.make(0.5, -0.5, 0, 1, 1, nf);
-        vertices[start + 2] = v.make(0.5, 0.5, 0, 1, 0, nf);
-        vertices[start + 3] = v.make(-0.5, -0.5, 0, 0, 1, nf);
-        vertices[start + 4] = v.make(0.5, 0.5, 0, 1, 0, nf);
-        vertices[start + 5] = v.make(-0.5, 0.5, 0, 0, 0, nf);
-        // Back face (CW from +Z = CCW from -Z)
-        vertices[start + 6] = v.make(0.5, -0.5, 0, 1, 1, nb);
-        vertices[start + 7] = v.make(-0.5, -0.5, 0, 0, 1, nb);
-        vertices[start + 8] = v.make(0.5, 0.5, 0, 1, 0, nb);
-        vertices[start + 9] = v.make(0.5, 0.5, 0, 1, 0, nb);
-        vertices[start + 10] = v.make(-0.5, -0.5, 0, 0, 1, nb);
-        vertices[start + 11] = v.make(-0.5, 0.5, 0, 0, 0, nb);
+        vertices[start + 0] = v.make(-0.5, -0.5, 0.005, 0, 1, nf);
+        vertices[start + 1] = v.make(0.5, -0.5, 0.005, 1, 1, nf);
+        vertices[start + 2] = v.make(0.5, 0.5, 0.005, 1, 0, nf);
+        vertices[start + 3] = v.make(-0.5, -0.5, 0.005, 0, 1, nf);
+        vertices[start + 4] = v.make(0.5, 0.5, 0.005, 1, 0, nf);
+        vertices[start + 5] = v.make(-0.5, 0.5, 0.005, 0, 0, nf);
+        vertices[start + 6] = v.make(0.5, -0.5, -0.005, 1, 1, nb);
+        vertices[start + 7] = v.make(-0.5, -0.5, -0.005, 0, 1, nb);
+        vertices[start + 8] = v.make(0.5, 0.5, -0.005, 1, 0, nb);
+        vertices[start + 9] = v.make(0.5, 0.5, -0.005, 1, 0, nb);
+        vertices[start + 10] = v.make(-0.5, -0.5, -0.005, 0, 1, nb);
+        vertices[start + 11] = v.make(-0.5, 0.5, -0.005, 0, 0, nb);
         return start + 12;
     }
 
