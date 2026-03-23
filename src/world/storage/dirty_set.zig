@@ -144,7 +144,7 @@ pub const ChunkPool = struct {
         const slots = try allocator.create([POOL_SIZE]Chunk);
         var pool: ChunkPool = .{
             .slots = slots,
-            .next = undefined,
+            .next = std.mem.zeroes([POOL_SIZE]u32),
             .free_head = 0,
             .mutex = .init,
         };
@@ -333,8 +333,8 @@ pub const DirtySet = struct {
                 result.batches[result.batch_count] = .{
                     .region_coord = entry.region_coord,
                     .count = 0,
-                    .indices = undefined,
-                    .keys = undefined,
+                    .indices = std.mem.zeroes([MAX_BATCH_SIZE]u9),
+                    .keys = std.mem.zeroes([MAX_BATCH_SIZE]ChunkKey),
                     .chunks = undefined,
                 };
                 result.batch_count += 1;

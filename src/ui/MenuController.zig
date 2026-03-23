@@ -65,9 +65,9 @@ pub const MenuController = struct {
     app_state: AppState = .title_menu,
     action: ?Action = null,
 
-    world_names: [MAX_WORLDS][MAX_NAME_LEN]u8 = undefined,
+    world_names: [MAX_WORLDS][MAX_NAME_LEN]u8 = .{.{0} ** MAX_NAME_LEN} ** MAX_WORLDS,
     world_name_lens: [MAX_WORLDS]u8 = .{0} ** MAX_WORLDS,
-    world_display_names: [MAX_WORLDS][MAX_DISPLAY_LEN]u8 = undefined,
+    world_display_names: [MAX_WORLDS][MAX_DISPLAY_LEN]u8 = .{.{0} ** MAX_DISPLAY_LEN} ** MAX_WORLDS,
     world_display_lens: [MAX_WORLDS]u8 = .{0} ** MAX_WORLDS,
     world_count: u8 = 0,
     selection: u8 = 0,
@@ -143,7 +143,7 @@ pub const MenuController = struct {
     edit_world_name_input_id: WidgetId = NULL_WIDGET,
     edit_game_mode_label_id: WidgetId = NULL_WIDGET,
     edit_game_mode: @import("../GameState.zig").GameMode = .creative,
-    edit_world_name: [MAX_NAME_LEN]u8 = undefined,
+    edit_world_name: [MAX_NAME_LEN]u8 = .{0} ** MAX_NAME_LEN,
     edit_world_name_len: u8 = 0,
 
     pub fn init(ui_manager: *UiManager, allocator: std.mem.Allocator) MenuController {

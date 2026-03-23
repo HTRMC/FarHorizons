@@ -96,11 +96,11 @@ pub const TextureManager = struct {
             .bindless_descriptor_set_layout = null,
             .bindless_descriptor_pool = null,
             .bindless_descriptor_set = null,
-            .animations = undefined,
+            .animations = std.mem.zeroes([MAX_ANIMATED_TEXTURES]AnimatedTexture),
             .animation_count = 0,
             .anim_staging_buffer = null,
             .anim_staging_memory = null,
-            .anim_staging_ptr = undefined,
+            .anim_staging_ptr = undefined, // set by createAnimationStagingBuffer
             .tick_accumulator = 0,
             .allocator = allocator,
         };

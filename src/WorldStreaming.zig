@@ -50,7 +50,7 @@ pub const WorldStreamingState = struct {
     player_dirty_chunks: DirtyChunkSet,
 
     // Pending unloads (collected by worldTick, applied by renderer)
-    pending_unload_keys: [MAX_PENDING_UNLOADS]WorldState.ChunkKey = undefined,
+    pending_unload_keys: [MAX_PENDING_UNLOADS]WorldState.ChunkKey = std.mem.zeroes([MAX_PENDING_UNLOADS]WorldState.ChunkKey),
     pending_unload_count: u16 = 0,
     unload_scan_cursor: u32 = 0,
 

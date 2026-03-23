@@ -1269,7 +1269,7 @@ pub fn affectedChunks(wx: i32, wy: i32, wz: i32) AffectedChunks {
     const base_cz = @divFloor(wz, cs);
 
     var result = AffectedChunks{
-        .keys = undefined,
+        .keys = std.mem.zeroes([7]ChunkKey),
         .count = 0,
     };
 

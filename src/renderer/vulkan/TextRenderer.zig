@@ -41,7 +41,7 @@ pub const TextRenderer = struct {
     mapped_vertices: ?[*]TextVertex,
     current_frame: u32,
     clip_rect: [4]f32 = .{ -1e9, -1e9, 1e9, 1e9 },
-    clip_stack: [8][4]f32 = undefined,
+    clip_stack: [8][4]f32 = .{.{ 0, 0, 0, 0 }} ** 8,
     clip_depth: u8 = 0,
     clip_scale: f32 = 1.0,
 

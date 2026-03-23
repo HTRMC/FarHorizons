@@ -16,7 +16,7 @@ pub const Attr = struct {
 pub const XmlEvent = struct {
     kind: EventKind,
     tag: []const u8,
-    attrs: [MAX_ATTRS]Attr = undefined,
+    attrs: [MAX_ATTRS]Attr = std.mem.zeroes([MAX_ATTRS]Attr),
     attr_count: u8 = 0,
 
     pub fn getAttr(self: *const XmlEvent, name: []const u8) ?[]const u8 {
