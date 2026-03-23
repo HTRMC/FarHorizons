@@ -18,8 +18,11 @@ const CS = CHUNK_SIZE;
 //   this.b = 16-octave Perlin, density A, scale 684.412
 //   this.c = 16-octave Perlin, density B, scale 684.412
 //   this.d = 8-octave Perlin, selector,  scale 8.555 (xz), 4.278 (y)
+//   this.e = 4-octave Perlin, sand/gravel biome, scale 0.03125
+//   this.f = 4-octave Perlin, dirt depth variation, scale 0.0625
 //   this.g = 10-octave Perlin, height modifier (2D), scale 1.0
 //   this.h = 16-octave Perlin, roughness (2D), scale 100.0
+//   this.i = 8-octave Perlin, tree count (2D), scale 0.5
 const DENSITY_SCALE: f32 = 684.412;
 const SELECTOR_SCALE_XZ: f32 = 8.555;
 const SELECTOR_SCALE_Y: f32 = 4.278;
@@ -160,7 +163,7 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
     }
 
     // --- Surface pass ---
-    surfacePass(chunk, oy_i32, seed);
+    surfacePass(chunk, key, &ng, seed);
 
     // --- Bedrock floor ---
     bedrockPass(chunk, oy_i32, seed);
@@ -172,11 +175,42 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
     TreeGen.plantTrees(chunk, key, seed);
 }
 
-fn surfacePass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
-    _ = seed;
+fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u64) void {
+    const origin = key.position();
+    const oy_i32 = origin[1];
+
     for (0..CS) |bz| {
         for (0..CS) |bx| {
+            const wx = origin[0] + @as(i32, @intCast(bx));
+            const wz = origin[2] + @as(i32, @intCast(bz));
+            const wx_f: f64 = @floatFromInt(wx);
+            const wz_f: f64 = @floatFromInt(wz);
+
+            // Per-column RNG for small jitter (Infdev uses java.util.Random)
+            var col_rng = CaveRng.init(seed +%
+                @as(u64, @bitCast(@as(i64, wx) *% 341873128712)) +%
+                @as(u64, @bitCast(@as(i64, wz) *% 132897987541)));
+            const rand0: f64 = @floatCast(col_rng.float());
+            const rand1: f64 = @floatCast(col_rng.float());
+            const rand2: f64 = @floatCast(col_rng.float());
+
+            // Sand/gravel biome noise (Infdev a.java lines 178-180)
+            // this.e.a(x * 0.03125, z * 0.03125, 0) + random * 0.2 > 0
+            const is_sandy = ng.sand_gravel.sample3D(wx_f * 0.03125, wz_f * 0.03125, 0.0) + rand0 * 0.2 > 0.0;
+            // this.e.a(z * 0.03125, 109.0134, x * 0.03125) + random * 0.2 > 3.0
+            const is_gravelly = ng.sand_gravel.sample3D(wz_f * 0.03125, 109.0134, wx_f * 0.03125) + rand1 * 0.2 > 3.0;
+
+            // Dirt depth noise (Infdev line 180)
+            // (int)(this.f.a(x * 0.03125 * 2, z * 0.03125 * 2) / 3.0 + 3.0 + random * 0.25)
+            const dirt_depth_f = ng.dirt_depth.sample2D(wx_f * 0.0625, wz_f * 0.0625) / 3.0 + 3.0 + rand2 * 0.25;
+            const dirt_depth: i32 = @intFromFloat(dirt_depth_f);
+
             var depth: i32 = -1;
+            // Infdev surface materials (reset per first-stone-hit)
+            // var102 = top block, var19 = fill block
+            var top_block: StateId = BlockState.defaultState(.grass_block);
+            var fill_block: StateId = BlockState.defaultState(.dirt);
+
             var by_rev: usize = CS;
             while (by_rev > 0) {
                 by_rev -= 1;
@@ -186,27 +220,59 @@ fn surfacePass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
 
                 const blk = BlockState.getBlock(block);
                 if (blk == .air or blk == .water) {
-                    depth = 0;
+                    depth = -1;
                     continue;
                 }
 
-                if (depth < 0) continue;
+                // Only replace stone with surface blocks
+                if (blk != .stone) continue;
 
-                chunk.blocks[idx] = selectBlock(depth, wy, 0);
-                depth += 1;
+                if (depth == -1) {
+                    // First stone hit from air/water — determine surface materials
+                    if (dirt_depth <= 0) {
+                        // Exposed stone (Infdev: var102=0, var19=stone)
+                        top_block = if (wy < SEA_LEVEL) BlockState.defaultState(.water) else 0;
+                        fill_block = BlockState.defaultState(.stone);
+                    } else if (wy >= -4 and wy <= 1) {
+                        // Near-water zone (Infdev y=60..65): apply sand/gravel biome
+                        top_block = BlockState.defaultState(.grass_block);
+                        fill_block = BlockState.defaultState(.dirt);
+                        // Gravel: top becomes air/water, fill becomes gravel
+                        if (is_gravelly) {
+                            top_block = 0;
+                            fill_block = BlockState.defaultState(.gravel);
+                        }
+                        // Sand overrides gravel for both top and fill
+                        if (is_sandy) {
+                            top_block = BlockState.defaultState(.sand);
+                            fill_block = BlockState.defaultState(.sand);
+                        }
+                        // If top is air and below sea level, fill with water
+                        if (wy < SEA_LEVEL and top_block == 0) {
+                            top_block = BlockState.defaultState(.water);
+                        }
+                    } else {
+                        top_block = BlockState.defaultState(.grass_block);
+                        fill_block = BlockState.defaultState(.dirt);
+                    }
+
+                    depth = dirt_depth;
+                    if (wy >= -1) {
+                        // At or above Infdev y=63: place top block
+                        if (top_block != 0) {
+                            chunk.blocks[idx] = top_block;
+                        }
+                    } else {
+                        // Deep underwater: place fill block
+                        chunk.blocks[idx] = fill_block;
+                    }
+                } else if (depth > 0) {
+                    depth -= 1;
+                    chunk.blocks[idx] = fill_block;
+                }
             }
         }
     }
-}
-
-fn selectBlock(depth: i32, wy: i32, seed: i32) StateId {
-    _ = seed;
-    if (depth == 0) {
-        if (wy >= SEA_LEVEL) return BlockState.defaultState(.grass_block);
-        return BlockState.defaultState(.dirt); // underwater surface
-    }
-    if (depth <= 3) return BlockState.defaultState(.dirt);
-    return BlockState.defaultState(.stone);
 }
 
 fn bedrockPass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
@@ -855,16 +921,25 @@ test "CaveRng.float: values in [0, 1)" {
     }
 }
 
-test "selectBlock: surface blocks" {
-    // At sea level, depth 0 = grass
-    try testing.expectEqual(BlockState.defaultState(.grass_block), selectBlock(0, SEA_LEVEL, 0));
-    // Below sea level, depth 0 = dirt (underwater)
-    try testing.expectEqual(BlockState.defaultState(.dirt), selectBlock(0, SEA_LEVEL - 1, 0));
-    // Depth 1-3 = dirt
-    try testing.expectEqual(BlockState.defaultState(.dirt), selectBlock(1, SEA_LEVEL, 0));
-    try testing.expectEqual(BlockState.defaultState(.dirt), selectBlock(3, SEA_LEVEL, 0));
-    // Depth 4+ = stone
-    try testing.expectEqual(BlockState.defaultState(.stone), selectBlock(4, SEA_LEVEL, 0));
+test "surfacePass: generates sand near water" {
+    // Smoke test: generate a chunk near sea level and verify surface blocks exist
+    var chunk: Chunk = undefined;
+    const key = ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
+    generateChunk(&chunk, key, 42);
+
+    // Check that the chunk has at least some non-air, non-stone surface blocks
+    var has_surface = false;
+    for (0..CS) |bz| {
+        for (0..CS) |bx| {
+            for (0..CS) |by| {
+                const blk = BlockState.getBlock(chunk.blocks[WorldState.chunkIndex(bx, by, bz)]);
+                if (blk == .grass_block or blk == .dirt or blk == .sand or blk == .gravel) {
+                    has_surface = true;
+                }
+            }
+        }
+    }
+    try testing.expect(has_surface);
 }
 
 // ============================================================

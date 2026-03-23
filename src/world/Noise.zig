@@ -378,8 +378,11 @@ pub const NoiseGen = struct {
     density_a: OctavePerlin, // this.b — 16 octaves
     density_b: OctavePerlin, // this.c — 16 octaves
     selector: OctavePerlin, // this.d — 8 octaves
+    sand_gravel: OctavePerlin, // this.e — 4 octaves (sand/gravel biome)
+    dirt_depth: OctavePerlin, // this.f — 4 octaves (surface depth variation)
     height_mod: OctavePerlin, // this.g — 10 octaves
     roughness: OctavePerlin, // this.h — 16 octaves
+    tree_count: OctavePerlin, // this.i — 8 octaves (tree density)
 
     /// Initialize all noise generators from a world seed.
     /// Order matches Infdev's constructor (a.java lines 32-39):
@@ -390,13 +393,11 @@ pub const NoiseGen = struct {
             .density_a = OctavePerlin.init(&rng, 16), // this.b
             .density_b = OctavePerlin.init(&rng, 16), // this.c
             .selector = OctavePerlin.init(&rng, 8), // this.d
-            // this.e (4 octaves) and this.f (4 octaves) are for sand/gravel surface — skip for now
-            .height_mod = blk: {
-                // Skip this.e and this.f (4+4 octaves = consume 8 Perlin inits)
-                for (0..8) |_| _ = Perlin.init(&rng);
-                break :blk OctavePerlin.init(&rng, 10); // this.g
-            },
+            .sand_gravel = OctavePerlin.init(&rng, 4), // this.e
+            .dirt_depth = OctavePerlin.init(&rng, 4), // this.f
+            .height_mod = OctavePerlin.init(&rng, 10), // this.g
             .roughness = OctavePerlin.init(&rng, 16), // this.h
+            .tree_count = OctavePerlin.init(&rng, 8), // this.i
         };
     }
 };

@@ -46,7 +46,20 @@ pub fn plantTrees(chunk: *Chunk, key: ChunkKey, seed: u64) void {
                 0x54524545;
 
             var rng = TreeRng.init(col_seed);
-            const num_attempts = rng.bounded(6) + 2;
+
+            // Infdev tree count (a.java line 494):
+            // (int)(this.i.a(blockX * 0.5, blockZ * 0.5) / 8 + random * 4 + 4)
+            const block_x: f64 = @floatFromInt(@as(i32, scan_cx) * CS);
+            const block_z: f64 = @floatFromInt(@as(i32, scan_cz) * CS);
+            const tree_noise = ng.tree_count.sample2D(block_x * 0.5, block_z * 0.5);
+            const rand_f: f64 = @as(f64, @floatFromInt(rng.bounded(1000))) / 250.0; // 0..4
+            const raw_count_f = tree_noise / 8.0 + rand_f + 4.0;
+            // Infdev uses 16x16 chunks; ours are 32x32 (4x area), scale count by 4
+            const scaled = raw_count_f * 4.0;
+            // 10% chance of +1 (Infdev line 499-501)
+            const bonus: f64 = if (rng.bounded(10) == 0) 1.0 else 0.0;
+            const raw_count: i32 = @intFromFloat(@max(0.0, scaled + bonus));
+            const num_attempts: u32 = @intCast(@min(raw_count, 40));
 
             for (0..num_attempts) |_| {
                 const local_x: i32 = @intCast(rng.bounded(@intCast(CS)));
@@ -59,14 +72,55 @@ pub fn plantTrees(chunk: *Chunk, key: ChunkKey, seed: u64) void {
                 // Grid-interpolated height matches chunk gen exactly.
                 // All chunks compute the same value, so trees are seamless.
                 const wy = TerrainGen.sampleGridSurfaceHeight(wx, wz, &ng);
-                if (wy < 0) continue;
+                if (wy <= 0) continue; // skip at or below sea level
 
                 if (wy + height + 1 < chunk_min_y or wy - 1 >= chunk_max_y) continue;
+
+                // Infdev e.java line 40: only place trees on grass or dirt
+                const ground_bx = wx - origin[0];
+                const ground_by = wy - 1 - origin[1];
+                const ground_bz = wz - origin[2];
+                if (ground_bx >= 0 and ground_bx < CS and ground_by >= 0 and ground_by < CS and ground_bz >= 0 and ground_bz < CS) {
+                    const ground_blk = BlockState.getBlock(chunk.blocks[WorldState.chunkIndex(@intCast(ground_bx), @intCast(ground_by), @intCast(ground_bz))]);
+                    if (ground_blk != .grass_block and ground_blk != .dirt) continue;
+                }
+
+                // Infdev e.java lines 12-34: validate space for tree
+                if (!validateTreeSpace(chunk, origin, wx, wy, wz, height)) continue;
 
                 placeTree(chunk, origin, wx, wy, wz, height, corner_seed);
             }
         }
     }
+}
+
+/// Infdev e.java lines 12-34: check the space around a tree for obstructions.
+/// Returns false if any opaque non-leaf block occupies the tree's footprint.
+fn validateTreeSpace(chunk: *Chunk, origin: [3]i32, wx: i32, wy: i32, wz: i32, height: i32) bool {
+    const top = wy + height;
+    var check_y = wy;
+    while (check_y <= top + 1) : (check_y += 1) {
+        // Infdev radius: 0 at base, 1 in middle, 2 at top 2 layers
+        var radius: i32 = 1;
+        if (check_y == wy) radius = 0;
+        if (check_y >= top - 1) radius = 2;
+
+        var dx: i32 = -radius;
+        while (dx <= radius) : (dx += 1) {
+            var dz: i32 = -radius;
+            while (dz <= radius) : (dz += 1) {
+                const bx = wx + dx - origin[0];
+                const by = check_y - origin[1];
+                const bz = wz + dz - origin[2];
+                if (bx < 0 or bx >= CS or by < 0 or by >= CS or bz < 0 or bz >= CS) continue;
+
+                const blk = BlockState.getBlock(chunk.blocks[WorldState.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz))]);
+                // Fail if occupied by anything other than air, water, or leaves
+                if (blk != .air and blk != .water and blk != .oak_leaves) return false;
+            }
+        }
+    }
+    return true;
 }
 
 fn placeTree(chunk: *Chunk, origin: [3]i32, wx: i32, wy: i32, wz: i32, height: i32, corner_seed: u64) void {
