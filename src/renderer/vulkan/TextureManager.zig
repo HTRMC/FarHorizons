@@ -508,7 +508,7 @@ pub const TextureManager = struct {
 
         vk.cmdPipelineBarrier(
             cmd,
-            vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vk.VK_PIPELINE_STAGE_HOST_BIT,
             vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
             0,
             0,

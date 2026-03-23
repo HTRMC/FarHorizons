@@ -824,7 +824,7 @@ pub const UiRenderer = struct {
             .image = self.atlas_image,
             .subresourceRange = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
         };
-        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_transfer});
+        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_HOST_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_transfer});
 
         const region = vk.VkBufferImageCopy{
             .bufferOffset = 0,
@@ -1059,7 +1059,7 @@ pub const UiRenderer = struct {
                 .layerCount = 1,
             },
         };
-        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_transfer});
+        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_HOST_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_transfer});
 
         const region = vk.VkBufferImageCopy{
             .bufferOffset = 0,

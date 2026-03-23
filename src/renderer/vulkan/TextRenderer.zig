@@ -505,7 +505,7 @@ pub const TextRenderer = struct {
             },
         };
 
-        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_transfer});
+        vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_HOST_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{to_transfer});
 
         const region = vk.VkBufferImageCopy{
             .bufferOffset = 0,

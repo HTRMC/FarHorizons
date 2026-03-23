@@ -805,7 +805,7 @@ pub const VulkanRenderer = struct {
 
         vk.cmdPipelineBarrier(
             command_buffer,
-            vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vk.VK_PIPELINE_STAGE_HOST_BIT,
             vk.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
             0,
             0,
@@ -837,7 +837,7 @@ pub const VulkanRenderer = struct {
 
         vk.cmdPipelineBarrier(
             command_buffer,
-            vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vk.VK_PIPELINE_STAGE_HOST_BIT,
             vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
             0,
             0,
@@ -1065,7 +1065,7 @@ pub const VulkanRenderer = struct {
         vk.cmdPipelineBarrier(
             command_buffer,
             vk.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-            vk.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            vk.VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
             0,
             0,
             null,
