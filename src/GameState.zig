@@ -398,6 +398,8 @@ pub fn slotPtr(self: *GameState, slot: u8) *Entity.ItemStack {
 
 /// Click a slot: pick up, place, or swap with carried item.
 pub fn clickSlot(self: *GameState, slot: u8) void {
+    const tz = tracy.zone(@src(), "clickSlot");
+    defer tz.end();
     const ptr = self.slotPtr(slot);
     if (self.carried_item.isEmpty() and ptr.isEmpty()) return;
     const tmp = ptr.*;
@@ -442,6 +444,8 @@ pub fn quickMove(self: *GameState, slot: u8) void {
 }
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8, world_type_override: ?WorldState.WorldType, game_mode_override: ?GameMode) !GameState {
+    const tz = tracy.zone(@src(), "GameState.init");
+    defer tz.end();
     var cam = Camera.init(width, height);
     const chunk_map = ChunkMap.init(allocator);
     const chunk_pool = ChunkPool.init(allocator);
@@ -615,6 +619,8 @@ pub fn save(self: *GameState) void {
 }
 
 pub fn deinit(self: *GameState) void {
+    const tz = tracy.zone(@src(), "GameState.deinit");
+    defer tz.end();
     // Free entity inventories
     for (self.entities.inventory[0..self.entities.count]) |inv| {
         if (inv) |ptr| self.allocator.destroy(ptr);
@@ -1402,6 +1408,8 @@ pub fn breakBlockNoDrop(self: *GameState) void {
 }
 
 pub fn breakBlock(self: *GameState) void {
+    const tz = tracy.zone(@src(), "breakBlock");
+    defer tz.end();
     self.breakBlockImpl(true);
 }
 
@@ -1688,6 +1696,8 @@ fn resolveOrientation(block_state: BlockState.StateId, yaw: f32, hit: Raycast.Bl
 }
 
 pub fn placeBlock(self: *GameState) void {
+    const tz = tracy.zone(@src(), "placeBlock");
+    defer tz.end();
     const hit = self.hit_result orelse return;
     self.swing_requested = true;
 

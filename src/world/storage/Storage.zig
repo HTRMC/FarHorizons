@@ -7,6 +7,7 @@ const ChunkCacheMod = @import("chunk_cache.zig");
 const IoPipeline = @import("io_pipeline.zig").IoPipeline;
 const dirty_set_mod = @import("dirty_set.zig");
 const app_config = @import("../../app_config.zig");
+const tracy = @import("../../platform/tracy.zig");
 
 const Io = std.Io;
 const Dir = Io.Dir;
@@ -143,6 +144,8 @@ pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *con
 }
 
 pub fn tick(self: *Storage) void {
+    const tz = tracy.zone(@src(), "storage.tick");
+    defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
 
     self.dirty_mutex.lockUncancelable(io);
@@ -189,6 +192,8 @@ pub fn tick(self: *Storage) void {
 }
 
 pub fn saveAllDirty(self: *Storage) void {
+    const tz = tracy.zone(@src(), "storage.saveAllDirty");
+    defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
 
     self.dirty_mutex.lockUncancelable(io);
@@ -250,6 +255,8 @@ pub fn saveAllDirty(self: *Storage) void {
 
 
 pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chunk {
+    const tz = tracy.zone(@src(), "storage.loadChunk");
+    defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
     const key = ChunkKey.init(cx, cy, cz, lod);
 
@@ -414,6 +421,8 @@ fn loadOrCreateSeed(io: Io, allocator: std.mem.Allocator, world_dir: []const u8)
 }
 
 pub fn loadGameTime(self: *const Storage) i64 {
+    const tz = tracy.zone(@src(), "storage.loadGameTime");
+    defer tz.end();
     const sep = std.fs.path.sep_str;
     const path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "game_time.dat", .{self.world_dir}, 0) catch return 0;
     defer self.allocator.free(path);
@@ -431,6 +440,8 @@ pub fn loadGameTime(self: *const Storage) i64 {
 }
 
 pub fn saveGameTime(self: *const Storage, game_time: i64) void {
+    const tz = tracy.zone(@src(), "storage.saveGameTime");
+    defer tz.end();
     const sep = std.fs.path.sep_str;
     const path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "game_time.dat", .{self.world_dir}, 0) catch return;
     defer self.allocator.free(path);
@@ -481,6 +492,8 @@ pub const PlayerData = struct {
 pub const LOCAL_PLAYER_UUID = "00000000-0000-0000-0000-000000000000";
 
 pub fn loadPlayerData(self: *const Storage, uuid: []const u8) ?PlayerData {
+    const tz = tracy.zone(@src(), "storage.loadPlayerData");
+    defer tz.end();
     const sep = std.fs.path.sep_str;
     const path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "playerdata" ++ sep ++ "{s}.dat", .{ self.world_dir, uuid }, 0) catch return null;
     defer self.allocator.free(path);
@@ -546,6 +559,8 @@ pub fn loadPlayerData(self: *const Storage, uuid: []const u8) ?PlayerData {
 }
 
 pub fn savePlayerData(self: *const Storage, uuid: []const u8, data: PlayerData) void {
+    const tz = tracy.zone(@src(), "storage.savePlayerData");
+    defer tz.end();
     const sep = std.fs.path.sep_str;
     const path = std.fmt.allocPrintSentinel(self.allocator, "{s}" ++ sep ++ "playerdata" ++ sep ++ "{s}.dat", .{ self.world_dir, uuid }, 0) catch return;
     defer self.allocator.free(path);

@@ -5,6 +5,7 @@ const LightMap = LightMapMod.LightMap;
 const LightBorderSnapshot = LightMapMod.LightBorderSnapshot;
 const BlockState = WorldState.BlockState;
 const StateId = WorldState.StateId;
+const tracy = @import("../platform/tracy.zig");
 
 const CHUNK_SIZE = WorldState.CHUNK_SIZE;
 const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
@@ -178,6 +179,8 @@ pub fn computeChunkLight(
     chunk_cy: i32,
     surface_heights: ?*const [CHUNK_SIZE * CHUNK_SIZE]i32,
 ) u6 {
+    const tz = tracy.zone(@src(), "computeChunkLight");
+    defer tz.end();
     light_map.clear();
 
     computeSkyLight(chunk, neighbors, neighbor_borders, light_map, chunk_cy, surface_heights);
@@ -583,6 +586,8 @@ pub fn applyBlockChange(
     lz: u8,
     old_block: StateId,
 ) ?u6 {
+    const tz = tracy.zone(@src(), "applyBlockChange");
+    defer tz.end();
     const idx = chunkIndex(lx, ly, lz);
     const new_block = chunk.blocks[idx];
 

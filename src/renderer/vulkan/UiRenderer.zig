@@ -132,6 +132,9 @@ pub const UiRenderer = struct {
     }
 
     pub fn beginFrame(self: *UiRenderer, device: vk.VkDevice) void {
+        const tz = tracy.zone(@src(), "UiRenderer.beginFrame");
+        defer tz.end();
+
         _ = device;
         self.mapped_vertices = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr));
         self.vertex_count = 0;
@@ -166,6 +169,9 @@ pub const UiRenderer = struct {
     }
 
     pub fn recordDraw(self: *const UiRenderer, command_buffer: vk.VkCommandBuffer) void {
+        const tz = tracy.zone(@src(), "UiRenderer.recordDraw");
+        defer tz.end();
+
         if (self.vertex_count == 0 and self.inverted_vertex_count == 0) return;
 
         const ortho = orthoMatrix(self.screen_width, self.screen_height);

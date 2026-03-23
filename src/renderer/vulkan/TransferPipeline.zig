@@ -286,6 +286,7 @@ pub const TransferPipeline = struct {
     }
 
     fn workerFn(self: *TransferPipeline) void {
+        tracy.setThreadName("TransferPipeline");
         const io = Io.Threaded.global_single_threaded.io();
         const mw = self.mesh_worker orelse return;
         const f_tlsf = self.face_tlsf orelse return;
@@ -298,18 +299,23 @@ pub const TransferPipeline = struct {
             var local_results: [MeshWorker.MAX_OUTPUT]MeshWorker.ChunkResult = undefined;
             var local_count: u32 = 0;
 
-            mw.output_mutex.lockUncancelable(io);
-            while (mw.output_len == 0 and !self.shutdown.load(.acquire)) {
-                mw.output_cond.waitUncancelable(io, &mw.output_mutex);
-            }
-            local_count = mw.output_len;
-            if (local_count > 0) {
-                @memcpy(local_results[0..local_count], mw.output_queue[0..local_count]);
-                mw.output_len = 0;
-            }
-            mw.output_mutex.unlock(io);
-            if (local_count > 0) {
-                mw.output_drained_cond.signal(io);
+            {
+                const tz = tracy.zone(@src(), "transfer.drainMeshResults");
+                defer tz.end();
+
+                mw.output_mutex.lockUncancelable(io);
+                while (mw.output_len == 0 and !self.shutdown.load(.acquire)) {
+                    mw.output_cond.waitUncancelable(io, &mw.output_mutex);
+                }
+                local_count = mw.output_len;
+                if (local_count > 0) {
+                    @memcpy(local_results[0..local_count], mw.output_queue[0..local_count]);
+                    mw.output_len = 0;
+                }
+                mw.output_mutex.unlock(io);
+                if (local_count > 0) {
+                    mw.output_drained_cond.signal(io);
+                }
             }
 
             if (self.shutdown.load(.acquire)) {
@@ -325,6 +331,9 @@ pub const TransferPipeline = struct {
             self.waitTimeline(self.slot_timeline_values[current_slot]);
 
             // 3. Reset ring + begin command buffer
+            const tz2 = tracy.zone(@src(), "transfer.uploadBatch");
+            defer tz2.end();
+
             self.ring_buffers[current_slot].head = 0;
             vk.resetCommandPool(self.device, self.command_pools[current_slot], 0) catch |err| {
                 std.log.err("Failed to reset transfer command pool: {}", .{err});

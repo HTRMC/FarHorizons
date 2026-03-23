@@ -1031,10 +1031,16 @@ pub const VulkanRenderer = struct {
             const proj = gs.camera.getProjectionMatrix();
             const mvp = zlm.Mat4.mul(proj, view);
 
-            self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw, day_night.ambient_light, fog_color, fog_start, fog_end);
+            {
+                const tz2 = tracy.zone(@src(), "record.world");
+                defer tz2.end();
+                self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw, day_night.ambient_light, fog_color, fog_start, fog_end);
+            }
 
             // Sun/moon celestial bodies (rendered on sky background via depth test)
             if (!overdraw and !eyes_in_water) {
+                const tz2 = tracy.zone(@src(), "record.sky");
+                defer tz2.end();
                 const moon_dir = [3]f32{ 0.0, -sun_dir[1], -sun_dir[2] };
                 self.render_state.sky_renderer.record(command_buffer, &mvp.m, sun_dir, moon_dir);
             }
@@ -1061,6 +1067,8 @@ pub const VulkanRenderer = struct {
 
             // Translucent world pass (water) — after entities so water tints things behind it
             if (!overdraw) {
+                const tz2 = tracy.zone(@src(), "record.translucent");
+                defer tz2.end();
                 self.render_state.world_renderer.recordTranslucent(command_buffer, &mvp.m, day_night.ambient_light, fog_color, fog_start, fog_end);
             }
 
@@ -1086,16 +1094,21 @@ pub const VulkanRenderer = struct {
             self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, gs_.third_person, day_night.ambient_light, sun_dir, player_light[3], .{ player_light[0], player_light[1], player_light[2] });
         }
 
-        self.render_state.ui_renderer.recordDraw(command_buffer);
-
         {
-            const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
-            const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
-            const ui_scale = self.render_state.ui_renderer.clip_scale;
-            self.render_state.entity_renderer.recordDraw(command_buffer, sw, sh, ui_scale);
-        }
+            const tz2 = tracy.zone(@src(), "record.ui");
+            defer tz2.end();
 
-        self.render_state.text_renderer.recordDraw(command_buffer);
+            self.render_state.ui_renderer.recordDraw(command_buffer);
+
+            {
+                const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
+                const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
+                const ui_scale = self.render_state.ui_renderer.clip_scale;
+                self.render_state.entity_renderer.recordDraw(command_buffer, sw, sh, ui_scale);
+            }
+
+            self.render_state.text_renderer.recordDraw(command_buffer);
+        }
 
         vk.cmdEndRendering(command_buffer);
 

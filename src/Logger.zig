@@ -1,5 +1,6 @@
 const std = @import("std");
 const app_config = @import("app_config.zig");
+const tracy = @import("platform/tracy.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 const File = Io.File;
@@ -135,6 +136,7 @@ pub const FileLogger = struct {
     }
 
     fn writerThreadFn(self: *FileLogger) void {
+        tracy.setThreadName("Logger");
         var file_writer_buf: [8192]u8 = undefined;
         var file_writer = File.Writer.initStreaming(self.log_file, self.io, &file_writer_buf);
 

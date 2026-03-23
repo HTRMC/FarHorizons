@@ -95,6 +95,9 @@ pub const TextRenderer = struct {
     }
 
     pub fn beginFrame(self: *TextRenderer, device: vk.VkDevice) void {
+        const tz = tracy.zone(@src(), "TextRenderer.beginFrame");
+        defer tz.end();
+
         _ = device;
         self.mapped_vertices = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr));
         self.vertex_count = 0;
@@ -189,6 +192,9 @@ pub const TextRenderer = struct {
     }
 
     pub fn recordDraw(self: *const TextRenderer, command_buffer: vk.VkCommandBuffer) void {
+        const tz = tracy.zone(@src(), "TextRenderer.recordDraw");
+        defer tz.end();
+
         if (self.vertex_count == 0) return;
 
         const ortho = orthoMatrix(self.screen_width, self.screen_height);

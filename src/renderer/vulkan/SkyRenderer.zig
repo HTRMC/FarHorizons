@@ -51,6 +51,9 @@ pub const SkyRenderer = struct {
     }
 
     pub fn record(self: *const SkyRenderer, command_buffer: vk.VkCommandBuffer, view_proj: *const [16]f32, sun_dir: [3]f32, moon_dir: [3]f32) void {
+        const tz = tracy.zone(@src(), "SkyRenderer.record");
+        defer tz.end();
+
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
         vk.cmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &[_]vk.VkDescriptorSet{self.descriptor_set}, 0, null);
 

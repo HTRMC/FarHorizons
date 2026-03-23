@@ -34,6 +34,10 @@ pub inline fn zone(comptime src: std.builtin.SourceLocation, comptime name: ?[*:
     return .{ .ctx = {} };
 }
 
+pub inline fn setThreadName(comptime name: [*:0]const u8) void {
+    if (enabled) c.___tracy_set_thread_name(name);
+}
+
 pub inline fn frameMark() void {
     if (enabled) c.___tracy_emit_frame_mark(null);
 }

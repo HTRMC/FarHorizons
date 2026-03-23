@@ -86,6 +86,9 @@ pub const MobRenderer = struct {
         ambient_light: [3]f32,
         sun_dir: [3]f32,
     ) void {
+        const tz = tracy.zone(@src(), "MobRenderer.recordDraw");
+        defer tz.end();
+
         if (self.vertex_count == 0) return;
 
         // Check if any pigs exist

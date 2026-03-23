@@ -265,6 +265,9 @@ pub const WorldRenderer = struct {
     }
 
     pub fn writeChunkData(self: *WorldRenderer, slot: usize) void {
+        const tz = tracy.zone(@src(), "WorldRenderer.writeChunkData");
+        defer tz.end();
+
         const base_ptr = self.chunk_data_alloc.mapped_ptr orelse return;
         const offset = slot * @sizeOf(ChunkData);
         const dst: *ChunkData = @ptrCast(@alignCast(base_ptr + offset));
@@ -332,6 +335,9 @@ pub const WorldRenderer = struct {
     }
 
     pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool, ambient_light: [3]f32, fog_color: [3]f32, fog_start: f32, fog_end: f32) void {
+        const tz = tracy.zone(@src(), "WorldRenderer.record");
+        defer tz.end();
+
         var total_draws: u32 = 0;
         for (self.draw_counts) |dc| total_draws += dc;
         if (total_draws == 0) return;
@@ -411,6 +417,9 @@ pub const WorldRenderer = struct {
     }
 
     pub fn recordTranslucent(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, ambient_light: [3]f32, fog_color: [3]f32, fog_start: f32, fog_end: f32) void {
+        const tz = tracy.zone(@src(), "WorldRenderer.recordTranslucent");
+        defer tz.end();
+
         if (self.draw_counts[2] == 0) return;
 
         const cmd_stride: u32 = @sizeOf(vk.VkDrawIndexedIndirectCommand);

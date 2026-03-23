@@ -76,6 +76,9 @@ pub const DebugRenderer = struct {
     }
 
     pub fn recordCompute(self: *const DebugRenderer, command_buffer: vk.VkCommandBuffer) void {
+        const tz = tracy.zone(@src(), "DebugRenderer.recordCompute");
+        defer tz.end();
+
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.compute_pipeline);
         vk.cmdBindDescriptorSets(
             command_buffer,
@@ -124,6 +127,9 @@ pub const DebugRenderer = struct {
     }
 
     pub fn recordDraw(self: *const DebugRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32) void {
+        const tz = tracy.zone(@src(), "DebugRenderer.recordDraw");
+        defer tz.end();
+
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
         vk.cmdBindDescriptorSets(
             command_buffer,
@@ -325,6 +331,9 @@ pub const DebugRenderer = struct {
     }
 
     pub fn updateVertices(self: *DebugRenderer, device: vk.VkDevice, game_state: *const GameState) void {
+        const tz = tracy.zone(@src(), "DebugRenderer.updateVertices");
+        defer tz.end();
+
         _ = device;
         const vertices: [*]LineVertex = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr orelse return));
 

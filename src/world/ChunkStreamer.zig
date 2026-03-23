@@ -279,6 +279,9 @@ pub const ChunkStreamer = struct {
             const ud: i64 = UNLOAD_DISTANCE;
             const ud_sq = ud * ud;
             for (local_keys[0..local_count]) |key| {
+                const tz = tracy.zone(@src(), "chunkStreamer.processChunk");
+                defer tz.end();
+
                 if (self.shutdown.load(.acquire)) break;
 
                 // Skip stale chunks the player has moved away from

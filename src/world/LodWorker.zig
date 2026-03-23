@@ -159,6 +159,9 @@ pub const LodWorker = struct {
             const lod_py = @divFloor(pcy, @as(i32, LOD_VOXEL_SIZE));
             const lod_pz = @divFloor(pcz, @as(i32, LOD_VOXEL_SIZE));
 
+            const tz = tracy.zone(@src(), "lodWorker.generate");
+            defer tz.end();
+
             // Build desired set of LOD keys (shell between INNER and OUTER radius)
             var desired = std.AutoHashMap(ChunkKey, void).init(self.allocator);
             defer desired.deinit();

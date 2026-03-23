@@ -4,6 +4,7 @@ const Entity = GameState.Entity;
 const WorldState = @import("world/WorldState.zig");
 const BlockState = WorldState.BlockState;
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
+const tracy = @import("platform/tracy.zig");
 
 const GRAVITY: f32 = 32.0;
 const Y_DRAG: f32 = 0.9866;
@@ -33,6 +34,8 @@ pub fn updateEntity(
     camera_yaw: f32,
     dt: f32,
 ) void {
+    const tz = tracy.zone(@src(), "updateEntity");
+    defer tz.end();
     const params = entities.physics[id];
     const forward_input = input_move[0];
     const right_input = input_move[2];

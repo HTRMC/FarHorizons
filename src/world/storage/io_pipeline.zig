@@ -7,6 +7,7 @@ const chunk_codec = @import("chunk_codec.zig");
 const compression = @import("compression.zig");
 const WorldState = @import("../WorldState.zig");
 const dirty_set_mod = @import("dirty_set.zig");
+const tracy = @import("../../platform/tracy.zig");
 
 const ChunkKey = storage_types.ChunkKey;
 const RegionCoord = storage_types.RegionCoord;
@@ -225,6 +226,7 @@ pub const IoPipeline = struct {
     }
 
     fn workerFn(self: *IoPipeline) void {
+        tracy.setThreadName("IoPipeline");
         while (true) {
             const request = self.dequeue() orelse return;
 
@@ -256,6 +258,9 @@ pub const IoPipeline = struct {
     }
 
     fn executeLoad(self: *IoPipeline, request: Request) void {
+        const tz = tracy.zone(@src(), "io.executeLoad");
+        defer tz.end();
+
         const key = request.key;
         const coord = key.regionCoord();
         const region = self.region_cache.getOrOpen(coord) catch {
@@ -280,6 +285,9 @@ pub const IoPipeline = struct {
     }
 
     fn executeSave(self: *IoPipeline, request: Request) void {
+        const tz = tracy.zone(@src(), "io.executeSave");
+        defer tz.end();
+
         const key = request.key;
         const chunk = request.chunk_data orelse return;
         const coord = key.regionCoord();

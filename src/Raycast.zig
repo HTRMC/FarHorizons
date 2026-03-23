@@ -4,6 +4,7 @@ const WorldState = @import("world/WorldState.zig");
 const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
 const Physics = @import("Physics.zig");
 const Entity = @import("Entity.zig");
+const tracy = @import("platform/tracy.zig");
 
 const BlockState = WorldState.BlockState;
 const AABB = BlockState.AABB;
@@ -36,6 +37,8 @@ pub const BlockHitResult = struct {
 };
 
 pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?BlockHitResult {
+    const tz = tracy.zone(@src(), "raycast");
+    defer tz.end();
     var block_x: i32 = @intFromFloat(@floor(origin.x));
     var block_y: i32 = @intFromFloat(@floor(origin.y));
     var block_z: i32 = @intFromFloat(@floor(origin.z));
@@ -200,6 +203,8 @@ pub const EntityHitResult = struct {
 
 /// Test a ray against all non-player entity AABBs. Returns the closest hit within MAX_RANGE.
 pub fn raycastEntities(entities: *const Entity.EntityStore, origin: zlm.Vec3, dir: zlm.Vec3) ?EntityHitResult {
+    const tz = tracy.zone(@src(), "raycastEntities");
+    defer tz.end();
     const o = [3]f32{ origin.x, origin.y, origin.z };
     const d = [3]f32{ dir.x, dir.y, dir.z };
 

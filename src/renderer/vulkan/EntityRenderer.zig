@@ -100,6 +100,9 @@ pub const EntityRenderer = struct {
     }
 
     pub fn recordDraw(self: *const EntityRenderer, command_buffer: vk.VkCommandBuffer, screen_width: f32, screen_height: f32, ui_scale: f32) void {
+        const tz = tracy.zone(@src(), "EntityRenderer.recordDraw");
+        defer tz.end();
+
         if (!self.visible or self.vertex_count == 0) return;
         if (self.viewport_w <= 0 or self.viewport_h <= 0) return;
 
@@ -174,6 +177,9 @@ pub const EntityRenderer = struct {
     }
 
     pub fn recordDrawWorld(self: *const EntityRenderer, command_buffer: vk.VkCommandBuffer, view_proj: zlm.Mat4, ambient_light: [3]f32, sun_dir: [3]f32, sky_level: f32, block_light: [3]f32) void {
+        const tz = tracy.zone(@src(), "EntityRenderer.recordDrawWorld");
+        defer tz.end();
+
         if (!self.world_visible or self.vertex_count == 0) return;
 
         const sin_y = @sin(self.world_yaw + std.math.pi);

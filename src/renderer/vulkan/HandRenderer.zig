@@ -244,6 +244,9 @@ pub const HandRenderer = struct {
     }
 
     pub fn recordDraw(self: *const HandRenderer, command_buffer: vk.VkCommandBuffer, screen_width: f32, screen_height: f32, third_person: bool, ambient_light: [3]f32, sun_dir: [3]f32, sky_level: f32, block_light: [3]f32) void {
+        const tz = tracy.zone(@src(), "HandRenderer.recordDraw");
+        defer tz.end();
+
         if (!self.visible or third_person) return;
         if (self.arm_vertex_count == 0) return;
 
