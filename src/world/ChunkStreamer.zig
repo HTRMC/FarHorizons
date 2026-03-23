@@ -103,8 +103,12 @@ pub const ChunkStreamer = struct {
         // Re-set context pointer after self.* assignment overwrote it
         self.input_heap.context = self;
         // Pre-allocate for full sphere to avoid runtime allocations
-        self.input_heap.ensureTotalCapacity(allocator, HEAP_CAPACITY) catch {};
-        self.input_set.ensureTotalCapacity(@intCast(HEAP_CAPACITY)) catch {};
+        self.input_heap.ensureTotalCapacity(allocator, HEAP_CAPACITY) catch |err| {
+            std.log.err("ChunkStreamer: failed to pre-allocate input heap: {}", .{err});
+        };
+        self.input_set.ensureTotalCapacity(@intCast(HEAP_CAPACITY)) catch |err| {
+            std.log.err("ChunkStreamer: failed to pre-allocate input set: {}", .{err});
+        };
     }
 
     pub fn start(self: *ChunkStreamer) void {

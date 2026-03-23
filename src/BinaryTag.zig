@@ -45,6 +45,7 @@ const HEADER_SIZE: usize = 9;
 pub const Writer = struct {
     buf: std.ArrayListUnmanaged(u8),
     allocator: std.mem.Allocator,
+    failed: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) Writer {
         return .{ .buf = .empty, .allocator = allocator };
@@ -54,55 +55,67 @@ pub const Writer = struct {
         self.buf.deinit(self.allocator);
     }
 
+    fn write(self: *Writer, byte: u8) void {
+        self.buf.append(self.allocator, byte) catch {
+            self.failed = true;
+        };
+    }
+
+    fn writeSlice(self: *Writer, bytes: []const u8) void {
+        self.buf.appendSlice(self.allocator, bytes) catch {
+            self.failed = true;
+        };
+    }
+
     pub fn putBool(self: *Writer, name: []const u8, val: bool) void {
         self.writeTag(.bool, name);
-        self.buf.append(self.allocator, @intFromBool(val)) catch {};
+        self.write(@intFromBool(val));
     }
 
     pub fn putI8(self: *Writer, name: []const u8, val: i8) void {
         self.writeTag(.i8, name);
-        self.buf.append(self.allocator, @bitCast(val)) catch {};
+        self.write(@bitCast(val));
     }
 
     pub fn putI16(self: *Writer, name: []const u8, val: i16) void {
         self.writeTag(.i16, name);
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(val), val))) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(val), val)));
     }
 
     pub fn putI32(self: *Writer, name: []const u8, val: i32) void {
         self.writeTag(.i32, name);
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(val), val))) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(val), val)));
     }
 
     pub fn putI64(self: *Writer, name: []const u8, val: i64) void {
         self.writeTag(.i64, name);
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(val), val))) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(val), val)));
     }
 
     pub fn putF32(self: *Writer, name: []const u8, val: f32) void {
         self.writeTag(.f32, name);
         const bits: u32 = @bitCast(val);
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(bits), bits))) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(bits), bits)));
     }
 
     pub fn putF64(self: *Writer, name: []const u8, val: f64) void {
         self.writeTag(.f64, name);
         const bits: u64 = @bitCast(val);
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(bits), bits))) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(bits), bits)));
     }
 
     pub fn putString(self: *Writer, name: []const u8, val: []const u8) void {
         self.writeTag(.string, name);
         const len: u16 = @intCast(@min(val.len, std.math.maxInt(u16)));
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(len), len))) catch {};
-        self.buf.appendSlice(self.allocator, val[0..len]) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(len), len)));
+        self.writeSlice(val[0..len]);
     }
 
     pub fn putBytes(self: *Writer, name: []const u8, val: []const u8) void {
         self.writeTag(.byte_array, name);
         const len: u32 = @intCast(@min(val.len, std.math.maxInt(u32)));
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(len), len))) catch {};
-        self.buf.appendSlice(self.allocator, val[0..len]) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(len), len)));
+        self.writeSlice(val[0..len]);
     }
 
     pub fn beginCompound(self: *Writer, name: []const u8) void {
@@ -110,37 +123,40 @@ pub const Writer = struct {
     }
 
     pub fn endCompound(self: *Writer) void {
-        self.buf.append(self.allocator, @intFromEnum(TagType.end)) catch {};
+        self.write(@intFromEnum(TagType.end));
     }
 
     pub fn beginList(self: *Writer, name: []const u8, element_type: TagType, count: u16) void {
         self.writeTag(.list, name);
-        self.buf.append(self.allocator, @intFromEnum(element_type)) catch {};
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(count), count))) catch {};
+        self.write(@intFromEnum(element_type));
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(count), count)));
     }
 
     /// Write a list element value (no tag type or name — those are implicit in lists).
     pub fn listPutF32(self: *Writer, val: f32) void {
         const bits: u32 = @bitCast(val);
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(bits), bits))) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(bits), bits)));
     }
 
     pub fn listPutI32(self: *Writer, val: i32) void {
-        self.buf.appendSlice(self.allocator, &std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(val), val))) catch {};
+        self.writeSlice(&std.mem.toBytes(std.mem.nativeToLittle(@TypeOf(val), val)));
     }
 
-    /// Returns the raw (uncompressed) tag data. Caller owns the slice.
+    /// Returns the raw (uncompressed) tag data, or null if any write failed. Caller owns the slice.
     pub fn toOwnedSlice(self: *Writer) ?[]u8 {
-        // Append root end tag
-        self.buf.append(self.allocator, @intFromEnum(TagType.end)) catch {};
+        self.write(@intFromEnum(TagType.end));
+        if (self.failed) {
+            std.log.err("BinaryTag.Writer: allocation failed during serialization", .{});
+            return null;
+        }
         return self.buf.toOwnedSlice(self.allocator) catch null;
     }
 
     fn writeTag(self: *Writer, tag_type: TagType, name: []const u8) void {
         const name_len: u8 = @intCast(@min(name.len, 255));
-        self.buf.append(self.allocator, @intFromEnum(tag_type)) catch {};
-        self.buf.append(self.allocator, name_len) catch {};
-        self.buf.appendSlice(self.allocator, name[0..name_len]) catch {};
+        self.write(@intFromEnum(tag_type));
+        self.write(name_len);
+        self.writeSlice(name[0..name_len]);
     }
 };
 

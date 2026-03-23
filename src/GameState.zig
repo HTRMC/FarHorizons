@@ -56,6 +56,17 @@ pub const EQUIP_SLOTS = Entity.EQUIP_SLOTS;
 pub const MAX_PICKUP_GHOSTS = PlayerInventoryMod.MAX_PICKUP_GHOSTS;
 pub const PickupGhost = PlayerInventoryMod.PickupGhost;
 
+// Player physics
+const PLAYER_JUMP_VELOCITY: f32 = 8.7;
+const MOB_JUMP_VELOCITY: f32 = 8.0;
+const BREAK_TIME_MULTIPLIER: f32 = 1.5;
+const KNOCKBACK_STRENGTH: f32 = 5.0;
+const KNOCKBACK_UPWARD: f32 = 4.0;
+const DAMAGE_COOLDOWN_TICKS: u8 = 15; // 0.5s at 30Hz
+const RESPAWN_IMMUNITY_TICKS: u8 = 30; // 1s at 30Hz
+const ATTACK_COOLDOWN_TICKS: u8 = 15; // 0.5s at 30Hz
+const DEATH_DROP_PICKUP_COOLDOWN: u16 = 60; // 2s before pickup
+
 // Initial load radius in chunks (per axis from center)
 const LOAD_RADIUS_XZ: i32 = 2;
 const LOAD_RADIUS_Y: i32 = 1;
@@ -471,7 +482,7 @@ pub fn toggleMode(self: *GameState) void {
 pub fn takeDamage(self: *GameState, amount: f32) void {
     if (self.game_mode != .survival or self.combat.damage_cooldown > 0) return;
     self.combat.health = @max(self.combat.health - amount, 0.0);
-    self.combat.damage_cooldown = 15; // 0.5s invincibility
+    self.combat.damage_cooldown = DAMAGE_COOLDOWN_TICKS;
     if (self.combat.health <= 0.0) self.die();
 }
 
@@ -498,7 +509,7 @@ fn spawnScatterDrop(self: *GameState, pos: [3]f32, item: Entity.ItemStack, rando
         0.2,
         @cos(angle) * speed,
     };
-    self.entities.pickup_cooldown[last] = 60; // 2s before pickup (longer than normal drops)
+    self.entities.pickup_cooldown[last] = DEATH_DROP_PICKUP_COOLDOWN;
 }
 
 fn die(self: *GameState) void {
@@ -528,7 +539,7 @@ fn die(self: *GameState) void {
 
     self.combat.health = self.combat.max_health;
     self.combat.air_supply = self.combat.max_air;
-    self.combat.damage_cooldown = 30; // 1s post-respawn immunity
+    self.combat.damage_cooldown = RESPAWN_IMMUNITY_TICKS;
     self.combat.was_on_ground = true;
     self.combat.fall_start_y = spawn[1];
 }
@@ -576,7 +587,20 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.entities.prev_pos[P] = self.entities.pos[P];
     self.prev_camera_pos = self.camera.position;
 
-    // Detect water state before physics (both modes need it for fog)
+    self.updatePlayerMovement(P, move_speed);
+    self.updateCombatSystems();
+    self.updateEntities();
+
+    self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
+    self.entity_hit = Raycast.raycastEntities(&self.entities, self.camera.position, self.camera.getForward());
+
+    self.requestMissingChunks();
+    self.worldTick();
+    self.streaming.world_tick_pending = true;
+    self.reportPipelineStats();
+}
+
+fn updatePlayerMovement(self: *GameState, player: u32, move_speed: f32) void {
     self.updateWaterState();
 
     switch (self.mode) {
@@ -590,28 +614,27 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
                 self.camera.move(forward_input * speed, right_input * speed, up_input * speed);
             }
 
-            self.entities.pos[P] = .{
+            self.entities.pos[player] = .{
                 self.camera.position.x,
                 self.camera.position.y - EYE_OFFSET,
                 self.camera.position.z,
             };
         },
         .walking => {
-            const flags = self.entities.flags[P];
+            const flags = self.entities.flags[player];
 
             if (self.jump_cooldown > 0) {
                 self.jump_cooldown -= 1;
             } else if (self.jump_requested and flags.on_ladder) {
-                // Climb up ladder
-                self.entities.vel[P][1] = Physics.LADDER_CLIMB_SPEED;
+                self.entities.vel[player][1] = Physics.LADDER_CLIMB_SPEED;
             } else if (self.jump_requested and !flags.in_water and flags.on_ground) {
-                self.entities.vel[P][1] = 8.7;
+                self.entities.vel[player][1] = PLAYER_JUMP_VELOCITY;
             }
             self.jump_requested = false;
 
-            Physics.updateEntity(&self.entities, P, &self.chunk_map, self.input_move, self.camera.yaw, TICK_INTERVAL);
+            Physics.updateEntity(&self.entities, player, &self.chunk_map, self.input_move, self.camera.yaw, TICK_INTERVAL);
 
-            const epos = self.entities.pos[P];
+            const epos = self.entities.pos[player];
             self.camera.position = zlm.Vec3.init(
                 epos[0],
                 epos[1] + EYE_OFFSET,
@@ -619,80 +642,67 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
             );
         },
     }
+}
 
-    // Survival damage systems
+fn updateCombatSystems(self: *GameState) void {
     if (self.combat.damage_cooldown > 0) self.combat.damage_cooldown -= 1;
     if (self.combat.entity_attack_cooldown > 0) self.combat.entity_attack_cooldown -= 1;
     if (self.mode == .walking) {
         self.updateFallDamage();
         self.updateDrowning();
     }
-
-    // Hold-to-break in survival mode
     self.updateBreakProgress();
-
-    // Update attack damage based on held item
     self.updateAttackDamage();
+}
 
-    // Update item drop entities (iterate backwards for safe despawn)
+fn updateEntities(self: *GameState) void {
     self.updateItemDrops();
-
-    // Update mob AI and combat
     self.updateMobs();
     self.updateMobCombat();
+}
 
-    self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
-    self.entity_hit = Raycast.raycastEntities(&self.entities, self.camera.position, self.camera.getForward());
+/// Request load for missing chunks within render distance.
+/// Iterates center-outward so the first batch contains chunks near the player.
+fn requestMissingChunks(self: *GameState) void {
+    if (!self.streaming.streaming_initialized) return;
 
-    // Request load for missing chunks within render distance (runs at tick rate).
-    // Iterates center-outward so the first batch contains chunks near the player,
-    // not biased toward the bottom of the sphere.
-    if (self.streaming.streaming_initialized) {
-        const rd = ChunkStreamer.RENDER_DISTANCE;
-        const rd_sq = rd * rd;
-        const pc = self.streaming.player_chunk;
-        var batch: [1024]WorldState.ChunkKey = undefined;
-        var batch_len: u32 = 0;
+    const rd = ChunkStreamer.RENDER_DISTANCE;
+    const rd_sq = rd * rd;
+    const pc = self.streaming.player_chunk;
+    var batch: [1024]WorldState.ChunkKey = undefined;
+    var batch_len: u32 = 0;
 
-        var shell: i32 = 0;
-        outer: while (shell <= rd) : (shell += 1) {
-            var dy: i32 = -shell;
-            while (dy <= shell) : (dy += 1) {
-                var dz: i32 = -shell;
-                while (dz <= shell) : (dz += 1) {
-                    var dx: i32 = -shell;
-                    while (dx <= shell) : (dx += 1) {
-                        // Only process the surface of this Chebyshev shell
-                        if (@max(@abs(dx), @abs(dy), @abs(dz)) != shell) {
-                            dx = shell - 1; // skip interior (next iter → shell)
-                            continue;
-                        }
-                        if (dx * dx + dy * dy + dz * dz > rd_sq) continue;
-                        const key = WorldState.ChunkKey{
-                            .cx = pc.cx + dx,
-                            .cy = pc.cy + dy,
-                            .cz = pc.cz + dz,
-                        };
-                        if (self.chunk_map.get(key) == null) {
-                            batch[batch_len] = key;
-                            batch_len += 1;
-                            if (batch_len >= batch.len) break :outer;
-                        }
+    var shell: i32 = 0;
+    outer: while (shell <= rd) : (shell += 1) {
+        var dy: i32 = -shell;
+        while (dy <= shell) : (dy += 1) {
+            var dz: i32 = -shell;
+            while (dz <= shell) : (dz += 1) {
+                var dx: i32 = -shell;
+                while (dx <= shell) : (dx += 1) {
+                    if (@max(@abs(dx), @abs(dy), @abs(dz)) != shell) {
+                        dx = shell - 1;
+                        continue;
+                    }
+                    if (dx * dx + dy * dy + dz * dz > rd_sq) continue;
+                    const key = WorldState.ChunkKey{
+                        .cx = pc.cx + dx,
+                        .cy = pc.cy + dy,
+                        .cz = pc.cz + dz,
+                    };
+                    if (self.chunk_map.get(key) == null) {
+                        batch[batch_len] = key;
+                        batch_len += 1;
+                        if (batch_len >= batch.len) break :outer;
                     }
                 }
             }
         }
-
-        if (batch_len > 0) {
-            self.streaming.streamer.requestLoadBatch(batch[0..batch_len]);
-        }
     }
 
-    self.worldTick();
-    self.streaming.world_tick_pending = true;
-
-    // Pipeline stats reporter — sample every 2 seconds
-    self.reportPipelineStats();
+    if (batch_len > 0) {
+        self.streaming.streamer.requestLoadBatch(batch[0..batch_len]);
+    }
 }
 
 fn updateBreakProgress(self: *GameState) void {
@@ -747,7 +757,7 @@ fn updateBreakProgress(self: *GameState) void {
         }
     }
 
-    const break_time = hardness * 1.5 / tool_multiplier;
+    const break_time = hardness * BREAK_TIME_MULTIPLIER / tool_multiplier;
     const speed_per_tick = 1.0 / (break_time * TICK_RATE);
     self.combat.break_progress += speed_per_tick;
 
@@ -900,7 +910,7 @@ fn updateMobs(self: *GameState) void {
             const vx = self.entities.vel[i][0];
             const vz = self.entities.vel[i][2];
             if (vx * vx + vz * vz < 0.1) {
-                self.entities.vel[i][1] = 8.0;
+                self.entities.vel[i][1] = MOB_JUMP_VELOCITY;
             }
         }
 
@@ -996,7 +1006,7 @@ pub fn attackEntity(self: *GameState) bool {
     }
 
     self.swing_requested = true;
-    self.combat.entity_attack_cooldown = 15; // 0.5s at 30Hz
+    self.combat.entity_attack_cooldown = ATTACK_COOLDOWN_TICKS;
 
     // Apply damage
     self.entities.mob_health[id] -= self.combat.attack_damage;
@@ -1015,9 +1025,9 @@ pub fn attackEntity(self: *GameState) bool {
         kx = 0;
         kz = 1;
     }
-    const knockback_strength: f32 = 5.0;
+    const knockback_strength: f32 = KNOCKBACK_STRENGTH;
     self.entities.vel[id][0] += kx * knockback_strength;
-    self.entities.vel[id][1] = 4.0;
+    self.entities.vel[id][1] = KNOCKBACK_UPWARD;
     self.entities.vel[id][2] += kz * knockback_strength;
     return true;
 }
@@ -1838,7 +1848,11 @@ pub fn worldTick(self: *GameState) void {
         self.chunk_map.put(result.key, result.chunk);
         self.surface_height_map.updateFromChunk(result.key, result.chunk);
         const lm = self.light_map_pool.acquire();
-        self.light_maps.put(result.key, lm) catch {};
+        self.light_maps.put(result.key, lm) catch {
+            std.log.err("Failed to register light map for chunk ({},{},{})", .{ result.key.cx, result.key.cy, result.key.cz });
+            self.light_map_pool.release(lm);
+            continue;
+        };
         self.dirty_chunks.add(result.key);
         // Mark neighbors dirty so they re-mesh with the new neighbor present
         // Also mark their LightMaps dirty so light recomputes with the new chunk's data
