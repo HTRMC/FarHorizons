@@ -3,7 +3,7 @@
 
     <!-- ======== Player panel (texture background) ======== -->
     <panel width="303" height="312" anchor_x="center" anchor_y="center"
-           offset_x="-428" layout="anchor">
+           offset_x="-428" layout="anchor" on_click="inv_noop">
       <image id="inv_player_bg" src="inv:player_panel" width="303" height="312"/>
 
       <!-- Left armor slots: 4 rows, pitch 54 -->
@@ -44,7 +44,7 @@
     </panel>
 
     <!-- ======== Inventory panel (texture background) ======== -->
-    <panel width="528" height="330" anchor_x="center" anchor_y="end" offset_y="-60" layout="anchor">
+    <panel width="528" height="330" anchor_x="center" anchor_y="end" offset_y="-60" layout="anchor" on_click="inv_noop">
       <image id="inv_bg" src="inv:inventory_bg" width="528" height="330"/>
 
       <!-- Header label -->
@@ -196,7 +196,7 @@
 
     <!-- ======== Crafting panel (right side) ======== -->
     <panel width="303" height="420" anchor_x="center" anchor_y="center"
-           offset_x="428" layout="anchor">
+           offset_x="428" layout="anchor" on_click="inv_noop">
       <image id="crafting_bg" src="inv:crafting_bg" width="303" height="420"/>
       <panel width="303" height="420" padding="8" direction="column" gap="4">
 
