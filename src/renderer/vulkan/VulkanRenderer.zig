@@ -1315,14 +1315,26 @@ pub const VulkanRenderer = struct {
         var devices: [16]vk.VkPhysicalDevice = undefined;
         try vk.enumeratePhysicalDevices(instance, &device_count, &devices);
 
+        var fallback: ?DeviceInfo = null;
+
         for (devices[0..device_count]) |device| {
             var props: vk.VkPhysicalDeviceProperties = undefined;
             try vk.getPhysicalDeviceProperties(device, &props);
             std.log.info("Found GPU: {s}", .{props.deviceName});
 
             if (try findQueueFamilies(allocator, device, surface)) |info| {
-                return info;
+                if (props.deviceType == vk.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+                    std.log.info("Selected discrete GPU: {s}", .{props.deviceName});
+                    return info;
+                }
+                if (fallback == null) {
+                    fallback = info;
+                }
             }
+        }
+
+        if (fallback) |info| {
+            return info;
         }
 
         return error.NoSuitableDevice;
