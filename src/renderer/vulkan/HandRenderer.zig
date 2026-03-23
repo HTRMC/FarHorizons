@@ -80,7 +80,7 @@ pub const HandRenderer = struct {
     tex_group_count: u8 = 0,
     item_mesh_start: u32 = 0,
     item_mesh_count: u32 = 0,
-    allocator: std.mem.Allocator = undefined, // set by init()
+    allocator: std.mem.Allocator,
 
     const TexGroup = struct { start: u32, count: u32, tex_layer: i16 };
 
@@ -106,11 +106,11 @@ pub const HandRenderer = struct {
             .descriptor_set = null,
             .vertex_alloc = BufferAllocation.EMPTY,
             .gpu_alloc = gpu_alloc,
+            .allocator = allocator,
         };
 
         try self.createResources(ctx, gpu_alloc, skin_image_view, skin_sampler, block_tex_view, block_tex_sampler);
         try self.createPipeline(shader_compiler, ctx, swapchain_format);
-        self.allocator = allocator;
         self.buildGeometry(allocator);
 
         return self;
