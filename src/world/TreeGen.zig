@@ -2,6 +2,7 @@ const WorldState = @import("WorldState.zig");
 const BlockState = WorldState.BlockState;
 const TerrainGen = @import("TerrainGen.zig");
 const Noise = @import("Noise.zig");
+const tracy = @import("../platform/tracy.zig");
 
 const Chunk = WorldState.Chunk;
 const ChunkKey = WorldState.ChunkKey;
@@ -31,6 +32,8 @@ const TreeRng = struct {
 };
 
 pub fn plantTrees(chunk: *Chunk, key: ChunkKey, seed: u64) void {
+    const tz = tracy.zone(@src(), "plantTrees");
+    defer tz.end();
     const origin = key.position();
     const chunk_min_y = origin[1];
     const chunk_max_y = origin[1] + CS;

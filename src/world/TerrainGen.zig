@@ -2,6 +2,7 @@ const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const Noise = @import("Noise.zig");
 const TreeGen = @import("TreeGen.zig");
+const tracy = @import("../platform/tracy.zig");
 
 const Chunk = WorldState.Chunk;
 const ChunkKey = WorldState.ChunkKey;
@@ -45,6 +46,8 @@ const CAVE_LAVA_Y: i32 = -54; // Infdev y=10 → our y = 10-64 = -54
 const Biome = enum { plains, desert, tundra, mountains };
 
 pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
+    const tz = tracy.zone(@src(), "generateChunk");
+    defer tz.end();
     const ng = Noise.NoiseGen.init(seed);
     const origin = key.position();
 
@@ -179,6 +182,8 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
 }
 
 fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u64) void {
+    const tz = tracy.zone(@src(), "surfacePass");
+    defer tz.end();
     const origin = key.position();
     const oy_i32 = origin[1];
 
@@ -279,6 +284,8 @@ fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u6
 }
 
 fn bedrockPass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
+    const tz = tracy.zone(@src(), "bedrockPass");
+    defer tz.end();
     // Infdev: bedrock at y <= random(6)-1 (Infdev y=0..5 → our y=-64..-59)
     var rng = CaveRng.init(seed +% 0xBEDBEDBED);
     for (0..CS) |by| {
@@ -327,6 +334,8 @@ const ore_table = [_]OreEntry{
 };
 
 fn generateOres(chunk: *Chunk, key: ChunkKey, seed: u64) void {
+    const tz = tracy.zone(@src(), "generateOres");
+    defer tz.end();
     const origin = key.position();
     const chunk_min_y = origin[1];
     const chunk_max_y = origin[1] + CS;
@@ -511,6 +520,8 @@ const CaveRng = struct {
 };
 
 fn carveCaves(chunk: *Chunk, key: ChunkKey, seed: u64) void {
+    const tz = tracy.zone(@src(), "carveCaves");
+    defer tz.end();
     const origin = key.position();
 
     // Infdev scans ±8 chunks (16-block chunks). For 32-block chunks, ±4 gives similar world range.
@@ -941,6 +952,8 @@ fn trilerp8(lo: [4]f32, hi: [4]f32, fx: f32, fy: f32, fz: f32) f32 {
 // ============================================================
 
 pub fn generateLodChunk(chunk: *Chunk, key: ChunkKey, seed: u64, voxel_size: u32) void {
+    const tz = tracy.zone(@src(), "generateLodChunk");
+    defer tz.end();
     const ng = Noise.NoiseGen.init(seed);
     const vs: i32 = @intCast(voxel_size);
     const step_f: f64 = @floatFromInt(Noise.STEP);
