@@ -135,9 +135,9 @@ pub fn flush(self: *Storage) void {
 }
 
 
-pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *const Chunk) void {
+pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *const Chunk) void {
     const io = Io.Threaded.global_single_threaded.io();
-    const key = ChunkKey.init(cx, cy, cz, lod);
+    const key = ChunkKey.init(cx, cy, cz);
     self.dirty_mutex.lockUncancelable(io);
     defer self.dirty_mutex.unlock(io);
     self.dirty_set.markDirty(key, chunk);
@@ -254,11 +254,11 @@ pub fn saveAllDirty(self: *Storage) void {
 }
 
 
-pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chunk {
+pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32) ?*const Chunk {
     const tz = tracy.zone(@src(), "storage.loadChunk");
     defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
-    const key = ChunkKey.init(cx, cy, cz, lod);
+    const key = ChunkKey.init(cx, cy, cz);
 
     _ = self.stats_load_count.fetchAdd(1, .monotonic);
 
@@ -293,8 +293,8 @@ pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chu
     return self.chunk_cache.get(key);
 }
 
-pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *const Chunk) !void {
-    const key = ChunkKey.init(cx, cy, cz, lod);
+pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *const Chunk) !void {
+    const key = ChunkKey.init(cx, cy, cz);
     const coord = key.regionCoord();
 
     const region = try self.region_cache.getOrOpen(coord);
@@ -306,8 +306,8 @@ pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8, chunk: *con
     self.chunk_cache.put(key, chunk);
 }
 
-pub fn chunkExists(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) bool {
-    const key = ChunkKey.init(cx, cy, cz, lod);
+pub fn chunkExists(self: *Storage, cx: i32, cy: i32, cz: i32) bool {
+    const key = ChunkKey.init(cx, cy, cz);
     const coord = key.regionCoord();
 
     const region = self.region_cache.getOrOpen(coord) catch return false;
@@ -322,10 +322,9 @@ pub fn requestLoadAsync(
     cx: i32,
     cy: i32,
     cz: i32,
-    lod: u8,
     priority: Priority,
 ) AsyncHandle {
-    const key = ChunkKey.init(cx, cy, cz, lod);
+    const key = ChunkKey.init(cx, cy, cz);
 
     if (self.chunk_cache.get(key) != null) {
         return AsyncHandle.invalid;
@@ -348,7 +347,6 @@ pub fn loadRegion(
     self: *Storage,
     min: [3]i32,
     max: [3]i32,
-    lod: u8,
 ) void {
     var cy = min[1];
     while (cy <= max[1]) : (cy += 1) {
@@ -356,20 +354,20 @@ pub fn loadRegion(
         while (cz <= max[2]) : (cz += 1) {
             var cx = min[0];
             while (cx <= max[0]) : (cx += 1) {
-                _ = self.loadChunk(cx, cy, cz, lod);
+                _ = self.loadChunk(cx, cy, cz);
             }
         }
     }
 }
 
 
-pub fn getCached(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) ?*const Chunk {
-    const key = ChunkKey.init(cx, cy, cz, lod);
+pub fn getCached(self: *Storage, cx: i32, cy: i32, cz: i32) ?*const Chunk {
+    const key = ChunkKey.init(cx, cy, cz);
     return self.chunk_cache.get(key);
 }
 
-pub fn invalidateCache(self: *Storage, cx: i32, cy: i32, cz: i32, lod: u8) void {
-    const key = ChunkKey.init(cx, cy, cz, lod);
+pub fn invalidateCache(self: *Storage, cx: i32, cy: i32, cz: i32) void {
+    const key = ChunkKey.init(cx, cy, cz);
     self.chunk_cache.invalidate(key);
 }
 

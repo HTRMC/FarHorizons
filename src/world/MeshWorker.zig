@@ -72,7 +72,6 @@ pub const MeshWorker = struct {
         light_count: u32,
         key: ChunkKey,
         light_only: bool,
-        voxel_size: u32 = 1,
     };
 
     fn meshDistCmp(self: *MeshWorker, a: ChunkKey, b: ChunkKey) std.math.Order {

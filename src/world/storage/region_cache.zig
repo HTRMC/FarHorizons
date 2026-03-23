@@ -63,18 +63,10 @@ pub const RegionCache = struct {
             }
         }
 
-        const sep = std.fs.path.sep_str;
-        const dir_path = try std.fmt.allocPrint(
-            self.allocator,
-            "{s}{s}lod{d}",
-            .{ self.base_dir, sep, coord.lod },
-        );
-        defer self.allocator.free(dir_path);
-
         const io = Io.Threaded.global_single_threaded.io();
-        Io.Dir.createDirAbsolute(io, dir_path, .default_file) catch {};
+        Io.Dir.createDirAbsolute(io, self.base_dir, .default_file) catch {};
 
-        const region = try RegionFile.open(self.allocator, dir_path, coord);
+        const region = try RegionFile.open(self.allocator, self.base_dir, coord);
         errdefer region.close();
 
         const slot_idx = self.findSlot() orelse {
@@ -83,8 +75,8 @@ pub const RegionCache = struct {
         };
 
         if (self.entries[slot_idx]) |old| {
-            log.debug("Evicting region ({d},{d},{d}) lod{d}", .{
-                old.coord.rx, old.coord.ry, old.coord.rz, old.coord.lod,
+            log.debug("Evicting region ({d},{d},{d})", .{
+                old.coord.rx, old.coord.ry, old.coord.rz,
             });
             if (old.region.unref()) {
                 old.region.close();

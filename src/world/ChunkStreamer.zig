@@ -291,7 +291,7 @@ pub const ChunkStreamer = struct {
 
                 var loaded = false;
                 if (self.storage) |s| {
-                    if (s.loadChunk(key.cx, key.cy, key.cz, 0)) |cached_chunk| {
+                    if (s.loadChunk(key.cx, key.cy, key.cz)) |cached_chunk| {
                         chunk.* = cached_chunk.*;
                         loaded = true;
                         _ = self.stats_loaded.fetchAdd(1, .monotonic);

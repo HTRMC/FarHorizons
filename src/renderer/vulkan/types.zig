@@ -42,7 +42,6 @@ pub const ChunkData = extern struct {
     light_start: u32,
     face_start: u32,
     face_counts: [6]u32,
-    voxel_size: u32,
 };
 
 pub const DrawCommand = extern struct {

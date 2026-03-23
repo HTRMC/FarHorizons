@@ -51,7 +51,7 @@ pub const ChunkOffsetEntry = packed struct(u64) {
 pub const FileHeader = extern struct {
     magic: [4]u8 align(1) = MAGIC,
     format_version: u16 align(1) = FORMAT_VERSION,
-    lod_level: u8 align(1) = 0,
+    _reserved0: u8 align(1) = 0,
     default_compression: u8 align(1) = @intFromEnum(CompressionAlgo.zstd),
     region_x: i32 align(1) = 0,
     region_y: i32 align(1) = 0,
@@ -85,19 +85,17 @@ pub const RegionCoord = struct {
     rx: i32,
     ry: i32,
     rz: i32,
-    lod: u8,
 
-    pub fn fromChunk(cx: i32, cy: i32, cz: i32, lod: u8) RegionCoord {
+    pub fn fromChunk(cx: i32, cy: i32, cz: i32) RegionCoord {
         return .{
             .rx = @divFloor(cx, REGION_DIM),
             .ry = @divFloor(cy, REGION_DIM),
             .rz = @divFloor(cz, REGION_DIM),
-            .lod = lod,
         };
     }
 
     pub fn eql(a: RegionCoord, b: RegionCoord) bool {
-        return a.rx == b.rx and a.ry == b.ry and a.rz == b.rz and a.lod == b.lod;
+        return a.rx == b.rx and a.ry == b.ry and a.rz == b.rz;
     }
 
     pub fn hash(self: RegionCoord) u64 {
@@ -105,7 +103,6 @@ pub const RegionCoord = struct {
         h ^= @as(u64, @bitCast(@as(i64, self.rx))) *% 0x517cc1b727220a95;
         h ^= @as(u64, @bitCast(@as(i64, self.ry))) *% 0x6c62272e07bb0142;
         h ^= @as(u64, @bitCast(@as(i64, self.rz))) *% 0x305f92d82afb0d53;
-        h ^= @as(u64, self.lod) *% 0x9e3779b97f4a7c15;
         return h;
     }
 };
@@ -115,15 +112,13 @@ pub const ChunkKey = packed struct(u64) {
     cx: i16,
     cy: i16,
     cz: i16,
-    lod: u8,
-    _reserved: u8 = 0,
+    _reserved: u16 = 0,
 
-    pub fn init(cx: i32, cy: i32, cz: i32, lod: u8) ChunkKey {
+    pub fn init(cx: i32, cy: i32, cz: i32) ChunkKey {
         return .{
             .cx = @intCast(cx),
             .cy = @intCast(cy),
             .cz = @intCast(cz),
-            .lod = lod,
         };
     }
 
@@ -143,7 +138,7 @@ pub const ChunkKey = packed struct(u64) {
     }
 
     pub fn regionCoord(self: ChunkKey) RegionCoord {
-        return RegionCoord.fromChunk(self.cx, self.cy, self.cz, self.lod);
+        return RegionCoord.fromChunk(self.cx, self.cy, self.cz);
     }
 };
 
@@ -190,26 +185,25 @@ test "ChunkOffsetEntry empty" {
 }
 
 test "ChunkKey round-trip" {
-    const key = ChunkKey.init(10, -3, 7, 0);
+    const key = ChunkKey.init(10, -3, 7);
     try std.testing.expectEqual(@as(i16, 10), key.cx);
     try std.testing.expectEqual(@as(i16, -3), key.cy);
     try std.testing.expectEqual(@as(i16, 7), key.cz);
-    try std.testing.expectEqual(@as(u8, 0), key.lod);
 }
 
 test "ChunkKey localIndex" {
-    const k0 = ChunkKey.init(0, 0, 0, 0);
+    const k0 = ChunkKey.init(0, 0, 0);
     try std.testing.expectEqual(@as(u9, 0), k0.localIndex());
 
-    const k1 = ChunkKey.init(1, 0, 0, 0);
+    const k1 = ChunkKey.init(1, 0, 0);
     try std.testing.expectEqual(@as(u9, 1), k1.localIndex());
 
-    const k8 = ChunkKey.init(0, 0, 1, 0);
+    const k8 = ChunkKey.init(0, 0, 1);
     try std.testing.expectEqual(@as(u9, REGION_DIM), k8.localIndex());
 }
 
 test "RegionCoord fromChunk" {
-    const rc = RegionCoord.fromChunk(9, 0, -1, 0);
+    const rc = RegionCoord.fromChunk(9, 0, -1);
     try std.testing.expectEqual(@as(i32, 1), rc.rx);
     try std.testing.expectEqual(@as(i32, 0), rc.ry);
     try std.testing.expectEqual(@as(i32, -1), rc.rz);

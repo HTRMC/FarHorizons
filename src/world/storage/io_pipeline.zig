@@ -176,7 +176,7 @@ pub const IoPipeline = struct {
 
         self.queue[self.queue_len] = .{
             .kind = .batch_save,
-            .key = ChunkKey.init(0, 0, 0, 0),
+            .key = ChunkKey.init(0, 0, 0),
             .priority = .save,
             .handle_id = handle_id,
             .chunk_data = null,

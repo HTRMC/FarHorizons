@@ -106,7 +106,6 @@ pub const RegionFile = struct {
             .io = io,
             .coord = coord,
             .header = .{
-                .lod_level = coord.lod,
                 .region_x = coord.rx,
                 .region_y = coord.ry,
                 .region_z = coord.rz,

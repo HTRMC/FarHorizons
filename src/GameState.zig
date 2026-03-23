@@ -20,7 +20,6 @@ const app_config = @import("app_config.zig");
 const WorldRenderer = @import("renderer/vulkan/WorldRenderer.zig").WorldRenderer;
 const TlsfAllocator = @import("allocators/TlsfAllocator.zig").TlsfAllocator;
 const MeshWorker = @import("world/MeshWorker.zig").MeshWorker;
-const LodWorker = @import("world/LodWorker.zig").LodWorker;
 const SurfaceHeightMap = @import("world/SurfaceHeightMap.zig").SurfaceHeightMap;
 const TransferPipeline = @import("renderer/vulkan/TransferPipeline.zig").TransferPipeline;
 const Io = std.Io;
@@ -1819,7 +1818,7 @@ fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     const s = self.streaming.storage orelse return;
     const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
     const chunk = self.chunk_map.get(key) orelse return;
-    s.markDirty(key.cx, key.cy, key.cz, 0, chunk);
+    s.markDirty(key.cx, key.cy, key.cz, chunk);
 }
 
 pub fn worldTick(self: *GameState) void {
@@ -1875,11 +1874,8 @@ pub fn worldTick(self: *GameState) void {
     // Scan for chunks to unload (incremental cursor)
     self.scanUnloads();
 
-    // Sync streamer + LOD worker player position + tick storage
+    // Sync streamer player position + tick storage
     self.streaming.streamer.syncPlayerChunk(self.streaming.player_chunk);
-    if (self.streaming.lod_worker) |lw| {
-        lw.syncPlayerChunk(self.streaming.player_chunk);
-    }
     if (self.streaming.storage) |s| {
         s.tick();
     }

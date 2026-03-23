@@ -208,14 +208,6 @@ pub const ChunkKey = struct {
         };
     }
 
-    pub fn positionScaled(self: ChunkKey, voxel_size: u32) [3]i32 {
-        const vs: i32 = @intCast(voxel_size);
-        return .{
-            self.cx * CHUNK_SIZE * vs,
-            self.cy * CHUNK_SIZE * vs,
-            self.cz * CHUNK_SIZE * vs,
-        };
-    }
 };
 
 pub const ChunkMeshResult = struct {
@@ -1036,114 +1028,6 @@ pub fn generateChunkMesh(
     };
 }
 
-pub fn generateLodChunkMesh(
-    allocator: std.mem.Allocator,
-    chunk: *const Chunk,
-    neighbors: [6]?*const Chunk,
-) !ChunkMeshResult {
-    const tz = tracy.zone(@src(), "generateLodChunkMesh");
-    defer tz.end();
-
-    var padded: [PADDED_BLOCKS]StateId = undefined;
-    buildPaddedStates(&padded, chunk, neighbors);
-
-    const max_sky_packed = packLight(255, .{ 0, 0, 0 });
-    const lod_light = LightEntry{ .corners = .{ max_sky_packed, max_sky_packed, max_sky_packed, max_sky_packed } };
-    const lod_ao: [4]u2 = .{ 0, 0, 0, 0 };
-
-    var layer_faces: [LAYER_COUNT][6]std.ArrayList(FaceData) = undefined;
-    var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
-    for (0..LAYER_COUNT) |l| {
-        for (0..6) |n| {
-            layer_faces[l][n] = .empty;
-            layer_lights[l][n] = .empty;
-        }
-    }
-    errdefer for (0..LAYER_COUNT) |l| {
-        for (0..6) |n| {
-            layer_faces[l][n].deinit(allocator);
-            layer_lights[l][n].deinit(allocator);
-        }
-    };
-
-    for (0..CHUNK_SIZE) |by| {
-        for (0..CHUNK_SIZE) |bz| {
-            for (0..CHUNK_SIZE) |bx| {
-                const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
-                const state_id = padded[@intCast(base)];
-                if (state_id == 0) continue;
-
-                const layer = @intFromEnum(BlockState.renderLayer(state_id));
-
-                const is_water = BlockState.getBlock(state_id) == .water;
-                const water_lowered = is_water and
-                    BlockState.getBlock(padded[@intCast(base + padded_face_deltas[4])]) != .water;
-
-                for (0..6) |face| {
-                    const neighbor = padded[@intCast(base + padded_face_deltas[face])];
-
-                    if (shouldCullFace(state_id, face, neighbor)) continue;
-                    if (neighbor == state_id and BlockState.cullsSelf(state_id)) continue;
-
-                    const tex = BlockState.blockTexIndices(state_id);
-                    const tex_index: u8 = @intCast(if (face == 4 or face == 5) tex.top else tex.side);
-
-                    const model_index: u16 = if (water_lowered)
-                        WATER_MODEL_BASE + @as(u9, @intCast(face))
-                    else
-                        @intCast(face);
-                    const face_data = types.packFaceData(
-                        @intCast(bx),
-                        @intCast(by),
-                        @intCast(bz),
-                        tex_index,
-                        model_index,
-                        lod_ao,
-                    );
-
-                    try layer_faces[layer][face].append(allocator, face_data);
-                    try layer_lights[layer][face].append(allocator, lod_light);
-                }
-            }
-        }
-    }
-
-    var layer_face_counts: [LAYER_COUNT][6]u32 = undefined;
-    var total_face_count: u32 = 0;
-    for (0..LAYER_COUNT) |l| {
-        for (0..6) |n| {
-            layer_face_counts[l][n] = @intCast(layer_faces[l][n].items.len);
-            total_face_count += layer_face_counts[l][n];
-        }
-    }
-
-    const faces = try allocator.alloc(FaceData, total_face_count);
-    errdefer allocator.free(faces);
-    const lights = try allocator.alloc(LightEntry, total_face_count);
-    errdefer allocator.free(lights);
-
-    var write_offset: usize = 0;
-    for (0..LAYER_COUNT) |l| {
-        for (0..6) |n| {
-            const fitems = layer_faces[l][n].items;
-            const litems = layer_lights[l][n].items;
-            @memcpy(faces[write_offset..][0..fitems.len], fitems);
-            @memcpy(lights[write_offset..][0..litems.len], litems);
-            write_offset += fitems.len;
-            layer_faces[l][n].deinit(allocator);
-            layer_lights[l][n].deinit(allocator);
-        }
-    }
-
-    return .{
-        .faces = faces,
-        .layer_face_counts = layer_face_counts,
-        .total_face_count = total_face_count,
-        .lights = lights,
-        .light_count = total_face_count,
-    };
-}
-
 pub fn generateChunkLightOnly(
     allocator: std.mem.Allocator,
     chunk: *const Chunk,
@@ -1834,25 +1718,6 @@ test "bench: generateChunkMesh surface (with AO)" {
     }
 
     printBenchResult("generateChunkMesh surface (with AO)", &samples, face_count);
-}
-
-test "bench: generateLodChunkMesh surface (no AO)" {
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const ITERS = 10;
-    var samples: [ITERS]u64 = undefined;
-    const chunk = makeSurfaceChunk();
-    var face_count: u32 = 0;
-
-    for (&samples) |*sample| {
-        const start = std.Io.Clock.now(.awake, io);
-        const result = try generateLodChunkMesh(testing.allocator, &chunk, no_neighbors);
-        sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
-        face_count = result.total_face_count;
-        testing.allocator.free(result.faces);
-        testing.allocator.free(result.lights);
-    }
-
-    printBenchResult("generateLodChunkMesh surface (no AO)", &samples, face_count);
 }
 
 test "bench: generateChunkMesh checkerboard (worst case)" {
