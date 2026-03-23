@@ -80,7 +80,7 @@ pub const HandRenderer = struct {
     tex_group_count: u8 = 0,
     item_mesh_start: u32 = 0,
     item_mesh_count: u32 = 0,
-    allocator: std.mem.Allocator = undefined,
+    allocator: std.mem.Allocator = undefined, // set by init()
 
     const TexGroup = struct { start: u32, count: u32, tex_layer: i16 };
 
@@ -104,7 +104,7 @@ pub const HandRenderer = struct {
             .descriptor_set_layout = null,
             .descriptor_pool = null,
             .descriptor_set = null,
-            .vertex_alloc = undefined,
+            .vertex_alloc = BufferAllocation.EMPTY,
             .gpu_alloc = gpu_alloc,
         };
 

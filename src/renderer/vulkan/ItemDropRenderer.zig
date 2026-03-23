@@ -70,7 +70,7 @@ pub const ItemDropRenderer = struct {
             .descriptor_set_layout = null,
             .descriptor_pool = null,
             .descriptor_set = null,
-            .vertex_alloc = undefined,
+            .vertex_alloc = BufferAllocation.EMPTY,
             .gpu_alloc = gpu_alloc,
             .item_meshes = [_]ItemMesh{.{ .start = 0, .count = 0 }} ** ITEM_TEXTURE_COUNT,
             .shaped_vert_start = CUBE_VERTICES,

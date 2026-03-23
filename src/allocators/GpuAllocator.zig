@@ -19,6 +19,16 @@ pub const BufferAllocation = struct {
     pool_kind: PoolKind,
     tlsf_handle: TlsfAllocator.Handle,
     mapped_ptr: ?[*]u8,
+
+    pub const EMPTY = BufferAllocation{
+        .buffer = null,
+        .memory = null,
+        .offset = 0,
+        .size = 0,
+        .pool_kind = .device_local,
+        .tlsf_handle = TlsfAllocator.null_handle,
+        .mapped_ptr = null,
+    };
 };
 
 const DEVICE_LOCAL_SIZE: vk.VkDeviceSize = 2048 * 1024 * 1024; // 2GB

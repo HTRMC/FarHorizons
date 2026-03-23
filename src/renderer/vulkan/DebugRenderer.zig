@@ -47,9 +47,9 @@ pub const DebugRenderer = struct {
             .compute_descriptor_set_layout = null,
             .compute_descriptor_pool = null,
             .compute_descriptor_set = null,
-            .vertex_alloc = undefined,
-            .indirect_alloc = undefined,
-            .count_alloc = undefined,
+            .vertex_alloc = BufferAllocation.EMPTY,
+            .indirect_alloc = BufferAllocation.EMPTY,
+            .count_alloc = BufferAllocation.EMPTY,
             .gpu_alloc = gpu_alloc,
             .vertex_count = 0,
         };

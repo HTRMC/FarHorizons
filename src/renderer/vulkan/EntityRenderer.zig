@@ -75,7 +75,7 @@ pub const EntityRenderer = struct {
             .descriptor_set_layout = null,
             .descriptor_pool = null,
             .descriptor_set = null,
-            .vertex_alloc = undefined,
+            .vertex_alloc = BufferAllocation.EMPTY,
             .gpu_alloc = gpu_alloc,
         };
 

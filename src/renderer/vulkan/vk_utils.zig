@@ -189,7 +189,7 @@ pub const TransferBatch = struct {
     cmd: vk.VkCommandBuffer,
     ctx: *const VulkanContext,
     gpu_alloc: *GpuAllocator,
-    staging_allocs: [MAX_STAGING]BufferAllocation = undefined,
+    staging_allocs: [MAX_STAGING]BufferAllocation = .{BufferAllocation.EMPTY} ** MAX_STAGING,
     staging_count: u32 = 0,
     has_commands: bool = false,
 
