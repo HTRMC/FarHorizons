@@ -906,6 +906,19 @@ pub fn main() !void {
             }
         }
 
+        // While saving, keep draining the chunk streamer output queue so worker
+        // threads don't block on backpressure (which can stall the save thread).
+        if (menu_ctrl.app_state == .saving) {
+            if (game_state) |*gs| {
+                const CS = GameState.ChunkStreamer;
+                var discard_buf: [CS.MAX_OUTPUT]CS.LoadResult = undefined;
+                const n = gs.streamer.drainOutput(&discard_buf);
+                for (discard_buf[0..n]) |result| {
+                    gs.chunk_pool.release(result.chunk);
+                }
+            }
+        }
+
         // Check if background save completed
         if (menu_ctrl.app_state == .saving and save_done.load(.acquire)) {
             if (save_thread) |t| {

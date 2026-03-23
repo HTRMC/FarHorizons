@@ -134,13 +134,24 @@ pub const RegionCache = struct {
     }
 
     pub fn flushAll(self: *RegionCache) void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
+        // Collect regions and ref them under the lock, then fsync without holding it.
+        // This avoids blocking getOrOpen() for the duration of all fsyncs.
+        var to_flush: [MAX_OPEN_REGIONS]*RegionFile = undefined;
+        var flush_count: usize = 0;
 
+        self.mutex.lockUncancelable(self.io);
         for (self.entries) |entry_opt| {
             if (entry_opt) |entry| {
-                entry.region.fsync() catch {};
+                entry.region.ref();
+                to_flush[flush_count] = entry.region;
+                flush_count += 1;
             }
+        }
+        self.mutex.unlock(self.io);
+
+        for (to_flush[0..flush_count]) |region| {
+            region.fsync() catch {};
+            self.releaseRegion(region);
         }
     }
 };

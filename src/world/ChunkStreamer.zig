@@ -300,10 +300,6 @@ pub const ChunkStreamer = struct {
                         .debug => WorldState.generateDebugChunk(chunk, key),
                     }
                     _ = self.stats_generated.fetchAdd(1, .monotonic);
-                    // Save newly generated chunk to storage
-                    if (self.storage) |s| {
-                        s.saveChunk(key.cx, key.cy, key.cz, 0, chunk) catch {};
-                    }
                 }
 
                 // Push to output queue — wait if full (backpressure)
