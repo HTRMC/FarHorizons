@@ -1,14 +1,14 @@
 const std = @import("std");
-const WorldGenTypes = @import("WorldGenTypes.zig");
+const WorldState = @import("WorldState.zig");
 const Noise = @import("Noise.zig");
 const TreeGen = @import("TreeGen.zig");
 const tracy = @import("../platform/tracy.zig");
 
-const Chunk = WorldGenTypes.Chunk;
-const ChunkKey = WorldGenTypes.ChunkKey;
-const BlockState = WorldGenTypes.BlockState;
-const StateId = WorldGenTypes.StateId;
-const CHUNK_SIZE = WorldGenTypes.CHUNK_SIZE;
+const Chunk = WorldState.Chunk;
+const ChunkKey = WorldState.ChunkKey;
+const BlockState = WorldState.BlockState;
+const StateId = WorldState.StateId;
+const CHUNK_SIZE = WorldState.CHUNK_SIZE;
 const CS = CHUNK_SIZE;
 
 // ============================================================
@@ -135,7 +135,7 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
             for (0..CS) |by| {
                 const wy = oy_i32 + @as(i32, @intCast(by));
                 const wy_f: f32 = @floatFromInt(wy);
-                const idx = WorldGenTypes.chunkIndex(bx, by, bz);
+                const idx = WorldState.chunkIndex(bx, by, bz);
 
                 // Y-axis lerp from precomputed column values
                 const sy = by / Noise.STEP;
@@ -222,7 +222,7 @@ fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u6
             var by_rev: usize = CS;
             while (by_rev > 0) {
                 by_rev -= 1;
-                const idx = WorldGenTypes.chunkIndex(bx, by_rev, bz);
+                const idx = WorldState.chunkIndex(bx, by_rev, bz);
                 const block = chunk.blocks[idx];
                 const wy = oy_i32 + @as(i32, @intCast(by_rev));
 
@@ -293,7 +293,7 @@ fn bedrockPass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
         if (wy > -58) continue;
         for (0..CS) |bz| {
             for (0..CS) |bx| {
-                const idx = WorldGenTypes.chunkIndex(bx, by, bz);
+                const idx = WorldState.chunkIndex(bx, by, bz);
                 const bed_blk = BlockState.getBlock(chunk.blocks[idx]);
                 if (bed_blk != .air and bed_blk != .water) {
                     // Random bedrock top boundary (Infdev line 187)
@@ -477,7 +477,7 @@ fn placeVein(
                     if (dx_f * dx_f + dy_f * dy_f + dz_f * dz_f >= 1.0) continue;
 
                     // Only replace stone (c.b.c.java line 39)
-                    const idx = WorldGenTypes.chunkIndex(@intCast(local_x), @intCast(local_y), @intCast(local_z));
+                    const idx = WorldState.chunkIndex(@intCast(local_x), @intCast(local_y), @intCast(local_z));
                     if (BlockState.getBlock(chunk.blocks[idx]) == .stone) {
                         chunk.blocks[idx] = ore_state;
                     }
@@ -729,7 +729,7 @@ fn carveEllipsoid(
                 const fdz = @as(f32, @floatFromInt(dz)) / xz_radius;
                 if (fdx * fdx + fdy * fdy + fdz * fdz >= 1.0) continue;
 
-                const idx = WorldGenTypes.chunkIndex(bx, by, bz);
+                const idx = WorldState.chunkIndex(bx, by, bz);
                 const cave_blk = BlockState.getBlock(chunk.blocks[idx]);
                 if (cave_blk != .air and cave_blk != .water and cave_blk != .bedrock) {
                     chunk.blocks[idx] = BlockState.defaultState(.air);
@@ -991,7 +991,7 @@ pub fn generateLodChunk(chunk: *Chunk, key: ChunkKey, seed: u64, voxel_size: u32
             for (0..CS) |by| {
                 const wy: i32 = key.cy * @as(i32, CS) * vs + @as(i32, @intCast(by)) * vs;
                 const depth: i32 = @as(i32, @intFromFloat(@floor(surface_y))) - wy;
-                const idx = WorldGenTypes.chunkIndex(bx, by, bz);
+                const idx = WorldState.chunkIndex(bx, by, bz);
 
                 if (depth >= 4 * vs) {
                     chunk.blocks[idx] = BlockState.defaultState(.stone);
@@ -1083,7 +1083,7 @@ test "generateChunk: deep underground is mostly solid" {
         if (blk != .air and blk != .water) solid += 1;
     }
     // Should be mostly solid (bedrock + stone), at least 90%
-    try testing.expect(solid > WorldGenTypes.BLOCKS_PER_CHUNK * 9 / 10);
+    try testing.expect(solid > WorldState.BLOCKS_PER_CHUNK * 9 / 10);
 }
 
 test "sampleHeight: deterministic for same seed" {
@@ -1126,7 +1126,7 @@ test "surfacePass: generates sand near water" {
     for (0..CS) |bz| {
         for (0..CS) |bx| {
             for (0..CS) |by| {
-                const blk = BlockState.getBlock(chunk.blocks[WorldGenTypes.chunkIndex(bx, by, bz)]);
+                const blk = BlockState.getBlock(chunk.blocks[WorldState.chunkIndex(bx, by, bz)]);
                 if (blk == .grass_block or blk == .dirt or blk == .sand or blk == .gravel) {
                     has_surface = true;
                 }
@@ -1200,7 +1200,6 @@ test "bench: full pipeline (terrain + mesh)" {
     for (&samples, 0..) |*sample, i| {
         const start = std.Io.Clock.now(.awake, io);
         generateChunk(&chunk, .{ .cx = @intCast(i), .cy = 0, .cz = 0 }, 42);
-        const WorldState = @import("WorldState.zig");
         const result = WorldState.generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders) catch unreachable;
         sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
         face_count = result.total_face_count;

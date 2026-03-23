@@ -9,7 +9,8 @@ const LightMapMod = @import("world/LightMap.zig");
 const LightMap = LightMapMod.LightMap;
 const LightMapPool = LightMapMod.LightMapPool;
 pub const ChunkStreamer = @import("world/ChunkStreamer.zig").ChunkStreamer;
-const WorldGenApi = @import("world/WorldGenApi.zig");
+const TerrainGen = @import("world/TerrainGen.zig");
+const tracy = @import("platform/tracy.zig");
 const Physics = @import("Physics.zig");
 pub const Entity = @import("Entity.zig");
 pub const Item = @import("Item.zig");
@@ -23,7 +24,6 @@ const LodWorker = @import("world/LodWorker.zig").LodWorker;
 const SurfaceHeightMap = @import("world/SurfaceHeightMap.zig").SurfaceHeightMap;
 const TransferPipeline = @import("renderer/vulkan/TransferPipeline.zig").TransferPipeline;
 const Io = std.Io;
-const tracy = @import("platform/tracy.zig");
 
 const GameState = @This();
 
@@ -581,8 +581,6 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
 }
 
 pub fn save(self: *GameState) void {
-    const tz = tracy.zone(@src(), "save");
-    defer tz.end();
     const s = self.storage orelse return;
     const io = std.Io.Threaded.global_single_threaded.io();
     const save_start = std.Io.Clock.now(.awake, io);
@@ -827,8 +825,6 @@ fn updateDrowning(self: *GameState) void {
 }
 
 pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
-    const tz = tracy.zone(@src(), "fixedUpdate");
-    defer tz.end();
     const P = Entity.PLAYER;
     self.game_time +%= 1;
     self.entities.prev_pos[P] = self.entities.pos[P];
@@ -1306,8 +1302,6 @@ fn spawnPickupGhost(self: *GameState, entity_idx: u32) void {
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
-    const tz = tracy.zone(@src(), "interpolateForRender");
-    defer tz.end();
     self.render_alpha = alpha;
     const P = Entity.PLAYER;
     self.tick_camera_pos = self.camera.position;
@@ -2073,8 +2067,6 @@ fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
 }
 
 pub fn worldTick(self: *GameState) void {
-    const tz = tracy.zone(@src(), "worldTick");
-    defer tz.end();
     // Update player chunk from camera position
     const pos = self.camera.position;
     const current_chunk = WorldState.ChunkKey.fromWorldPos(
@@ -2298,8 +2290,6 @@ pub fn applyUnloadsToGpu(
     deferred_light_frees: []TlsfAllocator.Handle,
     deferred_light_free_count: *u32,
 ) void {
-    const tz = tracy.zone(@src(), "applyUnloadsToGpu");
-    defer tz.end();
     for (self.pending_unload_keys[0..self.pending_unload_count]) |key| {
         // Free GPU TLSF allocs via deferred mechanism
         if (wr.chunk_slot_map.get(key)) |slot| {
@@ -2356,7 +2346,7 @@ fn findSpawn(seed: u64) [3]f32 {
         const half = @divFloor(side, 2);
         if (x >= -half and x <= half and z >= -half and z <= half) {
             if (isDryLand(x, z, seed, SEA_LEVEL)) {
-                const surface_y = WorldGenApi.sampleGridHeight(x, z, seed);
+                const surface_y = TerrainGen.sampleGridHeight(x, z, seed);
                 return .{ @as(f32, @floatFromInt(x)) + 0.5, @floatFromInt(surface_y), @as(f32, @floatFromInt(z)) + 0.5 };
             }
         }
@@ -2372,7 +2362,7 @@ fn findSpawn(seed: u64) [3]f32 {
     }
 
     // Fallback: just use (0, 0) surface
-    const fallback_y = WorldGenApi.sampleGridHeight(0, 0, seed);
+    const fallback_y = TerrainGen.sampleGridHeight(0, 0, seed);
     return .{ 0.5, @floatFromInt(@max(fallback_y, SEA_LEVEL + 1)), 0.5 };
 }
 
@@ -2382,7 +2372,7 @@ fn isDryLand(cx: i32, cz: i32, seed: u64, sea_level: i32) bool {
     while (dz <= 2) : (dz += 1) {
         var ddx: i32 = -2;
         while (ddx <= 2) : (ddx += 1) {
-            const h = WorldGenApi.sampleGridHeight(cx + ddx, cz + dz, seed);
+            const h = TerrainGen.sampleGridHeight(cx + ddx, cz + dz, seed);
             if (h <= sea_level) return false;
         }
     }
