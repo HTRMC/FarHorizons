@@ -1251,7 +1251,7 @@ pub fn main() !void {
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("world/WorldState.zig");
-        _ = @import("world/TerrainGen.zig");
+        _ = @import("world/WorldGenTypes.zig");
         _ = @import("world/LightEngine.zig");
         _ = @import("world/SurfaceHeightMap.zig");
     }

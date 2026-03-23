@@ -1,9 +1,9 @@
 const std = @import("std");
-const WorldState = @import("WorldState.zig");
+const WorldGenTypes = @import("WorldGenTypes.zig");
 
 const Noise = @This();
 
-const CS = WorldState.CHUNK_SIZE;
+const CS = WorldGenTypes.CHUNK_SIZE;
 
 /// Coarse grid: 4-block step (matching Infdev's horizontal spacing)
 pub const STEP = 4;
