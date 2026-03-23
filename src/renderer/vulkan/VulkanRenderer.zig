@@ -186,9 +186,9 @@ pub const VulkanRenderer = struct {
             std.log.warn("Failed to load HUD atlas: {}, HUD sprites disabled", .{err});
         };
 
-        if (game_state) |gs| {
-            gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
-            self.startWorkerPipeline(gs);
+        if (game_state) |state| {
+            state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+            self.startWorkerPipeline(state);
         }
 
         std.log.info("VulkanRenderer initialized", .{});
@@ -227,17 +227,17 @@ pub const VulkanRenderer = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn setGameState(self: *VulkanRenderer, gs: ?*GameState) void {
+    pub fn setGameState(self: *VulkanRenderer, game_state: ?*GameState) void {
         self.stopWorkerPipeline();
-        self.game_state = gs;
+        self.game_state = game_state;
 
-        if (gs) |game_state| {
-            game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
-            self.startWorkerPipeline(game_state);
+        if (game_state) |state| {
+            state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+            self.startWorkerPipeline(state);
         }
     }
 
-    fn startWorkerPipeline(self: *VulkanRenderer, gs: *GameState) void {
+    fn startWorkerPipeline(self: *VulkanRenderer, game_state: *GameState) void {
         const wr = &self.render_state.world_renderer;
 
         // 1. Create + init MeshWorker
@@ -246,18 +246,18 @@ pub const VulkanRenderer = struct {
             return;
         };
 
-        mw.initInPlace(self.allocator, &gs.chunk_map, &gs.light_maps, &gs.surface_height_map);
+        mw.initInPlace(self.allocator, &game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map);
 
         self.mesh_worker = mw;
 
         // 3. Init + start ChunkStreamer
-        gs.streamer.initInPlace(self.allocator, gs.storage, &gs.chunk_pool, gs.world_seed, gs.world_type);
+        game_state.streaming.streamer.initInPlace(self.allocator, game_state.streaming.storage, &game_state.chunk_pool, game_state.streaming.world_seed, game_state.streaming.world_type);
 
         // Sync player position before starting threads so initial heap ordering is correct
-        gs.streamer.syncPlayerChunk(gs.player_chunk);
-        mw.syncChunkMap(&gs.chunk_map, &gs.light_maps, &gs.surface_height_map, gs.player_chunk);
+        game_state.streaming.streamer.syncPlayerChunk(game_state.streaming.player_chunk);
+        mw.syncChunkMap(&game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map, game_state.streaming.player_chunk);
 
-        gs.streamer.start();
+        game_state.streaming.streamer.start();
 
         // 4. Setup + start TransferPipeline thread
         self.transfer_pipeline.setupThread(
@@ -269,32 +269,32 @@ pub const VulkanRenderer = struct {
         );
 
         // 5. Set pipeline references for stats reporting
-        gs.mesh_worker = mw;
-        gs.transfer_pipeline = &self.transfer_pipeline;
+        game_state.streaming.mesh_worker = mw;
+        game_state.streaming.transfer_pipeline = &self.transfer_pipeline;
 
         // 6. Start threads (mesh first so transfer can consume)
         mw.start();
         self.transfer_pipeline.start();
 
         // 7. Create + start LodWorker
-        if (gs.world_type == .normal) {
+        if (game_state.streaming.world_type == .normal) {
             const lw = self.allocator.create(LodWorker) catch |err| {
                 std.log.err("Failed to allocate LodWorker: {}", .{err});
                 return;
             };
-            lw.initInPlace(self.allocator, gs.world_seed, mw);
-            lw.syncPlayerChunk(gs.player_chunk);
+            lw.initInPlace(self.allocator, game_state.streaming.world_seed, mw);
+            lw.syncPlayerChunk(game_state.streaming.player_chunk);
             lw.start();
             self.lod_worker = lw;
-            gs.lod_worker = lw;
+            game_state.streaming.lod_worker = lw;
         }
 
         // 8. Request initial load batch if async loading
-        if (!gs.initial_load_ready) {
+        if (!game_state.streaming.initial_load_ready) {
             const WorldState = @import("../../world/WorldState.zig");
             const rd: i32 = 3; // spawn radius for initial load
             const rd_sq = rd * rd;
-            const pc = gs.player_chunk;
+            const pc = game_state.streaming.player_chunk;
             var batch: [512]WorldState.ChunkKey = undefined;
             var batch_len: u32 = 0;
 
@@ -319,7 +319,7 @@ pub const VulkanRenderer = struct {
             }
 
             if (batch_len > 0) {
-                gs.streamer.requestLoadBatch(batch[0..batch_len]);
+                game_state.streaming.streamer.requestLoadBatch(batch[0..batch_len]);
             }
         }
     }
@@ -331,11 +331,11 @@ pub const VulkanRenderer = struct {
         }
 
         // Stop streamer first (produces chunks for main thread)
-        if (self.game_state) |gs| {
-            gs.streamer.stop();
-            gs.mesh_worker = null;
-            gs.transfer_pipeline = null;
-            gs.lod_worker = null;
+        if (self.game_state) |game_state| {
+            game_state.streaming.streamer.stop();
+            game_state.streaming.mesh_worker = null;
+            game_state.streaming.transfer_pipeline = null;
+            game_state.streaming.lod_worker = null;
         }
 
         // Stop threads in dependency order: transfer (consumes mesh) → mesh (produces)
@@ -384,8 +384,8 @@ pub const VulkanRenderer = struct {
             try vk.waitForFences(self.ctx.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
         }
 
-        if (self.game_state) |gs| {
-            if (!gs.debug_camera_active) {
+        if (self.game_state) |game_state| {
+            if (!game_state.debug_camera_active) {
                 // Always: deferred TLSF frees (usually empty between ticks)
                 {
                     const tz2 = tracy.zone(@src(), "deferredFrees");
@@ -399,9 +399,9 @@ pub const VulkanRenderer = struct {
                     const tz2 = tracy.zone(@src(), "playerDirtyChunks");
                     defer tz2.end();
                     if (self.mesh_worker) |mw| {
-                        if (gs.player_dirty_chunks.count() > 0) {
-                            mw.enqueueBatch(gs.player_dirty_chunks.keys());
-                            gs.player_dirty_chunks.clear();
+                        if (game_state.streaming.player_dirty_chunks.count() > 0) {
+                            mw.enqueueBatch(game_state.streaming.player_dirty_chunks.keys());
+                            game_state.streaming.player_dirty_chunks.clear();
                         }
                     }
                 }
@@ -415,12 +415,12 @@ pub const VulkanRenderer = struct {
                 }
 
                 // Tick-gated: only when 30 Hz tick fired since last frame
-                if (gs.world_tick_pending) {
+                if (game_state.streaming.world_tick_pending) {
                     const tz2 = tracy.zone(@src(), "worldTick");
                     defer tz2.end();
-                    gs.world_tick_pending = false;
+                    game_state.streaming.world_tick_pending = false;
 
-                    gs.applyUnloadsToGpu(
+                    game_state.applyUnloadsToGpu(
                         &self.render_state.world_renderer,
                         &self.deferred_face_frees[cf],
                         &self.deferred_face_free_counts[cf],
@@ -429,10 +429,10 @@ pub const VulkanRenderer = struct {
                     );
 
                     if (self.mesh_worker) |mw| {
-                        mw.syncChunkMap(&gs.chunk_map, &gs.light_maps, &gs.surface_height_map, gs.player_chunk);
-                        if (gs.dirty_chunks.count() > 0) {
-                            mw.enqueueBatch(gs.dirty_chunks.keys());
-                            gs.dirty_chunks.clear();
+                        mw.syncChunkMap(&game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map, game_state.streaming.player_chunk);
+                        if (game_state.dirty_chunks.count() > 0) {
+                            mw.enqueueBatch(game_state.dirty_chunks.keys());
+                            game_state.dirty_chunks.clear();
                         }
                     }
 
@@ -474,12 +474,12 @@ pub const VulkanRenderer = struct {
                 {
                     const tz2 = tracy.zone(@src(), "buildDrawCmds");
                     defer tz2.end();
-                    const cull_pos = if (gs.third_person) blk: {
-                        const forward = gs.camera.getForward();
-                        break :blk zlm.Vec3.sub(gs.camera.position, zlm.Vec3.scale(forward, third_person_dist));
-                    } else gs.camera.position;
+                    const cull_pos = if (game_state.third_person) blk: {
+                        const forward = game_state.camera.getForward();
+                        break :blk zlm.Vec3.sub(game_state.camera.position, zlm.Vec3.scale(forward, third_person_dist));
+                    } else game_state.camera.position;
                     self.render_state.world_renderer.buildIndirectCommands(&self.ctx, cull_pos);
-                    self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
+                    self.render_state.debug_renderer.updateVertices(self.ctx.device, game_state);
                 }
             }
         }
@@ -491,11 +491,11 @@ pub const VulkanRenderer = struct {
             self.render_state.text_renderer.beginFrame(self.ctx.device, cf);
         }
 
-        if (self.game_state) |gs| {
+        if (self.game_state) |game_state| {
             const tz2 = tracy.zone(@src(), "debugOverlay");
             defer tz2.end();
             const DebugOverlay = @import("../../DebugOverlay.zig");
-            DebugOverlay.draw(&self.render_state.text_renderer, gs, &self.render_state.world_renderer, self.gpu_allocator);
+            DebugOverlay.draw(&self.render_state.text_renderer, game_state, &self.render_state.world_renderer, self.gpu_allocator);
         }
 
         if (self.ui_manager) |um| {
@@ -530,7 +530,7 @@ pub const VulkanRenderer = struct {
                 self.transfer_pipeline.tlsf_mutex.unlock(io_val);
                 self.max_graphics_wait_timeline = @max(self.max_graphics_wait_timeline, entry.timeline_value);
                 // Re-dirty so the chunk gets retried when slots free up
-                if (self.game_state) |gs| gs.dirty_chunks.add(entry.key);
+                if (self.game_state) |game_state| game_state.dirty_chunks.add(entry.key);
                 continue;
             };
 
@@ -802,8 +802,8 @@ pub const VulkanRenderer = struct {
 
         try self.surface_state.createDepthBuffer(&self.ctx);
 
-        if (self.game_state) |gs| {
-            gs.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
+        if (self.game_state) |game_state| {
+            game_state.camera.updateAspect(self.surface_state.swapchain_extent.width, self.surface_state.swapchain_extent.height);
         }
 
         const actual_w = self.surface_state.swapchain_extent.width;
@@ -839,7 +839,7 @@ pub const VulkanRenderer = struct {
         self.render_state.world_renderer.texture_manager.recordAnimationUploads(command_buffer);
 
         const has_game = self.game_state != null;
-        const overdraw = if (self.game_state) |gs| gs.overdraw_mode else false;
+        const overdraw = if (self.game_state) |game_state| game_state.overdraw_mode else false;
 
         if (has_game and !overdraw) self.render_state.debug_renderer.recordCompute(command_buffer);
 
@@ -907,31 +907,31 @@ pub const VulkanRenderer = struct {
             &[_]vk.VkImageMemoryBarrier{color_barrier},
         );
 
-        const day_night = if (self.game_state) |gs| GameState.dayNightCycle(gs.game_time) else GameState.DayNightResult{
+        const day_night = if (self.game_state) |game_state| GameState.dayNightCycle(game_state.game_time) else GameState.DayNightResult{
             .ambient_light = .{ 1.0, 1.0, 1.0 },
             .sky_color = .{ 0.224, 0.643, 0.918 },
         };
 
         // Sun direction from day/night cycle (shared by sky, entity, hand renderers)
-        const sun_angle: f32 = if (self.game_state) |gs| blk: {
-            break :blk @as(f32, @floatFromInt(@mod(gs.game_time, GameState.DAY_CYCLE))) / @as(f32, @floatFromInt(GameState.DAY_CYCLE)) * 2.0 * std.math.pi;
+        const sun_angle: f32 = if (self.game_state) |game_state| blk: {
+            break :blk @as(f32, @floatFromInt(@mod(game_state.game_time, GameState.DAY_CYCLE))) / @as(f32, @floatFromInt(GameState.DAY_CYCLE)) * 2.0 * std.math.pi;
         } else 0.0;
         const sun_dir = [3]f32{ 0.0, @cos(sun_angle), @sin(sun_angle) };
 
         // Sample block/sky light at player eye position
-        const player_light: [4]f32 = if (self.game_state) |gs|
-            gs.sampleLightAt(gs.camera.position.x, gs.camera.position.y, gs.camera.position.z)
+        const player_light: [4]f32 = if (self.game_state) |game_state|
+            game_state.sampleLightAt(game_state.camera.position.x, game_state.camera.position.y, game_state.camera.position.z)
         else
             .{ 0, 0, 0, 1 };
 
         // Underwater fog parameters
-        const eyes_in_water = if (self.game_state) |gs| gs.entities.flags[GameState.Entity.PLAYER].eyes_in_water else false;
+        const eyes_in_water = if (self.game_state) |game_state| game_state.entities.flags[GameState.Entity.PLAYER].eyes_in_water else false;
         const fog_color: [3]f32 = .{ 0.05, 0.1, 0.3 };
         var fog_start: f32 = 10000.0;
         var fog_end: f32 = 10000.0;
         if (eyes_in_water) {
-            if (self.game_state) |gs| {
-                const vision = gs.waterVision();
+            if (self.game_state) |game_state| {
+                const vision = game_state.waterVision();
                 fog_start = 0.0;
                 fog_end = 15.0 + vision * 45.0; // 15 to 60 blocks
             }
@@ -1006,19 +1006,19 @@ pub const VulkanRenderer = struct {
         };
         vk.cmdSetScissor(command_buffer, 0, 1, &[_]vk.VkRect2D{scissor});
 
-        if (self.game_state) |gs| {
+        if (self.game_state) |game_state| {
             // Compute view matrix with third-person offset applied at render time
             const view = blk: {
-                if (gs.third_person) {
-                    const forward = gs.camera.getForward();
-                    const eye = zlm.Vec3.sub(gs.camera.position, zlm.Vec3.scale(forward, third_person_dist));
+                if (game_state.third_person) {
+                    const forward = game_state.camera.getForward();
+                    const eye = zlm.Vec3.sub(game_state.camera.position, zlm.Vec3.scale(forward, third_person_dist));
                     const target = zlm.Vec3.add(eye, forward);
                     break :blk zlm.Mat4.lookAt(eye, target, zlm.Vec3.init(0.0, 1.0, 0.0));
                 } else {
-                    break :blk gs.camera.getViewMatrix();
+                    break :blk game_state.camera.getViewMatrix();
                 }
             };
-            const proj = gs.camera.getProjectionMatrix();
+            const proj = game_state.camera.getProjectionMatrix();
             const mvp = zlm.Mat4.mul(proj, view);
 
             {
@@ -1036,23 +1036,23 @@ pub const VulkanRenderer = struct {
             }
 
             // Third-person player model (rendered with world depth)
-            if (gs.third_person and !overdraw) {
+            if (game_state.third_person and !overdraw) {
                 self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp, day_night.ambient_light, sun_dir, player_light[3], .{ player_light[0], player_light[1], player_light[2] });
             }
 
             // Item drop entities (rendered with world depth)
             if (!overdraw) {
-                self.render_state.item_drop_renderer.recordDraw(command_buffer, gs, mvp, day_night.ambient_light, sun_dir);
+                self.render_state.item_drop_renderer.recordDraw(command_buffer, game_state, mvp, day_night.ambient_light, sun_dir);
             }
 
             // Mob entities (rendered with world depth)
             if (!overdraw) {
-                self.render_state.mob_renderer.recordDraw(command_buffer, gs, mvp, day_night.ambient_light, sun_dir);
+                self.render_state.mob_renderer.recordDraw(command_buffer, game_state, mvp, day_night.ambient_light, sun_dir);
             }
 
             // Block breaking overlay
             if (!overdraw) {
-                self.render_state.break_renderer.recordDraw(command_buffer, gs, mvp);
+                self.render_state.break_renderer.recordDraw(command_buffer, game_state, mvp);
             }
 
             // Translucent world pass (water) — after entities so water tints things behind it
@@ -1551,8 +1551,8 @@ pub const VulkanRenderer = struct {
 
     fn setGameStateVTable(ptr: *anyopaque, game_state_ptr: ?*anyopaque) void {
         const self: *VulkanRenderer = @ptrCast(@alignCast(ptr));
-        const gs: ?*GameState = if (game_state_ptr) |p| @ptrCast(@alignCast(p)) else null;
-        self.setGameState(gs);
+        const game_state: ?*GameState = if (game_state_ptr) |p| @ptrCast(@alignCast(p)) else null;
+        self.setGameState(game_state);
     }
 
     fn setUiManagerVTable(ptr: *anyopaque, ui_manager_ptr: ?*anyopaque) void {

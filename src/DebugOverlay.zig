@@ -18,25 +18,25 @@ const yellow = [4]f32{ 1.0, 1.0, 0.0, 1.0 };
 const LINE_HEIGHT: f32 = 20.0;
 const RIGHT_MARGIN: f32 = 10.0;
 
-pub fn draw(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_alloc: *const GpuAllocator) void {
-    if (!gs.show_ui) return;
+pub fn draw(text: *TextRenderer, game_state: *GameState, wr: *const WorldRenderer, gpu_alloc: *const GpuAllocator) void {
+    if (!game_state.show_ui) return;
 
-    if (gs.debug_screens == 0) return;
+    if (game_state.debug_screens == 0) return;
 
     var y: f32 = 10.0;
 
-    if (gs.debug_screens & SCREEN_F3 != 0) {
-        y = drawF3(text, gs, y);
+    if (game_state.debug_screens & SCREEN_F3 != 0) {
+        y = drawF3(text, game_state, y);
     }
-    if (gs.debug_screens & SCREEN_F4 != 0) {
-        y = drawF4(text, gs, wr, gpu_alloc, y);
+    if (game_state.debug_screens & SCREEN_F4 != 0) {
+        y = drawF4(text, game_state, wr, gpu_alloc, y);
     }
-    if (gs.debug_screens & SCREEN_F5 != 0) {
-        drawF5(text, gs);
+    if (game_state.debug_screens & SCREEN_F5 != 0) {
+        drawF5(text, game_state);
     }
 }
 
-fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
+fn drawF3(text: *TextRenderer, game_state: *GameState, start_y: f32) f32 {
     var buf: [256]u8 = undefined;
     var y = start_y;
     const x: f32 = 10.0;
@@ -44,7 +44,7 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     text.drawText(x, y, "FarHorizons", white);
     y += LINE_HEIGHT;
 
-    const ft = gs.frame_timing;
+    const ft = game_state.frame_timing;
     const fps_text = std.fmt.bufPrint(&buf, "FPS: {d:.0} ({d:.1}ms)", .{ ft.smooth_fps, ft.smooth_frame_ms }) catch "FPS: ?";
     text.drawText(x, y, fps_text, yellow);
     y += LINE_HEIGHT;
@@ -55,37 +55,37 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     text.drawText(x, y, timing_text, yellow);
     y += LINE_HEIGHT;
 
-    const pos = gs.camera.position;
+    const pos = game_state.camera.position;
     const xyz_text = std.fmt.bufPrint(&buf, "XYZ: {d:.2} / {d:.2} / {d:.2}", .{ pos.x, pos.y, pos.z }) catch "XYZ: ?";
     text.drawText(x, y, xyz_text, yellow);
     y += LINE_HEIGHT;
 
-    const vel = gs.entities.vel[GameState.Entity.PLAYER];
+    const vel = game_state.entities.vel[GameState.Entity.PLAYER];
     const vel_text = std.fmt.bufPrint(&buf, "Velocity: {d:.2} / {d:.2} / {d:.2}", .{ vel[0], vel[1], vel[2] }) catch "Velocity: ?";
     text.drawText(x, y, vel_text, yellow);
     y += LINE_HEIGHT;
 
     const deg = 180.0 / std.math.pi;
-    const yaw_deg = gs.camera.yaw * deg;
-    const pitch_deg = gs.camera.pitch * deg;
-    const facing = yawFacing(gs.camera.yaw);
+    const yaw_deg = game_state.camera.yaw * deg;
+    const pitch_deg = game_state.camera.pitch * deg;
+    const facing = yawFacing(game_state.camera.yaw);
     const ang_text = std.fmt.bufPrint(&buf, "Facing: {s}  Yaw: {d:.2}  Pitch: {d:.2}", .{ facing, yaw_deg, pitch_deg }) catch "Facing: ?";
     text.drawText(x, y, ang_text, yellow);
     y += LINE_HEIGHT;
 
-    const mode_text: []const u8 = switch (gs.mode) {
+    const mode_text: []const u8 = switch (game_state.mode) {
         .flying => "Mode: Flying",
         .walking => "Mode: Walking",
     };
     text.drawText(x, y, mode_text, yellow);
     y += LINE_HEIGHT;
 
-    const ground_text: []const u8 = if (gs.entities.flags[GameState.Entity.PLAYER].on_ground) "On Ground: true" else "On Ground: false";
+    const ground_text: []const u8 = if (game_state.entities.flags[GameState.Entity.PLAYER].on_ground) "On Ground: true" else "On Ground: false";
     text.drawText(x, y, ground_text, yellow);
     y += LINE_HEIGHT;
 
-    if (gs.hit_result) |hit| {
-        const block = gs.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    if (game_state.hit_result) |hit| {
+        const block = game_state.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
         const block_name = GameState.blockName(block);
         const face_name = dirName(hit.direction);
         const target_text = std.fmt.bufPrint(&buf, "Target: {s} @ ({d}, {d}, {d}) [{s}]", .{
@@ -97,16 +97,16 @@ fn drawF3(text: *TextRenderer, gs: *GameState, start_y: f32) f32 {
     }
     y += LINE_HEIGHT;
 
-    const sel_stack = gs.playerInv().hotbar[gs.selected_slot];
+    const sel_stack = game_state.playerInv().hotbar[game_state.inv.selected_slot];
     const sel_name = GameState.itemName(sel_stack.block);
-    const sel_text = std.fmt.bufPrint(&buf, "Selected: [{d}] {s} x{d}", .{ gs.selected_slot + 1, sel_name, sel_stack.count }) catch "Selected: ?";
+    const sel_text = std.fmt.bufPrint(&buf, "Selected: [{d}] {s} x{d}", .{ game_state.inv.selected_slot + 1, sel_name, sel_stack.count }) catch "Selected: ?";
     text.drawText(x, y, sel_text, yellow);
     y += LINE_HEIGHT;
 
     return y;
 }
 
-fn drawF4(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_alloc: *const GpuAllocator, start_y: f32) f32 {
+fn drawF4(text: *TextRenderer, game_state: *GameState, wr: *const WorldRenderer, gpu_alloc: *const GpuAllocator, start_y: f32) f32 {
     var buf: [128]u8 = undefined;
     var y = start_y;
     const x: f32 = 10.0;
@@ -121,7 +121,7 @@ fn drawF4(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_all
     text.drawText(x, y, chunks_text, yellow);
     y += LINE_HEIGHT;
 
-    const queue_depth = gs.streamer.inputQueueDepth();
+    const queue_depth = game_state.streaming.streamer.inputQueueDepth();
     const rd = ChunkStreamer.RENDER_DISTANCE;
     const stream_text = std.fmt.bufPrint(&buf, "Streamer: {d} queued, RD={d}", .{ queue_depth, rd }) catch "Streamer: ?";
     text.drawText(x, y, stream_text, yellow);
@@ -133,15 +133,15 @@ fn drawF4(text: *TextRenderer, gs: *GameState, wr: *const WorldRenderer, gpu_all
     text.drawText(x, y, dc_text, yellow);
     y += LINE_HEIGHT;
 
-    const dirty_text = std.fmt.bufPrint(&buf, "Dirty Chunks: {d}", .{gs.dirty_chunks.count()}) catch "Dirty Chunks: ?";
+    const dirty_text = std.fmt.bufPrint(&buf, "Dirty Chunks: {d}", .{game_state.dirty_chunks.count()}) catch "Dirty Chunks: ?";
     text.drawText(x, y, dirty_text, yellow);
     y += LINE_HEIGHT;
 
-    const overdraw_text: []const u8 = if (gs.overdraw_mode) "Overdraw: on" else "Overdraw: off";
+    const overdraw_text: []const u8 = if (game_state.overdraw_mode) "Overdraw: on" else "Overdraw: off";
     text.drawText(x, y, overdraw_text, yellow);
     y += LINE_HEIGHT;
 
-    const dbg_cam_text: []const u8 = if (gs.debug_camera_active) "Debug Camera: on" else "Debug Camera: off";
+    const dbg_cam_text: []const u8 = if (game_state.debug_camera_active) "Debug Camera: on" else "Debug Camera: off";
     text.drawText(x, y, dbg_cam_text, yellow);
     y += LINE_HEIGHT;
 
@@ -208,14 +208,14 @@ fn drawTextRight(text: *TextRenderer, y: f32, str: []const u8, color: [4]f32) vo
     text.drawText(text.screen_width - w - RIGHT_MARGIN, y, str, color);
 }
 
-fn drawF5(text: *TextRenderer, gs: *GameState) void {
+fn drawF5(text: *TextRenderer, game_state: *GameState) void {
     var buf: [128]u8 = undefined;
     var y: f32 = 10.0;
 
     drawTextRight(text, y, "World", white);
     y += LINE_HEIGHT;
 
-    const chunk_count = gs.chunk_map.count();
+    const chunk_count = game_state.chunk_map.count();
     const chunks_text = std.fmt.bufPrint(&buf, "Loaded Chunks: {d} ({d}^3 blocks each)", .{
         chunk_count, WorldState.CHUNK_SIZE,
     }) catch "Chunks: ?";
@@ -228,7 +228,7 @@ fn drawF5(text: *TextRenderer, gs: *GameState) void {
     drawTextRight(text, y, rd_text, yellow);
     y += LINE_HEIGHT;
 
-    const pos = gs.camera.position;
+    const pos = game_state.camera.position;
     const player_key = WorldState.ChunkKey.fromWorldPos(
         @intFromFloat(@floor(pos.x)),
         @intFromFloat(@floor(pos.y)),

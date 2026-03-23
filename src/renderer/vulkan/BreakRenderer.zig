@@ -53,14 +53,14 @@ pub const BreakRenderer = struct {
     pub fn recordDraw(
         self: *const BreakRenderer,
         command_buffer: vk.VkCommandBuffer,
-        gs: *const GameState,
+        game_state: *const GameState,
         vp: zlm.Mat4,
     ) void {
-        if (gs.break_progress <= 0 or gs.game_mode == .creative) return;
-        const bp = gs.breaking_pos orelse return;
+        if (game_state.combat.break_progress <= 0 or game_state.game_mode == .creative) return;
+        const bp = game_state.combat.breaking_pos orelse return;
 
         // Compute break stage (0-9)
-        const stage: u32 = @intFromFloat(@min(gs.break_progress * BREAK_STAGE_COUNT, BREAK_STAGE_COUNT - 1));
+        const stage: u32 = @intFromFloat(@min(game_state.combat.break_progress * BREAK_STAGE_COUNT, BREAK_STAGE_COUNT - 1));
         const tex_layer: i32 = @intCast(BREAK_TEX_BASE + stage);
 
         // Model matrix: translate to block position with slight expansion to avoid z-fighting

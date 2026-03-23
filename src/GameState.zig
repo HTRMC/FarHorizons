@@ -27,6 +27,20 @@ const Io = std.Io;
 
 const GameState = @This();
 
+pub const PlayerCombat = @import("PlayerCombat.zig").PlayerCombat;
+const WorldStreamingMod = @import("WorldStreaming.zig");
+pub const WorldStreamingState = WorldStreamingMod.WorldStreamingState;
+const PlayerInventoryMod = @import("PlayerInventory.zig");
+pub const PlayerInventory = PlayerInventoryMod.PlayerInventory;
+pub const BlockRegistry = @import("BlockRegistry.zig");
+pub const blockName = BlockRegistry.blockName;
+pub const blockColor = BlockRegistry.blockColor;
+pub const itemName = BlockRegistry.itemName;
+pub const itemColor = BlockRegistry.itemColor;
+pub const dayNightCycle = BlockRegistry.dayNightCycle;
+pub const DayNightResult = BlockRegistry.DayNightResult;
+pub const DAY_CYCLE = BlockRegistry.DAY_CYCLE;
+
 pub const GameMode = enum(u8) { creative = 0, survival = 1 };
 pub const MovementMode = enum { flying, walking };
 pub const EYE_OFFSET: f32 = 1.62;
@@ -39,218 +53,13 @@ pub const INV_SIZE = Entity.INV_SIZE;
 pub const ARMOR_SLOTS = Entity.ARMOR_SLOTS;
 pub const EQUIP_SLOTS = Entity.EQUIP_SLOTS;
 
-pub const MAX_PICKUP_GHOSTS = 8;
-pub const PickupGhost = struct {
-    active: bool = false,
-    start_pos: [3]f32 = .{ 0, 0, 0 },
-    block: BlockState.StateId = 0,
-    item_count: u8 = 0,
-    bob_offset: f32 = 0,
-    age_ticks: u32 = 0,
-    tick: u8 = 0, // 0-2, animation lasts 3 ticks
-};
-
-// Day/night cycle: 36000 ticks at 30Hz = 20 minutes per full day
-pub const DAY_CYCLE: i64 = 36000;
-
-pub const DayNightResult = struct {
-    ambient_light: [3]f32,
-    sky_color: [3]f32,
-};
-
-pub fn dayNightCycle(game_time: i64) DayNightResult {
-    // dayTime is symmetric around midnight: 0 at midnight, DAY_CYCLE/2 at noon
-    const cycle = @mod(game_time, DAY_CYCLE);
-    const half = @divTrunc(DAY_CYCLE, 2);
-    const day_time = @as(i64, @intCast(@abs(cycle - half)));
-
-    const quarter = @divTrunc(DAY_CYCLE, 4);
-    const sixteenth = @divTrunc(DAY_CYCLE, 16);
-
-    const night_end = quarter - sixteenth; // 2250
-    const day_start = quarter + sixteenth; // 3750
-
-    if (day_time < night_end) {
-        // Full night
-        return .{
-            .ambient_light = .{ 0.1, 0.1, 0.1 },
-            .sky_color = .{ 0.02, 0.02, 0.06 },
-        };
-    } else if (day_time > day_start) {
-        // Full day
-        return .{
-            .ambient_light = .{ 1.0, 1.0, 1.0 },
-            .sky_color = .{ 0.224, 0.643, 0.918 },
-        };
-    } else {
-        // Sunrise/sunset transition
-        const range: f32 = @floatFromInt(day_start - night_end);
-        const t: f32 = @as(f32, @floatFromInt(day_time - night_end)) / range;
-        // Smoothstep for natural feel
-        const s = t * t * (3.0 - 2.0 * t);
-
-        // Ambient interpolation
-        const ambient = 0.1 + 0.9 * s;
-
-        // Sky color: night → warm sunrise/sunset → day
-        // Red/orange leads, blue trails for warm sunrise tones
-        const r_t = @min(1.0, s * 1.4); // red leads
-        const g_t = s; // green is normal
-        const b_t = @max(0.0, s * 0.7 + 0.3 * s * s); // blue trails
-
-        return .{
-            .ambient_light = .{ ambient, ambient, ambient },
-            .sky_color = .{
-                0.02 + (0.224 - 0.02) * r_t + 0.3 * r_t * (1.0 - r_t), // warm red bump
-                0.02 + (0.643 - 0.02) * g_t + 0.1 * g_t * (1.0 - g_t), // slight warm green
-                0.06 + (0.918 - 0.06) * b_t,
-            },
-        };
-    }
-}
+pub const MAX_PICKUP_GHOSTS = PlayerInventoryMod.MAX_PICKUP_GHOSTS;
+pub const PickupGhost = PlayerInventoryMod.PickupGhost;
 
 // Initial load radius in chunks (per axis from center)
 const LOAD_RADIUS_XZ: i32 = 2;
 const LOAD_RADIUS_Y: i32 = 1;
-const MAX_PENDING_UNLOADS: u32 = 256;
-
-pub fn blockName(state: BlockState.StateId) []const u8 {
-    return switch (BlockState.getBlock(state)) {
-        .air => "Air",
-        .glass => "Glass",
-        .grass_block => "Grass",
-        .dirt => "Dirt",
-        .stone => "Stone",
-        .glowstone => "Glowstone",
-        .red_glowstone => "Red Glowstone",
-        .crimson_glowstone => "Crimson Glowstone",
-        .orange_glowstone => "Orange Glowstone",
-        .peach_glowstone => "Peach Glowstone",
-        .lime_glowstone => "Lime Glowstone",
-        .green_glowstone => "Green Glowstone",
-        .teal_glowstone => "Teal Glowstone",
-        .cyan_glowstone => "Cyan Glowstone",
-        .light_blue_glowstone => "Light Blue Glowstone",
-        .blue_glowstone => "Blue Glowstone",
-        .navy_glowstone => "Navy Glowstone",
-        .indigo_glowstone => "Indigo Glowstone",
-        .purple_glowstone => "Purple Glowstone",
-        .magenta_glowstone => "Magenta Glowstone",
-        .pink_glowstone => "Pink Glowstone",
-        .hot_pink_glowstone => "Hot Pink Glowstone",
-        .white_glowstone => "White Glowstone",
-        .warm_white_glowstone => "Warm White Glowstone",
-        .light_gray_glowstone => "Light Gray Glowstone",
-        .gray_glowstone => "Gray Glowstone",
-        .brown_glowstone => "Brown Glowstone",
-        .tan_glowstone => "Tan Glowstone",
-        .black_glowstone => "Black Glowstone",
-        .sand => "Sand",
-        .snow => "Snow",
-        .water => "Water",
-        .gravel => "Gravel",
-        .cobblestone => "Cobblestone",
-        .oak_log => "Oak Log",
-        .oak_planks => "Oak Planks",
-        .bricks => "Bricks",
-        .bedrock => "Bedrock",
-        .gold_ore => "Gold Ore",
-        .iron_ore => "Iron Ore",
-        .coal_ore => "Coal Ore",
-        .diamond_ore => "Diamond Ore",
-        .sponge => "Sponge",
-        .pumice => "Pumice",
-        .wool => "Wool",
-        .gold_block => "Gold Block",
-        .iron_block => "Iron Block",
-        .diamond_block => "Diamond Block",
-        .bookshelf => "Bookshelf",
-        .obsidian => "Obsidian",
-        .oak_leaves => "Oak Leaves",
-        .oak_slab => "Oak Slab",
-        .oak_stairs => "Oak Stairs",
-        .torch => "Torch",
-        .ladder => "Ladder",
-        .oak_door => "Oak Door",
-        .oak_fence => "Oak Fence",
-        .crafting_table => "Crafting Table",
-        .stick => "Stick",
-    };
-}
-
-pub fn blockColor(state: BlockState.StateId) [4]f32 {
-    return switch (BlockState.getBlock(state)) {
-        .air => .{ 0.0, 0.0, 0.0, 0.0 },
-        .glass => .{ 0.8, 0.9, 1.0, 0.4 },
-        .grass_block => .{ 0.3, 0.7, 0.2, 1.0 },
-        .dirt => .{ 0.6, 0.4, 0.2, 1.0 },
-        .stone => .{ 0.5, 0.5, 0.5, 1.0 },
-        .glowstone => .{ 1.0, 0.9, 0.5, 1.0 },
-        .red_glowstone => .{ 1.0, 0.2, 0.12, 1.0 },
-        .crimson_glowstone => .{ 0.71, 0.08, 0.16, 1.0 },
-        .orange_glowstone => .{ 1.0, 0.59, 0.12, 1.0 },
-        .peach_glowstone => .{ 1.0, 0.71, 0.47, 1.0 },
-        .lime_glowstone => .{ 0.47, 1.0, 0.16, 1.0 },
-        .green_glowstone => .{ 0.16, 0.78, 0.24, 1.0 },
-        .teal_glowstone => .{ 0.12, 0.71, 0.59, 1.0 },
-        .cyan_glowstone => .{ 0.12, 0.86, 0.86, 1.0 },
-        .light_blue_glowstone => .{ 0.31, 0.63, 1.0, 1.0 },
-        .blue_glowstone => .{ 0.16, 0.31, 1.0, 1.0 },
-        .navy_glowstone => .{ 0.12, 0.16, 0.71, 1.0 },
-        .indigo_glowstone => .{ 0.39, 0.16, 0.86, 1.0 },
-        .purple_glowstone => .{ 0.63, 0.2, 1.0, 1.0 },
-        .magenta_glowstone => .{ 0.86, 0.2, 0.78, 1.0 },
-        .pink_glowstone => .{ 1.0, 0.43, 0.67, 1.0 },
-        .hot_pink_glowstone => .{ 1.0, 0.2, 0.47, 1.0 },
-        .white_glowstone => .{ 0.94, 0.94, 1.0, 1.0 },
-        .warm_white_glowstone => .{ 1.0, 0.86, 0.71, 1.0 },
-        .light_gray_glowstone => .{ 0.71, 0.71, 0.75, 1.0 },
-        .gray_glowstone => .{ 0.47, 0.47, 0.51, 1.0 },
-        .brown_glowstone => .{ 0.63, 0.39, 0.2, 1.0 },
-        .tan_glowstone => .{ 0.78, 0.67, 0.43, 1.0 },
-        .black_glowstone => .{ 0.16, 0.14, 0.2, 1.0 },
-        .sand => .{ 0.82, 0.75, 0.51, 1.0 },
-        .snow => .{ 0.95, 0.97, 1.0, 1.0 },
-        .water => .{ 0.2, 0.4, 0.8, 0.6 },
-        .gravel => .{ 0.5, 0.48, 0.47, 1.0 },
-        .cobblestone => .{ 0.45, 0.45, 0.45, 1.0 },
-        .oak_log => .{ 0.55, 0.36, 0.2, 1.0 },
-        .oak_planks => .{ 0.7, 0.55, 0.33, 1.0 },
-        .bricks => .{ 0.6, 0.3, 0.25, 1.0 },
-        .bedrock => .{ 0.2, 0.2, 0.2, 1.0 },
-        .gold_ore => .{ 0.75, 0.7, 0.4, 1.0 },
-        .iron_ore => .{ 0.6, 0.55, 0.5, 1.0 },
-        .coal_ore => .{ 0.3, 0.3, 0.3, 1.0 },
-        .diamond_ore => .{ 0.4, 0.7, 0.8, 1.0 },
-        .sponge => .{ 0.8, 0.8, 0.3, 1.0 },
-        .pumice => .{ 0.6, 0.58, 0.55, 1.0 },
-        .wool => .{ 0.9, 0.9, 0.9, 1.0 },
-        .gold_block => .{ 0.9, 0.8, 0.2, 1.0 },
-        .iron_block => .{ 0.8, 0.8, 0.8, 1.0 },
-        .diamond_block => .{ 0.4, 0.9, 0.9, 1.0 },
-        .bookshelf => .{ 0.55, 0.4, 0.25, 1.0 },
-        .obsidian => .{ 0.15, 0.1, 0.2, 1.0 },
-        .oak_leaves => .{ 0.2, 0.5, 0.15, 0.8 },
-        .oak_slab => .{ 0.7, 0.55, 0.33, 1.0 },
-        .oak_stairs => .{ 0.7, 0.55, 0.33, 1.0 },
-        .torch => .{ 0.9, 0.7, 0.2, 1.0 },
-        .ladder => .{ 0.6, 0.45, 0.25, 1.0 },
-        .oak_door => .{ 0.7, 0.55, 0.33, 1.0 },
-        .oak_fence => .{ 0.7, 0.55, 0.33, 1.0 },
-        .crafting_table => .{ 0.6, 0.45, 0.25, 1.0 },
-        .stick => .{ 0.55, 0.4, 0.2, 1.0 },
-    };
-}
-
-pub fn itemName(id: u16) []const u8 {
-    if (Item.isToolItem(id)) return Item.toolName(id);
-    return blockName(id);
-}
-
-pub fn itemColor(id: u16) [4]f32 {
-    if (Item.isToolItem(id)) return Item.toolColor(id);
-    return blockColor(id);
-}
+const MAX_PENDING_UNLOADS = WorldStreamingMod.MAX_PENDING_UNLOADS;
 
 allocator: std.mem.Allocator,
 camera: Camera,
@@ -267,60 +76,19 @@ jump_cooldown: u8,
 hit_result: ?Raycast.BlockHitResult,
 entity_hit: ?Raycast.EntityHitResult = null,
 swing_requested: bool,
-dirty_chunks: DirtyChunkSet,
+dirty_chunks: WorldStreamingMod.DirtyChunkSet,
 debug_camera_active: bool,
 third_person: bool = false,
 third_person_crosshair: bool = false,
 overdraw_mode: bool,
 saved_camera: Camera,
 
-selected_slot: u8 = 0,
-carried_item: Entity.ItemStack = Entity.ItemStack.EMPTY,
-inventory_open: bool = false,
-
-pickup_ghosts: [MAX_PICKUP_GHOSTS]PickupGhost = .{PickupGhost{}} ** MAX_PICKUP_GHOSTS,
+inv: PlayerInventory = .{},
 render_alpha: f32 = 0,
 
 game_mode: GameMode = .creative,
-break_progress: f32 = 0,
-breaking_pos: ?[3]i32 = null,
-attack_held: bool = false,
-attack_damage: f32 = 1.0,
-health: f32 = 20.0,
-max_health: f32 = 20.0,
-air_supply: u16 = 300,
-max_air: u16 = 300,
-damage_cooldown: u8 = 0,
-entity_attack_cooldown: u8 = 0,
-fall_start_y: f32 = 0.0,
-was_on_ground: bool = true,
-
-open_workbench_requested: bool = false,
-world_seed: u64,
-world_type: WorldState.WorldType,
-storage: ?*Storage,
-streamer: ChunkStreamer,
-player_chunk: WorldState.ChunkKey,
-streaming_initialized: bool,
-world_tick_pending: bool = false,
-
-// Player-caused dirty chunks — fed to MeshWorker every frame for low latency
-player_dirty_chunks: DirtyChunkSet,
-
-// Pending unloads (collected by worldTick, applied by renderer)
-pending_unload_keys: [MAX_PENDING_UNLOADS]WorldState.ChunkKey = undefined,
-pending_unload_count: u16 = 0,
-unload_scan_cursor: u32 = 0,
-
-// Async initial load (ready when player's chunk is loaded+meshed AND count >= target)
-initial_load_target: u32 = 0,
-initial_load_ready: bool = true,
-
-// Pipeline references for stats reporting (set by renderer)
-mesh_worker: ?*MeshWorker = null,
-lod_worker: ?*LodWorker = null,
-transfer_pipeline: ?*TransferPipeline = null,
-stats_last_time: ?Io.Timestamp = null,
+combat: PlayerCombat = .{},
+streaming: WorldStreamingState,
 
 game_time: i64 = 0,
 debug_screens: u8 = 0,
@@ -353,33 +121,7 @@ pub const FrameTiming = struct {
     }
 };
 
-pub const DirtyChunkSet = struct {
-    map: std.AutoArrayHashMap(WorldState.ChunkKey, void),
-
-    pub fn init(allocator: std.mem.Allocator) DirtyChunkSet {
-        return .{ .map = std.AutoArrayHashMap(WorldState.ChunkKey, void).init(allocator) };
-    }
-
-    pub fn deinit(self: *DirtyChunkSet) void {
-        self.map.deinit();
-    }
-
-    pub fn add(self: *DirtyChunkSet, key: WorldState.ChunkKey) void {
-        self.map.put(key, {}) catch {};
-    }
-
-    pub fn clear(self: *DirtyChunkSet) void {
-        self.map.clearRetainingCapacity();
-    }
-
-    pub fn count(self: *const DirtyChunkSet) u32 {
-        return @intCast(self.map.count());
-    }
-
-    pub fn keys(self: *const DirtyChunkSet) []const WorldState.ChunkKey {
-        return self.map.keys();
-    }
-};
+pub const DirtyChunkSet = WorldStreamingMod.DirtyChunkSet;
 
 pub fn playerInv(self: anytype) if (@TypeOf(self) == *const GameState) *const Entity.Inventory else *Entity.Inventory {
     return self.entities.inventory[Entity.PLAYER].?;
@@ -401,10 +143,10 @@ pub fn clickSlot(self: *GameState, slot: u8) void {
     const tz = tracy.zone(@src(), "clickSlot");
     defer tz.end();
     const ptr = self.slotPtr(slot);
-    if (self.carried_item.isEmpty() and ptr.isEmpty()) return;
+    if (self.inv.carried_item.isEmpty() and ptr.isEmpty()) return;
     const tmp = ptr.*;
-    ptr.* = self.carried_item;
-    self.carried_item = tmp;
+    ptr.* = self.inv.carried_item;
+    self.inv.carried_item = tmp;
 }
 
 /// Shift+click: move item between hotbar and main inventory.
@@ -552,9 +294,11 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
             break :blk store;
         },
         .game_mode = game_mode,
-        .health = saved_health,
-        .air_supply = saved_air,
-        .fall_start_y = spawn_y,
+        .combat = .{
+            .health = saved_health,
+            .air_supply = saved_air,
+            .fall_start_y = spawn_y,
+        },
         .mode = .walking,
         .input_move = .{ 0.0, 0.0, 0.0 },
         .jump_requested = false,
@@ -562,15 +306,17 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .hit_result = null,
         .swing_requested = false,
         .dirty_chunks = DirtyChunkSet.init(allocator),
-        .player_dirty_chunks = DirtyChunkSet.init(allocator),
-        .world_seed = world_seed,
-        .world_type = world_type,
-        .storage = storage_inst,
-        .streamer = undefined,
-        .player_chunk = spawn_key,
-        .streaming_initialized = false,
-        .initial_load_ready = false,
-        .initial_load_target = 75,
+        .streaming = .{
+            .world_seed = world_seed,
+            .world_type = world_type,
+            .storage = storage_inst,
+            .streamer = undefined,
+            .player_chunk = spawn_key,
+            .streaming_initialized = false,
+            .initial_load_ready = false,
+            .initial_load_target = 75,
+            .player_dirty_chunks = DirtyChunkSet.init(allocator),
+        },
         .game_time = saved_game_time,
         .debug_camera_active = false,
         .overdraw_mode = false,
@@ -581,7 +327,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
 }
 
 pub fn save(self: *GameState) void {
-    const s = self.storage orelse return;
+    const s = self.streaming.storage orelse return;
     const io = std.Io.Threaded.global_single_threaded.io();
     const save_start = std.Io.Clock.now(.awake, io);
 
@@ -593,8 +339,8 @@ pub fn save(self: *GameState) void {
         .yaw = self.camera.yaw,
         .pitch = self.camera.pitch,
         .game_mode = self.game_mode,
-        .health = self.health,
-        .air_supply = self.air_supply,
+        .health = self.combat.health,
+        .air_supply = self.combat.air_supply,
         .inventory = self.entities.inventory[Entity.PLAYER],
     });
 
@@ -624,8 +370,8 @@ pub fn deinit(self: *GameState) void {
         if (inv) |ptr| self.allocator.destroy(ptr);
     }
     self.dirty_chunks.deinit();
-    self.player_dirty_chunks.deinit();
-    if (self.storage) |s| s.deinit();
+    self.streaming.player_dirty_chunks.deinit();
+    if (self.streaming.storage) |s| s.deinit();
     var lm_it = self.light_maps.iterator();
     while (lm_it.next()) |entry| {
         self.light_map_pool.release(entry.value_ptr.*);
@@ -706,7 +452,7 @@ pub fn toggleMode(self: *GameState) void {
             self.entities.flags[P].on_ground = false;
             self.jump_requested = false;
             self.jump_cooldown = 5;
-            self.fall_start_y = self.entities.pos[P][1];
+            self.combat.fall_start_y = self.entities.pos[P][1];
             self.mode = .walking;
         },
         .walking => {
@@ -723,10 +469,10 @@ pub fn toggleMode(self: *GameState) void {
 }
 
 pub fn takeDamage(self: *GameState, amount: f32) void {
-    if (self.game_mode != .survival or self.damage_cooldown > 0) return;
-    self.health = @max(self.health - amount, 0.0);
-    self.damage_cooldown = 15; // 0.5s invincibility
-    if (self.health <= 0.0) self.die();
+    if (self.game_mode != .survival or self.combat.damage_cooldown > 0) return;
+    self.combat.health = @max(self.combat.health - amount, 0.0);
+    self.combat.damage_cooldown = 15; // 0.5s invincibility
+    if (self.combat.health <= 0.0) self.die();
 }
 
 fn dropInventoryWithScatter(self: *GameState, slots: []Entity.ItemStack, pos: [3]f32, random: std.Random) void {
@@ -771,7 +517,7 @@ fn die(self: *GameState) void {
     }
 
     // Respawn at world spawn
-    const spawn = findSpawn(self.world_seed);
+    const spawn = findSpawn(self.streaming.world_seed);
     self.entities.pos[P] = spawn;
     self.entities.prev_pos[P] = spawn;
     self.entities.vel[P] = .{ 0, 0, 0 };
@@ -780,11 +526,11 @@ fn die(self: *GameState) void {
     self.prev_camera_pos = self.camera.position;
     self.tick_camera_pos = self.camera.position;
 
-    self.health = self.max_health;
-    self.air_supply = self.max_air;
-    self.damage_cooldown = 30; // 1s post-respawn immunity
-    self.was_on_ground = true;
-    self.fall_start_y = spawn[1];
+    self.combat.health = self.combat.max_health;
+    self.combat.air_supply = self.combat.max_air;
+    self.combat.damage_cooldown = 30; // 1s post-respawn immunity
+    self.combat.was_on_ground = true;
+    self.combat.fall_start_y = spawn[1];
 }
 
 fn updateFallDamage(self: *GameState) void {
@@ -793,26 +539,26 @@ fn updateFallDamage(self: *GameState) void {
     const flags = self.entities.flags[P];
     const pos_y = self.entities.pos[P][1];
 
-    if (!self.was_on_ground and flags.on_ground and !flags.in_water) {
-        const damage = self.fall_start_y - pos_y - 3.0;
+    if (!self.combat.was_on_ground and flags.on_ground and !flags.in_water) {
+        const damage = self.combat.fall_start_y - pos_y - 3.0;
         if (damage > 0) self.takeDamage(damage);
     }
 
     if (flags.on_ground or flags.in_water) {
-        self.fall_start_y = pos_y;
+        self.combat.fall_start_y = pos_y;
     } else {
-        self.fall_start_y = @max(self.fall_start_y, pos_y);
+        self.combat.fall_start_y = @max(self.combat.fall_start_y, pos_y);
     }
 
-    self.was_on_ground = flags.on_ground;
+    self.combat.was_on_ground = flags.on_ground;
 }
 
 fn updateDrowning(self: *GameState) void {
     if (self.game_mode != .survival) return;
     const P = Entity.PLAYER;
     if (self.entities.flags[P].eyes_in_water) {
-        if (self.air_supply > 0) {
-            self.air_supply -= 1;
+        if (self.combat.air_supply > 0) {
+            self.combat.air_supply -= 1;
         } else {
             // Drowning damage: 1 HP every 30 ticks (1 second)
             if (@mod(self.game_time, 30) == 0) {
@@ -820,7 +566,7 @@ fn updateDrowning(self: *GameState) void {
             }
         }
     } else {
-        self.air_supply = @min(self.air_supply + 5, self.max_air);
+        self.combat.air_supply = @min(self.combat.air_supply + 5, self.combat.max_air);
     }
 }
 
@@ -875,8 +621,8 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     }
 
     // Survival damage systems
-    if (self.damage_cooldown > 0) self.damage_cooldown -= 1;
-    if (self.entity_attack_cooldown > 0) self.entity_attack_cooldown -= 1;
+    if (self.combat.damage_cooldown > 0) self.combat.damage_cooldown -= 1;
+    if (self.combat.entity_attack_cooldown > 0) self.combat.entity_attack_cooldown -= 1;
     if (self.mode == .walking) {
         self.updateFallDamage();
         self.updateDrowning();
@@ -901,10 +647,10 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     // Request load for missing chunks within render distance (runs at tick rate).
     // Iterates center-outward so the first batch contains chunks near the player,
     // not biased toward the bottom of the sphere.
-    if (self.streaming_initialized) {
+    if (self.streaming.streaming_initialized) {
         const rd = ChunkStreamer.RENDER_DISTANCE;
         const rd_sq = rd * rd;
-        const pc = self.player_chunk;
+        const pc = self.streaming.player_chunk;
         var batch: [1024]WorldState.ChunkKey = undefined;
         var batch_len: u32 = 0;
 
@@ -938,12 +684,12 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
         }
 
         if (batch_len > 0) {
-            self.streamer.requestLoadBatch(batch[0..batch_len]);
+            self.streaming.streamer.requestLoadBatch(batch[0..batch_len]);
         }
     }
 
     self.worldTick();
-    self.world_tick_pending = true;
+    self.streaming.world_tick_pending = true;
 
     // Pipeline stats reporter — sample every 2 seconds
     self.reportPipelineStats();
@@ -951,29 +697,29 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
 
 fn updateBreakProgress(self: *GameState) void {
     if (self.game_mode != .survival) return;
-    if (!self.attack_held) {
-        if (self.break_progress > 0) {
-            self.break_progress = 0;
-            self.breaking_pos = null;
+    if (!self.combat.attack_held) {
+        if (self.combat.break_progress > 0) {
+            self.combat.break_progress = 0;
+            self.combat.breaking_pos = null;
         }
         return;
     }
 
     const hit = self.hit_result orelse {
-        self.break_progress = 0;
-        self.breaking_pos = null;
+        self.combat.break_progress = 0;
+        self.combat.breaking_pos = null;
         return;
     };
 
     const target_pos = hit.block_pos;
 
     // Reset if target changed
-    if (self.breaking_pos) |bp| {
+    if (self.combat.breaking_pos) |bp| {
         if (bp[0] != target_pos[0] or bp[1] != target_pos[1] or bp[2] != target_pos[2]) {
-            self.break_progress = 0;
+            self.combat.break_progress = 0;
         }
     }
-    self.breaking_pos = target_pos;
+    self.combat.breaking_pos = target_pos;
 
     const block_state = self.chunk_map.getBlock(target_pos[0], target_pos[1], target_pos[2]);
     const hardness = BlockState.getHardness(block_state);
@@ -984,14 +730,14 @@ fn updateBreakProgress(self: *GameState) void {
     // Instant break
     if (hardness == 0) {
         self.breakBlock();
-        self.break_progress = 0;
-        self.breaking_pos = null;
+        self.combat.break_progress = 0;
+        self.combat.breaking_pos = null;
         return;
     }
 
     // Calculate tool multiplier
     var tool_multiplier: f32 = 1.0;
-    const held_slot = self.playerInv().hotbar[self.selected_slot];
+    const held_slot = self.playerInv().hotbar[self.inv.selected_slot];
     if (held_slot.isTool()) {
         if (Item.toolFromId(held_slot.block)) |tool_info| {
             const preferred = BlockState.getPreferredTool(block_state);
@@ -1003,9 +749,9 @@ fn updateBreakProgress(self: *GameState) void {
 
     const break_time = hardness * 1.5 / tool_multiplier;
     const speed_per_tick = 1.0 / (break_time * TICK_RATE);
-    self.break_progress += speed_per_tick;
+    self.combat.break_progress += speed_per_tick;
 
-    if (self.break_progress >= 1.0) {
+    if (self.combat.break_progress >= 1.0) {
         // Check if tool can harvest (requires_tool check)
         const can_harvest = !BlockState.requiresTool(block_state) or (tool_multiplier > 1.0);
         if (!can_harvest) {
@@ -1017,7 +763,7 @@ fn updateBreakProgress(self: *GameState) void {
 
         // Durability cost
         if (held_slot.isTool()) {
-            const slot = &self.playerInv().hotbar[self.selected_slot];
+            const slot = &self.playerInv().hotbar[self.inv.selected_slot];
             if (slot.durability > 1) {
                 slot.durability -= 1;
             } else {
@@ -1025,20 +771,20 @@ fn updateBreakProgress(self: *GameState) void {
             }
         }
 
-        self.break_progress = 0;
-        self.breaking_pos = null;
+        self.combat.break_progress = 0;
+        self.combat.breaking_pos = null;
     }
 }
 
 fn updateAttackDamage(self: *GameState) void {
-    const held = self.playerInv().hotbar[self.selected_slot];
+    const held = self.playerInv().hotbar[self.inv.selected_slot];
     if (held.isTool()) {
         if (Item.toolFromId(held.block)) |info| {
-            self.attack_damage = Item.baseAttackDamage(info.tool_type) + Item.tierStats(info.tier).attack_bonus;
+            self.combat.attack_damage = Item.baseAttackDamage(info.tool_type) + Item.tierStats(info.tier).attack_bonus;
             return;
         }
     }
-    self.attack_damage = 1.0;
+    self.combat.attack_damage = 1.0;
 }
 
 fn updateItemDrops(self: *GameState) void {
@@ -1047,7 +793,7 @@ fn updateItemDrops(self: *GameState) void {
     const MERGE_RADIUS: f32 = 1.0;
 
     // Advance pickup ghost animations
-    for (&self.pickup_ghosts) |*ghost| {
+    for (&self.inv.pickup_ghosts) |*ghost| {
         if (ghost.active) {
             ghost.tick += 1;
             if (ghost.tick >= 3) ghost.active = false;
@@ -1230,7 +976,7 @@ fn updateMobCombat(self: *GameState) void {
 /// Try to attack the entity the player is looking at. Returns true if an entity
 /// was attacked (so the caller can skip block breaking).
 pub fn attackEntity(self: *GameState) bool {
-    if (self.entity_attack_cooldown > 0) return false;
+    if (self.combat.entity_attack_cooldown > 0) return false;
 
     const eh = self.entity_hit orelse return false;
     const id = eh.entity_id;
@@ -1250,10 +996,10 @@ pub fn attackEntity(self: *GameState) bool {
     }
 
     self.swing_requested = true;
-    self.entity_attack_cooldown = 15; // 0.5s at 30Hz
+    self.combat.entity_attack_cooldown = 15; // 0.5s at 30Hz
 
     // Apply damage
-    self.entities.mob_health[id] -= self.attack_damage;
+    self.entities.mob_health[id] -= self.combat.attack_damage;
     self.entities.hurt_time[id] = 10;
 
     // Knockback: push away from player
@@ -1280,7 +1026,7 @@ fn spawnPickupGhost(self: *GameState, entity_idx: u32) void {
     // Find first inactive slot (or oldest if all active)
     var best: usize = 0;
     var best_tick: u8 = 0;
-    for (self.pickup_ghosts, 0..) |ghost, idx| {
+    for (self.inv.pickup_ghosts, 0..) |ghost, idx| {
         if (!ghost.active) {
             best = idx;
             break;
@@ -1290,7 +1036,7 @@ fn spawnPickupGhost(self: *GameState, entity_idx: u32) void {
             best = idx;
         }
     }
-    self.pickup_ghosts[best] = .{
+    self.inv.pickup_ghosts[best] = .{
         .active = true,
         .start_pos = self.entities.render_pos[entity_idx],
         .block = self.entities.item_block[entity_idx],
@@ -1343,7 +1089,7 @@ pub fn restoreAfterRender(self: *GameState) void {
 
 fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
     const affected = WorldState.affectedChunks(wx, wy, wz);
-    const target = if (player) &self.player_dirty_chunks else &self.dirty_chunks;
+    const target = if (player) &self.streaming.player_dirty_chunks else &self.dirty_chunks;
     for (affected.keys[0..affected.count]) |key| {
         target.add(key);
         if (self.light_maps.get(key)) |lm| {
@@ -1387,7 +1133,7 @@ fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: 
             // to face-neighbors only if the incremental update changes boundary values.
             const affected = WorldState.affectedChunks(wx, wy, wz);
             for (affected.keys[0..affected.count]) |key| {
-                self.player_dirty_chunks.add(key);
+                self.streaming.player_dirty_chunks.add(key);
             }
             return;
         }
@@ -1704,11 +1450,11 @@ pub fn placeBlock(self: *GameState) void {
 
     // If clicking on a crafting table, open workbench crafting
     if (BlockState.getBlock(clicked_block) == .crafting_table) {
-        self.open_workbench_requested = true;
+        self.inv.open_workbench_requested = true;
         return;
     }
 
-    const stack = &self.playerInv().hotbar[self.selected_slot];
+    const stack = &self.playerInv().hotbar[self.inv.selected_slot];
     if (stack.isEmpty()) return;
     if (stack.isTool()) return; // tools can't be placed as blocks
     if (BlockState.getBlock(stack.block).isNonPlaceable()) return; // non-placeable items
@@ -1838,7 +1584,7 @@ pub fn dropFromSlot(self: *GameState, slot: u8, drop_all: bool) void {
 /// Drop carried item as an entity in the world.
 /// If `drop_all` is false, drops only 1 from the stack.
 pub fn dropCarried(self: *GameState, drop_all: bool) void {
-    if (self.carried_item.isEmpty()) return;
+    if (self.inv.carried_item.isEmpty()) return;
     if (self.entities.count >= Entity.MAX_ENTITIES) return;
 
     const P = Entity.PLAYER;
@@ -1849,9 +1595,9 @@ pub fn dropCarried(self: *GameState, drop_all: bool) void {
         epos[1] + EYE_OFFSET + forward.y * 0.5,
         epos[2] + forward.z * 0.5,
     };
-    const drop_count: u8 = if (drop_all or self.carried_item.isTool()) self.carried_item.count else 1;
+    const drop_count: u8 = if (drop_all or self.inv.carried_item.isTool()) self.inv.carried_item.count else 1;
     const prev_count = self.entities.count;
-    self.entities.spawnItemDropWithDurability(drop_pos, self.carried_item.block, drop_count, self.carried_item.durability);
+    self.entities.spawnItemDropWithDurability(drop_pos, self.inv.carried_item.block, drop_count, self.inv.carried_item.durability);
     if (self.entities.count <= prev_count) return;
 
     const last = self.entities.count - 1;
@@ -1861,16 +1607,16 @@ pub fn dropCarried(self: *GameState, drop_all: bool) void {
         forward.z * 5.0,
     };
 
-    if (drop_all or self.carried_item.count <= 1) {
-        self.carried_item = Entity.ItemStack.EMPTY;
+    if (drop_all or self.inv.carried_item.count <= 1) {
+        self.inv.carried_item = Entity.ItemStack.EMPTY;
     } else {
-        self.carried_item.count -= 1;
+        self.inv.carried_item.count -= 1;
     }
 }
 
 fn decrementSelectedStack(self: *GameState) void {
     if (self.game_mode == .creative) return; // infinite blocks in creative
-    const stack = &self.playerInv().hotbar[self.selected_slot];
+    const stack = &self.playerInv().hotbar[self.inv.selected_slot];
     if (stack.count > 1) {
         stack.count -= 1;
     } else {
@@ -1949,7 +1695,7 @@ pub fn pickBlock(self: *GameState) void {
     const inv = self.playerInv();
     for (inv.hotbar, 0..) |slot, i| {
         if (slot.block == block_state) {
-            self.selected_slot = @intCast(i);
+            self.inv.selected_slot = @intCast(i);
             return;
         }
     }
@@ -1959,7 +1705,7 @@ pub fn pickBlock(self: *GameState) void {
 
     // Creative: replace the current slot with a full stack
     // If current slot holds a tool, find first non-tool slot instead
-    var target_slot = self.selected_slot;
+    var target_slot = self.inv.selected_slot;
     if (inv.hotbar[target_slot].isTool()) {
         for (inv.hotbar, 0..) |s, idx| {
             if (!s.isTool()) {
@@ -1969,7 +1715,7 @@ pub fn pickBlock(self: *GameState) void {
         }
     }
     inv.hotbar[target_slot] = .{ .block = block_state, .count = Entity.MAX_STACK };
-    self.selected_slot = target_slot;
+    self.inv.selected_slot = target_slot;
 }
 
 /// Sample block light (RGB) and sky light at a world position with
@@ -2060,7 +1806,7 @@ fn blockOverlapsPlayer(bx: i32, by: i32, bz: i32, pos: [3]f32) bool {
 }
 
 fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
-    const s = self.storage orelse return;
+    const s = self.streaming.storage orelse return;
     const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
     const chunk = self.chunk_map.get(key) orelse return;
     s.markDirty(key.cx, key.cy, key.cz, 0, chunk);
@@ -2075,14 +1821,14 @@ pub fn worldTick(self: *GameState) void {
         @intFromFloat(@floor(pos.z)),
     );
 
-    if (!current_chunk.eql(self.player_chunk) or !self.streaming_initialized) {
-        self.player_chunk = current_chunk;
-        self.streaming_initialized = true;
+    if (!current_chunk.eql(self.streaming.player_chunk) or !self.streaming.streaming_initialized) {
+        self.streaming.player_chunk = current_chunk;
+        self.streaming.streaming_initialized = true;
     }
 
     // Drain streamer output
     var results: [ChunkStreamer.MAX_OUTPUT]ChunkStreamer.LoadResult = undefined;
-    const count = self.streamer.drainOutput(&results);
+    const count = self.streaming.streamer.drainOutput(&results);
     for (results[0..count]) |result| {
         // Skip if chunk was already loaded (e.g. by double request)
         if (self.chunk_map.get(result.key) != null) {
@@ -2116,20 +1862,20 @@ pub fn worldTick(self: *GameState) void {
     self.scanUnloads();
 
     // Sync streamer + LOD worker player position + tick storage
-    self.streamer.syncPlayerChunk(self.player_chunk);
-    if (self.lod_worker) |lw| {
-        lw.syncPlayerChunk(self.player_chunk);
+    self.streaming.streamer.syncPlayerChunk(self.streaming.player_chunk);
+    if (self.streaming.lod_worker) |lw| {
+        lw.syncPlayerChunk(self.streaming.player_chunk);
     }
-    if (self.storage) |s| {
+    if (self.streaming.storage) |s| {
         s.tick();
     }
 
     // Track initial load readiness
-    if (!self.initial_load_ready) {
+    if (!self.streaming.initial_load_ready) {
         const chunk_count = self.chunk_map.count();
-        const player_loaded = self.chunk_map.get(self.player_chunk) != null;
-        if (chunk_count >= self.initial_load_target and player_loaded) {
-            self.initial_load_ready = true;
+        const player_loaded = self.chunk_map.get(self.streaming.player_chunk) != null;
+        if (chunk_count >= self.streaming.initial_load_target and player_loaded) {
+            self.streaming.initial_load_ready = true;
         }
     }
 }
@@ -2138,22 +1884,22 @@ fn reportPipelineStats(self: *GameState) void {
     const io = Io.Threaded.global_single_threaded.io();
     const now = Io.Clock.now(.awake, io);
 
-    const last = self.stats_last_time orelse {
-        self.stats_last_time = now;
+    const last = self.streaming.stats_last_time orelse {
+        self.streaming.stats_last_time = now;
         return;
     };
 
     const elapsed_ns: i64 = @intCast(last.durationTo(now).nanoseconds);
     if (elapsed_ns < 2_000_000_000) return;
-    self.stats_last_time = now;
+    self.streaming.stats_last_time = now;
 
     const elapsed_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
 
     // Read + reset streamer counters
-    const s_loaded = self.streamer.stats_loaded.swap(0, .monotonic);
-    const s_generated = self.streamer.stats_generated.swap(0, .monotonic);
-    const s_stale = self.streamer.stats_stale.swap(0, .monotonic);
-    const s_waits = self.streamer.stats_output_waits.swap(0, .monotonic);
+    const s_loaded = self.streaming.streamer.stats_loaded.swap(0, .monotonic);
+    const s_generated = self.streaming.streamer.stats_generated.swap(0, .monotonic);
+    const s_stale = self.streaming.streamer.stats_stale.swap(0, .monotonic);
+    const s_waits = self.streaming.streamer.stats_output_waits.swap(0, .monotonic);
     const s_total = s_loaded + s_generated;
 
     // Read + reset mesh worker counters
@@ -2162,7 +1908,7 @@ fn reportPipelineStats(self: *GameState) void {
     var m_hidden: u64 = 0;
     var m_stale: u64 = 0;
     var m_waits: u64 = 0;
-    if (self.mesh_worker) |mw| {
+    if (self.streaming.mesh_worker) |mw| {
         m_meshed = mw.stats_meshed.swap(0, .monotonic);
         m_light = mw.stats_light_only.swap(0, .monotonic);
         m_hidden = mw.stats_hidden.swap(0, .monotonic);
@@ -2174,22 +1920,22 @@ fn reportPipelineStats(self: *GameState) void {
     // Read + reset transfer pipeline counters
     var t_transferred: u64 = 0;
     var t_dropped: u64 = 0;
-    if (self.transfer_pipeline) |tp| {
+    if (self.streaming.transfer_pipeline) |tp| {
         t_transferred = tp.stats_transferred.swap(0, .monotonic);
         t_dropped = tp.stats_dropped.swap(0, .monotonic);
     }
 
     // Sample queue depths (non-atomic, diagnostic only)
-    const si = self.streamer.input_heap.count();
-    const so = self.streamer.output_len;
+    const si = self.streaming.streamer.input_heap.count();
+    const so = self.streaming.streamer.output_len;
     var mi: usize = 0;
     var mo: u32 = 0;
-    if (self.mesh_worker) |mw| {
+    if (self.streaming.mesh_worker) |mw| {
         mi = mw.input_heap.count();
         mo = mw.output_len;
     }
     var co: u32 = 0;
-    if (self.transfer_pipeline) |tp| {
+    if (self.streaming.transfer_pipeline) |tp| {
         co = tp.committed_len;
     }
 
@@ -2216,7 +1962,7 @@ fn reportPipelineStats(self: *GameState) void {
     });
 
     // Storage timing breakdown
-    if (self.storage) |s| {
+    if (self.streaming.storage) |s| {
         const st_loads = s.stats_load_count.swap(0, .monotonic);
         const st_hits = s.stats_cache_hits.swap(0, .monotonic);
         const st_region_ns = s.stats_region_ns.swap(0, .monotonic);
@@ -2237,11 +1983,11 @@ fn reportPipelineStats(self: *GameState) void {
 
 fn scanUnloads(self: *GameState) void {
     // Only scan when previous unloads have been applied
-    if (self.pending_unload_count > 0) return;
+    if (self.streaming.pending_unload_count > 0) return;
 
     const ud = ChunkStreamer.UNLOAD_DISTANCE;
     const ud_sq = ud * ud;
-    const pc = self.player_chunk;
+    const pc = self.streaming.player_chunk;
     const SCAN_BUDGET: u32 = 512;
 
     const map_size: u32 = @intCast(self.chunk_map.count());
@@ -2252,10 +1998,10 @@ fn scanUnloads(self: *GameState) void {
     var it = self.chunk_map.iterator();
 
     // Skip cursor entries
-    while (skipped < self.unload_scan_cursor) {
+    while (skipped < self.streaming.unload_scan_cursor) {
         if (it.next() == null) {
             // Wrapped around — reset cursor and restart
-            self.unload_scan_cursor = 0;
+            self.streaming.unload_scan_cursor = 0;
             it = self.chunk_map.iterator();
             break;
         }
@@ -2264,19 +2010,19 @@ fn scanUnloads(self: *GameState) void {
 
     while (scanned < SCAN_BUDGET) : (scanned += 1) {
         const entry = it.next() orelse {
-            self.unload_scan_cursor = 0;
+            self.streaming.unload_scan_cursor = 0;
             break;
         };
-        self.unload_scan_cursor += 1;
+        self.streaming.unload_scan_cursor += 1;
 
         const key = entry.key_ptr.*;
         const dx = key.cx - pc.cx;
         const dy = key.cy - pc.cy;
         const dz = key.cz - pc.cz;
         if (dx * dx + dy * dy + dz * dz > ud_sq) {
-            if (self.pending_unload_count < MAX_PENDING_UNLOADS) {
-                self.pending_unload_keys[self.pending_unload_count] = key;
-                self.pending_unload_count += 1;
+            if (self.streaming.pending_unload_count < MAX_PENDING_UNLOADS) {
+                self.streaming.pending_unload_keys[self.streaming.pending_unload_count] = key;
+                self.streaming.pending_unload_count += 1;
             }
         }
     }
@@ -2290,7 +2036,7 @@ pub fn applyUnloadsToGpu(
     deferred_light_frees: []TlsfAllocator.Handle,
     deferred_light_free_count: *u32,
 ) void {
-    for (self.pending_unload_keys[0..self.pending_unload_count]) |key| {
+    for (self.streaming.pending_unload_keys[0..self.streaming.pending_unload_count]) |key| {
         // Free GPU TLSF allocs via deferred mechanism
         if (wr.chunk_slot_map.get(key)) |slot| {
             if (wr.chunk_face_alloc[slot]) |fa| {
@@ -2325,7 +2071,7 @@ pub fn applyUnloadsToGpu(
             self.surface_height_map.removeColumn(key.cx, key.cz);
         }
     }
-    self.pending_unload_count = 0;
+    self.streaming.pending_unload_count = 0;
 }
 
 /// Spiral search from (0,0) outward to find a valid spawn on dry land.
@@ -2402,131 +2148,131 @@ fn lerpArray3(a: [3]f32, b: [3]f32, t: f32) [3]f32 {
 const testing = std.testing;
 
 fn makeTestGameState() GameState {
-    var gs: GameState = undefined;
-    gs.entities = Entity.EntityStore{};
-    _ = gs.entities.spawn(.player, .{ 0, 0, 0 });
+    var game_state: GameState = undefined;
+    game_state.entities = Entity.EntityStore{};
+    _ = game_state.entities.spawn(.player, .{ 0, 0, 0 });
     const inv = testing.allocator.create(Entity.Inventory) catch @panic("alloc failed");
     inv.* = .{
         .hotbar = .{Entity.ItemStack.of(BlockState.defaultState(.grass_block), 64)} ** HOTBAR_SIZE,
     };
-    gs.entities.inventory[Entity.PLAYER] = inv;
-    gs.carried_item = Entity.ItemStack.EMPTY;
-    gs.selected_slot = 0;
-    return gs;
+    game_state.entities.inventory[Entity.PLAYER] = inv;
+    game_state.inv.carried_item = Entity.ItemStack.EMPTY;
+    game_state.inv.selected_slot = 0;
+    return game_state;
 }
 
-fn destroyTestGameState(gs: *GameState) void {
-    if (gs.entities.inventory[Entity.PLAYER]) |inv| {
+fn destroyTestGameState(game_state: *GameState) void {
+    if (game_state.entities.inventory[Entity.PLAYER]) |inv| {
         testing.allocator.destroy(inv);
     }
 }
 
 test "slotPtr: hotbar slots 0-8" {
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     for (0..HOTBAR_SIZE) |i| {
-        const ptr = gs.slotPtr(@intCast(i));
+        const ptr = game_state.slotPtr(@intCast(i));
         try testing.expectEqual(&inv.hotbar[i], ptr);
     }
 }
 
 test "slotPtr: inventory slots 9-44" {
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     for (0..INV_SIZE) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + i);
-        const ptr = gs.slotPtr(slot);
+        const ptr = game_state.slotPtr(slot);
         try testing.expectEqual(&inv.main[i], ptr);
     }
 }
 
 test "slotPtr: armor slots 45-48" {
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     for (0..ARMOR_SLOTS) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + INV_SIZE + i);
-        const ptr = gs.slotPtr(slot);
+        const ptr = game_state.slotPtr(slot);
         try testing.expectEqual(&inv.armor[i], ptr);
     }
 }
 
 test "slotPtr: equip slots 49-52" {
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     for (0..EQUIP_SLOTS) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + i);
-        const ptr = gs.slotPtr(slot);
+        const ptr = game_state.slotPtr(slot);
         try testing.expectEqual(&inv.equip[i], ptr);
     }
 }
 
 test "slotPtr: offhand slot 53" {
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
-    const ptr = gs.slotPtr(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS);
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
+    const ptr = game_state.slotPtr(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS);
     try testing.expectEqual(&inv.offhand, ptr);
 }
 
 test "clickSlot: pick up item from hotbar" {
     const S = Entity.ItemStack;
     const stone = S.of(BlockState.defaultState(.stone), 32);
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    gs.playerInv().hotbar[0] = stone;
-    gs.carried_item = S.EMPTY;
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    game_state.playerInv().hotbar[0] = stone;
+    game_state.inv.carried_item = S.EMPTY;
 
-    gs.clickSlot(0);
+    game_state.clickSlot(0);
 
-    try testing.expect(gs.playerInv().hotbar[0].isEmpty());
-    try testing.expectEqual(stone.block, gs.carried_item.block);
-    try testing.expectEqual(stone.count, gs.carried_item.count);
+    try testing.expect(game_state.playerInv().hotbar[0].isEmpty());
+    try testing.expectEqual(stone.block, game_state.inv.carried_item.block);
+    try testing.expectEqual(stone.count, game_state.inv.carried_item.count);
 }
 
 test "clickSlot: swap carried with slot" {
     const S = Entity.ItemStack;
     const stone = S.of(BlockState.defaultState(.stone), 32);
     const dirt = S.of(BlockState.defaultState(.dirt), 16);
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    gs.playerInv().hotbar[0] = stone;
-    gs.carried_item = dirt;
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    game_state.playerInv().hotbar[0] = stone;
+    game_state.inv.carried_item = dirt;
 
-    gs.clickSlot(0);
+    game_state.clickSlot(0);
 
-    try testing.expectEqual(dirt.block, gs.playerInv().hotbar[0].block);
-    try testing.expectEqual(dirt.count, gs.playerInv().hotbar[0].count);
-    try testing.expectEqual(stone.block, gs.carried_item.block);
-    try testing.expectEqual(stone.count, gs.carried_item.count);
+    try testing.expectEqual(dirt.block, game_state.playerInv().hotbar[0].block);
+    try testing.expectEqual(dirt.count, game_state.playerInv().hotbar[0].count);
+    try testing.expectEqual(stone.block, game_state.inv.carried_item.block);
+    try testing.expectEqual(stone.count, game_state.inv.carried_item.count);
 }
 
 test "clickSlot: both empty does nothing" {
     const S = Entity.ItemStack;
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    gs.playerInv().hotbar[0] = S.EMPTY;
-    gs.carried_item = S.EMPTY;
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    game_state.playerInv().hotbar[0] = S.EMPTY;
+    game_state.inv.carried_item = S.EMPTY;
 
-    gs.clickSlot(0);
+    game_state.clickSlot(0);
 
-    try testing.expect(gs.playerInv().hotbar[0].isEmpty());
-    try testing.expect(gs.carried_item.isEmpty());
+    try testing.expect(game_state.playerInv().hotbar[0].isEmpty());
+    try testing.expect(game_state.inv.carried_item.isEmpty());
 }
 
 test "quickMove: hotbar to inventory" {
     const S = Entity.ItemStack;
     const stone = S.of(BlockState.defaultState(.stone), 32);
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     inv.hotbar[0] = stone;
     inv.main[0] = S.EMPTY;
 
-    gs.quickMove(0);
+    game_state.quickMove(0);
 
     try testing.expect(inv.hotbar[0].isEmpty());
     try testing.expectEqual(stone.block, inv.main[0].block);
@@ -2537,14 +2283,14 @@ test "quickMove: inventory to hotbar" {
     const S = Entity.ItemStack;
     const stone = S.of(BlockState.defaultState(.stone), 32);
     const dirt = S.of(BlockState.defaultState(.dirt), 64);
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     inv.hotbar = .{dirt} ** HOTBAR_SIZE; // fill hotbar except slot 2
     inv.hotbar[2] = S.EMPTY;
     inv.main[0] = stone;
 
-    gs.quickMove(HOTBAR_SIZE); // slot 9 = first inventory slot
+    game_state.quickMove(HOTBAR_SIZE); // slot 9 = first inventory slot
 
     try testing.expectEqual(stone.block, inv.hotbar[2].block);
     try testing.expectEqual(stone.count, inv.hotbar[2].count);
@@ -2555,13 +2301,13 @@ test "quickMove: no empty target does nothing" {
     const S = Entity.ItemStack;
     const stone = S.of(BlockState.defaultState(.stone), 32);
     const dirt = S.of(BlockState.defaultState(.dirt), 64);
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     inv.hotbar[0] = stone;
     inv.main = .{dirt} ** INV_SIZE; // all full, different block
 
-    gs.quickMove(0);
+    game_state.quickMove(0);
 
     // Item stays in place
     try testing.expectEqual(stone.block, inv.hotbar[0].block);
@@ -2570,26 +2316,26 @@ test "quickMove: no empty target does nothing" {
 
 test "addToInventory: merges into existing stack" {
     const S = Entity.ItemStack;
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     inv.hotbar[0] = S.of(BlockState.defaultState(.stone), 60);
     inv.hotbar[1] = S.EMPTY;
 
-    const result = gs.addToInventory(S.of(BlockState.defaultState(.stone), 3));
+    const result = game_state.addToInventory(S.of(BlockState.defaultState(.stone), 3));
     try testing.expect(result);
     try testing.expectEqual(@as(u8, 63), inv.hotbar[0].count);
 }
 
 test "addToInventory: fills empty slot when no match" {
     const S = Entity.ItemStack;
-    var gs = makeTestGameState();
-    defer destroyTestGameState(&gs);
-    const inv = gs.playerInv();
+    var game_state = makeTestGameState();
+    defer destroyTestGameState(&game_state);
+    const inv = game_state.playerInv();
     for (&inv.hotbar) |*s| s.* = S.EMPTY;
     for (&inv.main) |*s| s.* = S.EMPTY;
 
-    const result = gs.addToInventory(S.of(BlockState.defaultState(.dirt), 1));
+    const result = game_state.addToInventory(S.of(BlockState.defaultState(.dirt), 1));
     try testing.expect(result);
     try testing.expectEqual(BlockState.defaultState(.dirt), inv.hotbar[0].block);
     try testing.expectEqual(@as(u8, 1), inv.hotbar[0].count);

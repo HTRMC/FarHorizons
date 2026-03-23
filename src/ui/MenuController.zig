@@ -728,19 +728,19 @@ pub const MenuController = struct {
         self.app_state = .playing;
     }
 
-    pub fn showInventory(self: *MenuController, gs: *GameState) void {
-        gs.inventory_open = true;
+    pub fn showInventory(self: *MenuController, game_state: *GameState) void {
+        game_state.inv.inventory_open = true;
         self.loadScreen(.inventory);
         self.app_state = .inventory;
     }
 
-    pub fn hideInventory(self: *MenuController, gs: ?*GameState) void {
+    pub fn hideInventory(self: *MenuController, game_state: ?*GameState) void {
         // Return carried item to inventory when closing
-        if (gs) |g| {
-            g.inventory_open = false;
-            if (!g.carried_item.isEmpty()) {
-                _ = g.addToInventory(g.carried_item);
-                g.carried_item = GameState.Entity.ItemStack.EMPTY;
+        if (game_state) |state| {
+            state.inv.inventory_open = false;
+            if (!state.inv.carried_item.isEmpty()) {
+                _ = state.addToInventory(state.inv.carried_item);
+                state.inv.carried_item = GameState.Entity.ItemStack.EMPTY;
             }
         }
         self.game_state = null;
@@ -748,13 +748,13 @@ pub const MenuController = struct {
         self.app_state = .playing;
     }
 
-    pub fn updateInventory(self: *MenuController, gs: *GameState) void {
+    pub fn updateInventory(self: *MenuController, game_state: *GameState) void {
         if (self.app_state != .inventory) {
             self.entity_visible = false;
             self.game_state = null;
             return;
         }
-        self.game_state = gs;
+        self.game_state = game_state;
         const tree = self.menuTree() orelse return;
 
         // Update entity renderer viewport from player_viewport widget rect
@@ -765,7 +765,7 @@ pub const MenuController = struct {
             }
         }
 
-        const inv = gs.playerInv();
+        const inv = game_state.playerInv();
 
         // Update hotbar row
         for (0..GameState.HOTBAR_SIZE) |i| {
@@ -824,14 +824,14 @@ pub const MenuController = struct {
         if (self.cursor_item_id != NULL_WIDGET) {
             const cid = self.cursor_item_id;
             if (tree.getWidget(cid)) |w| {
-                if (!gs.carried_item.isEmpty()) {
-                    const c = GameState.itemColor(gs.carried_item.block);
+                if (!game_state.inv.carried_item.isEmpty()) {
+                    const c = GameState.itemColor(game_state.inv.carried_item.block);
                     w.background = .{ .r = c[0], .g = c[1], .b = c[2], .a = c[3] };
                     if (tree.getData(cid)) |data| {
-                        data.panel.block_state = if (gs.carried_item.isTool())
-                            gs.carried_item.block
+                        data.panel.block_state = if (game_state.inv.carried_item.isTool())
+                            game_state.inv.carried_item.block
                         else
-                            BlockState.getDisplayState(gs.carried_item.block);
+                            BlockState.getDisplayState(game_state.inv.carried_item.block);
                     }
                     w.visible = true;
                 } else {
@@ -839,7 +839,7 @@ pub const MenuController = struct {
                 }
             }
         }
-        updateCountLabel(tree, self.cursor_count_id, gs.carried_item.count);
+        updateCountLabel(tree, self.cursor_count_id, game_state.inv.carried_item.count);
 
         // Player model drag-to-rotate
         const mouse_x = self.ui_manager.last_mouse_x;
@@ -860,7 +860,7 @@ pub const MenuController = struct {
         }
 
         // Update crafting panel (embedded in inventory)
-        self.updateCrafting(gs);
+        self.updateCrafting(game_state);
     }
 
     // ============================================================
@@ -897,11 +897,11 @@ pub const MenuController = struct {
         self.game_state = null;
     }
 
-    pub fn showCrafting(self: *MenuController, gs: *GameState, mode: CraftingMode) void {
+    pub fn showCrafting(self: *MenuController, game_state: *GameState, mode: CraftingMode) void {
         self.crafting_mode = mode;
         self.selected_recipe = null;
         self.crafting_details_dirty = true;
-        self.game_state = gs;
+        self.game_state = game_state;
         self.loadScreen(.crafting);
         self.app_state = .crafting;
 
@@ -1006,12 +1006,12 @@ pub const MenuController = struct {
         }
     }
 
-    pub fn updateCrafting(self: *MenuController, gs: *GameState) void {
+    pub fn updateCrafting(self: *MenuController, game_state: *GameState) void {
         if (self.app_state != .crafting and self.app_state != .inventory) {
             self.game_state = null;
             return;
         }
-        self.game_state = gs;
+        self.game_state = game_state;
         const tree = self.menuTree() orelse return;
 
         // Update recipe row colors based on craftability
@@ -1020,7 +1020,7 @@ pub const MenuController = struct {
             if (row_id == NULL_WIDGET) continue;
             const recipe_idx = self.recipe_indices[i];
             const recipe = &Crafting.recipes[recipe_idx];
-            const can = Crafting.canCraft(gs, recipe);
+            const can = Crafting.canCraft(game_state, recipe);
             const selected = if (self.selected_recipe) |sel| sel == i else false;
 
             if (tree.getWidget(row_id)) |w| {
@@ -1037,7 +1037,7 @@ pub const MenuController = struct {
         // Update detail panel only when selection or inventory changes
         if (self.crafting_details_dirty) {
             self.crafting_details_dirty = false;
-            self.updateCraftingDetails(gs, tree);
+            self.updateCraftingDetails(game_state, tree);
         }
 
         // Update craft button state every frame (cheap)
@@ -1045,7 +1045,7 @@ pub const MenuController = struct {
             if (self.selected_recipe) |sel| {
                 if (sel < self.visible_recipe_count) {
                     const recipe_idx = self.recipe_indices[sel];
-                    const can = Crafting.canCraft(gs, &Crafting.recipes[recipe_idx]);
+                    const can = Crafting.canCraft(game_state, &Crafting.recipes[recipe_idx]);
                     if (tree.getWidget(self.craft_btn_id)) |w| {
                         if (can) {
                             w.background = .{ .r = 0.16, .g = 0.16, .b = 0.16, .a = 1.0 };
@@ -1058,7 +1058,7 @@ pub const MenuController = struct {
         }
     }
 
-    fn updateCraftingDetails(self: *MenuController, gs: *GameState, tree: *WidgetTree) void {
+    fn updateCraftingDetails(self: *MenuController, game_state: *GameState, tree: *WidgetTree) void {
         const sel = self.selected_recipe orelse {
             // No selection — clear detail panel
             if (self.detail_name_id != NULL_WIDGET) {
@@ -1090,7 +1090,7 @@ pub const MenuController = struct {
         if (sel >= self.visible_recipe_count) return;
         const recipe_idx = self.recipe_indices[sel];
         const recipe = &Crafting.recipes[recipe_idx];
-        const can = Crafting.canCraft(gs, recipe);
+        const can = Crafting.canCraft(game_state, recipe);
 
         // Update output icon
         if (self.detail_icon_id != NULL_WIDGET) {
@@ -1127,7 +1127,7 @@ pub const MenuController = struct {
             tree.clearChildren(self.material_list_id);
             for (0..recipe.input_count) |i| {
                 const inp = recipe.inputs[i];
-                const have = Crafting.countItem(gs, inp.item);
+                const have = Crafting.countItem(game_state, inp.item);
                 const enough = have >= inp.count;
 
                 const mat_row = tree.addWidget(.panel, self.material_list_id) orelse return;
@@ -1205,11 +1205,11 @@ pub const MenuController = struct {
 
     fn actionCraftItem(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
-        const gs = self.game_state orelse return;
+        const game_state = self.game_state orelse return;
         const sel = self.selected_recipe orelse return;
         if (sel >= self.visible_recipe_count) return;
         const recipe_idx = self.recipe_indices[sel];
-        if (Crafting.craft(gs, &Crafting.recipes[recipe_idx])) {
+        if (Crafting.craft(game_state, &Crafting.recipes[recipe_idx])) {
             self.crafting_details_dirty = true;
         }
     }
@@ -1226,8 +1226,8 @@ pub const MenuController = struct {
         }
         if (self.app_state == .inventory) {
             // Return carried item before closing
-            if (self.game_state) |gs| {
-                gs.carried_item = GameState.Entity.ItemStack.EMPTY;
+            if (self.game_state) |game_state| {
+                game_state.inv.carried_item = GameState.Entity.ItemStack.EMPTY;
             }
             self.game_state = null;
             self.unloadScreen(.inventory);
@@ -1284,13 +1284,13 @@ pub const MenuController = struct {
         self.hud_binder = null;
     }
 
-    pub fn updateHud(self: *MenuController, gs: *const GameState, gamepad: *const Gamepad) void {
+    pub fn updateHud(self: *MenuController, game_state: *const GameState, gamepad: *const Gamepad) void {
         if (self.hud_binder == null) return;
         const tree = self.hudTree() orelse return;
         if (tree.getWidget(tree.root)) |root| {
-            root.visible = gs.show_ui;
+            root.visible = game_state.show_ui;
         }
-        (&self.hud_binder.?).update(tree, gs, gamepad);
+        (&self.hud_binder.?).update(tree, game_state, gamepad);
     }
 
     pub fn getSelectedWorldName(self: *const MenuController) []const u8 {
@@ -1815,12 +1815,12 @@ pub const MenuController = struct {
         const slot = self.resolveSlotFromWidget(pressed);
 
         if (slot) |s| {
-            if (self.game_state) |gs| {
+            if (self.game_state) |game_state| {
                 const shift = (self.ui_manager.last_mods & glfw.GLFW_MOD_SHIFT) != 0;
                 if (shift) {
-                    gs.quickMove(s);
+                    game_state.quickMove(s);
                 } else {
-                    gs.clickSlot(s);
+                    game_state.clickSlot(s);
                 }
             }
         }
@@ -1828,10 +1828,10 @@ pub const MenuController = struct {
 
     fn actionInvDropOutside(ctx: ?*anyopaque) void {
         const self = getSelf(ctx);
-        const gs = self.game_state orelse return;
-        if (gs.carried_item.isEmpty()) return;
+        const game_state = self.game_state orelse return;
+        if (game_state.inv.carried_item.isEmpty()) return;
         const drop_all = self.ui_manager.last_button != glfw.GLFW_MOUSE_BUTTON_RIGHT;
-        gs.dropCarried(drop_all);
+        game_state.dropCarried(drop_all);
     }
 
     fn actionResetKeybinds(ctx: ?*anyopaque) void {

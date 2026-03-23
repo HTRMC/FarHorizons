@@ -163,9 +163,9 @@ pub const recipes: []const Recipe = &.{
 };
 
 /// Count how many of a given item the player has across hotbar + main inventory.
-pub fn countItem(gs: *GameState, item_id: u16) u16 {
+pub fn countItem(game_state: *GameState, item_id: u16) u16 {
     var total: u16 = 0;
-    const inv = gs.playerInv();
+    const inv = game_state.playerInv();
     for (&inv.hotbar) |*s| {
         if (!s.isEmpty() and s.block == item_id) total += s.count;
     }
@@ -176,18 +176,18 @@ pub fn countItem(gs: *GameState, item_id: u16) u16 {
 }
 
 /// Check if the player has enough materials for a recipe.
-pub fn canCraft(gs: *GameState, recipe: *const Recipe) bool {
+pub fn canCraft(game_state: *GameState, recipe: *const Recipe) bool {
     for (0..recipe.input_count) |i| {
         const inp = recipe.inputs[i];
-        if (countItem(gs, inp.item) < inp.count) return false;
+        if (countItem(game_state, inp.item) < inp.count) return false;
     }
     return true;
 }
 
 /// Remove items from inventory (main first, then hotbar).
-fn removeItems(gs: *GameState, item_id: u16, count: u8) void {
+fn removeItems(game_state: *GameState, item_id: u16, count: u8) void {
     var remaining: u8 = count;
-    const inv = gs.playerInv();
+    const inv = game_state.playerInv();
 
     // Remove from main first
     for (&inv.main) |*s| {
@@ -212,22 +212,22 @@ fn removeItems(gs: *GameState, item_id: u16, count: u8) void {
 }
 
 /// Attempt to craft a recipe. Returns true on success.
-pub fn craft(gs: *GameState, recipe: *const Recipe) bool {
-    if (!canCraft(gs, recipe)) return false;
+pub fn craft(game_state: *GameState, recipe: *const Recipe) bool {
+    if (!canCraft(game_state, recipe)) return false;
 
     // Deduct inputs
     for (0..recipe.input_count) |i| {
         const inp = recipe.inputs[i];
-        removeItems(gs, inp.item, inp.count);
+        removeItems(game_state, inp.item, inp.count);
     }
 
     // Add output
     const output = recipe.output;
     if (Item.isToolItem(output.item)) {
         const info = Item.toolFromId(output.item) orelse return true;
-        _ = gs.addToInventory(Entity.ItemStack.ofTool(info.tool_type, info.tier));
+        _ = game_state.addToInventory(Entity.ItemStack.ofTool(info.tool_type, info.tier));
     } else {
-        _ = gs.addToInventory(Entity.ItemStack.of(output.item, output.count));
+        _ = game_state.addToInventory(Entity.ItemStack.of(output.item, output.count));
     }
 
     return true;

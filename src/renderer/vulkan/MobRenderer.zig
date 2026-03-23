@@ -81,7 +81,7 @@ pub const MobRenderer = struct {
     pub fn recordDraw(
         self: *const MobRenderer,
         command_buffer: vk.VkCommandBuffer,
-        gs: *const GameState,
+        game_state: *const GameState,
         view_proj: zlm.Mat4,
         ambient_light: [3]f32,
         sun_dir: [3]f32,
@@ -93,19 +93,19 @@ pub const MobRenderer = struct {
 
         // Check if any pigs exist
         var has_pigs = false;
-        for (1..gs.entities.count) |i| {
-            if (gs.entities.kind[i] == .pig) { has_pigs = true; break; }
+        for (1..game_state.entities.count) |i| {
+            if (game_state.entities.kind[i] == .pig) { has_pigs = true; break; }
         }
         if (!has_pigs) return;
 
         vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
         vk.cmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &[_]vk.VkDescriptorSet{self.descriptor_set}, 0, null);
 
-        for (1..gs.entities.count) |i| {
-            if (gs.entities.kind[i] != .pig) continue;
+        for (1..game_state.entities.count) |i| {
+            if (game_state.entities.kind[i] != .pig) continue;
 
-            const pos = gs.entities.render_pos[i];
-            const yaw = gs.entities.rotation[i][0];
+            const pos = game_state.entities.render_pos[i];
+            const yaw = game_state.entities.rotation[i][0];
 
             const angle = yaw + std.math.pi;
             const sin_y = @sin(angle);
@@ -115,11 +115,11 @@ pub const MobRenderer = struct {
             };
             const mvp = zlm.Mat4.mul(view_proj, model);
 
-            const light = gs.sampleLightAt(pos[0], pos[1] + 0.45, pos[2]);
+            const light = game_state.sampleLightAt(pos[0], pos[1] + 0.45, pos[2]);
             const block_light = [3]f32{ light[0], light[1], light[2] };
             const sky_level = light[3];
 
-            const hurt_tint: f32 = if (gs.entities.hurt_time[i] > 0) 1.0 else 0.0;
+            const hurt_tint: f32 = if (game_state.entities.hurt_time[i] > 0) 1.0 else 0.0;
 
             const pc = EntityPushConstants{
                 .mvp = mvp.m,
@@ -129,7 +129,7 @@ pub const MobRenderer = struct {
                 .sky_level = sky_level,
                 .block_light = block_light,
                 .model_yaw = angle,
-                .leg_phase = gs.entities.render_walk_anim[i],
+                .leg_phase = game_state.entities.render_walk_anim[i],
                 .hurt_tint = hurt_tint,
             };
             vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));

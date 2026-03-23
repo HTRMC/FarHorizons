@@ -373,7 +373,7 @@ pub const DebugRenderer = struct {
         if (game_state.show_chunk_borders) {
             const WorldState = @import("../../world/WorldState.zig");
             const CS: f32 = @floatFromInt(WorldState.CHUNK_SIZE);
-            const pc = game_state.player_chunk;
+            const pc = game_state.streaming.player_chunk;
             const border_color = [4]f32{ 1.0, 1.0, 0.0, 0.6 };
             const RADIUS = 3;
 

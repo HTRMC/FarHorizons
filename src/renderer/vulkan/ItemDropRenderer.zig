@@ -95,20 +95,20 @@ pub const ItemDropRenderer = struct {
     pub fn recordDraw(
         self: *const ItemDropRenderer,
         command_buffer: vk.VkCommandBuffer,
-        gs: *const GameState,
+        game_state: *const GameState,
         mvp: zlm.Mat4,
         ambient_light: [3]f32,
         sun_dir: [3]f32,
     ) void {
         var has_work = false;
-        for (1..gs.entities.count) |i| {
-            if (gs.entities.kind[i] == .item_drop) {
+        for (1..game_state.entities.count) |i| {
+            if (game_state.entities.kind[i] == .item_drop) {
                 has_work = true;
                 break;
             }
         }
         if (!has_work) {
-            for (gs.pickup_ghosts) |ghost| {
+            for (game_state.inv.pickup_ghosts) |ghost| {
                 if (ghost.active) {
                     has_work = true;
                     break;
@@ -133,22 +133,22 @@ pub const ItemDropRenderer = struct {
         const contrast: f32 = 0.0;
 
         // Draw live item drops
-        for (1..gs.entities.count) |i| {
-            if (gs.entities.kind[i] != .item_drop) continue;
+        for (1..game_state.entities.count) |i| {
+            if (game_state.entities.kind[i] != .item_drop) continue;
 
-            const pos = gs.entities.render_pos[i];
-            const age_f: f32 = @floatFromInt(gs.entities.age_ticks[i]);
-            const bob_offset = gs.entities.bob_offset[i];
+            const pos = game_state.entities.render_pos[i];
+            const age_f: f32 = @floatFromInt(game_state.entities.age_ticks[i]);
+            const bob_offset = game_state.entities.bob_offset[i];
 
             const bob = @sin(age_f * 0.1 + bob_offset) * 0.05 + 0.0625;
             const spin = age_f / 20.0 + bob_offset;
 
-            const item_block = gs.entities.item_block[i];
+            const item_block = game_state.entities.item_block[i];
             const item_mesh_idx = getItemMeshIndex(item_block);
             const is_flat = item_mesh_idx != null;
             const display_state = if (!is_flat) BlockState.getDisplayState(item_block) else 0;
             const is_shaped = if (!is_flat) BlockState.isShaped(display_state) else false;
-            const item_count = gs.entities.item_count[i];
+            const item_count = game_state.entities.item_count[i];
 
             const scale: f32 = if (is_flat) 0.35 else if (is_shaped) 0.35 else 0.25;
 
@@ -156,7 +156,7 @@ pub const ItemDropRenderer = struct {
             const sin_s = @sin(spin);
 
             const center_y = pos[1] + bob + scale * 0.5;
-            const light = gs.sampleLightAt(pos[0], center_y, pos[2]);
+            const light = game_state.sampleLightAt(pos[0], center_y, pos[2]);
             const block_light = [3]f32{ light[0], light[1], light[2] };
             const sky_level = light[3];
 
@@ -204,13 +204,13 @@ pub const ItemDropRenderer = struct {
         }
 
         // Draw pickup ghost animations (items flying to player)
-        const player_pos = gs.entities.render_pos[0];
+        const player_pos = game_state.entities.render_pos[0];
         const player_target = [3]f32{ player_pos[0], player_pos[1] + 0.9, player_pos[2] };
 
-        for (gs.pickup_ghosts) |ghost| {
+        for (game_state.inv.pickup_ghosts) |ghost| {
             if (!ghost.active) continue;
 
-            const t: f32 = (@as(f32, @floatFromInt(ghost.tick)) + gs.render_alpha) / 3.0;
+            const t: f32 = (@as(f32, @floatFromInt(ghost.tick)) + game_state.render_alpha) / 3.0;
             const eased = t * t;
 
             const gx = ghost.start_pos[0] + (player_target[0] - ghost.start_pos[0]) * eased;
@@ -228,7 +228,7 @@ pub const ItemDropRenderer = struct {
             const cos_s = @cos(spin);
             const sin_s = @sin(spin);
 
-            const light = gs.sampleLightAt(gx, gy, gz);
+            const light = game_state.sampleLightAt(gx, gy, gz);
             const block_light = [3]f32{ light[0], light[1], light[2] };
             const sky_level = light[3];
 

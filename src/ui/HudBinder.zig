@@ -89,24 +89,24 @@ pub const HudBinder = struct {
         setImageAtlas(tree, self.offhand_id, ui_renderer.offhand_rect);
     }
 
-    pub fn update(self: *HudBinder, tree: *WidgetTree, gs: *const GameState, gamepad: *const Gamepad) void {
+    pub fn update(self: *HudBinder, tree: *WidgetTree, game_state: *const GameState, gamepad: *const Gamepad) void {
         // Hide crosshair in third person unless explicitly enabled
         if (self.crosshair_id != NULL_WIDGET) {
             if (tree.getWidget(self.crosshair_id)) |w| {
-                w.visible = !gs.third_person or gs.third_person_crosshair;
+                w.visible = !game_state.third_person or game_state.third_person_crosshair;
             }
         }
 
         if (self.selection_id != NULL_WIDGET) {
             if (tree.getWidget(self.selection_id)) |w| {
                 const slot_pitch: f32 = 50.0;
-                w.offset_x = @as(f32, @floatFromInt(gs.selected_slot)) * slot_pitch - 2.0;
+                w.offset_x = @as(f32, @floatFromInt(game_state.inv.selected_slot)) * slot_pitch - 2.0;
             }
         }
 
         for (0..HOTBAR_SIZE) |i| {
             const id = self.slot_ids[i];
-            const stack = gs.playerInv().hotbar[i];
+            const stack = game_state.playerInv().hotbar[i];
             if (id != NULL_WIDGET) {
                 if (tree.getWidget(id)) |w| {
                     if (!stack.isEmpty()) {
@@ -148,11 +148,11 @@ pub const HudBinder = struct {
         // Health bar: visible in survival mode
         if (self.health_bar_id != NULL_WIDGET) {
             if (tree.getWidget(self.health_bar_id)) |w| {
-                w.visible = gs.game_mode == .survival;
+                w.visible = game_state.game_mode == .survival;
             }
-            if (gs.game_mode == .survival) {
+            if (game_state.game_mode == .survival) {
                 if (tree.getData(self.health_bar_id)) |data| {
-                    data.progress_bar.value = gs.health / gs.max_health;
+                    data.progress_bar.value = game_state.combat.health / game_state.combat.max_health;
                 }
             }
         }
@@ -160,22 +160,22 @@ pub const HudBinder = struct {
         // Air bar: visible in survival when air is depleting
         if (self.air_bar_id != NULL_WIDGET) {
             if (tree.getWidget(self.air_bar_id)) |w| {
-                w.visible = gs.game_mode == .survival and gs.air_supply < gs.max_air;
+                w.visible = game_state.game_mode == .survival and game_state.combat.air_supply < game_state.combat.max_air;
             }
-            if (gs.game_mode == .survival and gs.air_supply < gs.max_air) {
+            if (game_state.game_mode == .survival and game_state.combat.air_supply < game_state.combat.max_air) {
                 if (tree.getData(self.air_bar_id)) |data| {
-                    data.progress_bar.value = @as(f32, @floatFromInt(gs.air_supply)) / @as(f32, @floatFromInt(gs.max_air));
+                    data.progress_bar.value = @as(f32, @floatFromInt(game_state.combat.air_supply)) / @as(f32, @floatFromInt(game_state.combat.max_air));
                 }
             }
         }
 
         if (self.block_name_id != NULL_WIDGET) {
-            const selected_stack = gs.playerInv().hotbar[gs.selected_slot];
+            const selected_stack = game_state.playerInv().hotbar[game_state.inv.selected_slot];
             const cur_block = selected_stack.block;
 
             // Reset timer when slot or item changes
-            if (gs.selected_slot != self.prev_selected_slot or cur_block != self.prev_selected_block) {
-                self.prev_selected_slot = gs.selected_slot;
+            if (game_state.inv.selected_slot != self.prev_selected_slot or cur_block != self.prev_selected_block) {
+                self.prev_selected_slot = game_state.inv.selected_slot;
                 self.prev_selected_block = cur_block;
                 if (!selected_stack.isEmpty()) {
                     self.block_name_timer = 2.0;
@@ -184,11 +184,11 @@ pub const HudBinder = struct {
 
             // Tick down the timer
             if (self.block_name_timer > 0) {
-                self.block_name_timer -= gs.delta_time;
+                self.block_name_timer -= game_state.delta_time;
                 if (self.block_name_timer < 0) self.block_name_timer = 0;
             }
 
-            const show = !selected_stack.isEmpty() and !gs.inventory_open and self.block_name_timer > 0;
+            const show = !selected_stack.isEmpty() and !game_state.inv.inventory_open and self.block_name_timer > 0;
             if (tree.getWidget(self.block_name_id)) |w| {
                 w.visible = show;
             }
@@ -206,7 +206,7 @@ pub const HudBinder = struct {
             }
         }
 
-        self.updateHints(tree, gs, gamepad);
+        self.updateHints(tree, game_state, gamepad);
     }
 
     const Hint = struct {
@@ -216,7 +216,7 @@ pub const HudBinder = struct {
         action: []const u8,
     };
 
-    fn updateHints(self: *HudBinder, tree: *WidgetTree, gs: *const GameState, gamepad: *const Gamepad) void {
+    fn updateHints(self: *HudBinder, tree: *WidgetTree, game_state: *const GameState, gamepad: *const Gamepad) void {
         const show = gamepad.connected();
         setVisible(tree, self.hints_left_id, show);
         setVisible(tree, self.hints_right_id, show);
@@ -228,7 +228,7 @@ pub const HudBinder = struct {
         var left: [MAX_LEFT_HINTS]?Hint = .{null} ** MAX_LEFT_HINTS;
         var right: [MAX_RIGHT_HINTS]?Hint = .{null} ** MAX_RIGHT_HINTS;
 
-        if (gs.inventory_open) {
+        if (game_state.inv.inventory_open) {
             left[0] = .{ .btn = .a, .action = "Select" };
             right[0] = .{ .btn = .b, .action = "Close" };
         } else {

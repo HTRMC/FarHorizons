@@ -337,7 +337,7 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
 
             if (opts.keyMatches(.open_inventory, key) and action == glfw.GLFW_PRESS) {
                 resetAttackState(input_state);
-                if (input_state.game_state) |gs| input_state.menu_ctrl.showInventory(gs);
+                if (input_state.game_state) |state| input_state.menu_ctrl.showInventory(state);
                 uncaptureMouse(input_state);
                 return;
             }
@@ -354,8 +354,8 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
             }
 
             if (opts.keyMatches(.toggle_third_person, key) and action == glfw.GLFW_PRESS) {
-                if (input_state.game_state) |gs| {
-                    gs.third_person = !gs.third_person;
+                if (input_state.game_state) |state| {
+                    state.third_person = !state.third_person;
                 }
             }
 
@@ -464,24 +464,24 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
 
     input_log.debug("Mouse {s} {s}", .{ mouseButtonName(button), actionName(action) });
 
-    const gs = input_state.game_state orelse return;
+    const state = input_state.game_state orelse return;
     const opts = input_state.options;
 
     // Handle attack button held/released for hold-to-break
-    if (opts.mouseMatches(.attack, button) and input_state.mouse_captured and !gs.debug_camera_active) {
+    if (opts.mouseMatches(.attack, button) and input_state.mouse_captured and !state.debug_camera_active) {
         if (action == glfw.GLFW_PRESS) {
-            if (!gs.attackEntity()) {
-                gs.attack_held = true;
-                gs.swing_requested = true;
+            if (!state.attackEntity()) {
+                state.combat.attack_held = true;
+                state.swing_requested = true;
                 // Creative: instant break on press (no item drop)
-                if (gs.game_mode == .creative) {
-                    gs.breakBlockNoDrop();
+                if (state.game_mode == .creative) {
+                    state.breakBlockNoDrop();
                 }
             }
         } else if (action == glfw.GLFW_RELEASE) {
-            gs.attack_held = false;
-            gs.break_progress = 0;
-            gs.breaking_pos = null;
+            state.combat.attack_held = false;
+            state.combat.break_progress = 0;
+            state.combat.breaking_pos = null;
         }
         return;
     }
@@ -489,14 +489,14 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     if (action != glfw.GLFW_PRESS) return;
 
     if (opts.mouseMatches(.pick_item, button) and input_state.mouse_captured) {
-        if (!gs.debug_camera_active) {
-            gs.pickBlock();
+        if (!state.debug_camera_active) {
+            state.pickBlock();
         }
     } else if (opts.mouseMatches(.use_item, button)) {
         if (!input_state.mouse_captured) {
             captureMouse(input_state);
-        } else if (!gs.debug_camera_active) {
-            gs.placeBlock();
+        } else if (!state.debug_camera_active) {
+            state.placeBlock();
         }
     }
 }
@@ -515,10 +515,10 @@ fn captureMouse(input_state: *InputState) void {
 }
 
 fn resetAttackState(input_state: *InputState) void {
-    if (input_state.game_state) |gs| {
-        gs.attack_held = false;
-        gs.break_progress = 0;
-        gs.breaking_pos = null;
+    if (input_state.game_state) |state| {
+        state.combat.attack_held = false;
+        state.combat.break_progress = 0;
+        state.combat.breaking_pos = null;
     }
 }
 
@@ -549,24 +549,24 @@ fn processGamepadInput(input_state: *InputState) void {
             // Y → inventory
             if (gp.pressed(.y)) {
                 resetAttackState(input_state);
-                if (input_state.game_state) |gs| input_state.menu_ctrl.showInventory(gs);
+                if (input_state.game_state) |state| input_state.menu_ctrl.showInventory(state);
                 uncaptureMouse(input_state);
                 return;
             }
 
-            const gs = input_state.game_state orelse return;
+            const state = input_state.game_state orelse return;
 
             // Triggers → place / attack
             if (gp.leftTriggerPressed()) {
-                if (!gs.debug_camera_active) gs.placeBlock();
+                if (!state.debug_camera_active) state.placeBlock();
             }
-            if (!gs.debug_camera_active) {
+            if (!state.debug_camera_active) {
                 // Track right trigger held for hold-to-break
-                gs.attack_held = gp.right_trigger >= 0.5;
+                state.combat.attack_held = gp.right_trigger >= 0.5;
                 if (gp.rightTriggerPressed()) {
-                    gs.swing_requested = true;
-                    if (gs.game_mode == .creative) {
-                        gs.breakBlockNoDrop();
+                    state.swing_requested = true;
+                    if (state.game_mode == .creative) {
+                        state.breakBlockNoDrop();
                     }
                 }
             }
@@ -581,7 +581,7 @@ fn processGamepadInput(input_state: *InputState) void {
 
             // X → pick block
             if (gp.pressed(.x)) {
-                if (!gs.debug_camera_active) gs.pickBlock();
+                if (!state.debug_camera_active) state.pickBlock();
             }
 
             // D-pad up/down → speed adjust (debug camera)
@@ -698,8 +698,8 @@ fn gamepadNavigateUi(input_state: *InputState) void {
     }
 }
 
-fn saveWorkerFn(gs: *GameState, done: *std.atomic.Value(bool)) void {
-    gs.save();
+fn saveWorkerFn(game_state: *GameState, done: *std.atomic.Value(bool)) void {
+    game_state.save();
     done.store(true, .release);
 }
 
@@ -765,14 +765,14 @@ pub fn main() !void {
             t.join();
             save_thread = null;
         }
-        if (game_state) |*gs| {
+        if (game_state) |*state| {
             if (save_done.load(.acquire)) {
                 // Save thread already ran — skip redundant save
             } else {
-                gs.save();
+                state.save();
             }
             renderer.setGameState(null);
-            gs.deinit();
+            state.deinit();
         }
     }
 
@@ -833,10 +833,10 @@ pub fn main() !void {
                             std.log.err("Failed to load world '{s}': {}", .{ world_name, err });
                             break :blk null;
                         };
-                        if (game_state) |*gs| {
-                            gs.third_person_crosshair = options.third_person_crosshair;
-                            renderer.setGameState(@ptrCast(gs));
-                            input_state.game_state = gs;
+                        if (game_state) |*state| {
+                            state.third_person_crosshair = options.third_person_crosshair;
+                            renderer.setGameState(@ptrCast(state));
+                            input_state.game_state = state;
                             menu_ctrl.hideTitleMenu();
                             const vk_impl: *VulkanRenderer = @ptrCast(@alignCast(renderer.impl));
                             menu_ctrl.loadHud(&vk_impl.render_state.ui_renderer);
@@ -876,9 +876,9 @@ pub fn main() !void {
                     captureMouse(&input_state);
                 },
                 .return_to_title => {
-                    if (game_state) |*gs| {
+                    if (game_state) |*state| {
                         save_done.store(false, .release);
-                        save_thread = std.Thread.spawn(.{}, saveWorkerFn, .{ gs, &save_done }) catch null;
+                        save_thread = std.Thread.spawn(.{}, saveWorkerFn, .{ state, &save_done }) catch null;
                         if (save_thread != null) {
                             // Save runs in background — main loop stays alive
                             input_state.game_state = null;
@@ -889,10 +889,10 @@ pub fn main() !void {
                             menu_ctrl.app_state = .saving;
                         } else {
                             // Fallback: synchronous save
-                            gs.save();
+                            state.save();
                             renderer.setGameState(null);
                             input_state.game_state = null;
-                            gs.deinit();
+                            state.deinit();
                             game_state = null;
                             menu_ctrl.showTitleMenu();
                         }
@@ -909,12 +909,12 @@ pub fn main() !void {
         // While saving, keep draining the chunk streamer output queue so worker
         // threads don't block on backpressure (which can stall the save thread).
         if (menu_ctrl.app_state == .saving) {
-            if (game_state) |*gs| {
+            if (game_state) |*state| {
                 const CS = GameState.ChunkStreamer;
                 var discard_buf: [CS.MAX_OUTPUT]CS.LoadResult = undefined;
-                const n = gs.streamer.drainOutput(&discard_buf);
+                const n = state.streaming.streamer.drainOutput(&discard_buf);
                 for (discard_buf[0..n]) |result| {
-                    gs.chunk_pool.release(result.chunk);
+                    state.chunk_pool.release(result.chunk);
                 }
             }
         }
@@ -926,8 +926,8 @@ pub fn main() !void {
                 save_thread = null;
             }
             renderer.setGameState(null);
-            if (game_state) |*gs| {
-                gs.deinit();
+            if (game_state) |*state| {
+                state.deinit();
             }
             game_state = null;
             menu_ctrl.showTitleMenu();
@@ -935,10 +935,10 @@ pub fn main() !void {
 
         // Loading → playing transition: tick world until initial chunks are ready
         if (menu_ctrl.app_state == .loading) {
-            if (game_state) |*gs| {
-                gs.worldTick();
-                gs.world_tick_pending = true;
-                if (gs.initial_load_ready) {
+            if (game_state) |*state| {
+                state.worldTick();
+                state.streaming.world_tick_pending = true;
+                if (state.streaming.initial_load_ready) {
                     menu_ctrl.app_state = .playing;
                     captureMouse(&input_state);
                 }
@@ -949,16 +949,16 @@ pub fn main() !void {
 
         if (menu_ctrl.app_state == .playing) {
             update_start = glfw.getTime();
-            if (game_state) |*gs| {
+            if (game_state) |*state| {
                 if (input_state.hotbar_scroll_delta != 0.0) {
                     const delta: i32 = if (input_state.hotbar_scroll_delta < 0.0) @as(i32, 1) else @as(i32, -1);
-                    const current: i32 = @intCast(gs.selected_slot);
-                    gs.selected_slot = @intCast(@mod(current + delta + GameState.HOTBAR_SIZE, GameState.HOTBAR_SIZE));
+                    const current: i32 = @intCast(state.inv.selected_slot);
+                    state.inv.selected_slot = @intCast(@mod(current + delta + GameState.HOTBAR_SIZE, GameState.HOTBAR_SIZE));
                     input_state.hotbar_scroll_delta = 0.0;
                 }
 
                 if (input_state.hotbar_slot_requested) |slot| {
-                    gs.selected_slot = slot;
+                    state.inv.selected_slot = slot;
                     input_state.hotbar_slot_requested = null;
                 }
 
@@ -977,7 +977,7 @@ pub fn main() !void {
                         input_state.last_cursor_x = cursor_x;
                         input_state.last_cursor_y = cursor_y;
 
-                        gs.camera.look(-dx * mouse_sensitivity, -dy * mouse_sensitivity);
+                        state.camera.look(-dx * mouse_sensitivity, -dy * mouse_sensitivity);
                     }
                 }
 
@@ -986,57 +986,57 @@ pub fn main() !void {
                     const gpx = input_state.gamepad.right_x;
                     const gpy = input_state.gamepad.right_y;
                     if (gpx != 0 or gpy != 0) {
-                        gs.camera.look(-gpx * Gamepad.LOOK_SPEED * delta_time, -gpy * Gamepad.LOOK_SPEED * delta_time);
+                        state.camera.look(-gpx * Gamepad.LOOK_SPEED * delta_time, -gpy * Gamepad.LOOK_SPEED * delta_time);
                     }
                 }
 
                 if (input_state.debug_toggle_requested) {
                     input_state.debug_toggle_requested = false;
-                    gs.toggleDebugCamera();
+                    state.toggleDebugCamera();
                 }
 
                 if (input_state.overdraw_toggle_requested) {
                     input_state.overdraw_toggle_requested = false;
-                    gs.overdraw_mode = !gs.overdraw_mode;
+                    state.overdraw_mode = !state.overdraw_mode;
                 }
 
                 if (input_state.chunk_borders_toggle_requested) {
                     input_state.chunk_borders_toggle_requested = false;
-                    gs.show_chunk_borders = !gs.show_chunk_borders;
+                    state.show_chunk_borders = !state.show_chunk_borders;
                 }
 
                 if (input_state.hitbox_toggle_requested) {
                     input_state.hitbox_toggle_requested = false;
-                    gs.show_hitbox = !gs.show_hitbox;
+                    state.show_hitbox = !state.show_hitbox;
                 }
 
                 if (input_state.ui_toggle_requested) {
                     input_state.ui_toggle_requested = false;
-                    gs.show_ui = !gs.show_ui;
+                    state.show_ui = !state.show_ui;
                 }
 
                 if (input_state.gamemode_toggle_requested) {
                     input_state.gamemode_toggle_requested = false;
-                    switch (gs.game_mode) {
+                    switch (state.game_mode) {
                         .creative => {
                             // Creative → Survival: force walking mode first (while still creative, so toggleMode allows it)
-                            if (gs.mode == .flying) gs.toggleMode();
-                            gs.game_mode = .survival;
+                            if (state.mode == .flying) state.toggleMode();
+                            state.game_mode = .survival;
                         },
                         .survival => {
-                            gs.game_mode = .creative;
-                            gs.health = gs.max_health;
-                            gs.air_supply = gs.max_air;
+                            state.game_mode = .creative;
+                            state.combat.health = state.combat.max_health;
+                            state.combat.air_supply = state.combat.max_air;
                         },
                     }
                 }
 
                 if (input_state.debug_screen_toggle) |bit| {
                     input_state.debug_screen_toggle = null;
-                    gs.debug_screens ^= @as(u8, 1) << bit;
+                    state.debug_screens ^= @as(u8, 1) << bit;
                 }
 
-                gs.delta_time = delta_time;
+                state.delta_time = delta_time;
 
                 var forward_input: f32 = 0.0;
                 var right_input: f32 = 0.0;
@@ -1058,19 +1058,19 @@ pub fn main() !void {
                     if (gp.held(.b)) up_input = std.math.clamp(up_input - 1.0, -1.0, 1.0);
                 }
 
-                if (gs.debug_camera_active) {
+                if (state.debug_camera_active) {
                     const speed = input_state.move_speed * delta_time;
-                    gs.camera.move(forward_input * speed, right_input * speed, up_input * speed);
+                    state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
                 } else {
                     if (input_state.mode_toggle_requested) {
                         input_state.mode_toggle_requested = false;
-                        gs.toggleMode();
+                        state.toggleMode();
                     }
 
-                    gs.input_move = .{ forward_input, up_input, right_input };
+                    state.input_move = .{ forward_input, up_input, right_input };
 
                     const space_held = options.isKeyHeld(window.handle, .jump) or input_state.gamepad.held(.a);
-                    gs.jump_requested = space_held;
+                    state.jump_requested = space_held;
                     input_state.space_was_held = space_held;
 
                     tick_accumulator += delta_time;
@@ -1080,28 +1080,28 @@ pub fn main() !void {
                         // Poll drop key with cooldown (~50ms: every other tick at 30Hz)
                         if (input_state.drop_cooldown > 0) {
                             input_state.drop_cooldown -= 1;
-                        } else if (input_state.drop_key_held and !gs.debug_camera_active) {
-                            gs.dropFromSlot(gs.selected_slot, input_state.drop_key_ctrl);
+                        } else if (input_state.drop_key_held and !state.debug_camera_active) {
+                            state.dropFromSlot(state.inv.selected_slot, input_state.drop_key_ctrl);
                             input_state.drop_cooldown = 1;
                         }
-                        gs.fixedUpdate(input_state.move_speed);
+                        state.fixedUpdate(input_state.move_speed);
                         tick_accumulator -= GameState.TICK_INTERVAL;
                     }
 
                     const alpha = tick_accumulator / GameState.TICK_INTERVAL;
-                    gs.interpolateForRender(alpha);
+                    state.interpolateForRender(alpha);
                 }
 
-                menu_ctrl.updateHud(gs, &input_state.gamepad);
+                menu_ctrl.updateHud(state, &input_state.gamepad);
             }
         }
 
         // Update inventory (must run when app_state is .inventory, not .playing)
         if (menu_ctrl.app_state == .inventory) {
-            if (game_state) |*gs| {
+            if (game_state) |*state| {
                 // Keep the world ticking while inventory is open
-                gs.input_move = .{ 0, 0, 0 };
-                gs.jump_requested = false;
+                state.input_move = .{ 0, 0, 0 };
+                state.jump_requested = false;
                 tick_accumulator += delta_time;
                 if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
                 while (tick_accumulator >= GameState.TICK_INTERVAL) {
@@ -1110,57 +1110,57 @@ pub fn main() !void {
                         input_state.drop_cooldown -= 1;
                     } else if (input_state.drop_key_held) {
                         if (menu_ctrl.hoveredSlot()) |slot| {
-                            gs.dropFromSlot(slot, input_state.drop_key_ctrl);
+                            state.dropFromSlot(slot, input_state.drop_key_ctrl);
                             input_state.drop_cooldown = 1;
                         }
                     }
-                    gs.fixedUpdate(input_state.move_speed);
+                    state.fixedUpdate(input_state.move_speed);
                     tick_accumulator -= GameState.TICK_INTERVAL;
                 }
                 const alpha = tick_accumulator / GameState.TICK_INTERVAL;
-                gs.interpolateForRender(alpha);
+                state.interpolateForRender(alpha);
 
-                menu_ctrl.updateInventory(gs);
-                menu_ctrl.updateHud(gs, &input_state.gamepad);
+                menu_ctrl.updateInventory(state);
+                menu_ctrl.updateHud(state, &input_state.gamepad);
             }
         }
 
         // Update crafting screen
         if (menu_ctrl.app_state == .crafting) {
-            if (game_state) |*gs| {
+            if (game_state) |*state| {
                 // Keep the world ticking while crafting is open
-                gs.input_move = .{ 0, 0, 0 };
-                gs.jump_requested = false;
+                state.input_move = .{ 0, 0, 0 };
+                state.jump_requested = false;
                 tick_accumulator += delta_time;
                 if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
                 while (tick_accumulator >= GameState.TICK_INTERVAL) {
-                    gs.fixedUpdate(input_state.move_speed);
+                    state.fixedUpdate(input_state.move_speed);
                     tick_accumulator -= GameState.TICK_INTERVAL;
                 }
                 const alpha = tick_accumulator / GameState.TICK_INTERVAL;
-                gs.interpolateForRender(alpha);
+                state.interpolateForRender(alpha);
 
-                menu_ctrl.updateCrafting(gs);
-                menu_ctrl.updateHud(gs, &input_state.gamepad);
+                menu_ctrl.updateCrafting(state);
+                menu_ctrl.updateHud(state, &input_state.gamepad);
             }
         }
 
         // Poll workbench request after game tick
         if (menu_ctrl.app_state == .playing) {
-            if (game_state) |*gs| {
-                if (gs.open_workbench_requested) {
-                    gs.open_workbench_requested = false;
+            if (game_state) |*state| {
+                if (state.inv.open_workbench_requested) {
+                    state.inv.open_workbench_requested = false;
                     resetAttackState(&input_state);
-                    menu_ctrl.showCrafting(gs, .workbench);
+                    menu_ctrl.showCrafting(state, .workbench);
                     uncaptureMouse(&input_state);
                 }
             }
         }
 
         // Sync options → game state
-        if (game_state) |*gs| {
-            gs.third_person_crosshair = options.third_person_crosshair;
-            gs.camera.fov = std.math.degreesToRadians(options.fov);
+        if (game_state) |*state| {
+            state.third_person_crosshair = options.third_person_crosshair;
+            state.camera.fov = std.math.degreesToRadians(options.fov);
         }
 
         // Sync entity renderer with inventory viewport + third person
@@ -1173,45 +1173,45 @@ pub fn main() !void {
             er.viewport_w = menu_ctrl.entity_viewport[2];
             er.viewport_h = menu_ctrl.entity_viewport[3];
             er.rotation_y = menu_ctrl.player_rotation;
-            if (game_state) |*gs| {
-                er.world_visible = gs.third_person;
-                er.world_pos = gs.entities.render_pos[GameState.Entity.PLAYER];
-                er.world_yaw = gs.camera.yaw;
+            if (game_state) |*state| {
+                er.world_visible = state.third_person;
+                er.world_pos = state.entities.render_pos[GameState.Entity.PLAYER];
+                er.world_yaw = state.camera.yaw;
             } else {
                 er.world_visible = false;
             }
 
             // Sync hand renderer with held block + all hand animations
             const hr = &vk_impl.render_state.hand_renderer;
-            if (game_state) |*gs| {
-                hr.setPendingBlock(gs.playerInv().hotbar[gs.selected_slot].block);
-                if (gs.swing_requested) {
+            if (game_state) |*state| {
+                hr.setPendingBlock(state.playerInv().hotbar[state.inv.selected_slot].block);
+                if (state.swing_requested) {
                     hr.triggerSwing();
-                    gs.swing_requested = false;
+                    state.swing_requested = false;
                 }
                 // Continuous swing while mining in survival
-                if (gs.game_mode == .survival and gs.attack_held and gs.breaking_pos != null and !hr.is_swinging) {
+                if (state.game_mode == .survival and state.combat.attack_held and state.combat.breaking_pos != null and !hr.is_swinging) {
                     hr.triggerSwing();
                 }
                 const P = GameState.Entity.PLAYER;
-                const vel = gs.entities.vel[P];
+                const vel = state.entities.vel[P];
                 const hspeed = @sqrt(vel[0] * vel[0] + vel[2] * vel[2]);
-                const flags = gs.entities.flags[P];
-                const held_item = gs.playerInv().hotbar[gs.selected_slot].block;
+                const flags = state.entities.flags[P];
+                const held_item = state.playerInv().hotbar[state.inv.selected_slot].block;
                 const tool_info = Item.toolFromId(held_item);
                 hr.updateAnimations(
                     delta_time,
                     hspeed,
                     vel[1],
                     flags.on_ground,
-                    gs.camera.pitch,
-                    gs.camera.yaw,
+                    state.camera.pitch,
+                    state.camera.yaw,
                     flags.on_ladder,
                     flags.in_water,
                     options.isKeyHeld(window.handle, .sneak),
                     if (tool_info) |t| t.tool_type else null,
                     if (tool_info) |t| t.tier else null,
-                    gs.selected_slot,
+                    state.inv.selected_slot,
                 );
             } else {
                 hr.setPendingBlock(WorldState.BlockState.defaultState(.air));
@@ -1227,8 +1227,8 @@ pub fn main() !void {
         ui_manager.tickCursorBlink(delta_time);
 
         if (menu_ctrl.app_state == .playing) {
-            if (game_state) |*gs| {
-                gs.frame_timing.update_ms = @floatCast((glfw.getTime() - update_start) * 1000.0);
+            if (game_state) |*state| {
+                state.frame_timing.update_ms = @floatCast((glfw.getTime() - update_start) * 1000.0);
             }
         }
 
@@ -1238,12 +1238,12 @@ pub fn main() !void {
         try renderer.endFrame();
 
         if (menu_ctrl.app_state == .playing) {
-            if (game_state) |*gs| {
-                gs.frame_timing.render_ms = @floatCast((glfw.getTime() - render_start) * 1000.0);
-                gs.frame_timing.frame_ms = delta_time * 1000.0;
-                gs.frame_timing.smooth(delta_time);
-                if (!gs.debug_camera_active) {
-                    gs.restoreAfterRender();
+            if (game_state) |*state| {
+                state.frame_timing.render_ms = @floatCast((glfw.getTime() - render_start) * 1000.0);
+                state.frame_timing.frame_ms = delta_time * 1000.0;
+                state.frame_timing.smooth(delta_time);
+                if (!state.debug_camera_active) {
+                    state.restoreAfterRender();
                 }
             }
         }
