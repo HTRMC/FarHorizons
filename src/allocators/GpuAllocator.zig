@@ -22,7 +22,7 @@ pub const BufferAllocation = struct {
 };
 
 const DEVICE_LOCAL_SIZE: vk.VkDeviceSize = 2048 * 1024 * 1024; // 2GB
-const HOST_VISIBLE_SIZE: vk.VkDeviceSize = 16 * 1024 * 1024; // 16MB
+const HOST_VISIBLE_SIZE: vk.VkDeviceSize = 20 * 1024 * 1024; // 20MB
 const STAGING_SIZE: vk.VkDeviceSize = 4 * 1024 * 1024; // 4MB
 
 pub const GpuAllocator = struct {

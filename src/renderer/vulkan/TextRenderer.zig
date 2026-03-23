@@ -27,8 +27,8 @@ pub const TextRenderer = struct {
     pipeline_layout: vk.VkPipelineLayout,
     descriptor_set_layout: vk.VkDescriptorSetLayout,
     descriptor_pool: vk.VkDescriptorPool,
-    descriptor_set: vk.VkDescriptorSet,
-    vertex_alloc: BufferAllocation,
+    descriptor_sets: [2]vk.VkDescriptorSet,
+    vertex_allocs: [2]BufferAllocation,
     gpu_alloc: *GpuAllocator,
     font_image: vk.VkImage,
     font_image_memory: vk.VkDeviceMemory,
@@ -39,6 +39,7 @@ pub const TextRenderer = struct {
     screen_width: f32,
     screen_height: f32,
     mapped_vertices: ?[*]TextVertex,
+    current_frame: u32,
     clip_rect: [4]f32 = .{ -1e9, -1e9, 1e9, 1e9 },
     clip_stack: [8][4]f32 = undefined,
     clip_depth: u8 = 0,
@@ -59,8 +60,8 @@ pub const TextRenderer = struct {
             .pipeline_layout = null,
             .descriptor_set_layout = null,
             .descriptor_pool = null,
-            .descriptor_set = null,
-            .vertex_alloc = undefined,
+            .descriptor_sets = .{ null, null },
+            .vertex_allocs = undefined,
             .gpu_alloc = gpu_alloc,
             .font_image = null,
             .font_image_memory = null,
@@ -71,6 +72,7 @@ pub const TextRenderer = struct {
             .screen_width = 800.0,
             .screen_height = 600.0,
             .mapped_vertices = null,
+            .current_frame = 0,
         };
 
         try self.createVertexBuffer(gpu_alloc);
@@ -87,19 +89,20 @@ pub const TextRenderer = struct {
         vk.destroyPipelineLayout(device, self.pipeline_layout, null);
         vk.destroyDescriptorPool(device, self.descriptor_pool, null);
         vk.destroyDescriptorSetLayout(device, self.descriptor_set_layout, null);
-        self.gpu_alloc.destroyBuffer(self.vertex_alloc);
+        for (&self.vertex_allocs) |*alloc| self.gpu_alloc.destroyBuffer(alloc.*);
         vk.destroySampler(device, self.font_sampler, null);
         vk.destroyImageView(device, self.font_image_view, null);
         vk.destroyImage(device, self.font_image, null);
         vk.freeMemory(device, self.font_image_memory, null);
     }
 
-    pub fn beginFrame(self: *TextRenderer, device: vk.VkDevice) void {
+    pub fn beginFrame(self: *TextRenderer, device: vk.VkDevice, cf: u32) void {
         const tz = tracy.zone(@src(), "TextRenderer.beginFrame");
         defer tz.end();
 
         _ = device;
-        self.mapped_vertices = @ptrCast(@alignCast(self.vertex_alloc.mapped_ptr));
+        self.current_frame = cf;
+        self.mapped_vertices = @ptrCast(@alignCast(self.vertex_allocs[cf].mapped_ptr));
         self.vertex_count = 0;
         self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
         self.clip_depth = 0;
@@ -206,7 +209,7 @@ pub const TextRenderer = struct {
             self.pipeline_layout,
             0,
             1,
-            &[_]vk.VkDescriptorSet{self.descriptor_set},
+            &[_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]},
             0,
             null,
         );
@@ -342,11 +345,13 @@ pub const TextRenderer = struct {
 
     fn createVertexBuffer(self: *TextRenderer, gpu_alloc: *GpuAllocator) !void {
         const buffer_size: vk.VkDeviceSize = MAX_VERTICES * @sizeOf(TextVertex);
-        self.vertex_alloc = try gpu_alloc.createBuffer(
-            buffer_size,
-            vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            .host_visible,
-        );
+        for (&self.vertex_allocs) |*alloc| {
+            alloc.* = try gpu_alloc.createBuffer(
+                buffer_size,
+                vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                .host_visible,
+            );
+        }
     }
 
     fn createFontImage(self: *TextRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext) !void {
@@ -639,73 +644,76 @@ pub const TextRenderer = struct {
         self.descriptor_set_layout = try vk.createDescriptorSetLayout(ctx.device, &layout_info, null);
 
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
-            .{ .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1 },
-            .{ .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1 },
+            .{ .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 2 },
+            .{ .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 2 },
         };
 
         const pool_info = vk.VkDescriptorPoolCreateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .pNext = null,
             .flags = 0,
-            .maxSets = 1,
+            .maxSets = 2,
             .poolSizeCount = pool_sizes.len,
             .pPoolSizes = &pool_sizes,
         };
 
         self.descriptor_pool = try vk.createDescriptorPool(ctx.device, &pool_info, null);
 
+        const layouts = [_]vk.VkDescriptorSetLayout{ self.descriptor_set_layout, self.descriptor_set_layout };
         const ds_alloc_info = vk.VkDescriptorSetAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = null,
             .descriptorPool = self.descriptor_pool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &self.descriptor_set_layout,
+            .descriptorSetCount = 2,
+            .pSetLayouts = &layouts,
         };
 
-        var sets: [1]vk.VkDescriptorSet = undefined;
+        var sets: [2]vk.VkDescriptorSet = undefined;
         try vk.allocateDescriptorSets(ctx.device, &ds_alloc_info, &sets);
-        self.descriptor_set = sets[0];
+        self.descriptor_sets = sets;
 
-        const buffer_info = vk.VkDescriptorBufferInfo{
-            .buffer = self.vertex_alloc.buffer,
-            .offset = 0,
-            .range = MAX_VERTICES * @sizeOf(TextVertex),
-        };
+        for (0..2) |i| {
+            const buffer_info = vk.VkDescriptorBufferInfo{
+                .buffer = self.vertex_allocs[i].buffer,
+                .offset = 0,
+                .range = MAX_VERTICES * @sizeOf(TextVertex),
+            };
 
-        const image_info = vk.VkDescriptorImageInfo{
-            .sampler = self.font_sampler,
-            .imageView = self.font_image_view,
-            .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        };
+            const image_info = vk.VkDescriptorImageInfo{
+                .sampler = self.font_sampler,
+                .imageView = self.font_image_view,
+                .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            };
 
-        const writes = [_]vk.VkWriteDescriptorSet{
-            .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = self.descriptor_set,
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = null,
-                .pBufferInfo = &buffer_info,
-                .pTexelBufferView = null,
-            },
-            .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .pNext = null,
-                .dstSet = self.descriptor_set,
-                .dstBinding = 1,
-                .dstArrayElement = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &image_info,
-                .pBufferInfo = null,
-                .pTexelBufferView = null,
-            },
-        };
+            const writes = [_]vk.VkWriteDescriptorSet{
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = self.descriptor_sets[i],
+                    .dstBinding = 0,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    .pImageInfo = null,
+                    .pBufferInfo = &buffer_info,
+                    .pTexelBufferView = null,
+                },
+                .{
+                    .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                    .pNext = null,
+                    .dstSet = self.descriptor_sets[i],
+                    .dstBinding = 1,
+                    .dstArrayElement = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                    .pImageInfo = &image_info,
+                    .pBufferInfo = null,
+                    .pTexelBufferView = null,
+                },
+            };
 
-        vk.updateDescriptorSets(ctx.device, writes.len, &writes, 0, null);
+            vk.updateDescriptorSets(ctx.device, writes.len, &writes, 0, null);
+        }
     }
 
     fn createPipeline(self: *TextRenderer, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat) !void {
