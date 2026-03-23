@@ -963,7 +963,7 @@ pub const model_info_table: [TOTAL_STATES]?ModelInfo = blk: {
 // ==== Tests ====
 
 test "total state count" {
-    try std.testing.expectEqual(@as(u16, 135), TOTAL_STATES);
+    try std.testing.expectEqual(@as(u16, 137), TOTAL_STATES);
 }
 
 test "simple block round-trip" {

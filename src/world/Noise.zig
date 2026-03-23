@@ -140,9 +140,9 @@ pub const Perlin = struct {
         return lerp(w, lerp(v, lerp(u, grad(p[@intCast(AA)], xf, yf, zf), grad(p[@intCast(BA)], xf - 1.0, yf, zf)), lerp(u, grad(p[@intCast(AB)], xf, yf - 1.0, zf), grad(p[@intCast(BB)], xf - 1.0, yf - 1.0, zf))), lerp(v, lerp(u, grad(p[@intCast(AA + 1)], xf, yf, zf - 1.0), grad(p[@intCast(BA + 1)], xf - 1.0, yf, zf - 1.0)), lerp(u, grad(p[@intCast(AB + 1)], xf, yf - 1.0, zf - 1.0), grad(p[@intCast(BB + 1)], xf - 1.0, yf - 1.0, zf - 1.0))));
     }
 
-    /// 2D Perlin noise — calls 3D with z=0 (Java a.java line 82)
-    pub fn sample2D(self: *const Perlin, x: f64, y: f64) f64 {
-        return self.sample3D(x, y, 0.0);
+    /// 2D Perlin noise — horizontal XZ slice at y=0 (Java a.java line 82)
+    pub fn sample2D(self: *const Perlin, x: f64, z: f64) f64 {
+        return self.sample3D(x, 0.0, z);
     }
 
     // ---- SIMD vectorized helpers ----
