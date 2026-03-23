@@ -171,6 +171,9 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
     // --- Worm-carve caves ---
     carveCaves(chunk, key, seed);
 
+    // --- Generate ores ---
+    generateOres(chunk, key, seed);
+
     // --- Plant trees ---
     TreeGen.plantTrees(chunk, key, seed);
 }
@@ -290,6 +293,184 @@ fn bedrockPass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
                     const threshold: i32 = -64 + @as(i32, @intCast(rng.bounded(6)));
                     if (wy <= threshold) {
                         chunk.blocks[idx] = BlockState.defaultState(.bedrock);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+// Ore generation (Infdev a.java lines 452-491, vein shape c.b.c.java)
+// ============================================================
+
+const OreEntry = struct {
+    block: BlockState.Block,
+    vein_size: u32,
+    veins_per_subchunk: u32,
+    max_y_infdev: u32, // Infdev Y range (0-based), mapped to our coords by subtracting 64
+};
+
+const ore_table = [_]OreEntry{
+    // Infdev line 452: 20x dirt, size 32, Y 0-128
+    .{ .block = .dirt, .vein_size = 32, .veins_per_subchunk = 20, .max_y_infdev = 128 },
+    // Infdev line 459: 10x gravel, size 32, Y 0-128
+    .{ .block = .gravel, .vein_size = 32, .veins_per_subchunk = 10, .max_y_infdev = 128 },
+    // Infdev line 466: 20x coal ore, size 16, Y 0-128
+    .{ .block = .coal_ore, .vein_size = 16, .veins_per_subchunk = 20, .max_y_infdev = 128 },
+    // Infdev line 473: 20x iron ore, size 8, Y 0-64
+    .{ .block = .iron_ore, .vein_size = 8, .veins_per_subchunk = 20, .max_y_infdev = 64 },
+    // Infdev line 480: 1x gold ore (always), size 8, Y 0-32
+    .{ .block = .gold_ore, .vein_size = 8, .veins_per_subchunk = 1, .max_y_infdev = 32 },
+    // Infdev line 487: 1x diamond ore (25% chance), size 8, Y 0-16
+    .{ .block = .diamond_ore, .vein_size = 8, .veins_per_subchunk = 1, .max_y_infdev = 16 },
+};
+
+fn generateOres(chunk: *Chunk, key: ChunkKey, seed: u64) void {
+    const origin = key.position();
+    const chunk_min_y = origin[1];
+    const chunk_max_y = origin[1] + CS;
+
+    // Map our 32-block chunk to 4 Infdev 16-block sub-chunks
+    const infdev_cx_base = key.cx * 2;
+    const infdev_cz_base = key.cz * 2;
+
+    var dx: i32 = 0;
+    while (dx < 2) : (dx += 1) {
+        var dz: i32 = 0;
+        while (dz < 2) : (dz += 1) {
+            const icx = infdev_cx_base + dx;
+            const icz = infdev_cz_base + dz;
+
+            // Infdev feature seed (a.java line 448)
+            var rng = CaveRng.init(seed +%
+                @as(u64, @bitCast(@as(i64, icx) *% 318279123)) +%
+                @as(u64, @bitCast(@as(i64, icz) *% 919871212)));
+
+            const block_x: i32 = icx * 16;
+            const block_z: i32 = icz * 16;
+
+            for (ore_table) |entry| {
+                for (0..entry.veins_per_subchunk) |_| {
+                    // Diamond: 25% chance (Infdev line 487: nextInt(4)==0)
+                    if (entry.block == .diamond_ore and rng.bounded(4) != 0) {
+                        // Consume the RNG state that would have been used
+                        _ = rng.next(); // x
+                        _ = rng.next(); // y
+                        _ = rng.next(); // z
+                        continue;
+                    }
+
+                    const vx = block_x + @as(i32, @intCast(rng.bounded(16)));
+                    const vy_infdev: i32 = @intCast(rng.bounded(entry.max_y_infdev));
+                    const vz = block_z + @as(i32, @intCast(rng.bounded(16)));
+                    const vy = vy_infdev - 64; // Convert to our Y
+
+                    // Quick Y reject: vein can extend roughly ±vein_size/4 from center
+                    const max_extent: i32 = @intCast(entry.vein_size / 4 + 4);
+                    if (vy + max_extent < chunk_min_y or vy - max_extent >= chunk_max_y) {
+                        // Still need to advance RNG for this vein's parameters
+                        advanceVeinRng(&rng, entry.vein_size);
+                        continue;
+                    }
+
+                    placeVein(chunk, origin, &rng, vx, vy, vz, entry.block, entry.vein_size);
+                }
+            }
+        }
+    }
+}
+
+/// Advance RNG state by the same amount placeVein would consume, for skipped veins.
+fn advanceVeinRng(rng: *CaveRng, vein_size: u32) void {
+    _ = rng.next(); // angle
+    _ = rng.next(); // y1 offset
+    _ = rng.next(); // y2 offset
+    for (0..vein_size + 1) |_| {
+        _ = rng.next(); // random radius per step
+    }
+}
+
+/// Infdev vein generation (c.b.c.java): place an elongated blob of ore along a line segment.
+fn placeVein(
+    chunk: *Chunk,
+    origin: [3]i32,
+    rng: *CaveRng,
+    start_x: i32,
+    start_y: i32,
+    start_z: i32,
+    block: BlockState.Block,
+    vein_size: u32,
+) void {
+    const pi = std.math.pi;
+    const size_f: f64 = @floatFromInt(vein_size);
+
+    // Random angle for vein orientation (c.b.c.java line 17)
+    const angle: f64 = @as(f64, @floatFromInt(rng.bounded(10000))) / 10000.0 * pi;
+
+    // Line endpoints in XZ (c.b.c.java lines 18-21)
+    const sx: f64 = @floatFromInt(start_x + 8);
+    const sz: f64 = @floatFromInt(start_z + 8);
+    const x1: f64 = sx + @sin(angle) * size_f / 8.0;
+    const x2: f64 = sx - @sin(angle) * size_f / 8.0;
+    const z1: f64 = sz + @cos(angle) * size_f / 8.0;
+    const z2: f64 = sz - @cos(angle) * size_f / 8.0;
+
+    // Y endpoints with small random offset (c.b.c.java lines 22-23)
+    const y_base: f64 = @floatFromInt(start_y);
+    const y1: f64 = y_base + @as(f64, @floatFromInt(rng.bounded(3))) + 2.0;
+    const y2: f64 = y_base + @as(f64, @floatFromInt(rng.bounded(3))) + 2.0;
+
+    const ore_state = BlockState.defaultState(block);
+
+    // Walk along the line in vein_size+1 steps (c.b.c.java line 25)
+    for (0..vein_size + 1) |step_i| {
+        const t: f64 = @as(f64, @floatFromInt(step_i)) / size_f;
+
+        // Interpolated center position
+        const cx = x1 + (x2 - x1) * t;
+        const cy = y1 + (y2 - y1) * t;
+        const cz = z1 + (z2 - z1) * t;
+
+        // Sine-modulated radius (c.b.c.java lines 29-31)
+        const rand_size: f64 = @as(f64, @floatFromInt(rng.bounded(10000))) / 10000.0 * size_f / 16.0;
+        const sine_env: f64 = @sin(@as(f64, @floatFromInt(step_i)) * pi / size_f) + 1.0;
+        const radius: f64 = sine_env * rand_size + 1.0;
+        const half_r = radius / 2.0;
+
+        // Iterate blocks in the bounding box (c.b.c.java lines 33-44)
+        const min_bx: i32 = @intFromFloat(@floor(cx - half_r));
+        const max_bx: i32 = @intFromFloat(@floor(cx + half_r));
+        const min_by: i32 = @intFromFloat(@floor(cy - half_r));
+        const max_by: i32 = @intFromFloat(@floor(cy + half_r));
+        const min_bz: i32 = @intFromFloat(@floor(cz - half_r));
+        const max_bz: i32 = @intFromFloat(@floor(cz + half_r));
+
+        var iy = min_by;
+        while (iy <= max_by) : (iy += 1) {
+            const local_y = iy - origin[1];
+            if (local_y < 0 or local_y >= CS) continue;
+
+            var ix = min_bx;
+            while (ix <= max_bx) : (ix += 1) {
+                const local_x = ix - origin[0];
+                if (local_x < 0 or local_x >= CS) continue;
+
+                var iz = min_bz;
+                while (iz <= max_bz) : (iz += 1) {
+                    const local_z = iz - origin[2];
+                    if (local_z < 0 or local_z >= CS) continue;
+
+                    // Ellipsoid check (c.b.c.java lines 36-39)
+                    const dx_f = (@as(f64, @floatFromInt(ix)) + 0.5 - cx) / half_r;
+                    const dy_f = (@as(f64, @floatFromInt(iy)) + 0.5 - cy) / half_r;
+                    const dz_f = (@as(f64, @floatFromInt(iz)) + 0.5 - cz) / half_r;
+                    if (dx_f * dx_f + dy_f * dy_f + dz_f * dz_f >= 1.0) continue;
+
+                    // Only replace stone (c.b.c.java line 39)
+                    const idx = WorldState.chunkIndex(@intCast(local_x), @intCast(local_y), @intCast(local_z));
+                    if (BlockState.getBlock(chunk.blocks[idx]) == .stone) {
+                        chunk.blocks[idx] = ore_state;
                     }
                 }
             }
