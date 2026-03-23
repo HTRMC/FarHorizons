@@ -2,9 +2,10 @@ const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const ChunkPool = @import("ChunkPool.zig").ChunkPool;
 const Storage = @import("storage/Storage.zig");
-const TerrainGen = @import("TerrainGen.zig");
+const WorldGenApi = @import("WorldGenApi.zig");
 const Chunk = WorldState.Chunk;
 const Io = std.Io;
+const tracy = @import("../platform/tracy.zig");
 
 pub const ChunkStreamer = struct {
     pub const MAX_OUTPUT = 512;
@@ -243,29 +244,36 @@ pub const ChunkStreamer = struct {
     }
 
     fn workerFn(self: *ChunkStreamer) void {
+        tracy.setThreadName("ChunkStreamer");
         const io = Io.Threaded.global_single_threaded.io();
 
         while (!self.shutdown.load(.acquire)) {
             // 1. Drain a batch from the heap (closest chunks first)
             var local_keys: [WORKER_BATCH]ChunkKey = undefined;
             var local_count: u32 = 0;
+            var player_snapshot: ChunkKey = undefined;
 
-            self.input_mutex.lockUncancelable(io);
-            while (self.input_heap.count() == 0 and !self.shutdown.load(.acquire)) {
-                self.input_cond.waitUncancelable(io, &self.input_mutex);
-            }
-            if (self.shutdown.load(.acquire)) {
+            {
+                const tz = tracy.zone(@src(), "chunkStreamer.drainInput");
+                defer tz.end();
+
+                self.input_mutex.lockUncancelable(io);
+                while (self.input_heap.count() == 0 and !self.shutdown.load(.acquire)) {
+                    self.input_cond.waitUncancelable(io, &self.input_mutex);
+                }
+                if (self.shutdown.load(.acquire)) {
+                    self.input_mutex.unlock(io);
+                    break;
+                }
+                while (local_count < WORKER_BATCH) {
+                    const key = self.input_heap.pop() orelse break;
+                    _ = self.input_set.remove(key);
+                    local_keys[local_count] = key;
+                    local_count += 1;
+                }
+                player_snapshot = self.player_chunk;
                 self.input_mutex.unlock(io);
-                break;
             }
-            while (local_count < WORKER_BATCH) {
-                const key = self.input_heap.pop() orelse break;
-                _ = self.input_set.remove(key);
-                local_keys[local_count] = key;
-                local_count += 1;
-            }
-            const player_snapshot = self.player_chunk;
-            self.input_mutex.unlock(io);
 
             // 2. Process the batch
             const ud: i64 = UNLOAD_DISTANCE;
@@ -292,7 +300,7 @@ pub const ChunkStreamer = struct {
 
                 if (!loaded) {
                     switch (self.world_type) {
-                        .normal => TerrainGen.generateChunk(chunk, key, self.seed),
+                        .normal => WorldGenApi.generateChunk(chunk, key, self.seed),
                         .debug => WorldState.generateDebugChunk(chunk, key),
                     }
                     _ = self.stats_generated.fetchAdd(1, .monotonic);

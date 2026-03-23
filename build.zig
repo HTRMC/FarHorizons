@@ -98,6 +98,28 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // --- Worldgen DLL (separate compilation unit for fast rebuilds) ---
+    const worldgen_lib = b.addLibrary(.{
+        .linkage = .dynamic,
+        .name = "worldgen",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/worldgen_dll.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    // DLL gets its own build_options (tracy disabled, no zstd needed)
+    const dll_options = b.addOptions();
+    dll_options.addOption(bool, "tracy_enabled", false);
+    dll_options.addOption(bool, "zstd_enabled", false);
+    dll_options.addOption(?[]const u8, "gamepad_type", null);
+    worldgen_lib.root_module.addOptions("build_options", dll_options);
+
+    b.installArtifact(worldgen_lib);
+
+    const worldgen_step = b.step("worldgen", "Build worldgen DLL only");
+    worldgen_step.dependOn(&worldgen_lib.step);
+
     // Install assets next to the executable
     b.installDirectory(.{
         .source_dir = b.path("assets/farhorizons"),

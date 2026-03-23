@@ -1,12 +1,12 @@
-const WorldState = @import("WorldState.zig");
-const BlockState = WorldState.BlockState;
+const WorldGenTypes = @import("WorldGenTypes.zig");
+const BlockState = WorldGenTypes.BlockState;
 const TerrainGen = @import("TerrainGen.zig");
 const Noise = @import("Noise.zig");
 const tracy = @import("../platform/tracy.zig");
 
-const Chunk = WorldState.Chunk;
-const ChunkKey = WorldState.ChunkKey;
-const CHUNK_SIZE = WorldState.CHUNK_SIZE;
+const Chunk = WorldGenTypes.Chunk;
+const ChunkKey = WorldGenTypes.ChunkKey;
+const CHUNK_SIZE = WorldGenTypes.CHUNK_SIZE;
 const CS: i32 = CHUNK_SIZE;
 
 const TREE_SCAN_RANGE: i32 = 1;
@@ -84,7 +84,7 @@ pub fn plantTrees(chunk: *Chunk, key: ChunkKey, seed: u64) void {
                 const ground_by = wy - 1 - origin[1];
                 const ground_bz = wz - origin[2];
                 if (ground_bx >= 0 and ground_bx < CS and ground_by >= 0 and ground_by < CS and ground_bz >= 0 and ground_bz < CS) {
-                    const ground_blk = BlockState.getBlock(chunk.blocks[WorldState.chunkIndex(@intCast(ground_bx), @intCast(ground_by), @intCast(ground_bz))]);
+                    const ground_blk = BlockState.getBlock(chunk.blocks[WorldGenTypes.chunkIndex(@intCast(ground_bx), @intCast(ground_by), @intCast(ground_bz))]);
                     if (ground_blk != .grass_block and ground_blk != .dirt) continue;
                 }
 
@@ -117,7 +117,7 @@ fn validateTreeSpace(chunk: *Chunk, origin: [3]i32, wx: i32, wy: i32, wz: i32, h
                 const bz = wz + dz - origin[2];
                 if (bx < 0 or bx >= CS or by < 0 or by >= CS or bz < 0 or bz >= CS) continue;
 
-                const blk = BlockState.getBlock(chunk.blocks[WorldState.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz))]);
+                const blk = BlockState.getBlock(chunk.blocks[WorldGenTypes.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz))]);
                 // Fail if occupied by anything other than air, water, or leaves
                 if (blk != .air and blk != .water and blk != .oak_leaves) return false;
             }
@@ -157,7 +157,7 @@ fn placeTree(chunk: *Chunk, origin: [3]i32, wx: i32, wy: i32, wz: i32, height: i
                 const bz = wz + dz - origin[2];
                 if (bx < 0 or bx >= CS or by < 0 or by >= CS or bz < 0 or bz >= CS) continue;
 
-                const idx = WorldState.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz));
+                const idx = WorldGenTypes.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz));
                 if (!BlockState.isOpaque(chunk.blocks[idx])) {
                     chunk.blocks[idx] = BlockState.defaultState(.oak_leaves);
                 }
@@ -173,7 +173,7 @@ fn placeTree(chunk: *Chunk, origin: [3]i32, wx: i32, wy: i32, wz: i32, height: i
         const bz = wz - origin[2];
         if (bx < 0 or bx >= CS or by < 0 or by >= CS or bz < 0 or bz >= CS) continue;
 
-        const idx = WorldState.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz));
+        const idx = WorldGenTypes.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz));
         const blk = BlockState.getBlock(chunk.blocks[idx]);
         if (blk == .air or blk == .oak_leaves) {
             chunk.blocks[idx] = BlockState.defaultState(.oak_log);
@@ -186,7 +186,7 @@ fn placeTree(chunk: *Chunk, origin: [3]i32, wx: i32, wy: i32, wz: i32, height: i
         const by = wy - 1 - origin[1];
         const bz = wz - origin[2];
         if (bx >= 0 and bx < CS and by >= 0 and by < CS and bz >= 0 and bz < CS) {
-            const idx = WorldState.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz));
+            const idx = WorldGenTypes.chunkIndex(@intCast(bx), @intCast(by), @intCast(bz));
             if (BlockState.getBlock(chunk.blocks[idx]) == .grass_block) {
                 chunk.blocks[idx] = BlockState.defaultState(.dirt);
             }

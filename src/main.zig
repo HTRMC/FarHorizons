@@ -699,6 +699,7 @@ fn gamepadNavigateUi(input_state: *InputState) void {
 }
 
 fn saveWorkerFn(gs: *GameState, done: *std.atomic.Value(bool)) void {
+    tracy.setThreadName("SaveWorker");
     gs.save();
     done.store(true, .release);
 }
@@ -708,6 +709,11 @@ pub fn main() !void {
 
     const tz = tracy.zone(@src(), "main");
     defer tz.end();
+
+    // Load worldgen DLL (falls back to static if not found)
+    const WorldGenApi = @import("world/WorldGenApi.zig");
+    WorldGenApi.init();
+    defer WorldGenApi.deinit();
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

@@ -1,8 +1,9 @@
 const std = @import("std");
 const WorldState = @import("WorldState.zig");
-const TerrainGen = @import("TerrainGen.zig");
+const WorldGenApi = @import("WorldGenApi.zig");
 const MeshWorker = @import("MeshWorker.zig").MeshWorker;
 const Io = std.Io;
+const tracy = @import("../platform/tracy.zig");
 
 const ChunkKey = WorldState.ChunkKey;
 const Chunk = WorldState.Chunk;
@@ -128,6 +129,7 @@ pub const LodWorker = struct {
     }
 
     fn workerFn(self: *LodWorker) void {
+        tracy.setThreadName("LodWorker");
         const io = Io.Threaded.global_single_threaded.io();
 
         // Initial generation pass
@@ -245,7 +247,7 @@ pub const LodWorker = struct {
         }
 
         // Generate center chunk terrain
-        TerrainGen.generateLodChunk(center, key, self.seed, LOD_VOXEL_SIZE);
+        WorldGenApi.generateLodChunk(center, key, self.seed, LOD_VOXEL_SIZE);
 
         // Generate 6 neighbor chunks for proper face culling at boundaries
         const offsets = WorldState.face_neighbor_offsets;
@@ -256,7 +258,7 @@ pub const LodWorker = struct {
                 .cz = key.cz + offsets[i][2],
             };
             const nc = try self.allocator.create(Chunk);
-            TerrainGen.generateLodChunk(nc, nk, self.seed, LOD_VOXEL_SIZE);
+            WorldGenApi.generateLodChunk(nc, nk, self.seed, LOD_VOXEL_SIZE);
             neighbor_chunks[i] = nc;
         }
 

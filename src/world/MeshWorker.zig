@@ -7,10 +7,10 @@ const LightMap = LightMapMod.LightMap;
 const LightEngine = @import("LightEngine.zig");
 const SurfaceHeightMapMod = @import("SurfaceHeightMap.zig");
 const SurfaceHeightMap = SurfaceHeightMapMod.SurfaceHeightMap;
+const tracy = @import("../platform/tracy.zig");
 const types = @import("../renderer/vulkan/types.zig");
 const FaceData = types.FaceData;
 const LightEntry = types.LightEntry;
-const tracy = @import("../platform/tracy.zig");
 const Io = std.Io;
 const BlockState = WorldState.BlockState;
 
@@ -250,6 +250,7 @@ pub const MeshWorker = struct {
     }
 
     fn workerFn(self: *MeshWorker) void {
+        tracy.setThreadName("MeshWorker");
         const io = Io.Threaded.global_single_threaded.io();
 
         while (!self.shutdown.load(.acquire)) {
@@ -258,34 +259,45 @@ pub const MeshWorker = struct {
             var local_light_only: [WORKER_BATCH]bool = undefined;
             var local_count: u32 = 0;
             var local_chunk_map: *const ChunkMap = undefined;
+            var local_light_maps: *const LightMaps = undefined;
+            var local_shm: *const SurfaceHeightMap = undefined;
+            var player_snapshot: ChunkKey = undefined;
 
-            self.input_mutex.lockUncancelable(io);
-            while (self.input_heap.count() == 0 and !self.shutdown.load(.acquire)) {
-                self.input_cond.waitUncancelable(io, &self.input_mutex);
-            }
-            if (self.shutdown.load(.acquire)) {
+            {
+                const tz = tracy.zone(@src(), "meshWorker.drainInput");
+                defer tz.end();
+
+                self.input_mutex.lockUncancelable(io);
+                while (self.input_heap.count() == 0 and !self.shutdown.load(.acquire)) {
+                    self.input_cond.waitUncancelable(io, &self.input_mutex);
+                }
+                if (self.shutdown.load(.acquire)) {
+                    self.input_mutex.unlock(io);
+                    break;
+                }
+                while (local_count < WORKER_BATCH) {
+                    const k = self.input_heap.pop() orelse break;
+                    // Read authoritative light_only from set (may have been upgraded since push)
+                    local_light_only[local_count] = self.input_set.get(k) orelse false;
+                    _ = self.input_set.remove(k);
+                    local_keys[local_count] = k;
+                    local_count += 1;
+                }
+                // Snapshot chunk_map, light_maps, surface_height_map pointers and player position under mutex
+                local_chunk_map = self.chunk_map;
+                local_light_maps = self.light_maps;
+                local_shm = self.surface_height_map;
+                player_snapshot = self.player_chunk;
                 self.input_mutex.unlock(io);
-                break;
             }
-            while (local_count < WORKER_BATCH) {
-                const k = self.input_heap.pop() orelse break;
-                // Read authoritative light_only from set (may have been upgraded since push)
-                local_light_only[local_count] = self.input_set.get(k) orelse false;
-                _ = self.input_set.remove(k);
-                local_keys[local_count] = k;
-                local_count += 1;
-            }
-            // Snapshot chunk_map, light_maps, surface_height_map pointers and player position under mutex
-            local_chunk_map = self.chunk_map;
-            const local_light_maps: *const LightMaps = self.light_maps;
-            const local_shm: *const SurfaceHeightMap = self.surface_height_map;
-            const player_snapshot = self.player_chunk;
-            self.input_mutex.unlock(io);
 
             // 2. Process the batch
             const ud: i64 = ChunkStreamer.UNLOAD_DISTANCE;
             const ud_sq = ud * ud;
             for (local_keys[0..local_count], local_light_only[0..local_count]) |key, light_only| {
+                const tz = tracy.zone(@src(), "meshWorker.processChunk");
+                defer tz.end();
+
                 if (self.shutdown.load(.acquire)) break;
 
                 // Skip stale chunks the player has moved away from

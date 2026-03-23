@@ -8,10 +8,14 @@ const LightBorderSnapshot = LightMapMod.LightBorderSnapshot;
 const tracy = @import("../platform/tracy.zig");
 pub const BlockModelLoader = @import("BlockModelLoader.zig");
 pub const BlockModelRegistry = BlockModelLoader.BlockModelRegistry;
-pub const BlockState = @import("BlockState.zig");
-
-pub const CHUNK_SIZE = 32;
-pub const BLOCKS_PER_CHUNK = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
+pub const WorldGenTypes = @import("WorldGenTypes.zig");
+pub const BlockState = WorldGenTypes.BlockState;
+pub const StateId = WorldGenTypes.StateId;
+pub const CHUNK_SIZE = WorldGenTypes.CHUNK_SIZE;
+pub const BLOCKS_PER_CHUNK = WorldGenTypes.BLOCKS_PER_CHUNK;
+pub const Chunk = WorldGenTypes.Chunk;
+pub const ChunkKey = WorldGenTypes.ChunkKey;
+pub const chunkIndex = WorldGenTypes.chunkIndex;
 pub const MAX_FACES_PER_CHUNK = BLOCKS_PER_CHUNK * 6;
 
 pub const FaceVertex = struct { px: f32, py: f32, pz: f32, u: f32, v: f32 };
@@ -175,48 +179,7 @@ pub const WorldType = enum(u8) {
 pub const LAYER_COUNT = @import("BlockTypes.zig").LAYER_COUNT;
 pub const RenderLayer = @import("BlockTypes.zig").RenderLayer;
 
-// --- Core types ---
-
-pub const StateId = BlockState.StateId;
-
-pub const Chunk = struct {
-    blocks: [BLOCKS_PER_CHUNK]StateId,
-};
-
-pub const ChunkKey = struct {
-    cx: i32,
-    cy: i32,
-    cz: i32,
-
-    pub fn eql(a: ChunkKey, b: ChunkKey) bool {
-        return a.cx == b.cx and a.cy == b.cy and a.cz == b.cz;
-    }
-
-    pub fn fromWorldPos(wx: i32, wy: i32, wz: i32) ChunkKey {
-        return .{
-            .cx = @divFloor(wx, @as(i32, CHUNK_SIZE)),
-            .cy = @divFloor(wy, @as(i32, CHUNK_SIZE)),
-            .cz = @divFloor(wz, @as(i32, CHUNK_SIZE)),
-        };
-    }
-
-    pub fn position(self: ChunkKey) [3]i32 {
-        return .{
-            self.cx * CHUNK_SIZE,
-            self.cy * CHUNK_SIZE,
-            self.cz * CHUNK_SIZE,
-        };
-    }
-
-    pub fn positionScaled(self: ChunkKey, voxel_size: u32) [3]i32 {
-        const vs: i32 = @intCast(voxel_size);
-        return .{
-            self.cx * CHUNK_SIZE * vs,
-            self.cy * CHUNK_SIZE * vs,
-            self.cz * CHUNK_SIZE * vs,
-        };
-    }
-};
+// --- Core types (Chunk, ChunkKey, StateId re-exported from WorldGenTypes.zig) ---
 
 pub const ChunkMeshResult = struct {
     faces: []FaceData,
@@ -245,12 +208,6 @@ pub const AffectedChunks = struct {
     keys: [7]ChunkKey,
     count: u8,
 };
-
-// --- Utility ---
-
-pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
-    return y * CHUNK_SIZE * CHUNK_SIZE + z * CHUNK_SIZE + x;
-}
 
 // --- Terrain generation ---
 
