@@ -377,29 +377,47 @@ pub const VulkanRenderer = struct {
         const cf = self.render_state.current_frame;
 
         // 1. Wait this frame's fence only
-        const fence = [_]vk.VkFence{self.render_state.in_flight_fences[cf]};
-        try vk.waitForFences(self.ctx.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
+        {
+            const tz2 = tracy.zone(@src(), "waitFence");
+            defer tz2.end();
+            const fence = [_]vk.VkFence{self.render_state.in_flight_fences[cf]};
+            try vk.waitForFences(self.ctx.device, 1, &fence, vk.VK_TRUE, std.math.maxInt(u64));
+        }
 
         if (self.game_state) |gs| {
             if (!gs.debug_camera_active) {
                 // Always: deferred TLSF frees (usually empty between ticks)
-                self.processDeferredFrees(cf);
+                {
+                    const tz2 = tracy.zone(@src(), "deferredFrees");
+                    defer tz2.end();
+                    self.processDeferredFrees(cf);
+                }
 
                 // Player fast path: feed player-caused dirty chunks EVERY frame
                 // (bypass tick gate for instant responsiveness)
-                if (self.mesh_worker) |mw| {
-                    if (gs.player_dirty_chunks.count() > 0) {
-                        mw.enqueueBatch(gs.player_dirty_chunks.keys());
-                        gs.player_dirty_chunks.clear();
+                {
+                    const tz2 = tracy.zone(@src(), "playerDirtyChunks");
+                    defer tz2.end();
+                    if (self.mesh_worker) |mw| {
+                        if (gs.player_dirty_chunks.count() > 0) {
+                            mw.enqueueBatch(gs.player_dirty_chunks.keys());
+                            gs.player_dirty_chunks.clear();
+                        }
                     }
                 }
 
                 // Always: drain committed chunks from transfer pipeline
                 // (must run even when paused so the queue doesn't overflow)
-                self.drainCommittedChunks(cf);
+                {
+                    const tz2 = tracy.zone(@src(), "drainCommitted");
+                    defer tz2.end();
+                    self.drainCommittedChunks(cf);
+                }
 
                 // Tick-gated: only when 30 Hz tick fired since last frame
                 if (gs.world_tick_pending) {
+                    const tz2 = tracy.zone(@src(), "worldTick");
+                    defer tz2.end();
                     gs.world_tick_pending = false;
 
                     gs.applyUnloadsToGpu(
@@ -453,33 +471,46 @@ pub const VulkanRenderer = struct {
 
                 // Always: rebuild draw commands for this frame
                 // Use actual camera eye position (offset in third person) for face culling
-                const cull_pos = if (gs.third_person) blk: {
-                    const forward = gs.camera.getForward();
-                    break :blk zlm.Vec3.sub(gs.camera.position, zlm.Vec3.scale(forward, third_person_dist));
-                } else gs.camera.position;
-                self.render_state.world_renderer.buildIndirectCommands(&self.ctx, cull_pos);
-                self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
+                {
+                    const tz2 = tracy.zone(@src(), "buildDrawCmds");
+                    defer tz2.end();
+                    const cull_pos = if (gs.third_person) blk: {
+                        const forward = gs.camera.getForward();
+                        break :blk zlm.Vec3.sub(gs.camera.position, zlm.Vec3.scale(forward, third_person_dist));
+                    } else gs.camera.position;
+                    self.render_state.world_renderer.buildIndirectCommands(&self.ctx, cull_pos);
+                    self.render_state.debug_renderer.updateVertices(self.ctx.device, gs);
+                }
             }
         }
 
         // UI/text vertex buffers are shared (not per-frame), so we must ensure
         // the previous frame's GPU reads are complete before overwriting them.
         {
+            const tz2 = tracy.zone(@src(), "waitOtherFence");
+            defer tz2.end();
             const other_cf: usize = 1 - cf;
             const other_fence = [_]vk.VkFence{self.render_state.in_flight_fences[other_cf]};
             try vk.waitForFences(self.ctx.device, 1, &other_fence, vk.VK_TRUE, std.math.maxInt(u64));
         }
 
-        self.render_state.ui_renderer.beginFrame(self.ctx.device);
-
-        self.render_state.text_renderer.beginFrame(self.ctx.device);
+        {
+            const tz2 = tracy.zone(@src(), "uiBeginFrame");
+            defer tz2.end();
+            self.render_state.ui_renderer.beginFrame(self.ctx.device);
+            self.render_state.text_renderer.beginFrame(self.ctx.device);
+        }
 
         if (self.game_state) |gs| {
+            const tz2 = tracy.zone(@src(), "debugOverlay");
+            defer tz2.end();
             const DebugOverlay = @import("../../DebugOverlay.zig");
             DebugOverlay.draw(&self.render_state.text_renderer, gs, &self.render_state.world_renderer, self.gpu_allocator);
         }
 
         if (self.ui_manager) |um| {
+            const tz2 = tracy.zone(@src(), "uiLayout");
+            defer tz2.end();
             um.layout(&self.render_state.text_renderer);
             um.draw(&self.render_state.ui_renderer, &self.render_state.text_renderer);
         }
