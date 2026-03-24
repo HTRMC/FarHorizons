@@ -270,18 +270,18 @@ pub const IoPipeline = struct {
         defer self.region_cache.releaseRegion(region);
 
         const chunk_index = key.localIndex();
-        var temp_blocks: [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
-        const found = region.readChunk(chunk_index, &temp_blocks) catch {
+        var chunk: Chunk = .{ .blocks = WorldState.PaletteBlocks.init(std.heap.page_allocator) };
+        const found = region.readChunkPalette(chunk_index, &chunk.blocks) catch {
+            chunk.blocks.deinit();
             self.postResult(request.handle_id, key, false);
             return;
         };
 
         if (found) {
-            var chunk: Chunk = undefined;
-            chunk.blocks.loadFromSlice(&temp_blocks);
             self.chunk_cache.put(key, &chunk);
             self.postResult(request.handle_id, key, true);
         } else {
+            chunk.blocks.deinit();
             self.postResult(request.handle_id, key, false);
         }
     }

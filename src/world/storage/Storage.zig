@@ -256,45 +256,36 @@ pub fn saveAllDirty(self: *Storage) void {
 }
 
 
-pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32) ?*const Chunk {
-    const tz = tracy.zone(@src(), "storage.loadChunk");
+/// Load chunk directly into the caller's Chunk. Returns true if found on disk.
+/// Decodes directly into PaletteStorage — no flat array intermediate, no cache copies.
+pub fn loadChunkInto(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *Chunk) bool {
+    const tz = tracy.zone(@src(), "storage.loadChunkInto");
     defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
     const key = ChunkKey.init(cx, cy, cz);
 
     _ = self.stats_load_count.fetchAdd(1, .monotonic);
 
-    if (self.chunk_cache.get(key)) |cached| {
-        _ = self.stats_cache_hits.fetchAdd(1, .monotonic);
-        return cached;
-    }
-
     const coord = key.regionCoord();
     const t0 = Io.Clock.now(.awake, io);
     const region = self.region_cache.getOrOpen(coord) catch |err| {
         log.err("loadChunk({d},{d},{d}): open failed: {}", .{ cx, cy, cz, err });
-        return null;
+        return false;
     };
     defer self.region_cache.releaseRegion(region);
     const t1 = Io.Clock.now(.awake, io);
 
     const chunk_index = key.localIndex();
-    var temp_blocks: [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
-    const found = region.readChunk(chunk_index, &temp_blocks) catch |err| {
+    const found = region.readChunkPalette(chunk_index, &chunk.blocks) catch |err| {
         log.err("loadChunk({d},{d},{d}): read failed: {}", .{ cx, cy, cz, err });
-        return null;
+        return false;
     };
-    if (!found) return null;
-    var chunk: Chunk = undefined;
-    chunk.blocks.loadFromSlice(&temp_blocks);
     const t2 = Io.Clock.now(.awake, io);
 
     _ = self.stats_region_ns.fetchAdd(@intCast(t0.durationTo(t1).nanoseconds), .monotonic);
     _ = self.stats_read_ns.fetchAdd(@intCast(t1.durationTo(t2).nanoseconds), .monotonic);
 
-    self.chunk_cache.put(key, &chunk);
-
-    return self.chunk_cache.get(key);
+    return found;
 }
 
 pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *const Chunk) !void {

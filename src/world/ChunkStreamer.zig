@@ -131,8 +131,7 @@ pub const ChunkStreamer = struct {
         const chunk = self.chunk_pool.acquire();
         var loaded = false;
         if (self.storage) |s| {
-            if (s.loadChunk(key.cx, key.cy, key.cz)) |cached_chunk| {
-                chunk.* = cached_chunk.*;
+            if (s.loadChunkInto(key.cx, key.cy, key.cz, chunk)) {
                 loaded = true;
                 _ = self.stats_loaded.fetchAdd(1, .monotonic);
             }

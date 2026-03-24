@@ -192,6 +192,71 @@ pub const DecodeError = error{
     DataTruncated,
 };
 
+const PaletteBlocks = @import("../WorldState.zig").PaletteBlocks;
+
+/// Decode directly into PaletteStorage — avoids flat array intermediate.
+pub fn decodeToPalette(data: []const u8, blocks: *PaletteBlocks) DecodeError!void {
+    if (data.len < CODEC_HEADER_SIZE) return error.DataTruncated;
+
+    if (data[0] == 1) {
+        // V1 format — decode to flat then load (rare, legacy only)
+        var temp: [BLOCKS_PER_CHUNK]StateId = undefined;
+        try decodeV1(data, &temp);
+        blocks.loadFromSlice(&temp);
+        return;
+    }
+
+    if (data[0] != CODEC_FORMAT_VERSION) return error.InvalidFormat;
+    const raw_encoding = data[1];
+    const valid = inline for (@typeInfo(Encoding).@"enum".fields) |f| {
+        if (raw_encoding == f.value) break true;
+    } else false;
+    if (!valid) return error.UnknownEncoding;
+    const encoding: Encoding = @enumFromInt(raw_encoding);
+
+    switch (encoding) {
+        .single_block => {
+            if (data.len < CODEC_HEADER_SIZE + 2) {
+                blocks.fillUniform(0);
+                return;
+            }
+            blocks.fillUniform(std.mem.readInt(u16, data[4..6], .little));
+        },
+        .palette16 => try decodePalette16Direct(data, blocks),
+        .raw16 => {
+            // >256 unique values — decode to flat then load
+            var temp: [BLOCKS_PER_CHUNK]StateId = undefined;
+            try decodeRaw16(data, &temp);
+            blocks.loadFromSlice(&temp);
+        },
+    }
+}
+
+fn decodePalette16Direct(data: []const u8, blocks: *PaletteBlocks) DecodeError!void {
+    if (data.len < CODEC_HEADER_SIZE + 1) return error.DataTruncated;
+
+    const palette_size: u32 = data[4];
+    if (palette_size == 0) return error.InvalidPalette;
+
+    const palette_end = 5 + palette_size * 2;
+    if (data.len < palette_end) return error.DataTruncated;
+
+    const indices_end = palette_end + BLOCKS_PER_CHUNK;
+    if (data.len < indices_end) return error.DataTruncated;
+
+    // Load directly: pre-allocate exact palette, set raw indices (O(1) per block)
+    blocks.initCapacity(palette_size);
+    for (0..palette_size) |i| {
+        blocks.setPaletteEntry(@intCast(i), std.mem.readInt(u16, data[5 + i * 2 ..][0..2], .little));
+    }
+
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        const idx = data[palette_end + i];
+        if (idx >= palette_size) return error.InvalidPalette;
+        blocks.setRawIndex(@intCast(i), idx);
+    }
+}
+
 pub fn decode(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeError!void {
     if (data.len < CODEC_HEADER_SIZE) return error.DataTruncated;
 

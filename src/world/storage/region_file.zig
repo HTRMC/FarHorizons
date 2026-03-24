@@ -227,6 +227,33 @@ pub const RegionFile = struct {
         return true;
     }
 
+    /// Read and decode a chunk directly into PaletteStorage (no flat array intermediate).
+    pub fn readChunkPalette(
+        self: *RegionFile,
+        chunk_index: u9,
+        blocks: *WorldState.PaletteBlocks,
+    ) !bool {
+        const raw_result = try self.readChunkRawWithAlgo(chunk_index) orelse return false;
+        defer self.mem_allocator.free(raw_result.data);
+
+        const algo = raw_result.algo;
+
+        var decompressed_buf: [128 * 1024]u8 = undefined;
+        if (algo == .none) {
+            try chunk_codec.decodeToPalette(raw_result.data, blocks);
+        } else {
+            const decompressed_len = try compression.decompress(
+                algo,
+                raw_result.data,
+                &decompressed_buf,
+                decompressed_buf.len,
+            );
+            try chunk_codec.decodeToPalette(decompressed_buf[0..decompressed_len], blocks);
+        }
+
+        return true;
+    }
+
 
     pub fn writeChunk(
         self: *RegionFile,
