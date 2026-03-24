@@ -700,7 +700,7 @@ fn requestMissingChunks(self: *GameState) void {
     }
 
     if (batch_len > 0) {
-        self.streaming.streamer.requestLoadBatch(batch[0..batch_len]);
+        if (self.streaming.pool) |pool| pool.submitChunkLoadBatch(batch[0..batch_len]);
     }
 }
 
@@ -1875,7 +1875,7 @@ pub fn worldTick(self: *GameState) void {
     self.scanUnloads();
 
     // Sync streamer player position + tick storage
-    self.streaming.streamer.syncPlayerChunk(self.streaming.player_chunk);
+    if (self.streaming.pool) |pool| pool.syncPlayerChunk(self.streaming.player_chunk);
     if (self.streaming.storage) |s| {
         s.tick();
     }
@@ -1936,12 +1936,15 @@ fn reportPipelineStats(self: *GameState) void {
     }
 
     // Sample queue depths (non-atomic, diagnostic only)
-    const si = self.streaming.streamer.input_heap.count();
+    var si: usize = 0;
     const so = self.streaming.streamer.output_len;
     var mi: usize = 0;
     var mo: u32 = 0;
+    if (self.streaming.pool) |pool| {
+        si = pool.loadQueueDepth();
+        mi = pool.meshQueueDepth();
+    }
     if (self.streaming.mesh_worker) |mw| {
-        mi = mw.input_heap.count();
         mo = mw.output_len;
     }
     var co: u32 = 0;

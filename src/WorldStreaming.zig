@@ -3,6 +3,7 @@ const WorldState = @import("world/WorldState.zig");
 const ChunkStreamer = @import("world/ChunkStreamer.zig").ChunkStreamer;
 const Storage = @import("world/storage/Storage.zig");
 const MeshWorker = @import("world/MeshWorker.zig").MeshWorker;
+const ThreadPool = @import("ThreadPool.zig").ThreadPool;
 const TransferPipeline = @import("renderer/vulkan/TransferPipeline.zig").TransferPipeline;
 const Io = std.Io;
 
@@ -58,6 +59,7 @@ pub const WorldStreamingState = struct {
     initial_load_ready: bool = true,
 
     // Pipeline references for stats reporting (set by renderer)
+    pool: ?*ThreadPool = null,
     mesh_worker: ?*MeshWorker = null,
     transfer_pipeline: ?*TransferPipeline = null,
     stats_last_time: ?Io.Timestamp = null,

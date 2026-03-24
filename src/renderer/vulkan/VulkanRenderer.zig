@@ -245,26 +245,21 @@ pub const VulkanRenderer = struct {
             std.log.err("Failed to allocate MeshWorker: {}", .{err});
             return;
         };
-
         mw.initInPlace(self.allocator, &game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map);
-
         self.mesh_worker = mw;
 
         // 2. Init ChunkStreamer
         game_state.streaming.streamer.initInPlace(self.allocator, game_state.streaming.storage, &game_state.chunk_pool, game_state.streaming.world_seed, game_state.streaming.world_type);
 
-        // Sync player position before starting threads so initial heap ordering is correct
-        game_state.streaming.streamer.syncPlayerChunk(game_state.streaming.player_chunk);
-        mw.syncChunkMap(&game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map, game_state.streaming.player_chunk);
-
-        // 3. Create shared ThreadPool and register work sources
+        // 3. Create ThreadPool with single priority heap
         const pool = self.allocator.create(ThreadPool) catch |err| {
             std.log.err("Failed to allocate ThreadPool: {}", .{err});
             return;
         };
-        pool.init();
-        pool.addSource(game_state.streaming.streamer.workSource());
-        pool.addSource(mw.workSource());
+        pool.init(self.allocator);
+        pool.streamer = &game_state.streaming.streamer;
+        pool.mesh_worker = mw;
+        pool.syncPlayerChunk(game_state.streaming.player_chunk);
         game_state.streaming.streamer.pool = pool;
         mw.pool = pool;
         self.thread_pool = pool;
@@ -279,6 +274,7 @@ pub const VulkanRenderer = struct {
         );
 
         // 5. Set pipeline references for stats reporting
+        game_state.streaming.pool = pool;
         game_state.streaming.mesh_worker = mw;
         game_state.streaming.transfer_pipeline = &self.transfer_pipeline;
 
@@ -289,7 +285,7 @@ pub const VulkanRenderer = struct {
         // 7. Request initial load batch if async loading
         if (!game_state.streaming.initial_load_ready) {
             const WorldState = @import("../../world/WorldState.zig");
-            const rd: i32 = 3; // spawn radius for initial load
+            const rd: i32 = 3;
             const rd_sq = rd * rd;
             const pc = game_state.streaming.player_chunk;
             var batch: [512]WorldState.ChunkKey = undefined;
@@ -316,7 +312,7 @@ pub const VulkanRenderer = struct {
             }
 
             if (batch_len > 0) {
-                game_state.streaming.streamer.requestLoadBatch(batch[0..batch_len]);
+                pool.submitChunkLoadBatch(batch[0..batch_len]);
             }
         }
     }
@@ -330,6 +326,7 @@ pub const VulkanRenderer = struct {
         // Clear game_state references
         if (self.game_state) |game_state| {
             game_state.streaming.streamer.stop();
+            game_state.streaming.pool = null;
             game_state.streaming.mesh_worker = null;
             game_state.streaming.transfer_pipeline = null;
         }
@@ -394,9 +391,9 @@ pub const VulkanRenderer = struct {
                 {
                     const tz2 = tracy.zone(@src(), "playerDirtyChunks");
                     defer tz2.end();
-                    if (self.mesh_worker) |mw| {
+                    if (self.thread_pool) |pool| {
                         if (game_state.streaming.player_dirty_chunks.count() > 0) {
-                            mw.enqueueBatch(game_state.streaming.player_dirty_chunks.keys());
+                            pool.submitMeshBatch(game_state.streaming.player_dirty_chunks.keys());
                             game_state.streaming.player_dirty_chunks.clear();
                         }
                     }
@@ -425,9 +422,12 @@ pub const VulkanRenderer = struct {
                     );
 
                     if (self.mesh_worker) |mw| {
-                        mw.syncChunkMap(&game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map, game_state.streaming.player_chunk);
+                        mw.syncChunkMap(&game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map);
+                    }
+                    if (self.thread_pool) |pool| {
+                        pool.syncPlayerChunk(game_state.streaming.player_chunk);
                         if (game_state.dirty_chunks.count() > 0) {
-                            mw.enqueueBatch(game_state.dirty_chunks.keys());
+                            pool.submitMeshBatch(game_state.dirty_chunks.keys());
                             game_state.dirty_chunks.clear();
                         }
                     }

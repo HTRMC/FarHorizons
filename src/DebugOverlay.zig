@@ -121,7 +121,7 @@ fn drawF4(text: *TextRenderer, game_state: *GameState, wr: *const WorldRenderer,
     text.drawText(x, y, chunks_text, yellow);
     y += LINE_HEIGHT;
 
-    const queue_depth = game_state.streaming.streamer.inputQueueDepth();
+    const queue_depth: u32 = if (game_state.streaming.pool) |pool| pool.loadQueueDepth() else 0;
     const rd = ChunkStreamer.RENDER_DISTANCE;
     const stream_text = std.fmt.bufPrint(&buf, "Streamer: {d} queued, RD={d}", .{ queue_depth, rd }) catch "Streamer: ?";
     text.drawText(x, y, stream_text, yellow);
