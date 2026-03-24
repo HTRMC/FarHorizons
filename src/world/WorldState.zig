@@ -178,9 +178,10 @@ pub const RenderLayer = @import("BlockTypes.zig").RenderLayer;
 // --- Core types ---
 
 pub const StateId = BlockState.StateId;
+pub const PaletteBlocks = @import("../allocators/PaletteStorage.zig").PaletteStorage(StateId, BLOCKS_PER_CHUNK);
 
 pub const Chunk = struct {
-    blocks: [BLOCKS_PER_CHUNK]StateId,
+    blocks: PaletteBlocks,
 };
 
 pub const ChunkKey = struct {
@@ -247,7 +248,7 @@ pub fn chunkIndex(x: usize, y: usize, z: usize) usize {
 // --- Terrain generation ---
 
 pub fn generateFlatChunk(chunk: *Chunk, key: ChunkKey) void {
-    @memset(&chunk.blocks, BlockState.defaultState(.air));
+    chunk.blocks.fillUniform(BlockState.defaultState(.air));
 
     for (0..CHUNK_SIZE) |by| {
         const wy: i32 = key.cy * CHUNK_SIZE + @as(i32, @intCast(by));
@@ -265,14 +266,14 @@ pub fn generateFlatChunk(chunk: *Chunk, key: ChunkKey) void {
 
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                chunk.blocks[chunkIndex(bx, by, bz)] = state;
+                chunk.blocks.set(chunkIndex(bx, by, bz), state);
             }
         }
     }
 }
 
 pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
-    @memset(&chunk.blocks, BlockState.defaultState(.air));
+    chunk.blocks.fillUniform(BlockState.defaultState(.air));
 
     const COLS = 6;
     const SPACING = 2;
@@ -280,7 +281,7 @@ pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
     if (key.cy == -1) {
         for (0..CHUNK_SIZE) |bz| {
             for (0..CHUNK_SIZE) |bx| {
-                chunk.blocks[chunkIndex(bx, CHUNK_SIZE - 1, bz)] = BlockState.defaultState(.stone);
+                chunk.blocks.set(chunkIndex(bx, CHUNK_SIZE - 1, bz), BlockState.defaultState(.stone));
             }
         }
         return;
@@ -301,7 +302,7 @@ pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
         const lz = wz - key.cz * CHUNK_SIZE;
 
         if (lx >= 0 and lx < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE) {
-            chunk.blocks[chunkIndex(@intCast(lx), 0, @intCast(lz))] = @intCast(si);
+            chunk.blocks.set(chunkIndex(@intCast(lx), 0, @intCast(lz)), @intCast(si));
         }
     }
 }
@@ -461,52 +462,47 @@ fn buildPaddedStates(padded: *[PADDED_BLOCKS]StateId, chunk: *const Chunk, neigh
 
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
-            const src = chunk.blocks[chunkIndex(0, y, z)..][0..CHUNK_SIZE];
             const dst = padded[paddedIndex(1, y + 1, z + 1)..][0..CHUNK_SIZE];
-            @memcpy(dst, src);
+            chunk.blocks.getRange(dst, @intCast(chunkIndex(0, y, z)));
         }
     }
 
     if (neighbors[0]) |n| {
         for (0..CHUNK_SIZE) |y| {
-            const src = n.blocks[chunkIndex(0, y, 0)..][0..CHUNK_SIZE];
             const dst = padded[paddedIndex(1, y + 1, PADDED_SIZE - 1)..][0..CHUNK_SIZE];
-            @memcpy(dst, src);
+            n.blocks.getRange(dst, @intCast(chunkIndex(0, y, 0)));
         }
     }
     if (neighbors[1]) |n| {
         for (0..CHUNK_SIZE) |y| {
-            const src = n.blocks[chunkIndex(0, y, CHUNK_SIZE - 1)..][0..CHUNK_SIZE];
             const dst = padded[paddedIndex(1, y + 1, 0)..][0..CHUNK_SIZE];
-            @memcpy(dst, src);
+            n.blocks.getRange(dst, @intCast(chunkIndex(0, y, CHUNK_SIZE - 1)));
         }
     }
     if (neighbors[2]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
-                padded[paddedIndex(0, y + 1, z + 1)] = n.blocks[chunkIndex(CHUNK_SIZE - 1, y, z)];
+                padded[paddedIndex(0, y + 1, z + 1)] = n.blocks.get(chunkIndex(CHUNK_SIZE - 1, y, z));
             }
         }
     }
     if (neighbors[3]) |n| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
-                padded[paddedIndex(PADDED_SIZE - 1, y + 1, z + 1)] = n.blocks[chunkIndex(0, y, z)];
+                padded[paddedIndex(PADDED_SIZE - 1, y + 1, z + 1)] = n.blocks.get(chunkIndex(0, y, z));
             }
         }
     }
     if (neighbors[4]) |n| {
         for (0..CHUNK_SIZE) |z| {
-            const src = n.blocks[chunkIndex(0, 0, z)..][0..CHUNK_SIZE];
             const dst = padded[paddedIndex(1, PADDED_SIZE - 1, z + 1)..][0..CHUNK_SIZE];
-            @memcpy(dst, src);
+            n.blocks.getRange(dst, @intCast(chunkIndex(0, 0, z)));
         }
     }
     if (neighbors[5]) |n| {
         for (0..CHUNK_SIZE) |z| {
-            const src = n.blocks[chunkIndex(0, CHUNK_SIZE - 1, z)..][0..CHUNK_SIZE];
             const dst = padded[paddedIndex(1, 0, z + 1)..][0..CHUNK_SIZE];
-            @memcpy(dst, src);
+            n.blocks.getRange(dst, @intCast(chunkIndex(0, CHUNK_SIZE - 1, z)));
         }
     }
 
@@ -774,54 +770,53 @@ fn sampleTrilinearLight(
 }
 
 pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
-    for (&chunk.blocks) |s| {
+    for (chunk.blocks.palette[0..chunk.blocks.palette_len]) |s| {
         if (!BlockState.isOpaque(s)) return false;
     }
 
     for (0..6) |face| {
         const n = neighbors[face] orelse return false;
-        const nb = &n.blocks;
 
         switch (face) {
             0 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!BlockState.isOpaque(nb[chunkIndex(x, y, 0)])) return false;
+                        if (!BlockState.isOpaque(n.blocks.get(chunkIndex(x, y, 0)))) return false;
                     }
                 }
             },
             1 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!BlockState.isOpaque(nb[chunkIndex(x, y, CHUNK_SIZE - 1)])) return false;
+                        if (!BlockState.isOpaque(n.blocks.get(chunkIndex(x, y, CHUNK_SIZE - 1)))) return false;
                     }
                 }
             },
             2 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |z| {
-                        if (!BlockState.isOpaque(nb[chunkIndex(CHUNK_SIZE - 1, y, z)])) return false;
+                        if (!BlockState.isOpaque(n.blocks.get(chunkIndex(CHUNK_SIZE - 1, y, z)))) return false;
                     }
                 }
             },
             3 => {
                 for (0..CHUNK_SIZE) |y| {
                     for (0..CHUNK_SIZE) |z| {
-                        if (!BlockState.isOpaque(nb[chunkIndex(0, y, z)])) return false;
+                        if (!BlockState.isOpaque(n.blocks.get(chunkIndex(0, y, z)))) return false;
                     }
                 }
             },
             4 => {
                 for (0..CHUNK_SIZE) |z| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!BlockState.isOpaque(nb[chunkIndex(x, 0, z)])) return false;
+                        if (!BlockState.isOpaque(n.blocks.get(chunkIndex(x, 0, z)))) return false;
                     }
                 }
             },
             5 => {
                 for (0..CHUNK_SIZE) |z| {
                     for (0..CHUNK_SIZE) |x| {
-                        if (!BlockState.isOpaque(nb[chunkIndex(x, CHUNK_SIZE - 1, z)])) return false;
+                        if (!BlockState.isOpaque(n.blocks.get(chunkIndex(x, CHUNK_SIZE - 1, z)))) return false;
                     }
                 }
             },
@@ -1210,7 +1205,7 @@ fn unpackFace(fd: FaceData) struct { x: u5, y: u5, z: u5, tex_index: u8, normal_
 }
 
 fn makeEmptyChunk() Chunk {
-    return .{ .blocks = .{BlockState.defaultState(.air)} ** BLOCKS_PER_CHUNK };
+    return .{ .blocks = PaletteBlocks.init(testing.allocator) };
 }
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
@@ -1219,7 +1214,8 @@ const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
 test "single block in air produces 6 faces" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
+    defer chunk.blocks.deinit();
+    chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1243,8 +1239,9 @@ test "single block in air produces 6 faces" {
 
 test "two adjacent blocks share face - culled" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
-    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.defaultState(.stone);
+    defer chunk.blocks.deinit();
+    chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
+    chunk.blocks.set(chunkIndex(6, 5, 5), BlockState.defaultState(.stone));
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1263,9 +1260,10 @@ test "two adjacent blocks share face - culled" {
 
 test "face_counts sum equals total_face_count" {
     var chunk = makeEmptyChunk();
+    defer chunk.blocks.deinit();
     for (3..7) |x| {
         for (3..6) |y| {
-            chunk.blocks[chunkIndex(x, y, 4)] = BlockState.defaultState(.dirt);
+            chunk.blocks.set(chunkIndex(x, y, 4), BlockState.defaultState(.dirt));
         }
     }
 
@@ -1282,7 +1280,8 @@ test "face_counts sum equals total_face_count" {
 
 test "normal indices in faces match their group" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(10, 10, 10)] = BlockState.defaultState(.grass_block);
+    defer chunk.blocks.deinit();
+    chunk.blocks.set(chunkIndex(10, 10, 10), BlockState.defaultState(.grass_block));
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1302,9 +1301,11 @@ test "normal indices in faces match their group" {
 
 test "cross-chunk boundary face culling" {
     var chunk0 = makeEmptyChunk();
+    defer chunk0.blocks.deinit();
     var chunk1 = makeEmptyChunk();
-    chunk0.blocks[chunkIndex(CHUNK_SIZE - 1, 5, 5)] = BlockState.defaultState(.stone);
-    chunk1.blocks[chunkIndex(0, 5, 5)] = BlockState.defaultState(.stone);
+    defer chunk1.blocks.deinit();
+    chunk0.blocks.set(chunkIndex(CHUNK_SIZE - 1, 5, 5), BlockState.defaultState(.stone));
+    chunk1.blocks.set(chunkIndex(0, 5, 5), BlockState.defaultState(.stone));
 
     var neighbors0 = no_neighbors;
     neighbors0[3] = &chunk1;
@@ -1329,7 +1330,8 @@ test "cross-chunk boundary face culling" {
 }
 
 test "empty chunk produces no faces" {
-    const chunk = makeEmptyChunk();
+    var chunk = makeEmptyChunk();
+    defer chunk.blocks.deinit();
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
@@ -1340,8 +1342,9 @@ test "empty chunk produces no faces" {
 
 test "glass does not cull adjacent non-glass" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
-    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.defaultState(.glass);
+    defer chunk.blocks.deinit();
+    chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
+    chunk.blocks.set(chunkIndex(6, 5, 5), BlockState.defaultState(.glass));
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1352,8 +1355,9 @@ test "glass does not cull adjacent non-glass" {
 
 test "glass-glass adjacency culls shared face" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.glass);
-    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.defaultState(.glass);
+    defer chunk.blocks.deinit();
+    chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.glass));
+    chunk.blocks.set(chunkIndex(6, 5, 5), BlockState.defaultState(.glass));
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1364,8 +1368,9 @@ test "glass-glass adjacency culls shared face" {
 
 test "light count equals face count (1:1 mapping)" {
     var chunk = makeEmptyChunk();
+    defer chunk.blocks.deinit();
     for (0..4) |x| {
-        chunk.blocks[chunkIndex(x, 5, 5)] = BlockState.defaultState(.stone);
+        chunk.blocks.set(chunkIndex(x, 5, 5), BlockState.defaultState(.stone));
     }
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
@@ -1407,7 +1412,8 @@ test "ChunkKey.fromWorldPos handles negative coords" {
 
 test "world boundary blocks have all outer faces" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(0, 0, 0)] = BlockState.defaultState(.stone);
+    defer chunk.blocks.deinit();
+    chunk.blocks.set(chunkIndex(0, 0, 0), BlockState.defaultState(.stone));
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1441,7 +1447,8 @@ fn findFaceByNormal(result: ChunkMeshResult, normal: u3) ?FaceData {
 
 test "AO: single block in air has no occlusion" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
+    defer chunk.blocks.deinit();
+    chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1454,9 +1461,10 @@ test "AO: single block in air has no occlusion" {
 
 test "AO: block on flat surface has correct top face AO" {
     var chunk = makeEmptyChunk();
+    defer chunk.blocks.deinit();
     for (4..7) |x| {
         for (4..7) |z| {
-            chunk.blocks[chunkIndex(x, 5, z)] = BlockState.defaultState(.stone);
+            chunk.blocks.set(chunkIndex(x, 5, z), BlockState.defaultState(.stone));
         }
     }
 
@@ -1486,10 +1494,11 @@ test "AO: block on flat surface has correct top face AO" {
 
 test "AO: block in corner has maximum occlusion on enclosed corner" {
     var chunk = makeEmptyChunk();
-    chunk.blocks[chunkIndex(5, 5, 5)] = BlockState.defaultState(.stone);
-    chunk.blocks[chunkIndex(6, 5, 5)] = BlockState.defaultState(.stone);
-    chunk.blocks[chunkIndex(5, 6, 5)] = BlockState.defaultState(.stone);
-    chunk.blocks[chunkIndex(5, 5, 6)] = BlockState.defaultState(.stone);
+    defer chunk.blocks.deinit();
+    chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
+    chunk.blocks.set(chunkIndex(6, 5, 5), BlockState.defaultState(.stone));
+    chunk.blocks.set(chunkIndex(5, 6, 5), BlockState.defaultState(.stone));
+    chunk.blocks.set(chunkIndex(5, 5, 6), BlockState.defaultState(.stone));
 
     const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
     defer testing.allocator.free(result.faces);
@@ -1542,10 +1551,11 @@ test "affectedChunks: edge of chunk returns neighbor" {
 }
 
 test "generateFlatChunk: grass at wy=0" {
-    var chunk: Chunk = undefined;
+    var chunk: Chunk = .{ .blocks = PaletteBlocks.init(testing.allocator) };
+    defer chunk.blocks.deinit();
     generateFlatChunk(&chunk, .{ .cx = 0, .cy = 0, .cz = 0 });
-    try testing.expectEqual(BlockState.defaultState(.grass_block), chunk.blocks[chunkIndex(0, 0, 0)]);
-    try testing.expectEqual(@as(StateId, 0), chunk.blocks[chunkIndex(0, 1, 0)]);
+    try testing.expectEqual(BlockState.defaultState(.grass_block), chunk.blocks.get(chunkIndex(0, 0, 0)));
+    try testing.expectEqual(@as(StateId, 0), chunk.blocks.get(chunkIndex(0, 1, 0)));
 }
 
 test "oppositeFace: correct pairs" {
@@ -1673,14 +1683,14 @@ fn printBenchResult(comptime name: []const u8, samples: []const u64, face_count:
 
 /// Bottom 16 layers stone, layer 16 dirt, layer 17 grass, rest air.
 fn makeSurfaceChunk() Chunk {
-    var chunk: Chunk = .{ .blocks = .{BlockState.defaultState(.air)} ** BLOCKS_PER_CHUNK };
+    var chunk: Chunk = .{ .blocks = PaletteBlocks.init(testing.allocator) };
     for (0..CHUNK_SIZE) |x| {
         for (0..CHUNK_SIZE) |z| {
             for (0..16) |y| {
-                chunk.blocks[chunkIndex(x, y, z)] = BlockState.defaultState(.stone);
+                chunk.blocks.set(chunkIndex(x, y, z), BlockState.defaultState(.stone));
             }
-            chunk.blocks[chunkIndex(x, 16, z)] = BlockState.defaultState(.dirt);
-            chunk.blocks[chunkIndex(x, 17, z)] = BlockState.defaultState(.grass_block);
+            chunk.blocks.set(chunkIndex(x, 16, z), BlockState.defaultState(.dirt));
+            chunk.blocks.set(chunkIndex(x, 17, z), BlockState.defaultState(.grass_block));
         }
     }
     return chunk;
@@ -1688,12 +1698,12 @@ fn makeSurfaceChunk() Chunk {
 
 /// Alternating stone/air — worst-case face count.
 fn makeCheckerboardChunk() Chunk {
-    var chunk: Chunk = .{ .blocks = .{BlockState.defaultState(.air)} ** BLOCKS_PER_CHUNK };
+    var chunk: Chunk = .{ .blocks = PaletteBlocks.init(testing.allocator) };
     for (0..CHUNK_SIZE) |x| {
         for (0..CHUNK_SIZE) |y| {
             for (0..CHUNK_SIZE) |z| {
                 if ((x + y + z) % 2 == 0) {
-                    chunk.blocks[chunkIndex(x, y, z)] = BlockState.defaultState(.stone);
+                    chunk.blocks.set(chunkIndex(x, y, z), BlockState.defaultState(.stone));
                 }
             }
         }
@@ -1705,7 +1715,8 @@ test "bench: generateChunkMesh surface (with AO)" {
     const io = std.Io.Threaded.global_single_threaded.io();
     const ITERS = 10;
     var samples: [ITERS]u64 = undefined;
-    const chunk = makeSurfaceChunk();
+    var chunk = makeSurfaceChunk();
+    defer chunk.blocks.deinit();
     var face_count: u32 = 0;
 
     for (&samples) |*sample| {
@@ -1724,7 +1735,8 @@ test "bench: generateChunkMesh checkerboard (worst case)" {
     const io = std.Io.Threaded.global_single_threaded.io();
     const ITERS = 10;
     var samples: [ITERS]u64 = undefined;
-    const chunk = makeCheckerboardChunk();
+    var chunk = makeCheckerboardChunk();
+    defer chunk.blocks.deinit();
     var face_count: u32 = 0;
 
     for (&samples) |*sample| {
@@ -1743,7 +1755,8 @@ test "bench: generateChunkMesh empty (baseline)" {
     const io = std.Io.Threaded.global_single_threaded.io();
     const ITERS = 10;
     var samples: [ITERS]u64 = undefined;
-    const chunk = makeEmptyChunk();
+    var chunk = makeEmptyChunk();
+    defer chunk.blocks.deinit();
 
     for (&samples) |*sample| {
         const start = std.Io.Clock.now(.awake, io);

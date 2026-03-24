@@ -31,32 +31,32 @@ const AIR: StateId = BlockState.defaultState(.air);
 
 fn getBlock(chunk: *const WorldState.Chunk, neighbors: [6]?*const WorldState.Chunk, x: i32, y: i32, z: i32) StateId {
     if (x >= 0 and x < CHUNK_SIZE and y >= 0 and y < CHUNK_SIZE and z >= 0 and z < CHUNK_SIZE) {
-        return chunk.blocks[chunkIndex(@intCast(x), @intCast(y), @intCast(z))];
+        return chunk.blocks.get(chunkIndex(@intCast(x), @intCast(y), @intCast(z)));
     }
     // Check neighbor chunks
     if (x >= CHUNK_SIZE) {
         const n = neighbors[3] orelse return AIR; // +X
-        return n.blocks[chunkIndex(0, @intCast(y), @intCast(z))];
+        return n.blocks.get(chunkIndex(0, @intCast(y), @intCast(z)));
     }
     if (x < 0) {
         const n = neighbors[2] orelse return AIR; // -X
-        return n.blocks[chunkIndex(CHUNK_SIZE - 1, @intCast(y), @intCast(z))];
+        return n.blocks.get(chunkIndex(CHUNK_SIZE - 1, @intCast(y), @intCast(z)));
     }
     if (y >= CHUNK_SIZE) {
         const n = neighbors[4] orelse return AIR; // +Y
-        return n.blocks[chunkIndex(@intCast(x), 0, @intCast(z))];
+        return n.blocks.get(chunkIndex(@intCast(x), 0, @intCast(z)));
     }
     if (y < 0) {
         const n = neighbors[5] orelse return AIR; // -Y
-        return n.blocks[chunkIndex(@intCast(x), CHUNK_SIZE - 1, @intCast(z))];
+        return n.blocks.get(chunkIndex(@intCast(x), CHUNK_SIZE - 1, @intCast(z)));
     }
     if (z >= CHUNK_SIZE) {
         const n = neighbors[0] orelse return AIR; // +Z
-        return n.blocks[chunkIndex(@intCast(x), @intCast(y), 0)];
+        return n.blocks.get(chunkIndex(@intCast(x), @intCast(y), 0));
     }
     if (z < 0) {
         const n = neighbors[1] orelse return AIR; // -Z
-        return n.blocks[chunkIndex(@intCast(x), @intCast(y), CHUNK_SIZE - 1)];
+        return n.blocks.get(chunkIndex(@intCast(x), @intCast(y), CHUNK_SIZE - 1));
     }
     return AIR;
 }
@@ -218,7 +218,7 @@ fn computeSkyLight(
                 const world_y = chunk_base_y + y;
                 if (world_y <= sh) break; // at or below surface — no sky
                 const uy: usize = @intCast(y);
-                if (BlockState.isOpaque(chunk.blocks[chunkIndex(x, uy, z)])) break;
+                if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(x, uy, z)))) break;
                 light_map.sky_light.set(chunkIndex(x, uy, z), 255);
                 if (tail < MAX_QUEUE) {
                     queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = @intCast(z), .dir = 6, .level = 255 };
@@ -292,7 +292,7 @@ fn computeSkyLight(
             const uy: usize = @intCast(ny);
             const uz: usize = @intCast(nz);
 
-            if (BlockState.isOpaque(chunk.blocks[chunkIndex(ux, uy, uz)])) continue;
+            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
 
             const new_level = e.level -| ATTENUATION;
             if (new_level == 0) continue;
@@ -325,7 +325,7 @@ fn computeBlockLight(
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
             for (0..CHUNK_SIZE) |x| {
-                const block = chunk.blocks[chunkIndex(x, y, z)];
+                const block = chunk.blocks.get(chunkIndex(x, y, z));
                 const emit = BlockState.emittedLight(block);
                 if (emit[0] > 0 or emit[1] > 0 or emit[2] > 0) {
                     light_map.block_light.set(chunkIndex(x, y, z), emit);
@@ -414,7 +414,7 @@ fn seedBoundarySkyLight(
     const idx = chunkIndex(ux, uy, uz);
 
     if (new_level <= light_map.sky_light.get(idx)) return;
-    if (BlockState.isOpaque(chunk.blocks[idx])) return;
+    if (BlockState.isOpaque(chunk.blocks.get(idx))) return;
 
     light_map.sky_light.set(idx, new_level);
     if (tail.* < MAX_QUEUE) {
@@ -444,7 +444,7 @@ fn seedBoundaryBlockLight(
     const uz: usize = @intCast(z);
     const idx = chunkIndex(ux, uy, uz);
 
-    if (BlockState.isOpaque(chunk.blocks[idx])) return;
+    if (BlockState.isOpaque(chunk.blocks.get(idx))) return;
 
     const existing = light_map.block_light.get(idx);
     if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) return;
@@ -503,7 +503,7 @@ fn propagateBlockLightBFS(
             const uy: usize = @intCast(ny);
             const uz: usize = @intCast(nz);
 
-            if (BlockState.isOpaque(chunk.blocks[chunkIndex(ux, uy, uz)])) continue;
+            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
 
             const nr = e.r -| ATTENUATION;
             const ng = e.g -| ATTENUATION;
@@ -589,7 +589,7 @@ pub fn applyBlockChange(
     const tz = tracy.zone(@src(), "applyBlockChange");
     defer tz.end();
     const idx = chunkIndex(lx, ly, lz);
-    const new_block = chunk.blocks[idx];
+    const new_block = chunk.blocks.get(idx);
 
     const old_opaque = BlockState.isOpaque(old_block);
     const new_opaque = BlockState.isOpaque(new_block);
@@ -723,7 +723,7 @@ fn destructiveBlockLight(
             const uy: usize = @intCast(ny);
             const uz: usize = @intCast(nz);
 
-            if (BlockState.isOpaque(chunk.blocks[chunkIndex(ux, uy, uz)])) continue;
+            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
 
             // Expected attenuated value at neighbor if it came from our source.
             const exp_r = e.r -| ATTENUATION;
@@ -763,7 +763,7 @@ fn destructiveBlockLight(
             }
 
             // If this block is itself an emitter, it needs re-seeding.
-            const emit = BlockState.emittedLight(chunk.blocks[chunkIndex(ux, uy, uz)]);
+            const emit = BlockState.emittedLight(chunk.blocks.get(chunkIndex(ux, uy, uz)));
             if ((active & 1 != 0 and emit[0] > 0) or (active & 2 != 0 and emit[1] > 0) or (active & 4 != 0 and emit[2] > 0)) {
                 need_reseed = true;
             }
@@ -819,7 +819,7 @@ fn reseedBlockLight(
     for (reseeds) |rs| {
         const rs_idx = chunkIndex(@intCast(rs.x), @intCast(rs.y), @intCast(rs.z));
         const current = light_map.block_light.get(rs_idx);
-        const emit = BlockState.emittedLight(chunk.blocks[rs_idx]);
+        const emit = BlockState.emittedLight(chunk.blocks.get(rs_idx));
         const val = [3]u8{
             @max(current[0], emit[0]),
             @max(current[1], emit[1]),
@@ -884,7 +884,7 @@ const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
 fn allocChunk() !*Chunk {
     const chunk = try testing.allocator.create(Chunk);
-    chunk.* = .{ .blocks = .{AIR} ** BLOCKS_PER_CHUNK };
+    chunk.blocks = WorldState.PaletteBlocks.init(testing.allocator);
     return chunk;
 }
 
@@ -901,8 +901,11 @@ fn freeLightMap(lm: *LightMap) void {
 
 test "glowstone emitter lights surrounding blocks" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -927,8 +930,11 @@ test "glowstone emitter lights surrounding blocks" {
 
 test "block light attenuates to zero" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -945,9 +951,12 @@ test "block light attenuates to zero" {
 
 test "opaque block stops light propagation" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
-    chunk.blocks[chunkIndex(17, 16, 16)] = BlockState.defaultState(.stone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
+    chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -960,7 +969,10 @@ test "opaque block stops light propagation" {
 
 test "sky light fills air chunk with no above neighbor" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -973,10 +985,13 @@ test "sky light fills air chunk with no above neighbor" {
 
 test "sky light blocked by opaque block above" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
-            chunk.blocks[chunkIndex(x, CHUNK_SIZE - 1, z)] = BlockState.defaultState(.stone);
+            chunk.blocks.set(chunkIndex(x, CHUNK_SIZE - 1, z), BlockState.defaultState(.stone));
         }
     }
 
@@ -989,8 +1004,11 @@ test "sky light blocked by opaque block above" {
 
 test "block light propagates across chunk boundary via neighbor light map" {
     const chunk_a = try allocChunk();
-    defer testing.allocator.destroy(chunk_a);
-    chunk_a.blocks[chunkIndex(CHUNK_SIZE - 1, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk_a.blocks.deinit();
+        testing.allocator.destroy(chunk_a);
+    }
+    chunk_a.blocks.set(chunkIndex(CHUNK_SIZE - 1, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm_a = try allocLightMap();
     defer freeLightMap(lm_a);
@@ -999,7 +1017,10 @@ test "block light propagates across chunk boundary via neighbor light map" {
     try testing.expectEqual(@as(u8, 255), lm_a.block_light.get(chunkIndex(CHUNK_SIZE - 1, 16, 16))[0]);
 
     const chunk_b = try allocChunk();
-    defer testing.allocator.destroy(chunk_b);
+    defer {
+        chunk_b.blocks.deinit();
+        testing.allocator.destroy(chunk_b);
+    }
     const lm_b = try allocLightMap();
     defer freeLightMap(lm_b);
 
@@ -1021,7 +1042,10 @@ test "block light propagates across chunk boundary via neighbor light map" {
 test "sky light propagates vertically via surface height map" {
     // Chunk at cy=-1 (world y -32 to -1), no surface above → all sky
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1035,7 +1059,10 @@ test "sky light propagates vertically via surface height map" {
 test "surface height blocks sky in chunk below surface" {
     // Chunk at cy=0 (world y 0-31), surface height at y=50 → all blocks below surface
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
 
     var surface: [CHUNK_SIZE * CHUNK_SIZE]i32 = undefined;
     @memset(&surface, 50); // surface at y=50, entire chunk is below
@@ -1052,7 +1079,10 @@ test "surface height blocks sky in chunk below surface" {
 test "surface height partially blocks chunk" {
     // Chunk at cy=1 (world y 32-63), surface at y=40 → blocks below 40, open above
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
 
     var surface: [CHUNK_SIZE * CHUNK_SIZE]i32 = undefined;
     @memset(&surface, 40); // surface at world y=40
@@ -1076,7 +1106,10 @@ test "surface height partially blocks chunk" {
 test "sky light propagates laterally across chunk boundary" {
     // Chunk A has full skylight (no surface heights → all sky open)
     const chunk_a = try allocChunk();
-    defer testing.allocator.destroy(chunk_a);
+    defer {
+        chunk_a.blocks.deinit();
+        testing.allocator.destroy(chunk_a);
+    }
     const lm_a = try allocLightMap();
     defer freeLightMap(lm_a);
     _ = computeChunkLight(chunk_a, no_neighbors, no_borders, lm_a, 0, null);
@@ -1084,7 +1117,10 @@ test "sky light propagates laterally across chunk boundary" {
     // Chunk B: surface height blocks sky from above, but chunk A is its -X neighbor
     // Use surface heights that indicate opaque blocks above this chunk
     const chunk_b = try allocChunk();
-    defer testing.allocator.destroy(chunk_b);
+    defer {
+        chunk_b.blocks.deinit();
+        testing.allocator.destroy(chunk_b);
+    }
 
     // Surface height = 100 means opaque block at world Y=100, well above cy=0 chunk (y 0-31)
     var b_surface: [CHUNK_SIZE * CHUNK_SIZE]i32 = undefined;
@@ -1111,8 +1147,11 @@ test "sky light propagates laterally across chunk boundary" {
 
 test "boundary mask set for face with light above attenuation" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(CHUNK_SIZE - 1, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(CHUNK_SIZE - 1, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1123,8 +1162,11 @@ test "boundary mask set for face with light above attenuation" {
 
 test "boundary mask not set for face with no light" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1136,7 +1178,10 @@ test "boundary mask not set for face with no light" {
 
 test "dirty flag cleared after compute" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
     const lm = try allocLightMap();
     defer freeLightMap(lm);
     try testing.expect(lm.dirty);
@@ -1147,15 +1192,21 @@ test "dirty flag cleared after compute" {
 
 test "bidirectional boundary propagation" {
     const chunk_a = try allocChunk();
-    defer testing.allocator.destroy(chunk_a);
-    chunk_a.blocks[chunkIndex(CHUNK_SIZE - 2, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk_a.blocks.deinit();
+        testing.allocator.destroy(chunk_a);
+    }
+    chunk_a.blocks.set(chunkIndex(CHUNK_SIZE - 2, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm_a = try allocLightMap();
     defer freeLightMap(lm_a);
     _ = computeChunkLight(chunk_a, no_neighbors, no_borders, lm_a, 0, null);
 
     const chunk_b = try allocChunk();
-    defer testing.allocator.destroy(chunk_b);
+    defer {
+        chunk_b.blocks.deinit();
+        testing.allocator.destroy(chunk_b);
+    }
     const lm_b = try allocLightMap();
     defer freeLightMap(lm_b);
     var b_neighbor_lights = no_light_neighbors;
@@ -1187,7 +1238,7 @@ fn makeUndergroundChunk() !*Chunk {
     // Stone ceiling blocks sky light
     for (0..CHUNK_SIZE) |z| {
         for (0..CHUNK_SIZE) |x| {
-            chunk.blocks[chunkIndex(x, CHUNK_SIZE - 1, z)] = BlockState.defaultState(.stone);
+            chunk.blocks.set(chunkIndex(x, CHUNK_SIZE - 1, z), BlockState.defaultState(.stone));
         }
     }
     return chunk;
@@ -1195,8 +1246,11 @@ fn makeUndergroundChunk() !*Chunk {
 
 test "incremental: remove glowstone clears its light" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1207,8 +1261,8 @@ test "incremental: remove glowstone clears its light" {
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
 
     // Break the glowstone
-    const old_block = chunk.blocks[chunkIndex(16, 16, 16)];
-    chunk.blocks[chunkIndex(16, 16, 16)] = AIR;
+    const old_block = chunk.blocks.get(chunkIndex(16, 16, 16));
+    chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
 
     const result = applyBlockChange(chunk, lm, 16, 16, 16, old_block);
     try testing.expect(result != null);
@@ -1224,8 +1278,11 @@ test "incremental: remove glowstone clears its light" {
 
 test "incremental: place opaque block blocks light" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1235,7 +1292,7 @@ test "incremental: place opaque block blocks light" {
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), lm.block_light.get(chunkIndex(18, 16, 16))[0]);
 
     // Place stone at (17, 16, 16) — blocks light from passing through
-    chunk.blocks[chunkIndex(17, 16, 16)] = BlockState.defaultState(.stone);
+    chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
     const result = applyBlockChange(chunk, lm, 17, 16, 16, AIR);
     try testing.expect(result != null);
 
@@ -1249,9 +1306,12 @@ test "incremental: place opaque block blocks light" {
 
 test "incremental: break opaque block lets light through" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
-    chunk.blocks[chunkIndex(17, 16, 16)] = BlockState.defaultState(.stone); // wall blocking +X
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
+    chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone)); // wall blocking +X
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1262,7 +1322,7 @@ test "incremental: break opaque block lets light through" {
     try testing.expect(before < 255 - 2 * ATTENUATION);
 
     // Break the wall
-    chunk.blocks[chunkIndex(17, 16, 16)] = AIR;
+    chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
     const result = applyBlockChange(chunk, lm, 17, 16, 16, BlockState.defaultState(.stone));
     try testing.expect(result != null);
 
@@ -1274,9 +1334,12 @@ test "incremental: break opaque block lets light through" {
 
 test "incremental: two glowstones, remove one preserves other" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(10, 16, 16)] = BlockState.defaultState(.glowstone);
-    chunk.blocks[chunkIndex(20, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(10, 16, 16), BlockState.defaultState(.glowstone));
+    chunk.blocks.set(chunkIndex(20, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1287,7 +1350,7 @@ test "incremental: two glowstones, remove one preserves other" {
     try testing.expect(mid_before[0] > 0);
 
     // Remove glowstone at (10, 16, 16)
-    chunk.blocks[chunkIndex(10, 16, 16)] = AIR;
+    chunk.blocks.set(chunkIndex(10, 16, 16), AIR);
     const result = applyBlockChange(chunk, lm, 10, 16, 16, BlockState.defaultState(.glowstone));
     try testing.expect(result != null);
 
@@ -1306,7 +1369,10 @@ test "incremental: two glowstones, remove one preserves other" {
 
 test "incremental: place glowstone adds light" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1316,7 +1382,7 @@ test "incremental: place glowstone adds light" {
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
 
     // Place glowstone
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
     const result = applyBlockChange(chunk, lm, 16, 16, 16, AIR);
     try testing.expect(result != null);
 
@@ -1331,15 +1397,18 @@ test "incremental: place glowstone adds light" {
 
 test "incremental: matches full recompute for remove glowstone" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm_inc = try allocLightMap();
     defer freeLightMap(lm_inc);
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
 
     // Incremental remove
-    chunk.blocks[chunkIndex(16, 16, 16)] = AIR;
+    chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
     _ = applyBlockChange(chunk, lm_inc, 16, 16, 16, BlockState.defaultState(.glowstone));
 
     // Full recompute of the same final state
@@ -1359,15 +1428,18 @@ test "incremental: matches full recompute for remove glowstone" {
 
 test "incremental: matches full recompute for place wall" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
 
     const lm_inc = try allocLightMap();
     defer freeLightMap(lm_inc);
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
 
     // Place a stone wall
-    chunk.blocks[chunkIndex(17, 16, 16)] = BlockState.defaultState(.stone);
+    chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
     _ = applyBlockChange(chunk, lm_inc, 17, 16, 16, AIR);
 
     // Full recompute
@@ -1386,16 +1458,19 @@ test "incremental: matches full recompute for place wall" {
 
 test "incremental: matches full recompute for break wall" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.glowstone);
-    chunk.blocks[chunkIndex(17, 16, 16)] = BlockState.defaultState(.stone);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
+    chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
 
     const lm_inc = try allocLightMap();
     defer freeLightMap(lm_inc);
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
 
     // Break the wall
-    chunk.blocks[chunkIndex(17, 16, 16)] = AIR;
+    chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
     _ = applyBlockChange(chunk, lm_inc, 17, 16, 16, BlockState.defaultState(.stone));
 
     // Full recompute
@@ -1414,7 +1489,10 @@ test "incremental: matches full recompute for break wall" {
 
 test "incremental: sky light affected returns null for surface change" {
     const chunk = try allocChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
@@ -1422,21 +1500,24 @@ test "incremental: sky light affected returns null for surface change" {
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
     // Place stone in a sky-lit area: should return null (fall back to full)
-    chunk.blocks[chunkIndex(16, 16, 16)] = BlockState.defaultState(.stone);
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
     const result = applyBlockChange(chunk, lm, 16, 16, 16, AIR);
     try testing.expectEqual(@as(?u6, null), result);
 }
 
 test "incremental: no-op change in dark area" {
     const chunk = try makeUndergroundChunk();
-    defer testing.allocator.destroy(chunk);
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
 
     const lm = try allocLightMap();
     defer freeLightMap(lm);
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, &underground_surface);
 
     // Place and break stone in a completely dark interior area
-    chunk.blocks[chunkIndex(16, 10, 16)] = BlockState.defaultState(.stone);
+    chunk.blocks.set(chunkIndex(16, 10, 16), BlockState.defaultState(.stone));
     const result = applyBlockChange(chunk, lm, 16, 10, 16, AIR);
     try testing.expect(result != null);
     try testing.expectEqual(@as(u6, 0), result.?);

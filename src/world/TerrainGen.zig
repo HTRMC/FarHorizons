@@ -71,7 +71,7 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
     ng.selector.fillGrid3D(&selector, gx_start, gy_start, gz_start, SELECTOR_SCALE_XZ, SELECTOR_SCALE_Y, SELECTOR_SCALE_XZ);
 
     // --- Fill chunk ---
-    @memset(&chunk.blocks, @as(StateId, 0));
+    chunk.blocks.fillUniform(@as(StateId, 0));
 
     const oy_i32 = origin[1];
 
@@ -157,9 +157,9 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
                 const density = blended - bias;
 
                 if (density > 0.0) {
-                    chunk.blocks[idx] = BlockState.defaultState(.stone);
+                    chunk.blocks.set(idx, BlockState.defaultState(.stone));
                 } else if (wy <= SEA_LEVEL) {
-                    chunk.blocks[idx] = BlockState.defaultState(.water);
+                    chunk.blocks.set(idx, BlockState.defaultState(.water));
                 }
             }
         }
@@ -223,7 +223,7 @@ fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u6
             while (by_rev > 0) {
                 by_rev -= 1;
                 const idx = WorldState.chunkIndex(bx, by_rev, bz);
-                const block = chunk.blocks[idx];
+                const block = chunk.blocks.get(idx);
                 const wy = oy_i32 + @as(i32, @intCast(by_rev));
 
                 const blk = BlockState.getBlock(block);
@@ -268,15 +268,15 @@ fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u6
                     if (wy >= -1) {
                         // At or above Infdev y=63: place top block
                         if (top_block != 0) {
-                            chunk.blocks[idx] = top_block;
+                            chunk.blocks.set(idx, top_block);
                         }
                     } else {
                         // Deep underwater: place fill block
-                        chunk.blocks[idx] = fill_block;
+                        chunk.blocks.set(idx, fill_block);
                     }
                 } else if (depth > 0) {
                     depth -= 1;
-                    chunk.blocks[idx] = fill_block;
+                    chunk.blocks.set(idx, fill_block);
                 }
             }
         }
@@ -294,12 +294,12 @@ fn bedrockPass(chunk: *Chunk, oy_i32: i32, seed: u64) void {
         for (0..CS) |bz| {
             for (0..CS) |bx| {
                 const idx = WorldState.chunkIndex(bx, by, bz);
-                const bed_blk = BlockState.getBlock(chunk.blocks[idx]);
+                const bed_blk = BlockState.getBlock(chunk.blocks.get(idx));
                 if (bed_blk != .air and bed_blk != .water) {
                     // Random bedrock top boundary (Infdev line 187)
                     const threshold: i32 = -64 + @as(i32, @intCast(rng.bounded(6)));
                     if (wy <= threshold) {
-                        chunk.blocks[idx] = BlockState.defaultState(.bedrock);
+                        chunk.blocks.set(idx, BlockState.defaultState(.bedrock));
                     }
                 }
             }
@@ -478,8 +478,8 @@ fn placeVein(
 
                     // Only replace stone (c.b.c.java line 39)
                     const idx = WorldState.chunkIndex(@intCast(local_x), @intCast(local_y), @intCast(local_z));
-                    if (BlockState.getBlock(chunk.blocks[idx]) == .stone) {
-                        chunk.blocks[idx] = ore_state;
+                    if (BlockState.getBlock(chunk.blocks.get(idx)) == .stone) {
+                        chunk.blocks.set(idx, ore_state);
                     }
                 }
             }
@@ -730,9 +730,9 @@ fn carveEllipsoid(
                 if (fdx * fdx + fdy * fdy + fdz * fdz >= 1.0) continue;
 
                 const idx = WorldState.chunkIndex(bx, by, bz);
-                const cave_blk = BlockState.getBlock(chunk.blocks[idx]);
+                const cave_blk = BlockState.getBlock(chunk.blocks.get(idx));
                 if (cave_blk != .air and cave_blk != .water and cave_blk != .bedrock) {
-                    chunk.blocks[idx] = BlockState.defaultState(.air);
+                    chunk.blocks.set(idx, BlockState.defaultState(.air));
                 }
             }
         }
@@ -956,9 +956,17 @@ const testing = std.testing;
 test "generateChunk: deterministic output (same seed same blocks)" {
     const alloc = testing.allocator;
     const chunk1 = try alloc.create(Chunk);
-    defer alloc.destroy(chunk1);
+    chunk1.blocks = WorldState.PaletteBlocks.init(alloc);
+    defer {
+        chunk1.blocks.deinit();
+        alloc.destroy(chunk1);
+    }
     const chunk2 = try alloc.create(Chunk);
-    defer alloc.destroy(chunk2);
+    chunk2.blocks = WorldState.PaletteBlocks.init(alloc);
+    defer {
+        chunk2.blocks.deinit();
+        alloc.destroy(chunk2);
+    }
 
     const key = ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
     const seed: u64 = 12345;
@@ -966,25 +974,35 @@ test "generateChunk: deterministic output (same seed same blocks)" {
     generateChunk(chunk1, key, seed);
     generateChunk(chunk2, key, seed);
 
-    try testing.expectEqualSlices(StateId, &chunk1.blocks, &chunk2.blocks);
+    // Compare all blocks through palette access
+    for (0..WorldState.BLOCKS_PER_CHUNK) |i| {
+        try testing.expectEqual(chunk1.blocks.get(i), chunk2.blocks.get(i));
+    }
 }
 
 test "generateChunk: different seeds produce different chunks" {
     const alloc = testing.allocator;
     const chunk1 = try alloc.create(Chunk);
-    defer alloc.destroy(chunk1);
+    chunk1.blocks = WorldState.PaletteBlocks.init(alloc);
+    defer {
+        chunk1.blocks.deinit();
+        alloc.destroy(chunk1);
+    }
     const chunk2 = try alloc.create(Chunk);
-    defer alloc.destroy(chunk2);
+    chunk2.blocks = WorldState.PaletteBlocks.init(alloc);
+    defer {
+        chunk2.blocks.deinit();
+        alloc.destroy(chunk2);
+    }
 
     const key = ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
 
     generateChunk(chunk1, key, 111);
     generateChunk(chunk2, key, 222);
 
-    // At least some blocks should differ
     var diffs: u32 = 0;
-    for (&chunk1.blocks, &chunk2.blocks) |a, b| {
-        if (a != b) diffs += 1;
+    for (0..WorldState.BLOCKS_PER_CHUNK) |i| {
+        if (chunk1.blocks.get(i) != chunk2.blocks.get(i)) diffs += 1;
     }
     try testing.expect(diffs > 0);
 }
@@ -992,15 +1010,18 @@ test "generateChunk: different seeds produce different chunks" {
 test "generateChunk: surface chunks have stone and air" {
     const alloc = testing.allocator;
     const chunk = try alloc.create(Chunk);
-    defer alloc.destroy(chunk);
+    chunk.blocks = WorldState.PaletteBlocks.init(alloc);
+    defer {
+        chunk.blocks.deinit();
+        alloc.destroy(chunk);
+    }
 
-    // Surface-level chunk (cy=0 straddles sea level)
     generateChunk(chunk, .{ .cx = 0, .cy = 0, .cz = 0 }, 42);
 
     var has_stone = false;
     var has_air = false;
-    for (&chunk.blocks) |b| {
-        const blk = BlockState.getBlock(b);
+    for (0..WorldState.BLOCKS_PER_CHUNK) |i| {
+        const blk = BlockState.getBlock(chunk.blocks.get(i));
         if (blk == .stone) has_stone = true;
         if (blk == .air) has_air = true;
     }
@@ -1011,14 +1032,17 @@ test "generateChunk: surface chunks have stone and air" {
 test "generateChunk: deep underground is mostly solid" {
     const alloc = testing.allocator;
     const chunk = try alloc.create(Chunk);
-    defer alloc.destroy(chunk);
+    chunk.blocks = WorldState.PaletteBlocks.init(alloc);
+    defer {
+        chunk.blocks.deinit();
+        alloc.destroy(chunk);
+    }
 
-    // Very deep chunk (cy=-4 → y=-128 to -97)
     generateChunk(chunk, .{ .cx = 0, .cy = -4, .cz = 0 }, 42);
 
     var solid: u32 = 0;
-    for (&chunk.blocks) |b| {
-        const blk = BlockState.getBlock(b);
+    for (0..WorldState.BLOCKS_PER_CHUNK) |i| {
+        const blk = BlockState.getBlock(chunk.blocks.get(i));
         if (blk != .air and blk != .water) solid += 1;
     }
     // Should be mostly solid (bedrock + stone), at least 90%
@@ -1056,7 +1080,8 @@ test "CaveRng.float: values in [0, 1)" {
 
 test "surfacePass: generates sand near water" {
     // Smoke test: generate a chunk near sea level and verify surface blocks exist
-    var chunk: Chunk = undefined;
+    var chunk: Chunk = .{ .blocks = WorldState.PaletteBlocks.init(testing.allocator) };
+    defer chunk.blocks.deinit();
     const key = ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
     generateChunk(&chunk, key, 42);
 
@@ -1065,7 +1090,7 @@ test "surfacePass: generates sand near water" {
     for (0..CS) |bz| {
         for (0..CS) |bx| {
             for (0..CS) |by| {
-                const blk = BlockState.getBlock(chunk.blocks[WorldState.chunkIndex(bx, by, bz)]);
+                const blk = BlockState.getBlock(chunk.blocks.get(WorldState.chunkIndex(bx, by, bz)));
                 if (blk == .grass_block or blk == .dirt or blk == .sand or blk == .gravel) {
                     has_surface = true;
                 }
@@ -1100,7 +1125,8 @@ test "bench: generateChunk" {
     const io = std.Io.Threaded.global_single_threaded.io();
     const ITERS = 10;
     var samples: [ITERS]u64 = undefined;
-    var chunk: Chunk = undefined;
+    var chunk: Chunk = .{ .blocks = WorldState.PaletteBlocks.init(testing.allocator) };
+    defer chunk.blocks.deinit();
 
     for (&samples, 0..) |*sample, i| {
         const start = std.Io.Clock.now(.awake, io);
@@ -1115,7 +1141,8 @@ test "bench: full pipeline (terrain + mesh)" {
     const io = std.Io.Threaded.global_single_threaded.io();
     const ITERS = 10;
     var samples: [ITERS]u64 = undefined;
-    var chunk: Chunk = undefined;
+    var chunk: Chunk = .{ .blocks = WorldState.PaletteBlocks.init(testing.allocator) };
+    defer chunk.blocks.deinit();
     var face_count: u32 = 0;
     const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
     const LightBorderSnapshot = @import("LightMap.zig").LightBorderSnapshot;

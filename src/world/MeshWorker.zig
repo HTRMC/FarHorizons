@@ -248,10 +248,8 @@ pub const MeshWorker = struct {
         const chunk = local_chunk_map.get(key) orelse return true;
 
         // Skip all-air chunks immediately (no geometry possible)
-        if (!light_only and chunk.blocks[0] == BlockState.defaultState(.air)) blk: {
-            for (&chunk.blocks) |b| {
-                if (b != BlockState.defaultState(.air)) break :blk;
-            }
+        if (!light_only and chunk.blocks.get(0) == BlockState.defaultState(.air)) blk: {
+            if (chunk.blocks.palette_len > 1) break :blk;
             _ = self.stats_hidden.fetchAdd(1, .monotonic);
             return true;
         }

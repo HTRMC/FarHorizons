@@ -20,6 +20,7 @@ pub const ChunkPool = struct {
 
     pub fn deinit(self: *ChunkPool) void {
         for (self.free_list.items) |chunk| {
+            chunk.blocks.deinit();
             self.allocator.destroy(chunk);
         }
         self.free_list.deinit(self.allocator);
@@ -34,10 +35,13 @@ pub const ChunkPool = struct {
             null;
         self.mutex.unlock(io);
 
-        if (result) |chunk| return chunk;
+        if (result) |chunk| {
+            chunk.blocks.fillUniform(0);
+            return chunk;
+        }
 
         const chunk = self.allocator.create(Chunk) catch @panic("ChunkPool: out of memory");
-        @memset(&chunk.blocks, @as(u16, 0)); // StateId 0 = air
+        chunk.blocks = WorldState.PaletteBlocks.init(self.allocator);
         return chunk;
     }
 
@@ -46,6 +50,7 @@ pub const ChunkPool = struct {
         self.mutex.lockUncancelable(io);
         self.free_list.append(self.allocator, chunk) catch {
             self.mutex.unlock(io);
+            chunk.blocks.deinit();
             self.allocator.destroy(chunk);
             return;
         };

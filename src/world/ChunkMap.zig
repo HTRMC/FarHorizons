@@ -25,6 +25,7 @@ pub const ChunkMap = struct {
     pub fn deinit(self: *ChunkMap) void {
         var it = self.chunks.iterator();
         while (it.next()) |entry| {
+            entry.value_ptr.*.blocks.deinit();
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.chunks.deinit();
@@ -65,7 +66,7 @@ pub const ChunkMap = struct {
         const lx: usize = @intCast(@mod(wx, @as(i32, CHUNK_SIZE)));
         const ly: usize = @intCast(@mod(wy, @as(i32, CHUNK_SIZE)));
         const lz: usize = @intCast(@mod(wz, @as(i32, CHUNK_SIZE)));
-        return chunk.blocks[WorldState.chunkIndex(lx, ly, lz)];
+        return chunk.blocks.get(WorldState.chunkIndex(lx, ly, lz));
     }
 
     /// Set block state at world coordinates. Does nothing if chunk is not loaded.
@@ -75,7 +76,7 @@ pub const ChunkMap = struct {
         const lx: usize = @intCast(@mod(wx, @as(i32, CHUNK_SIZE)));
         const ly: usize = @intCast(@mod(wy, @as(i32, CHUNK_SIZE)));
         const lz: usize = @intCast(@mod(wz, @as(i32, CHUNK_SIZE)));
-        chunk.blocks[WorldState.chunkIndex(lx, ly, lz)] = block;
+        chunk.blocks.set(WorldState.chunkIndex(lx, ly, lz), block);
     }
 
     /// Get the 6 face neighbors for a chunk key.
@@ -102,7 +103,8 @@ const testing = std.testing;
 
 fn makeTestChunk(allocator: std.mem.Allocator, fill: BlockState.Block) !*Chunk {
     const chunk = try allocator.create(Chunk);
-    chunk.blocks = .{BlockState.defaultState(fill)} ** WorldState.BLOCKS_PER_CHUNK;
+    chunk.blocks = WorldState.PaletteBlocks.init(allocator);
+    chunk.blocks.fillUniform(BlockState.defaultState(fill));
     return chunk;
 }
 
@@ -143,6 +145,7 @@ test "ChunkMap: remove returns chunk" {
     try testing.expectEqual(@as(usize, 0), map.count());
 
     // Clean up manually since we removed it from map
+    removed.?.blocks.deinit();
     testing.allocator.destroy(removed.?);
 }
 
@@ -165,7 +168,7 @@ test "ChunkMap: getBlock returns correct block from loaded chunk" {
     defer map.deinit();
 
     const chunk = try makeTestChunk(testing.allocator, .air);
-    chunk.blocks[WorldState.chunkIndex(5, 10, 15)] = BlockState.defaultState(.stone);
+    chunk.blocks.set(WorldState.chunkIndex(5, 10, 15), BlockState.defaultState(.stone));
     map.put(ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     try testing.expectEqual(BlockState.Block.stone, BlockState.getBlock(map.getBlock(5, 10, 15)));
@@ -179,7 +182,7 @@ test "ChunkMap: getBlock with negative world coordinates" {
     const chunk = try makeTestChunk(testing.allocator, .air);
     // Chunk at (-1,-1,-1) covers world coords [-32, -1]
     // Block at local (31,31,31) = world (-1,-1,-1)
-    chunk.blocks[WorldState.chunkIndex(31, 31, 31)] = BlockState.defaultState(.dirt);
+    chunk.blocks.set(WorldState.chunkIndex(31, 31, 31), BlockState.defaultState(.dirt));
     map.put(ChunkKey{ .cx = -1, .cy = -1, .cz = -1 }, chunk);
 
     try testing.expectEqual(BlockState.Block.dirt, BlockState.getBlock(map.getBlock(-1, -1, -1)));

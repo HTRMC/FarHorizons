@@ -270,13 +270,15 @@ pub const IoPipeline = struct {
         defer self.region_cache.releaseRegion(region);
 
         const chunk_index = key.localIndex();
-        var chunk: Chunk = undefined;
-        const found = region.readChunk(chunk_index, &chunk.blocks) catch {
+        var temp_blocks: [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+        const found = region.readChunk(chunk_index, &temp_blocks) catch {
             self.postResult(request.handle_id, key, false);
             return;
         };
 
         if (found) {
+            var chunk: Chunk = undefined;
+            chunk.blocks.loadFromSlice(&temp_blocks);
             self.chunk_cache.put(key, &chunk);
             self.postResult(request.handle_id, key, true);
         } else {
@@ -298,7 +300,9 @@ pub const IoPipeline = struct {
         defer self.region_cache.releaseRegion(region);
 
         const chunk_index = key.localIndex();
-        region.writeChunk(chunk_index, &chunk.blocks, self.default_compression) catch |err| {
+        var temp_blocks: [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+        chunk.blocks.getRange(&temp_blocks, 0);
+        region.writeChunk(chunk_index, &temp_blocks, self.default_compression) catch |err| {
             log.err("Failed to save chunk: {}", .{err});
         };
     }
@@ -315,10 +319,12 @@ pub const IoPipeline = struct {
         defer self.region_cache.releaseRegion(region);
 
         var indices: [BatchSaveData.MAX_BATCH_SIZE]u9 = undefined;
+        var temp_blocks_batch: [BatchSaveData.MAX_BATCH_SIZE][WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
         var block_ptrs: [BatchSaveData.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
         for (0..batch.count) |i| {
             indices[i] = batch.indices[i];
-            block_ptrs[i] = &batch.chunks[i].blocks;
+            batch.chunks[i].blocks.getRange(&temp_blocks_batch[i], 0);
+            block_ptrs[i] = &temp_blocks_batch[i];
         }
 
         region.writeChunkBatch(

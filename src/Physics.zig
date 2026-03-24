@@ -330,8 +330,11 @@ test "collideAxis: no collision in empty chunk" {
     defer map.deinit();
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
-    defer testing.allocator.destroy(chunk);
-    @memset(&chunk.blocks, @as(u16, 0));
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks = WorldState.PaletteBlocks.init(testing.allocator);
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     const pos = [3]f32{ 5.0, 5.0, 5.0 };
@@ -345,11 +348,14 @@ test "collideAxis: collision with solid block" {
     defer map.deinit();
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
-    defer testing.allocator.destroy(chunk);
-    @memset(&chunk.blocks, @as(u16, 0));
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks = WorldState.PaletteBlocks.init(testing.allocator);
 
     // Place stone at (10, 5, 5)
-    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = BlockState.defaultState(.stone);
+    chunk.blocks.set(WorldState.chunkIndex(10, 5, 5), BlockState.defaultState(.stone));
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     // Entity at x=8.0 (HALF_W=0.4, so right edge at 8.4), moving +x toward block at x=10
@@ -367,11 +373,14 @@ test "collideAxis: negative movement collision" {
     defer map.deinit();
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
-    defer testing.allocator.destroy(chunk);
-    @memset(&chunk.blocks, @as(u16, 0));
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks = WorldState.PaletteBlocks.init(testing.allocator);
 
     // Place stone at (3, 5, 5) — block spans x=[3,4)
-    chunk.blocks[WorldState.chunkIndex(3, 5, 5)] = BlockState.defaultState(.stone);
+    chunk.blocks.set(WorldState.chunkIndex(3, 5, 5), BlockState.defaultState(.stone));
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     // Entity at x=5.0 (left edge at 4.6), moving -x toward block ending at x=4
@@ -388,11 +397,14 @@ test "collideAxis: water is not solid" {
     defer map.deinit();
 
     const chunk = try testing.allocator.create(WorldState.Chunk);
-    defer testing.allocator.destroy(chunk);
-    @memset(&chunk.blocks, @as(u16, 0));
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks = WorldState.PaletteBlocks.init(testing.allocator);
 
     // Place water at (10, 5, 5)
-    chunk.blocks[WorldState.chunkIndex(10, 5, 5)] = BlockState.defaultState(.water);
+    chunk.blocks.set(WorldState.chunkIndex(10, 5, 5), BlockState.defaultState(.water));
     map.put(WorldState.ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
     const pos = [3]f32{ 8.0, 5.0, 5.5 };

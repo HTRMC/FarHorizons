@@ -99,6 +99,28 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             self.bit_size = 0;
         }
 
+        /// Copy a contiguous range of values into a destination slice.
+        /// Optimized for the uniform case (bit_size == 0).
+        pub fn getRange(self: *const Self, dst: []T, start: u32) void {
+            if (self.bit_size == 0) {
+                @memset(dst, self.palette[0]);
+                return;
+            }
+            for (dst, 0..) |*d, i| {
+                d.* = self.get(start + @as(u32, @intCast(i)));
+            }
+        }
+
+        /// Load values from a flat array, replacing all current contents.
+        /// Resets palette and rebuilds from the source data.
+        pub fn loadFromSlice(self: *Self, src: []const T) void {
+            std.debug.assert(src.len == count);
+            self.fillUniform(src[0]);
+            for (src[1..], 1..) |val, i| {
+                self.set(i, val);
+            }
+        }
+
         /// Estimated heap bytes used by this storage (palette + occupancy + packed data).
         pub fn memoryUsage(self: *const Self) usize {
             var total: usize = self.palette_cap * @sizeOf(T);

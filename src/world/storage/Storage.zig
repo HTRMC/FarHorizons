@@ -224,10 +224,12 @@ pub fn saveAllDirty(self: *Storage) void {
         defer self.region_cache.releaseRegion(region);
 
         var indices: [dirty_set_mod.MAX_BATCH_SIZE]u9 = undefined;
+        var temp_blocks_batch: [dirty_set_mod.MAX_BATCH_SIZE][WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
         var block_ptrs: [dirty_set_mod.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
         for (0..batch.count) |i| {
             indices[i] = batch.indices[i];
-            block_ptrs[i] = &batch.chunks[i].blocks;
+            batch.chunks[i].blocks.getRange(&temp_blocks_batch[i], 0);
+            block_ptrs[i] = &temp_blocks_batch[i];
         }
 
         region.writeChunkBatch(
@@ -277,12 +279,14 @@ pub fn loadChunk(self: *Storage, cx: i32, cy: i32, cz: i32) ?*const Chunk {
     const t1 = Io.Clock.now(.awake, io);
 
     const chunk_index = key.localIndex();
-    var chunk: Chunk = undefined;
-    const found = region.readChunk(chunk_index, &chunk.blocks) catch |err| {
+    var temp_blocks: [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+    const found = region.readChunk(chunk_index, &temp_blocks) catch |err| {
         log.err("loadChunk({d},{d},{d}): read failed: {}", .{ cx, cy, cz, err });
         return null;
     };
     if (!found) return null;
+    var chunk: Chunk = undefined;
+    chunk.blocks.loadFromSlice(&temp_blocks);
     const t2 = Io.Clock.now(.awake, io);
 
     _ = self.stats_region_ns.fetchAdd(@intCast(t0.durationTo(t1).nanoseconds), .monotonic);
@@ -301,7 +305,9 @@ pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *const Chunk)
     defer self.region_cache.releaseRegion(region);
 
     const chunk_index = key.localIndex();
-    try region.writeChunk(chunk_index, &chunk.blocks, self.default_compression);
+    var temp_blocks: [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+    chunk.blocks.getRange(&temp_blocks, 0);
+    try region.writeChunk(chunk_index, &temp_blocks, self.default_compression);
 
     self.chunk_cache.put(key, chunk);
 }
