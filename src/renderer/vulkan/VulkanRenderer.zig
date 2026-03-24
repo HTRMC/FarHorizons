@@ -12,6 +12,7 @@ const vk_utils = @import("vk_utils.zig");
 const TransferPipeline = @import("TransferPipeline.zig").TransferPipeline;
 const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
+const ThreadPool = @import("../../ThreadPool.zig").ThreadPool;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const GameState = @import("../../GameState.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
@@ -70,6 +71,7 @@ pub const VulkanRenderer = struct {
     initial_cache_hash: u64,
     transfer_pipeline: TransferPipeline,
     mesh_worker: ?*MeshWorker,
+    thread_pool: ?*ThreadPool,
     game_state: ?*GameState,
     ui_manager: ?*UiManager,
     framebuffer_resized: bool,
@@ -156,6 +158,7 @@ pub const VulkanRenderer = struct {
             .render_state = undefined,
             .transfer_pipeline = undefined,
             .mesh_worker = null,
+            .thread_pool = null,
             .game_state = game_state,
             .ui_manager = null,
             .framebuffer_resized = false,
@@ -247,14 +250,24 @@ pub const VulkanRenderer = struct {
 
         self.mesh_worker = mw;
 
-        // 3. Init + start ChunkStreamer
+        // 2. Init ChunkStreamer
         game_state.streaming.streamer.initInPlace(self.allocator, game_state.streaming.storage, &game_state.chunk_pool, game_state.streaming.world_seed, game_state.streaming.world_type);
 
         // Sync player position before starting threads so initial heap ordering is correct
         game_state.streaming.streamer.syncPlayerChunk(game_state.streaming.player_chunk);
         mw.syncChunkMap(&game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map, game_state.streaming.player_chunk);
 
-        game_state.streaming.streamer.start();
+        // 3. Create shared ThreadPool and register work sources
+        const pool = self.allocator.create(ThreadPool) catch |err| {
+            std.log.err("Failed to allocate ThreadPool: {}", .{err});
+            return;
+        };
+        pool.init();
+        pool.addSource(game_state.streaming.streamer.workSource());
+        pool.addSource(mw.workSource());
+        game_state.streaming.streamer.pool = pool;
+        mw.pool = pool;
+        self.thread_pool = pool;
 
         // 4. Setup + start TransferPipeline thread
         self.transfer_pipeline.setupThread(
@@ -269,8 +282,8 @@ pub const VulkanRenderer = struct {
         game_state.streaming.mesh_worker = mw;
         game_state.streaming.transfer_pipeline = &self.transfer_pipeline;
 
-        // 6. Start threads (mesh first so transfer can consume)
-        mw.start();
+        // 6. Start pool + transfer thread
+        pool.start();
         self.transfer_pipeline.start();
 
         // 7. Request initial load batch if async loading
@@ -309,14 +322,19 @@ pub const VulkanRenderer = struct {
     }
 
     fn stopWorkerPipeline(self: *VulkanRenderer) void {
-        // Stop streamer first (produces chunks for main thread)
+        // Stop pool first (stops all streaming + meshing work)
+        if (self.thread_pool) |pool| {
+            pool.stop();
+        }
+
+        // Clear game_state references
         if (self.game_state) |game_state| {
             game_state.streaming.streamer.stop();
             game_state.streaming.mesh_worker = null;
             game_state.streaming.transfer_pipeline = null;
         }
 
-        // Stop threads in dependency order: transfer (consumes mesh) → mesh (produces)
+        // Stop transfer thread (consumes mesh output)
         self.transfer_pipeline.stop();
         if (self.mesh_worker) |mw| {
             mw.stop();
@@ -341,6 +359,10 @@ pub const VulkanRenderer = struct {
         if (self.mesh_worker) |mw| {
             self.allocator.destroy(mw);
             self.mesh_worker = null;
+        }
+        if (self.thread_pool) |pool| {
+            self.allocator.destroy(pool);
+            self.thread_pool = null;
         }
     }
 

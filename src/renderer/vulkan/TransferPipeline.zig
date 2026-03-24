@@ -313,8 +313,9 @@ pub const TransferPipeline = struct {
                     mw.output_len = 0;
                 }
                 mw.output_mutex.unlock(io);
+                // Wake pool workers that may have skipped due to full output
                 if (local_count > 0) {
-                    mw.output_drained_cond.signal(io);
+                    if (mw.pool) |p| p.notifyAll();
                 }
             }
 
