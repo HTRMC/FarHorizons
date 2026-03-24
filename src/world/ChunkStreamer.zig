@@ -259,10 +259,11 @@ pub const ChunkStreamer = struct {
         // Push to output queue
         self.output_mutex.lockUncancelable(io);
         if (self.output_len >= MAX_OUTPUT) {
-            // Output became full between check and push — drop
+            // Output became full between check and push — re-enqueue
             self.output_mutex.unlock(io);
             self.chunk_pool.release(chunk);
             _ = self.stats_output_waits.fetchAdd(1, .monotonic);
+            self.requestLoad(key);
             return true;
         }
         self.output_queue[self.output_len] = .{ .key = key, .chunk = chunk };

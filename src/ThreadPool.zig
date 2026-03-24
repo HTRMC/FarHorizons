@@ -17,8 +17,7 @@ pub const ThreadPool = struct {
     thread_count: u32,
     shutdown: std.atomic.Value(bool),
 
-    mutex: Io.Mutex,
-    cond: Io.Condition,
+    semaphore: Io.Semaphore,
 
     pub fn init(self: *ThreadPool) void {
         self.* = .{
@@ -27,8 +26,7 @@ pub const ThreadPool = struct {
             .threads = .{null} ** MAX_THREADS,
             .thread_count = 0,
             .shutdown = std.atomic.Value(bool).init(false),
-            .mutex = .init,
-            .cond = .init,
+            .semaphore = .{},
         };
     }
 
@@ -58,9 +56,10 @@ pub const ThreadPool = struct {
     pub fn stop(self: *ThreadPool) void {
         self.shutdown.store(true, .release);
         const io = Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        self.cond.broadcast(io);
-        self.mutex.unlock(io);
+        // Wake all workers so they can see the shutdown flag
+        for (0..self.thread_count) |_| {
+            self.semaphore.post(io);
+        }
         for (0..self.thread_count) |i| {
             if (self.threads[i]) |t| {
                 t.join();
@@ -72,17 +71,15 @@ pub const ThreadPool = struct {
     /// Signal that work may be available. Call after enqueuing to a source.
     pub fn notify(self: *ThreadPool) void {
         const io = Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        self.cond.signal(io);
-        self.mutex.unlock(io);
+        self.semaphore.post(io);
     }
 
     /// Wake all workers. Use when multiple items are enqueued.
     pub fn notifyAll(self: *ThreadPool) void {
         const io = Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        self.cond.broadcast(io);
-        self.mutex.unlock(io);
+        for (0..self.thread_count) |_| {
+            self.semaphore.post(io);
+        }
     }
 
     fn workerFn(self: *ThreadPool) void {
@@ -97,11 +94,7 @@ pub const ThreadPool = struct {
                 }
             }
             if (!did_work) {
-                self.mutex.lockUncancelable(io);
-                if (!self.shutdown.load(.acquire)) {
-                    self.cond.waitUncancelable(io, &self.mutex);
-                }
-                self.mutex.unlock(io);
+                self.semaphore.waitUncancelable(io);
             }
         }
     }

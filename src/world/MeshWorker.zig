@@ -393,6 +393,7 @@ pub const MeshWorker = struct {
                 self.output_mutex.unlock(io);
                 self.allocator.free(light_result.lights);
                 _ = self.stats_output_waits.fetchAdd(1, .monotonic);
+                self.enqueueLightOnlyBatch(&.{key});
                 return true;
             }
             self.output_queue[self.output_len] = .{
@@ -420,6 +421,7 @@ pub const MeshWorker = struct {
                 self.allocator.free(mesh.faces);
                 self.allocator.free(mesh.lights);
                 _ = self.stats_output_waits.fetchAdd(1, .monotonic);
+                self.enqueue(key);
                 return true;
             }
             self.output_queue[self.output_len] = .{
