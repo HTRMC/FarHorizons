@@ -1,6 +1,6 @@
 .{
     .name = .FarHorizons,
-    .version = "0.0.0",
+    .version = "0.1.0",
     .fingerprint = 0x953f10b5464497f4,
     .minimum_zig_version = "0.16.0-dev.2682+02142a54d",
     .dependencies = .{

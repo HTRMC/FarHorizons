@@ -737,7 +737,7 @@ pub fn main() !void {
     var window = try Window.init(.{
         .width = 1280,
         .height = 720,
-        .title = "FarHorizons 0.0.0",
+        .title = "FarHorizons 0.1.0",
     });
     defer window.deinit();
 
