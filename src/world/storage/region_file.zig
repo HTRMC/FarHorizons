@@ -315,7 +315,6 @@ pub const RegionFile = struct {
         if (chunk_indices.len == 0) return;
         std.debug.assert(chunk_indices.len == block_arrays.len);
 
-        const batch_start = std.Io.Clock.now(.awake, self.io);
         var encode_ns: i64 = 0;
         var compress_ns: i64 = 0;
         var write_ns: i64 = 0;
@@ -393,20 +392,7 @@ pub const RegionFile = struct {
         self.header.generation += 1;
         self.header.total_sectors = self.allocator_bitmap.total_sectors;
 
-        const commit_start = std.Io.Clock.now(.awake, self.io);
         try self.commitHeader();
-        const commit_ns: i64 = @intCast(commit_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds);
-
-        const total_us = @divTrunc(@as(i64, @intCast(batch_start.durationTo(std.Io.Clock.now(.awake, self.io)).nanoseconds)), 1000);
-        log.info("[writeChunkBatch] n={d} encode={d}us compress={d}us write={d}us commit={d}us total={d}us bytes={d}", .{
-            chunk_indices.len,
-            @divTrunc(encode_ns, 1000),
-            @divTrunc(compress_ns, 1000),
-            @divTrunc(write_ns, 1000),
-            @divTrunc(commit_ns, 1000),
-            total_us,
-            total_bytes,
-        });
     }
 
     pub fn chunkExists(self: *RegionFile, chunk_index: u9) bool {
@@ -471,12 +457,6 @@ pub const RegionFile = struct {
         const cot_bytes = buf[cot_offset..][0 .. CHUNKS_PER_REGION * @sizeOf(ChunkOffsetEntry)];
         const cot_entries: [*]const ChunkOffsetEntry = @ptrCast(@alignCast(cot_bytes.ptr));
         @memcpy(&self.cot, cot_entries[0..CHUNKS_PER_REGION]);
-
-        log.info("Opened region file {s} (slot {c}, gen {d})", .{
-            self.path,
-            @as(u8, if (use_slot == 0) 'A' else 'B'),
-            self.header.generation,
-        });
     }
 
     fn commitHeader(self: *RegionFile) !void {

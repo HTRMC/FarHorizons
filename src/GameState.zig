@@ -1900,15 +1900,6 @@ fn reportPipelineStats(self: *GameState) void {
     if (elapsed_ns < 2_000_000_000) return;
     self.streaming.stats_last_time = now;
 
-    const elapsed_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
-
-    // Read + reset streamer counters
-    const s_loaded = self.streaming.streamer.stats_loaded.swap(0, .monotonic);
-    const s_generated = self.streaming.streamer.stats_generated.swap(0, .monotonic);
-    const s_stale = self.streaming.streamer.stats_stale.swap(0, .monotonic);
-    const s_waits = self.streaming.streamer.stats_output_waits.swap(0, .monotonic);
-    const s_total = s_loaded + s_generated;
-
     // Read + reset mesh worker counters
     var m_meshed: u64 = 0;
     var m_light: u64 = 0;
@@ -1922,7 +1913,6 @@ fn reportPipelineStats(self: *GameState) void {
         m_stale = mw.stats_stale.swap(0, .monotonic);
         m_waits = mw.stats_output_waits.swap(0, .monotonic);
     }
-    const m_total = m_meshed + m_light;
 
     // Read + reset transfer pipeline counters
     var t_transferred: u64 = 0;
@@ -1934,7 +1924,6 @@ fn reportPipelineStats(self: *GameState) void {
 
     // Sample queue depths (non-atomic, diagnostic only)
     var si: usize = 0;
-    const so = self.streaming.streamer.output_len;
     var mi: usize = 0;
     var mo: u32 = 0;
     if (self.streaming.pool) |pool| {
@@ -1948,28 +1937,6 @@ fn reportPipelineStats(self: *GameState) void {
     if (self.streaming.transfer_pipeline) |tp| {
         co = tp.committed_len;
     }
-
-    std.log.info("[Pipeline {d:.1}s] stream: {d:.0}/s (gen:{} disk:{} stale:{} waits:{}) | mesh: {d:.0}/s (full:{} light:{} hidden:{} stale:{} waits:{}) | gpu: {d:.0}/s (drop:{}) | queues: si:{} so:{} mi:{} mo:{} co:{}", .{
-        elapsed_s,
-        @as(f64, @floatFromInt(s_total)) / elapsed_s,
-        s_generated,
-        s_loaded,
-        s_stale,
-        s_waits,
-        @as(f64, @floatFromInt(m_total)) / elapsed_s,
-        m_meshed,
-        m_light,
-        m_hidden,
-        m_stale,
-        m_waits,
-        @as(f64, @floatFromInt(t_transferred)) / elapsed_s,
-        t_dropped,
-        si,
-        so,
-        mi,
-        mo,
-        co,
-    });
 
     // Storage timing breakdown
     if (self.streaming.storage) |s| {
