@@ -592,6 +592,47 @@ fn propagateBlockLightBFS(
     if (track_boundary) return boundary_mask;
 }
 
+/// Additively propagate block light from neighbor borders into an already-computed
+/// light map. Seeds from all 6 borders and runs BFS, but only updates positions
+/// where incoming light exceeds existing values. Does not touch sky light or
+/// re-scan emitters. Used by the light-only refresh path so that light from
+/// torches near chunk borders propagates inward (like Cubyz's propagateFromNeighbor).
+pub fn propagateFromNeighbor(
+    chunk: *const WorldState.Chunk,
+    neighbor_borders: [6]LightBorderSnapshot,
+    light_map: *LightMap,
+) void {
+    const tz = tracy.zone(@src(), "propagateFromNeighbor");
+    defer tz.end();
+
+    var queue: [MAX_QUEUE]QueueEntry = undefined;
+    var head: u32 = 0;
+    var tail: u32 = 0;
+
+    // Seed from all 6 neighbor borders (additive — skips if existing >= incoming)
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |z| {
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(CHUNK_SIZE - 1), @intCast(y), @intCast(z), 1, getNeighborLight(neighbor_borders, 3, y * CHUNK_SIZE + z));
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, 0, @intCast(y), @intCast(z), 0, getNeighborLight(neighbor_borders, 2, y * CHUNK_SIZE + z));
+        }
+    }
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |x| {
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), @intCast(CHUNK_SIZE - 1), 5, getNeighborLight(neighbor_borders, 0, y * CHUNK_SIZE + x));
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), 0, 4, getNeighborLight(neighbor_borders, 1, y * CHUNK_SIZE + x));
+        }
+    }
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |x| {
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(CHUNK_SIZE - 1), @intCast(z), 3, getNeighborLight(neighbor_borders, 4, z * CHUNK_SIZE + x));
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), 0, @intCast(z), 2, getNeighborLight(neighbor_borders, 5, z * CHUNK_SIZE + x));
+        }
+    }
+
+    // Additive BFS — only spreads where incoming > existing
+    propagateBlockLightBFS(&queue, &head, &tail, chunk, light_map, false);
+}
+
 // ─── Incremental updates ───
 
 const DestructiveEntry = struct {

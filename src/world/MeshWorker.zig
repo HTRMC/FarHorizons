@@ -175,8 +175,8 @@ pub const MeshWorker = struct {
                 const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
 
                 // Light-only refresh for neighbors whose borders changed.
-                // No cascade recompute — neighbors keep their own light and just
-                // re-sample the updated border values during mesh generation.
+                // Neighbors recompute their lighting with updated border values,
+                // propagating light inward via BFS (e.g. torches near chunk borders).
                 if (boundary_mask != 0) {
                     var lo_keys: [6]ChunkKey = undefined;
                     var lo_count: usize = 0;
@@ -241,6 +241,12 @@ pub const MeshWorker = struct {
         }
 
         if (light_only) {
+            // Propagate neighbor border light into this chunk's light map additively,
+            // so that light from torches near chunk borders continues inward via BFS.
+            if (light_map) |lm| {
+                LightEngine.propagateFromNeighbor(chunk, neighbor_borders, lm);
+            }
+
             const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_borders) catch |err| {
                 std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                 return true;
