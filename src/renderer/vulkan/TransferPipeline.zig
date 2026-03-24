@@ -65,6 +65,7 @@ pub const TransferPipeline = struct {
     committed_queue: [MAX_COMMITTED]CommittedChunk,
     committed_len: u32,
     committed_mutex: Io.Mutex,
+    committed_drained_cond: Io.Condition,
 
     // Pipeline stats (atomically updated by worker)
     stats_transferred: std.atomic.Value(u64),
@@ -94,6 +95,7 @@ pub const TransferPipeline = struct {
         self.tlsf_mutex = .init;
         self.committed_len = 0;
         self.committed_mutex = .init;
+        self.committed_drained_cond = .init;
         self.stats_transferred = std.atomic.Value(u64).init(0);
         self.stats_dropped = std.atomic.Value(u64).init(0);
 
@@ -194,13 +196,17 @@ pub const TransferPipeline = struct {
 
     pub fn stop(self: *TransferPipeline) void {
         self.shutdown.store(true, .release);
+        const io = Io.Threaded.global_single_threaded.io();
         // Unblock the worker if it's waiting on mesh_worker output
         if (self.mesh_worker) |mw| {
-            const io = Io.Threaded.global_single_threaded.io();
             mw.output_mutex.lockUncancelable(io);
             mw.output_cond.broadcast(io);
             mw.output_mutex.unlock(io);
         }
+        // Unblock if waiting on committed queue backpressure
+        self.committed_mutex.lockUncancelable(io);
+        self.committed_drained_cond.broadcast(io);
+        self.committed_mutex.unlock(io);
         if (self.thread) |t| {
             t.join();
             self.thread = null;
@@ -210,12 +216,10 @@ pub const TransferPipeline = struct {
     pub fn drainCommitted(self: *TransferPipeline, out_buf: []CommittedChunk) u32 {
         const io = Io.Threaded.global_single_threaded.io();
         self.committed_mutex.lockUncancelable(io);
-        defer self.committed_mutex.unlock(io);
 
         const count = @min(self.committed_len, @as(u32, @intCast(out_buf.len)));
         if (count > 0) {
             @memcpy(out_buf[0..count], self.committed_queue[0..count]);
-            // Shift remaining
             if (count < self.committed_len) {
                 const remaining = self.committed_len - count;
                 std.mem.copyForwards(
@@ -225,7 +229,9 @@ pub const TransferPipeline = struct {
                 );
             }
             self.committed_len -= count;
+            self.committed_drained_cond.signal(io);
         }
+        self.committed_mutex.unlock(io);
         return count;
     }
 
@@ -607,34 +613,18 @@ pub const TransferPipeline = struct {
 
     fn pushCommitted(self: *TransferPipeline, entry: CommittedChunk) void {
         const io = Io.Threaded.global_single_threaded.io();
-        var dropped = false;
         self.committed_mutex.lockUncancelable(io);
-        if (self.committed_len < MAX_COMMITTED) {
-            self.committed_queue[self.committed_len] = entry;
-            self.committed_len += 1;
-            _ = self.stats_transferred.fetchAdd(1, .monotonic);
-        } else {
-            dropped = true;
-            _ = self.stats_dropped.fetchAdd(1, .monotonic);
+        while (self.committed_len >= MAX_COMMITTED and !self.shutdown.load(.acquire)) {
+            self.committed_drained_cond.waitUncancelable(io, &self.committed_mutex);
         }
+        if (self.shutdown.load(.acquire)) {
+            self.committed_mutex.unlock(io);
+            return;
+        }
+        self.committed_queue[self.committed_len] = entry;
+        self.committed_len += 1;
+        _ = self.stats_transferred.fetchAdd(1, .monotonic);
         self.committed_mutex.unlock(io);
-
-        if (dropped) {
-            std.log.warn("TransferPipeline committed queue full, dropping chunk", .{});
-            // Free TLSF handles to prevent leaking GPU buffer space
-            self.tlsf_mutex.lockUncancelable(io);
-            if (entry.face_alloc) |fa| {
-                if (fa.handle != TlsfAllocator.null_handle) {
-                    if (self.face_tlsf) |ft| ft.free(fa.handle);
-                }
-            }
-            if (entry.light_alloc) |la| {
-                if (la.handle != TlsfAllocator.null_handle) {
-                    if (self.light_tlsf) |lt| lt.free(la.handle);
-                }
-            }
-            self.tlsf_mutex.unlock(io);
-        }
     }
 
     pub fn deinit(self: *TransferPipeline) void {
