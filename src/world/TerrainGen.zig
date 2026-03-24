@@ -1145,13 +1145,13 @@ test "bench: full pipeline (terrain + mesh)" {
     defer chunk.blocks.deinit();
     var face_count: u32 = 0;
     const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
-    const LightMap = @import("LightMap.zig").LightMap;
-    const no_neighbor_lights: [6]?*const LightMap = .{ null, null, null, null, null, null };
+    const LightBorderSnapshot = @import("LightMap.zig").LightBorderSnapshot;
+    const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
     for (&samples, 0..) |*sample, i| {
         const start = std.Io.Clock.now(.awake, io);
         generateChunk(&chunk, .{ .cx = @intCast(i), .cy = 0, .cz = 0 }, 42);
-        const result = WorldState.generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights) catch unreachable;
+        const result = WorldState.generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders) catch unreachable;
         sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
         face_count = result.total_face_count;
         testing.allocator.free(result.faces);

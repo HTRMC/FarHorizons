@@ -592,12 +592,11 @@ fn propagateBlockLightBFS(
     if (track_boundary) return boundary_mask;
 }
 
-/// Additively propagate light from neighbor borders into an already-computed
-/// light map. Seeds from all 6 borders and runs BFS for both sky and block
-/// light, but only updates positions where incoming light exceeds existing
-/// values. Does not clear existing light or re-scan emitters. Used by the
-/// light-only refresh path so that light crossing chunk borders propagates
-/// inward (like Cubyz's propagateFromNeighbor).
+/// Additively propagate block light from neighbor borders into an already-computed
+/// light map. Seeds from all 6 borders and runs BFS, but only updates positions
+/// where incoming light exceeds existing values. Does not touch sky light or
+/// re-scan emitters. Used by the light-only refresh path so that light from
+/// torches near chunk borders propagates inward (like Cubyz's propagateFromNeighbor).
 pub fn propagateFromNeighbor(
     chunk: *const WorldState.Chunk,
     neighbor_borders: [6]LightBorderSnapshot,
@@ -606,93 +605,32 @@ pub fn propagateFromNeighbor(
     const tz = tracy.zone(@src(), "propagateFromNeighbor");
     defer tz.end();
 
-    // ── Block light ──
-    {
-        var queue: [MAX_QUEUE]QueueEntry = undefined;
-        var head: u32 = 0;
-        var tail: u32 = 0;
+    var queue: [MAX_QUEUE]QueueEntry = undefined;
+    var head: u32 = 0;
+    var tail: u32 = 0;
 
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |z| {
-                seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(CHUNK_SIZE - 1), @intCast(y), @intCast(z), 1, getNeighborLight(neighbor_borders, 3, y * CHUNK_SIZE + z));
-                seedBoundaryBlockLight(&queue, &tail, chunk, light_map, 0, @intCast(y), @intCast(z), 0, getNeighborLight(neighbor_borders, 2, y * CHUNK_SIZE + z));
-            }
-        }
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |x| {
-                seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), @intCast(CHUNK_SIZE - 1), 5, getNeighborLight(neighbor_borders, 0, y * CHUNK_SIZE + x));
-                seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), 0, 4, getNeighborLight(neighbor_borders, 1, y * CHUNK_SIZE + x));
-            }
-        }
+    // Seed from all 6 neighbor borders (additive — skips if existing >= incoming)
+    for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
-            for (0..CHUNK_SIZE) |x| {
-                seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(CHUNK_SIZE - 1), @intCast(z), 3, getNeighborLight(neighbor_borders, 4, z * CHUNK_SIZE + x));
-                seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), 0, @intCast(z), 2, getNeighborLight(neighbor_borders, 5, z * CHUNK_SIZE + x));
-            }
-        }
-
-        propagateBlockLightBFS(&queue, &head, &tail, chunk, light_map, false);
-    }
-
-    // ── Sky light ──
-    {
-        var queue: [MAX_QUEUE]SkyQueueEntry = undefined;
-        var head: u32 = 0;
-        var tail: u32 = 0;
-
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |z| {
-                seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(CHUNK_SIZE - 1), @intCast(y), @intCast(z), 1, getNeighborSkyLight(neighbor_borders, 3, y * CHUNK_SIZE + z));
-                seedBoundarySkyLight(&queue, &tail, chunk, light_map, 0, @intCast(y), @intCast(z), 0, getNeighborSkyLight(neighbor_borders, 2, y * CHUNK_SIZE + z));
-            }
-        }
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |x| {
-                seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), @intCast(CHUNK_SIZE - 1), 5, getNeighborSkyLight(neighbor_borders, 0, y * CHUNK_SIZE + x));
-                seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), 0, 4, getNeighborSkyLight(neighbor_borders, 1, y * CHUNK_SIZE + x));
-            }
-        }
-        for (0..CHUNK_SIZE) |z| {
-            for (0..CHUNK_SIZE) |x| {
-                seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(CHUNK_SIZE - 1), @intCast(z), 3, getNeighborSkyLight(neighbor_borders, 4, z * CHUNK_SIZE + x));
-                seedBoundarySkyLight(&queue, &tail, chunk, light_map, @intCast(x), 0, @intCast(z), 2, getNeighborSkyLight(neighbor_borders, 5, z * CHUNK_SIZE + x));
-            }
-        }
-
-        // Reuse the same BFS as computeSkyLight phase 3
-        while (head < tail) {
-            const e = queue[head];
-            head += 1;
-
-            for (0..6) |dir| {
-                if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
-
-                const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
-                const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
-                const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
-
-                if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) continue;
-
-                const ux: usize = @intCast(nx);
-                const uy: usize = @intCast(ny);
-                const uz: usize = @intCast(nz);
-
-                if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
-
-                const new_level = e.level -| ATTENUATION;
-                if (new_level == 0) continue;
-
-                const idx = chunkIndex(ux, uy, uz);
-                if (new_level <= light_map.sky_light.get(idx)) continue;
-
-                light_map.sky_light.set(idx, new_level);
-                if (tail < MAX_QUEUE) {
-                    queue[tail] = .{ .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz), .dir = @intCast(dir), .level = new_level };
-                    tail += 1;
-                }
-            }
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(CHUNK_SIZE - 1), @intCast(y), @intCast(z), 1, getNeighborLight(neighbor_borders, 3, y * CHUNK_SIZE + z));
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, 0, @intCast(y), @intCast(z), 0, getNeighborLight(neighbor_borders, 2, y * CHUNK_SIZE + z));
         }
     }
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |x| {
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), @intCast(CHUNK_SIZE - 1), 5, getNeighborLight(neighbor_borders, 0, y * CHUNK_SIZE + x));
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(y), 0, 4, getNeighborLight(neighbor_borders, 1, y * CHUNK_SIZE + x));
+        }
+    }
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |x| {
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), @intCast(CHUNK_SIZE - 1), @intCast(z), 3, getNeighborLight(neighbor_borders, 4, z * CHUNK_SIZE + x));
+            seedBoundaryBlockLight(&queue, &tail, chunk, light_map, @intCast(x), 0, @intCast(z), 2, getNeighborLight(neighbor_borders, 5, z * CHUNK_SIZE + x));
+        }
+    }
+
+    // Additive BFS — only spreads where incoming > existing
+    propagateBlockLightBFS(&queue, &head, &tail, chunk, light_map, false);
 }
 
 // ─── Incremental updates ───

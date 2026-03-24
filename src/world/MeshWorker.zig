@@ -247,7 +247,7 @@ pub const MeshWorker = struct {
                 LightEngine.propagateFromNeighbor(chunk, neighbor_borders, lm);
             }
 
-            const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
+            const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_borders) catch |err| {
                 std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                 return true;
             };
@@ -273,7 +273,7 @@ pub const MeshWorker = struct {
             self.output_mutex.unlock(io);
             _ = self.stats_light_only.fetchAdd(1, .monotonic);
         } else {
-            const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
+            const mesh = WorldState.generateChunkMesh(self.allocator, chunk, neighbors, light_map, neighbor_borders) catch |err| {
                 std.log.err("Chunk mesh generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                 return true;
             };
