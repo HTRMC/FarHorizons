@@ -84,12 +84,16 @@ pub const ThreadPool = struct {
 
     fn workerFn(self: *ThreadPool) void {
         const io = Io.Threaded.global_single_threaded.io();
+        var next_source: u32 = 0;
 
         while (!self.shutdown.load(.acquire)) {
             var did_work = false;
-            for (self.sources[0..self.source_count]) |source| {
-                if (source.processOneFn(source.ctx)) {
+            const count = self.source_count;
+            for (0..count) |offset| {
+                const idx = (next_source + @as(u32, @intCast(offset))) % count;
+                if (self.sources[idx].processOneFn(self.sources[idx].ctx)) {
                     did_work = true;
+                    next_source = (idx + 1) % count;
                     break;
                 }
             }
