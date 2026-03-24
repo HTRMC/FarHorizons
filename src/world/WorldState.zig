@@ -4,7 +4,6 @@ const FaceData = types.FaceData;
 const LightEntry = types.LightEntry;
 const LightMapMod = @import("LightMap.zig");
 const LightMap = LightMapMod.LightMap;
-const LightBorderSnapshot = LightMapMod.LightBorderSnapshot;
 const tracy = @import("../platform/tracy.zig");
 pub const BlockModelLoader = @import("BlockModelLoader.zig");
 pub const BlockModelRegistry = BlockModelLoader.BlockModelRegistry;
@@ -394,7 +393,10 @@ fn computePaddedAoDeltas() [6][4][3]i32 {
 }
 
 const TrilinearSample = struct {
-    delta: i32,
+    dx: i8,
+    dy: i8,
+    dz: i8,
+    delta: i32, // flat padded index offset (for block state lookups)
     weight: u16,
 };
 
@@ -442,6 +444,9 @@ fn computeTrilinearLightSamples() [6][4][4]TrilinearSample {
                             const sy = start[1] + dy;
                             const sz = start[2] + dz;
                             result[face][corner][si] = .{
+                                .dx = @intCast(sx),
+                                .dy = @intCast(sy),
+                                .dz = @intCast(sz),
                                 .delta = sy * @as(i32, PADDED_SIZE * PADDED_SIZE) + sz * @as(i32, PADDED_SIZE) + sx,
                                 .weight = iw,
                             };
@@ -451,7 +456,7 @@ fn computeTrilinearLightSamples() [6][4][4]TrilinearSample {
                 }
             }
             while (si < 4) : (si += 1) {
-                result[face][corner][si] = .{ .delta = 0, .weight = 0 };
+                result[face][corner][si] = .{ .dx = 0, .dy = 0, .dz = 0, .delta = 0, .weight = 0 };
             }
         }
     }
@@ -550,157 +555,6 @@ fn buildPaddedStates(padded: *[PADDED_BLOCKS]StateId, chunk: *const Chunk, neigh
     }
 }
 
-fn buildPaddedLight(
-    padded_sky: *[PADDED_BLOCKS]u8,
-    padded_block: *[PADDED_BLOCKS][3]u8,
-    light_map: ?*const LightMap,
-    neighbor_borders: [6]LightBorderSnapshot,
-) void {
-    @memset(padded_sky, 255);
-    @memset(padded_block, .{ 0, 0, 0 });
-
-    const lm = light_map orelse return;
-
-    for (0..CHUNK_SIZE) |y| {
-        for (0..CHUNK_SIZE) |z| {
-            for (0..CHUNK_SIZE) |x| {
-                const ci = chunkIndex(x, y, z);
-                const pi = paddedIndex(x + 1, y + 1, z + 1);
-                padded_sky[pi] = lm.sky_light.get(ci);
-                padded_block[pi] = lm.block_light.get(ci);
-            }
-        }
-    }
-
-    if (neighbor_borders[0].valid) {
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |x| {
-                const bi = y * CHUNK_SIZE + x;
-                const pi = paddedIndex(x + 1, y + 1, PADDED_SIZE - 1);
-                padded_sky[pi] = neighbor_borders[0].sky[bi];
-                padded_block[pi] = neighbor_borders[0].block[bi];
-            }
-        }
-    }
-    if (neighbor_borders[1].valid) {
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |x| {
-                const bi = y * CHUNK_SIZE + x;
-                const pi = paddedIndex(x + 1, y + 1, 0);
-                padded_sky[pi] = neighbor_borders[1].sky[bi];
-                padded_block[pi] = neighbor_borders[1].block[bi];
-            }
-        }
-    }
-    if (neighbor_borders[2].valid) {
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |z| {
-                const bi = y * CHUNK_SIZE + z;
-                const pi = paddedIndex(0, y + 1, z + 1);
-                padded_sky[pi] = neighbor_borders[2].sky[bi];
-                padded_block[pi] = neighbor_borders[2].block[bi];
-            }
-        }
-    }
-    if (neighbor_borders[3].valid) {
-        for (0..CHUNK_SIZE) |y| {
-            for (0..CHUNK_SIZE) |z| {
-                const bi = y * CHUNK_SIZE + z;
-                const pi = paddedIndex(PADDED_SIZE - 1, y + 1, z + 1);
-                padded_sky[pi] = neighbor_borders[3].sky[bi];
-                padded_block[pi] = neighbor_borders[3].block[bi];
-            }
-        }
-    }
-    if (neighbor_borders[4].valid) {
-        for (0..CHUNK_SIZE) |z| {
-            for (0..CHUNK_SIZE) |x| {
-                const bi = z * CHUNK_SIZE + x;
-                const pi = paddedIndex(x + 1, PADDED_SIZE - 1, z + 1);
-                padded_sky[pi] = neighbor_borders[4].sky[bi];
-                padded_block[pi] = neighbor_borders[4].block[bi];
-            }
-        }
-    }
-    if (neighbor_borders[5].valid) {
-        for (0..CHUNK_SIZE) |z| {
-            for (0..CHUNK_SIZE) |x| {
-                const bi = z * CHUNK_SIZE + x;
-                const pi = paddedIndex(x + 1, 0, z + 1);
-                padded_sky[pi] = neighbor_borders[5].sky[bi];
-                padded_block[pi] = neighbor_borders[5].block[bi];
-            }
-        }
-    }
-
-    // Fill 12 edges and 8 corners that aren't covered by face copies.
-    // Without diagonal neighbor data, extrapolate from the nearest filled face position
-    // by clamping each boundary coordinate one step inward.
-    fillPaddedEdgesAndCorners(padded_sky, padded_block);
-}
-
-fn fillPaddedEdgesAndCorners(
-    padded_sky: *[PADDED_BLOCKS]u8,
-    padded_block: *[PADDED_BLOCKS][3]u8,
-) void {
-    const S = PADDED_SIZE - 1; // 33
-    const bounds = [2]usize{ 0, S };
-
-    // 4 edges along X (y and z at boundaries)
-    for (bounds) |py| {
-        for (bounds) |pz| {
-            const cy = if (py == 0) @as(usize, 1) else S - 1;
-            const cz = if (pz == 0) @as(usize, 1) else S - 1;
-            for (1..S) |px| {
-                const dst = paddedIndex(px, py, pz);
-                const src = paddedIndex(px, cy, cz);
-                padded_sky[dst] = padded_sky[src];
-                padded_block[dst] = padded_block[src];
-            }
-        }
-    }
-    // 4 edges along Y (x and z at boundaries)
-    for (bounds) |px| {
-        for (bounds) |pz| {
-            const cx = if (px == 0) @as(usize, 1) else S - 1;
-            const cz = if (pz == 0) @as(usize, 1) else S - 1;
-            for (1..S) |py| {
-                const dst = paddedIndex(px, py, pz);
-                const src = paddedIndex(cx, py, cz);
-                padded_sky[dst] = padded_sky[src];
-                padded_block[dst] = padded_block[src];
-            }
-        }
-    }
-    // 4 edges along Z (x and y at boundaries)
-    for (bounds) |px| {
-        for (bounds) |py| {
-            const cx = if (px == 0) @as(usize, 1) else S - 1;
-            const cy = if (py == 0) @as(usize, 1) else S - 1;
-            for (1..S) |pz| {
-                const dst = paddedIndex(px, py, pz);
-                const src = paddedIndex(cx, cy, pz);
-                padded_sky[dst] = padded_sky[src];
-                padded_block[dst] = padded_block[src];
-            }
-        }
-    }
-    // 8 corners
-    for (bounds) |px| {
-        for (bounds) |py| {
-            for (bounds) |pz| {
-                const cx = if (px == 0) @as(usize, 1) else S - 1;
-                const cy = if (py == 0) @as(usize, 1) else S - 1;
-                const cz = if (pz == 0) @as(usize, 1) else S - 1;
-                const dst = paddedIndex(px, py, pz);
-                const src = paddedIndex(cx, cy, cz);
-                padded_sky[dst] = padded_sky[src];
-                padded_block[dst] = padded_block[src];
-            }
-        }
-    }
-}
-
 fn packLight(sky_val: u8, block_light_val: [3]u8) u32 {
     const s5: u32 = @as(u32, sky_val) >> 3;
     const br5: u32 = @as(u32, block_light_val[0]) >> 3;
@@ -711,16 +565,84 @@ fn packLight(sky_val: u8, block_light_val: [3]u8) u32 {
 
 const TrilinearLightResult = struct { sky: u8, block: [3]u8 };
 
+const LightVal = struct { sky: u8, block: [3]u8 };
+
+/// Read light at a padded-space position, live from LightMaps — like Cubyz's getLightAt.
+/// Interior positions read from the chunk's own LightMap; border positions read from
+/// the neighbor's LightMap. Edge/corner positions (diagonal neighbors) clamp to the
+/// chunk's own data. Returns (sky=0, block=0) if the relevant LightMap doesn't exist.
+fn getLightAt(
+    px: i32,
+    py: i32,
+    pz: i32,
+    light_map: ?*const LightMap,
+    neighbor_lights: [6]?*const LightMap,
+) LightVal {
+    const S = @as(i32, CHUNK_SIZE);
+    // Convert padded coords to chunk-local: chunk [0..31] = padded [1..32]
+    const cx = px - 1;
+    const cy = py - 1;
+    const cz = pz - 1;
+
+    if (cx >= 0 and cx < S and cy >= 0 and cy < S and cz >= 0 and cz < S) {
+        // Interior — read from chunk's own LightMap
+        const lm = light_map orelse return .{ .sky = 0, .block = .{ 0, 0, 0 } };
+        const ci = chunkIndex(@intCast(cx), @intCast(cy), @intCast(cz));
+        return .{ .sky = lm.sky_light.get(ci), .block = lm.block_light.get(ci) };
+    }
+
+    // Border — determine which face neighbor
+    // Face indices: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
+    const face: ?usize = if (cx < 0 and cy >= 0 and cy < S and cz >= 0 and cz < S)
+        @as(usize, 2) // -X
+    else if (cx >= S and cy >= 0 and cy < S and cz >= 0 and cz < S)
+        @as(usize, 3) // +X
+    else if (cy < 0 and cx >= 0 and cx < S and cz >= 0 and cz < S)
+        @as(usize, 5) // -Y
+    else if (cy >= S and cx >= 0 and cx < S and cz >= 0 and cz < S)
+        @as(usize, 4) // +Y
+    else if (cz < 0 and cx >= 0 and cx < S and cy >= 0 and cy < S)
+        @as(usize, 1) // -Z
+    else if (cz >= S and cx >= 0 and cx < S and cy >= 0 and cy < S)
+        @as(usize, 0) // +Z
+    else
+        null; // edge/corner — no single face neighbor
+
+    const f = face orelse {
+        // Edge/corner: clamp to chunk interior (same spirit as old extrapolation)
+        const lm = light_map orelse return .{ .sky = 0, .block = .{ 0, 0, 0 } };
+        const ci = chunkIndex(
+            @intCast(std.math.clamp(cx, 0, S - 1)),
+            @intCast(std.math.clamp(cy, 0, S - 1)),
+            @intCast(std.math.clamp(cz, 0, S - 1)),
+        );
+        return .{ .sky = lm.sky_light.get(ci), .block = lm.block_light.get(ci) };
+    };
+
+    const lm = neighbor_lights[f] orelse return .{ .sky = 0, .block = .{ 0, 0, 0 } };
+    const lx: usize = @intCast(if (f == 2) S - 1 else if (f == 3) @as(i32, 0) else cx);
+    const ly: usize = @intCast(if (f == 5) S - 1 else if (f == 4) @as(i32, 0) else cy);
+    const lz: usize = @intCast(if (f == 1) S - 1 else if (f == 0) @as(i32, 0) else cz);
+    const ci = chunkIndex(lx, ly, lz);
+    return .{ .sky = lm.sky_light.get(ci), .block = lm.block_light.get(ci) };
+}
+
 fn sampleTrilinearLight(
-    base: i32,
+    bx: usize,
+    by: usize,
+    bz: usize,
     face: usize,
     corner: usize,
     padded: *const [PADDED_BLOCKS]StateId,
-    padded_sky: *const [PADDED_BLOCKS]u8,
-    padded_block_light: *const [PADDED_BLOCKS][3]u8,
+    light_map: ?*const LightMap,
+    neighbor_lights: [6]?*const LightMap,
 ) TrilinearLightResult {
     const samples = trilinear_light_samples[face][corner];
-    const face_delta = padded_face_deltas[face];
+    const face_normal = face_neighbor_offsets[face];
+    const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
+    const base_px: i32 = @intCast(bx + 1);
+    const base_py: i32 = @intCast(by + 1);
+    const base_pz: i32 = @intCast(bz + 1);
     var sky_sum: u32 = 0;
     var blk_sum: [3]u32 = .{ 0, 0, 0 };
     var total_weight: u32 = 0;
@@ -728,23 +650,27 @@ fn sampleTrilinearLight(
     for (0..4) |s| {
         const sample = samples[s];
         if (sample.weight == 0) continue;
+        // Use flat index for the opaque check (padded block states stay)
         const sample_idx: usize = @intCast(base + sample.delta);
         if (BlockState.isOpaque(padded[sample_idx])) continue;
         const w: u32 = sample.weight;
         total_weight += w;
 
-        var sky_val: u8 = padded_sky[sample_idx];
-        var blk_val: [3]u8 = padded_block_light[sample_idx];
-        const next_signed: i32 = @as(i32, @intCast(sample_idx)) + face_delta;
-        if (next_signed >= 0 and next_signed < PADDED_BLOCKS) {
-            const next_idx: usize = @intCast(next_signed);
-            const sky_diff: u8 = @min(8, sky_val -| padded_sky[next_idx]);
-            sky_val -|= sky_diff * 5 / 2;
-            const next_blk = padded_block_light[next_idx];
-            inline for (0..3) |ch| {
-                const blk_diff: u8 = @min(8, blk_val[ch] -| next_blk[ch]);
-                blk_val[ch] -|= blk_diff * 5 / 2;
-            }
+        // Read light live from LightMaps
+        const spx = base_px + sample.dx;
+        const spy = base_py + sample.dy;
+        const spz = base_pz + sample.dz;
+        const sample_light = getLightAt(spx, spy, spz, light_map, neighbor_lights);
+        var sky_val = sample_light.sky;
+        var blk_val = sample_light.block;
+
+        // Directional darkening: read the "next" block in the face normal direction
+        const next = getLightAt(spx + face_normal[0], spy + face_normal[1], spz + face_normal[2], light_map, neighbor_lights);
+        const sky_diff: u8 = @min(8, sky_val -| next.sky);
+        sky_val -|= sky_diff * 5 / 2;
+        inline for (0..3) |ch| {
+            const blk_diff: u8 = @min(8, blk_val[ch] -| next.block[ch]);
+            blk_val[ch] -|= blk_diff * 5 / 2;
         }
 
         sky_sum += @as(u32, sky_val) * w;
@@ -754,11 +680,8 @@ fn sampleTrilinearLight(
     }
 
     if (total_weight == 0) {
-        const face_idx: usize = @intCast(base + face_delta);
-        return .{
-            .sky = padded_sky[face_idx],
-            .block = padded_block_light[face_idx],
-        };
+        const fallback = getLightAt(base_px + face_normal[0], base_py + face_normal[1], base_pz + face_normal[2], light_map, neighbor_lights);
+        return .{ .sky = fallback.sky, .block = fallback.block };
     }
 
     return .{
@@ -836,17 +759,13 @@ pub fn generateChunkMesh(
     chunk: *const Chunk,
     neighbors: [6]?*const Chunk,
     light_map: ?*const LightMap,
-    neighbor_borders: [6]LightBorderSnapshot,
+    neighbor_lights: [6]?*const LightMap,
 ) !ChunkMeshResult {
     const tz = tracy.zone(@src(), "generateChunkMesh");
     defer tz.end();
 
     var padded: [PADDED_BLOCKS]StateId = undefined;
     buildPaddedStates(&padded, chunk, neighbors);
-
-    var padded_sky: [PADDED_BLOCKS]u8 = undefined;
-    var padded_block_light: [PADDED_BLOCKS][3]u8 = undefined;
-    buildPaddedLight(&padded_sky, &padded_block_light, light_map, neighbor_borders);
 
     var layer_faces: [LAYER_COUNT][6]std.ArrayList(FaceData) = undefined;
     var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
@@ -884,7 +803,7 @@ pub fn generateChunkMesh(
                         var corner_packed: [4]u32 = undefined;
                         var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
                         for (0..4) |corner| {
-                            const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
+                            const result = sampleTrilinearLight(bx, by, bz, face, corner, &padded, light_map, neighbor_lights);
                             corner_packed[corner] = packLight(result.sky, result.block);
                             corner_block_brightness[corner] = @max(result.block[0], @max(result.block[1], result.block[2]));
                         }
@@ -944,7 +863,7 @@ pub fn generateChunkMesh(
                         corner_block_brightness = .{ 255, 255, 255, 255 };
                     } else {
                         for (0..4) |corner| {
-                            const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
+                            const result = sampleTrilinearLight(bx, by, bz, face, corner, &padded, light_map, neighbor_lights);
                             corner_packed[corner] = packLight(result.sky, result.block);
                             corner_block_brightness[corner] = @max(result.block[0], @max(result.block[1], result.block[2]));
                         }
@@ -1030,17 +949,13 @@ pub fn generateChunkLightOnly(
     chunk: *const Chunk,
     neighbors: [6]?*const Chunk,
     light_map: ?*const LightMap,
-    neighbor_borders: [6]LightBorderSnapshot,
+    neighbor_lights: [6]?*const LightMap,
 ) !ChunkLightResult {
     const tz = tracy.zone(@src(), "generateChunkLightOnly");
     defer tz.end();
 
     var padded: [PADDED_BLOCKS]StateId = undefined;
     buildPaddedStates(&padded, chunk, neighbors);
-
-    var padded_sky: [PADDED_BLOCKS]u8 = undefined;
-    var padded_block_light: [PADDED_BLOCKS][3]u8 = undefined;
-    buildPaddedLight(&padded_sky, &padded_block_light, light_map, neighbor_borders);
 
     var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
     for (0..LAYER_COUNT) |l| {
@@ -1073,7 +988,7 @@ pub fn generateChunkLightOnly(
                         const face: usize = sf.face_bucket;
                         var corner_packed: [4]u32 = undefined;
                         for (0..4) |corner| {
-                            const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
+                            const result = sampleTrilinearLight(bx, by, bz, face, corner, &padded, light_map, neighbor_lights);
                             corner_packed[corner] = packLight(result.sky, result.block);
                         }
                         try layer_lights[layer][face].append(allocator, .{ .corners = corner_packed });
@@ -1100,7 +1015,7 @@ pub fn generateChunkLightOnly(
                         corner_packed = .{ emit_packed, emit_packed, emit_packed, emit_packed };
                     } else {
                         for (0..4) |corner| {
-                            const result = sampleTrilinearLight(base, face, corner, &padded, &padded_sky, &padded_block_light);
+                            const result = sampleTrilinearLight(bx, by, bz, face, corner, &padded, light_map, neighbor_lights);
                             corner_packed[corner] = packLight(result.sky, result.block);
                         }
                     }
@@ -1211,15 +1126,15 @@ fn makeEmptyChunk() Chunk {
 }
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
+const no_neighbor_lights: [6]?*const LightMap = .{ null, null, null, null, null, null };
 const no_light_neighbors: [6]?*const LightMap = .{ null, null, null, null, null, null };
-const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
 test "single block in air produces 6 faces" {
     var chunk = makeEmptyChunk();
     defer chunk.blocks.deinit();
     chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1245,7 +1160,7 @@ test "two adjacent blocks share face - culled" {
     chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
     chunk.blocks.set(chunkIndex(6, 5, 5), BlockState.defaultState(.stone));
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1269,7 +1184,7 @@ test "face_counts sum equals total_face_count" {
         }
     }
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1285,7 +1200,7 @@ test "normal indices in faces match their group" {
     defer chunk.blocks.deinit();
     chunk.blocks.set(chunkIndex(10, 10, 10), BlockState.defaultState(.grass_block));
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1314,11 +1229,11 @@ test "cross-chunk boundary face culling" {
     var neighbors1 = no_neighbors;
     neighbors1[2] = &chunk0;
 
-    const result0 = try generateChunkMesh(testing.allocator, &chunk0, neighbors0, null, no_borders);
+    const result0 = try generateChunkMesh(testing.allocator, &chunk0, neighbors0, null, no_neighbor_lights);
     defer testing.allocator.free(result0.faces);
     defer testing.allocator.free(result0.lights);
 
-    const result1 = try generateChunkMesh(testing.allocator, &chunk1, neighbors1, null, no_borders);
+    const result1 = try generateChunkMesh(testing.allocator, &chunk1, neighbors1, null, no_neighbor_lights);
     defer testing.allocator.free(result1.faces);
     defer testing.allocator.free(result1.lights);
 
@@ -1334,7 +1249,7 @@ test "cross-chunk boundary face culling" {
 test "empty chunk produces no faces" {
     var chunk = makeEmptyChunk();
     defer chunk.blocks.deinit();
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1348,7 +1263,7 @@ test "glass does not cull adjacent non-glass" {
     chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
     chunk.blocks.set(chunkIndex(6, 5, 5), BlockState.defaultState(.glass));
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1361,7 +1276,7 @@ test "glass-glass adjacency culls shared face" {
     chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.glass));
     chunk.blocks.set(chunkIndex(6, 5, 5), BlockState.defaultState(.glass));
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1375,7 +1290,7 @@ test "light count equals face count (1:1 mapping)" {
         chunk.blocks.set(chunkIndex(x, 5, 5), BlockState.defaultState(.stone));
     }
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1417,7 +1332,7 @@ test "world boundary blocks have all outer faces" {
     defer chunk.blocks.deinit();
     chunk.blocks.set(chunkIndex(0, 0, 0), BlockState.defaultState(.stone));
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1452,7 +1367,7 @@ test "AO: single block in air has no occlusion" {
     defer chunk.blocks.deinit();
     chunk.blocks.set(chunkIndex(5, 5, 5), BlockState.defaultState(.stone));
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1470,7 +1385,7 @@ test "AO: block on flat surface has correct top face AO" {
         }
     }
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1502,7 +1417,7 @@ test "AO: block in corner has maximum occlusion on enclosed corner" {
     chunk.blocks.set(chunkIndex(5, 6, 5), BlockState.defaultState(.stone));
     chunk.blocks.set(chunkIndex(5, 5, 6), BlockState.defaultState(.stone));
 
-    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+    const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
     defer testing.allocator.free(result.faces);
     defer testing.allocator.free(result.lights);
 
@@ -1723,7 +1638,7 @@ test "bench: generateChunkMesh surface (with AO)" {
 
     for (&samples) |*sample| {
         const start = std.Io.Clock.now(.awake, io);
-        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
         sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
         face_count = result.total_face_count;
         testing.allocator.free(result.faces);
@@ -1743,7 +1658,7 @@ test "bench: generateChunkMesh checkerboard (worst case)" {
 
     for (&samples) |*sample| {
         const start = std.Io.Clock.now(.awake, io);
-        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
         sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
         face_count = result.total_face_count;
         testing.allocator.free(result.faces);
@@ -1762,7 +1677,7 @@ test "bench: generateChunkMesh empty (baseline)" {
 
     for (&samples) |*sample| {
         const start = std.Io.Clock.now(.awake, io);
-        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_borders);
+        const result = try generateChunkMesh(testing.allocator, &chunk, no_neighbors, null, no_neighbor_lights);
         sample.* = @intCast(start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
         testing.allocator.free(result.faces);
         testing.allocator.free(result.lights);
