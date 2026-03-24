@@ -357,7 +357,7 @@ pub fn save(self: *GameState) void {
     s.saveGameTime(self.game_time);
 
     const dirty_start = std.Io.Clock.now(.awake, io);
-    s.saveAllDirty();
+    s.saveAllDirty(&self.chunk_pool);
     const dirty_ns: i64 = @intCast(dirty_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
 
     const flush_start = std.Io.Clock.now(.awake, io);
@@ -1105,8 +1105,9 @@ fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
             lm.dirty = true;
         }
     }
-    // Always dirty face-neighbor LightMaps so light propagation updates
-    // (block changes can affect light reaching neighboring chunks)
+    // Mark face-neighbor chunks for re-mesh (geometry + light border refresh).
+    // Don't mark their LightMaps dirty — the MeshWorker will submit light-only
+    // refreshes for neighbors when boundaries change.
     const base_key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
     const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
     for (offsets) |off| {
@@ -1115,9 +1116,6 @@ fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
             .cy = base_key.cy + off[1],
             .cz = base_key.cz + off[2],
         };
-        if (self.light_maps.get(nk)) |nlm| {
-            nlm.dirty = true;
-        }
         target.add(nk);
     }
 }
@@ -1853,8 +1851,9 @@ pub fn worldTick(self: *GameState) void {
             continue;
         };
         self.dirty_chunks.add(result.key);
-        // Mark neighbors dirty so they re-mesh with the new neighbor present
-        // Also mark their LightMaps dirty so light recomputes with the new chunk's data
+        // Mark neighbors for re-mesh so they update faces against the new chunk.
+        // Don't mark their LightMaps dirty — they keep their own light and
+        // pick up border values from the new chunk during mesh generation.
         const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
         for (offsets) |off| {
             const nk = WorldState.ChunkKey{
@@ -1864,9 +1863,6 @@ pub fn worldTick(self: *GameState) void {
             };
             if (self.chunk_map.get(nk) != null) {
                 self.dirty_chunks.add(nk);
-                if (self.light_maps.get(nk)) |nlm| {
-                    nlm.dirty = true;
-                }
             }
         }
     }
@@ -1879,6 +1875,7 @@ pub fn worldTick(self: *GameState) void {
     if (self.streaming.storage) |s| {
         s.tick();
     }
+
 
     // Track initial load readiness
     if (!self.streaming.initial_load_ready) {

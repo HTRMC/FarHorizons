@@ -171,39 +171,17 @@ pub const MeshWorker = struct {
         if (light_map) |lm| {
             if (lm.dirty) {
                 lm.incremental = null;
-                const old_mask = LightEngine.computeBoundaryMask(lm);
                 const surface_heights = local_shm.getHeights(key.cx, key.cz);
-                const new_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
+                const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
 
-                const changed_mask = old_mask ^ new_mask;
-                const stable_mask = old_mask & new_mask;
-
-                if (changed_mask != 0) {
-                    var dirty_keys: [6]ChunkKey = undefined;
-                    var dirty_count: usize = 0;
-                    for (0..6) |i| {
-                        if (changed_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                            const nk = ChunkKey{
-                                .cx = key.cx + offsets[i][0],
-                                .cy = key.cy + offsets[i][1],
-                                .cz = key.cz + offsets[i][2],
-                            };
-                            if (local_light_maps.get(nk)) |nlm| {
-                                nlm.dirty = true;
-                            }
-                            dirty_keys[dirty_count] = nk;
-                            dirty_count += 1;
-                        }
-                    }
-                    if (dirty_count > 0) {
-                        if (self.pool) |p| p.submitMeshBatch(dirty_keys[0..dirty_count]);
-                    }
-                }
-                if (stable_mask != 0) {
+                // Light-only refresh for neighbors whose borders changed.
+                // No cascade recompute — neighbors keep their own light and just
+                // re-sample the updated border values during mesh generation.
+                if (boundary_mask != 0) {
                     var lo_keys: [6]ChunkKey = undefined;
                     var lo_count: usize = 0;
                     for (0..6) |i| {
-                        if (stable_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
                             lo_keys[lo_count] = .{
                                 .cx = key.cx + offsets[i][0],
                                 .cy = key.cy + offsets[i][1],
@@ -219,49 +197,43 @@ pub const MeshWorker = struct {
             } else if (lm.incremental) |update| {
                 lm.incremental = null;
                 if (LightEngine.applyBlockChange(chunk, lm, update.lx, update.ly, update.lz, update.old_block)) |boundary_mask| {
+                    // Incremental succeeded — light-only refresh for affected neighbors
                     if (boundary_mask != 0) {
-                        var cascade_keys: [6]ChunkKey = undefined;
-                        var cascade_count: usize = 0;
+                        var lo_keys: [6]ChunkKey = undefined;
+                        var lo_count: usize = 0;
                         for (0..6) |i| {
                             if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                                const nk = ChunkKey{
+                                lo_keys[lo_count] = .{
                                     .cx = key.cx + offsets[i][0],
                                     .cy = key.cy + offsets[i][1],
                                     .cz = key.cz + offsets[i][2],
                                 };
-                                if (local_light_maps.get(nk)) |nlm| {
-                                    nlm.dirty = true;
-                                }
-                                cascade_keys[cascade_count] = nk;
-                                cascade_count += 1;
+                                lo_count += 1;
                             }
                         }
-                        if (cascade_count > 0) {
-                            if (self.pool) |p| p.submitMeshBatch(cascade_keys[0..cascade_count]);
+                        if (lo_count > 0) {
+                            if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
                         }
                     }
                 } else {
+                    // Incremental declined (sky light affected) — fall back to full recompute
                     const surface_heights = local_shm.getHeights(key.cx, key.cz);
                     const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
                     if (boundary_mask != 0) {
-                        var cascade_keys: [6]ChunkKey = undefined;
-                        var cascade_count: usize = 0;
+                        var lo_keys: [6]ChunkKey = undefined;
+                        var lo_count: usize = 0;
                         for (0..6) |i| {
                             if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                                const nk = ChunkKey{
+                                lo_keys[lo_count] = .{
                                     .cx = key.cx + offsets[i][0],
                                     .cy = key.cy + offsets[i][1],
                                     .cz = key.cz + offsets[i][2],
                                 };
-                                if (local_light_maps.get(nk)) |nlm| {
-                                    nlm.dirty = true;
-                                }
-                                cascade_keys[cascade_count] = nk;
-                                cascade_count += 1;
+                                lo_count += 1;
                             }
                         }
-                        if (cascade_count > 0) {
-                            if (self.pool) |p| p.submitMeshBatch(cascade_keys[0..cascade_count]);
+                        if (lo_count > 0) {
+                            if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
                         }
                     }
                 }
