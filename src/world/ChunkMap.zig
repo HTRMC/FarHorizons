@@ -70,13 +70,17 @@ pub const ChunkMap = struct {
     }
 
     /// Set block state at world coordinates. Does nothing if chunk is not loaded.
+    /// Locks the chunk mutex to prevent IO threads from reading during modification.
     pub fn setBlock(self: *const ChunkMap, wx: i32, wy: i32, wz: i32, block: BlockState.StateId) void {
         const key = ChunkKey.fromWorldPos(wx, wy, wz);
         const chunk = self.get(key) orelse return;
         const lx: usize = @intCast(@mod(wx, @as(i32, CHUNK_SIZE)));
         const ly: usize = @intCast(@mod(wy, @as(i32, CHUNK_SIZE)));
         const lz: usize = @intCast(@mod(wz, @as(i32, CHUNK_SIZE)));
+        const io = std.Io.Threaded.global_single_threaded.io();
+        chunk.mutex.lockUncancelable(io);
         chunk.blocks.set(WorldState.chunkIndex(lx, ly, lz), block);
+        chunk.mutex.unlock(io);
     }
 
     /// Get the 6 face neighbors for a chunk key.
@@ -103,7 +107,7 @@ const testing = std.testing;
 
 fn makeTestChunk(allocator: std.mem.Allocator, fill: BlockState.Block) !*Chunk {
     const chunk = try allocator.create(Chunk);
-    chunk.blocks = WorldState.PaletteBlocks.init(allocator);
+    chunk.* = .{ .blocks = WorldState.PaletteBlocks.init(allocator) };
     chunk.blocks.fillUniform(BlockState.defaultState(fill));
     return chunk;
 }

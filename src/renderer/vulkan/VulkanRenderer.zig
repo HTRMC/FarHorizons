@@ -248,8 +248,11 @@ pub const VulkanRenderer = struct {
         mw.initInPlace(self.allocator, &game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map);
         self.mesh_worker = mw;
 
-        // 2. Init ChunkStreamer
+        // 2. Init ChunkStreamer + wire up Storage's game chunk pool reference
         game_state.streaming.streamer.initInPlace(self.allocator, game_state.streaming.storage, &game_state.chunk_pool, game_state.streaming.world_seed, game_state.streaming.world_type);
+        if (game_state.streaming.storage) |s| {
+            s.game_chunk_pool = &game_state.chunk_pool;
+        }
 
         // 3. Create ThreadPool with single priority heap
         const pool = self.allocator.create(ThreadPool) catch |err| {

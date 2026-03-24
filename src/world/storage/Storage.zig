@@ -6,6 +6,7 @@ const RegionCache = @import("region_cache.zig").RegionCache;
 const ChunkCacheMod = @import("chunk_cache.zig");
 const IoPipeline = @import("io_pipeline.zig").IoPipeline;
 const dirty_set_mod = @import("dirty_set.zig");
+const GameChunkPool = @import("../ChunkPool.zig").ChunkPool;
 const app_config = @import("../../app_config.zig");
 const tracy = @import("../../platform/tracy.zig");
 
@@ -40,9 +41,9 @@ region_cache: RegionCache,
 chunk_cache: ChunkCacheMod.ChunkCache,
 io_pipeline: IoPipeline,
 default_compression: CompressionAlgo,
-chunk_pool: dirty_set_mod.ChunkPool,
 dirty_set: DirtySet,
 dirty_mutex: Io.Mutex,
+game_chunk_pool: ?*GameChunkPool,
 
 // Load timing stats (atomically updated by streamer workers)
 stats_load_count: std.atomic.Value(u64),
@@ -95,9 +96,9 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
     self.world_type = world_type;
     self.region_cache = RegionCache.init(allocator, region_dir);
     self.default_compression = .zstd;
-    self.chunk_pool = try dirty_set_mod.ChunkPool.init(allocator);
-    self.dirty_set = try DirtySet.init(allocator, &self.chunk_pool);
+    self.dirty_set = try DirtySet.init(allocator);
     self.dirty_mutex = .init;
+    self.game_chunk_pool = null;
     self.stats_load_count = std.atomic.Value(u64).init(0);
     self.stats_cache_hits = std.atomic.Value(u64).init(0);
     self.stats_region_ns = std.atomic.Value(u64).init(0);
@@ -117,11 +118,21 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
 }
 
 pub fn deinit(self: *Storage) void {
-    self.saveAllDirty();
+    const pool = self.game_chunk_pool orelse {
+        log.warn("Storage.deinit: no game_chunk_pool set, skipping dirty save", .{});
+        self.io_pipeline.stop();
+        self.dirty_set.deinit(undefined);
+        self.region_cache.deinit();
+        const allocator = self.allocator;
+        allocator.free(self.region_dir);
+        allocator.free(self.world_dir);
+        log.info("Storage shut down", .{});
+        allocator.destroy(self);
+        return;
+    };
+    self.saveAllDirty(pool);
     self.io_pipeline.stop();
-    // Skip flush — gs.save() already fsynced, and region_cache.deinit() closes files cleanly
-    self.dirty_set.deinit();
-    self.chunk_pool.deinit(self.allocator);
+    self.dirty_set.deinit(pool);
     self.region_cache.deinit();
     const allocator = self.allocator;
     allocator.free(self.region_dir);
@@ -135,18 +146,20 @@ pub fn flush(self: *Storage) void {
 }
 
 
-pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *const Chunk) void {
+pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *Chunk) void {
+    const pool = self.game_chunk_pool orelse return;
     const io = Io.Threaded.global_single_threaded.io();
     const key = ChunkKey.init(cx, cy, cz);
     self.dirty_mutex.lockUncancelable(io);
     defer self.dirty_mutex.unlock(io);
-    self.dirty_set.markDirty(key, chunk);
+    self.dirty_set.markDirty(key, chunk, pool);
 }
 
 pub fn tick(self: *Storage) void {
     const tz = tracy.zone(@src(), "storage.tick");
     defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
+    const pool = self.game_chunk_pool orelse return;
 
     self.dirty_mutex.lockUncancelable(io);
     const dirty_count = self.dirty_set.count();
@@ -173,8 +186,9 @@ pub fn tick(self: *Storage) void {
     for (0..result.batch_count) |bi| {
         const batch = &result.batches[bi];
         const batch_data = self.allocator.create(BatchSaveData) catch {
+            // Release chunk refs on failure
             for (batch.chunks[0..batch.count]) |chunk_ptr| {
-                self.chunk_pool.free(chunk_ptr);
+                pool.release(chunk_ptr);
             }
             continue;
         };
@@ -185,13 +199,13 @@ pub fn tick(self: *Storage) void {
             .chunks = batch.chunks,
             .keys = batch.keys,
             .allocator = self.allocator,
-            .pool = &self.chunk_pool,
+            .chunk_pool = pool,
         };
         self.io_pipeline.submitBatchSave(batch_data);
     }
 }
 
-pub fn saveAllDirty(self: *Storage) void {
+pub fn saveAllDirty(self: *Storage, pool: *GameChunkPool) void {
     const tz = tracy.zone(@src(), "storage.saveAllDirty");
     defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
@@ -217,7 +231,7 @@ pub fn saveAllDirty(self: *Storage) void {
         const region = self.region_cache.getOrOpen(coord) catch {
             log.err("Failed to open region for shutdown save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
             for (batch.chunks[0..batch.count]) |chunk_ptr| {
-                self.chunk_pool.free(chunk_ptr);
+                pool.release(chunk_ptr);
             }
             continue;
         };
@@ -228,7 +242,11 @@ pub fn saveAllDirty(self: *Storage) void {
         var block_ptrs: [dirty_set_mod.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
         for (0..batch.count) |i| {
             indices[i] = batch.indices[i];
+            // Lock chunk to snapshot data safely
+            const cio = Io.Threaded.global_single_threaded.io();
+            batch.chunks[i].mutex.lockUncancelable(cio);
             batch.chunks[i].blocks.getRange(&temp_blocks_batch[i], 0);
+            batch.chunks[i].mutex.unlock(cio);
             block_ptrs[i] = &temp_blocks_batch[i];
         }
 
@@ -248,7 +266,7 @@ pub fn saveAllDirty(self: *Storage) void {
         });
 
         for (batch.chunks[0..batch.count]) |chunk_ptr| {
-            self.chunk_pool.free(chunk_ptr);
+            pool.release(chunk_ptr);
         }
     }
 

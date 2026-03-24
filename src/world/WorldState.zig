@@ -182,6 +182,8 @@ pub const PaletteBlocks = @import("../allocators/PaletteStorage.zig").PaletteSto
 
 pub const Chunk = struct {
     blocks: PaletteBlocks,
+    mutex: std.Io.Mutex = .init,
+    ref_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 };
 
 pub const ChunkKey = struct {

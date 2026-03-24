@@ -37,15 +37,28 @@ pub const ChunkPool = struct {
 
         if (result) |chunk| {
             chunk.blocks.fillUniform(0);
+            chunk.mutex = .init;
+            chunk.ref_count = std.atomic.Value(u32).init(1);
             return chunk;
         }
 
         const chunk = self.allocator.create(Chunk) catch @panic("ChunkPool: out of memory");
-        chunk.blocks = WorldState.PaletteBlocks.init(self.allocator);
+        chunk.* = .{
+            .blocks = WorldState.PaletteBlocks.init(self.allocator),
+        };
         return chunk;
     }
 
+    /// Decrement ref_count. Only return to pool when it reaches zero.
     pub fn release(self: *ChunkPool, chunk: *Chunk) void {
+        const prev = chunk.ref_count.fetchSub(1, .acq_rel);
+        std.debug.assert(prev >= 1);
+        if (prev == 1) {
+            self.returnToPool(chunk);
+        }
+    }
+
+    fn returnToPool(self: *ChunkPool, chunk: *Chunk) void {
         const io = Io.Threaded.global_single_threaded.io();
         self.mutex.lockUncancelable(io);
         self.free_list.append(self.allocator, chunk) catch {

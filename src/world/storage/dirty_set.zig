@@ -1,6 +1,7 @@
 const std = @import("std");
 const storage_types = @import("types.zig");
 const WorldState = @import("../WorldState.zig");
+const GameChunkPool = @import("../ChunkPool.zig").ChunkPool;
 
 const Io = std.Io;
 
@@ -30,7 +31,7 @@ pub const DirtyEntry = struct {
     region_coord: RegionCoord,
     first_dirty_time: i64,
     last_dirty_time: i64,
-    chunk_data: *Chunk,
+    chunk: *Chunk,
 
     pub fn computeUrgency(self: *const DirtyEntry, current_time: i64) UrgencyTier {
         const dirty_duration = current_time - self.first_dirty_time;
@@ -54,7 +55,7 @@ fn makeDummyEntry(first_dirty: i64, last_dirty: i64) DirtyEntry {
         .region_coord = .{ .rx = 0, .rz = 0 },
         .first_dirty_time = first_dirty,
         .last_dirty_time = last_dirty,
-        .chunk_data = undefined,
+        .chunk = undefined,
     };
 }
 
@@ -131,110 +132,64 @@ pub const DrainResult = struct {
     total_drained: u32,
 };
 
-pub const ChunkPool = struct {
-    pub const POOL_SIZE = 256;
-    const SENTINEL = std.math.maxInt(u32);
-
-    slots: *[POOL_SIZE]Chunk,
-    next: [POOL_SIZE]u32,
-    free_head: u32,
-    mutex: Io.Mutex,
-
-    pub fn init(allocator: std.mem.Allocator) !ChunkPool {
-        const slots = try allocator.create([POOL_SIZE]Chunk);
-        var pool: ChunkPool = .{
-            .slots = slots,
-            .next = std.mem.zeroes([POOL_SIZE]u32),
-            .free_head = 0,
-            .mutex = .init,
-        };
-        for (0..POOL_SIZE - 1) |i| {
-            pool.next[i] = @intCast(i + 1);
-        }
-        pool.next[POOL_SIZE - 1] = SENTINEL;
-        return pool;
-    }
-
-    pub fn deinit(self: *ChunkPool, allocator: std.mem.Allocator) void {
-        allocator.destroy(self.slots);
-    }
-
-    pub fn alloc(self: *ChunkPool) ?*Chunk {
-        const io = Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
-        if (self.free_head == SENTINEL) return null;
-        const idx = self.free_head;
-        self.free_head = self.next[idx];
-        return &self.slots[idx];
-    }
-
-    pub fn free(self: *ChunkPool, chunk: *Chunk) void {
-        const io = Io.Threaded.global_single_threaded.io();
-        self.mutex.lockUncancelable(io);
-        defer self.mutex.unlock(io);
-        const base = @intFromPtr(&self.slots[0]);
-        const ptr = @intFromPtr(chunk);
-        std.debug.assert(ptr >= base and ptr < base + POOL_SIZE * @sizeOf(Chunk));
-        std.debug.assert((ptr - base) % @sizeOf(Chunk) == 0);
-        const idx: u32 = @intCast((ptr - base) / @sizeOf(Chunk));
-        self.next[idx] = self.free_head;
-        self.free_head = idx;
-    }
-};
-
 pub const DirtySet = struct {
     map: std.AutoHashMap(u64, DirtyEntry),
     allocator: std.mem.Allocator,
-    pool: *ChunkPool,
 
-    pub fn init(allocator: std.mem.Allocator, pool: *ChunkPool) !DirtySet {
+    pub fn init(allocator: std.mem.Allocator) !DirtySet {
         var map = std.AutoHashMap(u64, DirtyEntry).init(allocator);
-        try map.ensureTotalCapacity(ChunkPool.POOL_SIZE);
+        try map.ensureTotalCapacity(256);
         return .{
             .map = map,
             .allocator = allocator,
-            .pool = pool,
         };
     }
 
-    pub fn deinit(self: *DirtySet) void {
+    pub fn deinit(self: *DirtySet, chunk_pool: *GameChunkPool) void {
         var it = self.map.valueIterator();
         while (it.next()) |entry| {
-            self.pool.free(entry.chunk_data);
+            chunk_pool.release(entry.chunk);
         }
         self.map.deinit();
     }
 
-    pub fn markDirty(self: *DirtySet, key: ChunkKey, chunk: *const Chunk) void {
+    /// Mark a chunk as dirty. Increments the chunk's ref_count so it
+    /// stays alive until the dirty set releases it (after IO save).
+    pub fn markDirty(self: *DirtySet, key: ChunkKey, chunk: *Chunk, chunk_pool: *GameChunkPool) void {
         const k = key.toU64();
         const current_time = now();
 
         if (self.map.getPtr(k)) |existing| {
             existing.last_dirty_time = current_time;
-            existing.chunk_data.* = chunk.*;
+            if (existing.chunk != chunk) {
+                // Chunk was unloaded and reloaded at same position — swap refs
+                chunk_pool.release(existing.chunk);
+                _ = chunk.ref_count.fetchAdd(1, .monotonic);
+                existing.chunk = chunk;
+            }
             return;
         }
 
-        const pool_chunk = self.pool.alloc() orelse {
-            log.err("Chunk pool exhausted in dirty set", .{});
-            return;
-        };
-        pool_chunk.* = chunk.*;
+        // Acquire a reference for the dirty set
+        _ = chunk.ref_count.fetchAdd(1, .monotonic);
 
-        self.map.putAssumeCapacity(k, .{
+        self.map.put(k, .{
             .key = key,
             .region_coord = key.regionCoord(),
             .first_dirty_time = current_time,
             .last_dirty_time = current_time,
-            .chunk_data = pool_chunk,
-        });
+            .chunk = chunk,
+        }) catch {
+            // Failed to insert — release the ref we just acquired
+            chunk_pool.release(chunk);
+            log.err("Failed to insert dirty entry", .{});
+        };
     }
 
-    pub fn remove(self: *DirtySet, key: ChunkKey) void {
+    pub fn remove(self: *DirtySet, key: ChunkKey, chunk_pool: *GameChunkPool) void {
         const k = key.toU64();
         if (self.map.fetchRemove(k)) |kv| {
-            self.pool.free(kv.value.chunk_data);
+            chunk_pool.release(kv.value.chunk);
         }
     }
 
@@ -257,6 +212,8 @@ pub const DirtySet = struct {
         return counts;
     }
 
+    /// Drain up to `budget` dirty chunks, grouped by region.
+    /// Transfers ownership of chunk references to the returned batches.
     pub fn drainBatch(self: *DirtySet, budget: u32) ?DrainResult {
         const effective_budget = @min(budget, MAX_BATCH_SIZE);
         if (self.map.count() == 0) return null;
@@ -346,10 +303,11 @@ pub const DirtySet = struct {
 
             result.batches[bi].indices[ci] = entry.key.localIndex();
             result.batches[bi].keys[ci] = entry.key;
-            result.batches[bi].chunks[ci] = entry.chunk_data;
+            result.batches[bi].chunks[ci] = entry.chunk;
             result.batches[bi].count += 1;
             result.total_drained += 1;
 
+            // Remove from map — ownership of the ref transfers to the batch
             _ = self.map.remove(key_u64);
         }
 

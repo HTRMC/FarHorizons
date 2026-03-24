@@ -7,6 +7,7 @@ const chunk_codec = @import("chunk_codec.zig");
 const compression = @import("compression.zig");
 const WorldState = @import("../WorldState.zig");
 const dirty_set_mod = @import("dirty_set.zig");
+const GameChunkPool = @import("../ChunkPool.zig").ChunkPool;
 const tracy = @import("../../platform/tracy.zig");
 
 const ChunkKey = storage_types.ChunkKey;
@@ -48,7 +49,7 @@ pub const IoPipeline = struct {
         key: ChunkKey,
         priority: Priority,
         handle_id: u32,
-        chunk_data: ?*const Chunk,
+        chunk_data: ?*Chunk,
         batch: ?*BatchSaveData,
 
         const Kind = enum { load, save, batch_save };
@@ -67,13 +68,13 @@ pub const IoPipeline = struct {
         chunks: [MAX_BATCH_SIZE]*Chunk,
         keys: [MAX_BATCH_SIZE]ChunkKey,
         allocator: std.mem.Allocator,
-        pool: *dirty_set_mod.ChunkPool,
+        chunk_pool: *GameChunkPool,
 
         pub const MAX_BATCH_SIZE = dirty_set_mod.MAX_BATCH_SIZE;
 
         pub fn deinit(self: *BatchSaveData) void {
             for (self.chunks[0..self.count]) |chunk_ptr| {
-                self.pool.free(chunk_ptr);
+                self.chunk_pool.release(chunk_ptr);
             }
             self.allocator.destroy(self);
         }
@@ -300,8 +301,11 @@ pub const IoPipeline = struct {
         defer self.region_cache.releaseRegion(region);
 
         const chunk_index = key.localIndex();
+        const io = Io.Threaded.global_single_threaded.io();
         var temp_blocks: [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+        chunk.mutex.lockUncancelable(io);
         chunk.blocks.getRange(&temp_blocks, 0);
+        chunk.mutex.unlock(io);
         region.writeChunk(chunk_index, &temp_blocks, self.default_compression) catch |err| {
             log.err("Failed to save chunk: {}", .{err});
         };
@@ -323,7 +327,11 @@ pub const IoPipeline = struct {
         var block_ptrs: [BatchSaveData.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
         for (0..batch.count) |i| {
             indices[i] = batch.indices[i];
+            // Lock chunk to prevent game thread from modifying during read
+            const cio = Io.Threaded.global_single_threaded.io();
+            batch.chunks[i].mutex.lockUncancelable(cio);
             batch.chunks[i].blocks.getRange(&temp_blocks_batch[i], 0);
+            batch.chunks[i].mutex.unlock(cio);
             block_ptrs[i] = &temp_blocks_batch[i];
         }
 
