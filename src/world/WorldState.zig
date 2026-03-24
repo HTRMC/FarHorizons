@@ -555,6 +555,124 @@ fn buildPaddedStates(padded: *[PADDED_BLOCKS]StateId, chunk: *const Chunk, neigh
     }
 }
 
+/// Visibility bitmask arrays for sparse mesh iteration.
+/// Each u32 packs one bit per X position in a (Y, Z) column.
+const ColumnMask = [CHUNK_SIZE][CHUNK_SIZE]u32;
+
+const VisibilityMasks = struct {
+    /// Bit set if block at (x,y,z) is non-air
+    has_block: ColumnMask,
+    /// Bit set if block is a simple full cube (not shaped, not self-culling)
+    is_simple: ColumnMask,
+    /// Per-face: bit set if the neighbor in that direction is fully opaque
+    neighbor_opaque: [6]ColumnMask,
+};
+
+fn buildVisibilityMasks(padded: *const [PADDED_BLOCKS]StateId) VisibilityMasks {
+    var masks: VisibilityMasks = undefined;
+
+    // First pass: build has_block, is_simple, and opaque_col (for X-axis face shifts)
+    var opaque_col: ColumnMask = undefined;
+    for (0..CHUNK_SIZE) |by| {
+        for (0..CHUNK_SIZE) |bz| {
+            var block_bits: u32 = 0;
+            var simple_bits: u32 = 0;
+            var opaque_bits: u32 = 0;
+            for (0..CHUNK_SIZE) |bx| {
+                const state = padded[paddedIndex(bx + 1, by + 1, bz + 1)];
+                const bit: u32 = @as(u32, 1) << @intCast(bx);
+                if (state != 0) {
+                    block_bits |= bit;
+                    if (!BlockState.isShaped(state) and !BlockState.cullsSelf(state)) {
+                        simple_bits |= bit;
+                    }
+                }
+                if (BlockState.isOpaque(state)) {
+                    opaque_bits |= bit;
+                }
+            }
+            masks.has_block[by][bz] = block_bits;
+            masks.is_simple[by][bz] = simple_bits;
+            opaque_col[by][bz] = opaque_bits;
+        }
+    }
+
+    // Build neighbor_opaque for each face.
+    // Face 2 (-X): neighbor at bx-1. Shift opaque left, fill bit 0 from padded x=0.
+    // Face 3 (+X): neighbor at bx+1. Shift opaque right, fill bit 31 from padded x=33.
+    for (0..CHUNK_SIZE) |by| {
+        for (0..CHUNK_SIZE) |bz| {
+            // -X boundary bit (padded x=0)
+            const lo_bit: u32 = @intFromBool(BlockState.isOpaque(padded[paddedIndex(0, by + 1, bz + 1)]));
+            masks.neighbor_opaque[2][by][bz] = (opaque_col[by][bz] << 1) | lo_bit;
+            // +X boundary bit (padded x=33)
+            const hi_bit: u32 = @intFromBool(BlockState.isOpaque(padded[paddedIndex(PADDED_SIZE - 1, by + 1, bz + 1)]));
+            masks.neighbor_opaque[3][by][bz] = (opaque_col[by][bz] >> 1) | (hi_bit << (CHUNK_SIZE - 1));
+        }
+    }
+
+    // Face 0 (+Z): neighbor at bz+1. Use opaque_col[by][bz+1], boundary from padded z=33.
+    // Face 1 (-Z): neighbor at bz-1. Use opaque_col[by][bz-1], boundary from padded z=0.
+    for (0..CHUNK_SIZE) |by| {
+        for (0..CHUNK_SIZE) |bz| {
+            if (bz < CHUNK_SIZE - 1) {
+                masks.neighbor_opaque[0][by][bz] = opaque_col[by][bz + 1];
+            } else {
+                // bz=31: neighbor is in +Z padded boundary (z=33)
+                var bits: u32 = 0;
+                for (0..CHUNK_SIZE) |bx| {
+                    if (BlockState.isOpaque(padded[paddedIndex(bx + 1, by + 1, PADDED_SIZE - 1)])) {
+                        bits |= @as(u32, 1) << @intCast(bx);
+                    }
+                }
+                masks.neighbor_opaque[0][by][bz] = bits;
+            }
+            if (bz > 0) {
+                masks.neighbor_opaque[1][by][bz] = opaque_col[by][bz - 1];
+            } else {
+                var bits: u32 = 0;
+                for (0..CHUNK_SIZE) |bx| {
+                    if (BlockState.isOpaque(padded[paddedIndex(bx + 1, by + 1, 0)])) {
+                        bits |= @as(u32, 1) << @intCast(bx);
+                    }
+                }
+                masks.neighbor_opaque[1][by][bz] = bits;
+            }
+        }
+    }
+
+    // Face 4 (+Y): neighbor at by+1. Use opaque_col[by+1][bz], boundary from padded y=33.
+    // Face 5 (-Y): neighbor at by-1. Use opaque_col[by-1][bz], boundary from padded y=0.
+    for (0..CHUNK_SIZE) |by| {
+        for (0..CHUNK_SIZE) |bz| {
+            if (by < CHUNK_SIZE - 1) {
+                masks.neighbor_opaque[4][by][bz] = opaque_col[by + 1][bz];
+            } else {
+                var bits: u32 = 0;
+                for (0..CHUNK_SIZE) |bx| {
+                    if (BlockState.isOpaque(padded[paddedIndex(bx + 1, PADDED_SIZE - 1, bz + 1)])) {
+                        bits |= @as(u32, 1) << @intCast(bx);
+                    }
+                }
+                masks.neighbor_opaque[4][by][bz] = bits;
+            }
+            if (by > 0) {
+                masks.neighbor_opaque[5][by][bz] = opaque_col[by - 1][bz];
+            } else {
+                var bits: u32 = 0;
+                for (0..CHUNK_SIZE) |bx| {
+                    if (BlockState.isOpaque(padded[paddedIndex(bx + 1, 0, bz + 1)])) {
+                        bits |= @as(u32, 1) << @intCast(bx);
+                    }
+                }
+                masks.neighbor_opaque[5][by][bz] = bits;
+            }
+        }
+    }
+
+    return masks;
+}
+
 /// SIMD light vector: [br, bg, bb, _, sr, sg, sb, _]
 /// Block light RGB in [0..2], sky light (replicated to RGB) in [4..6].
 /// u16 to avoid overflow in directional darkening arithmetic.
@@ -755,6 +873,7 @@ pub fn generateChunkMesh(
 
     var padded: [PADDED_BLOCKS]StateId = undefined;
     buildPaddedStates(&padded, chunk, neighbors);
+    const vis = buildVisibilityMasks(&padded);
 
     var layer_faces: [LAYER_COUNT][6]std.ArrayList(FaceData) = undefined;
     var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
@@ -773,11 +892,13 @@ pub fn generateChunkMesh(
 
     for (0..CHUNK_SIZE) |by| {
         for (0..CHUNK_SIZE) |bz| {
-            for (0..CHUNK_SIZE) |bx| {
+            var remaining = vis.has_block[by][bz];
+            while (remaining != 0) {
+                const bx: usize = @intCast(@ctz(remaining));
+                remaining &= remaining - 1; // clear lowest set bit
+
                 const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
                 const state_id = padded[@intCast(base)];
-                if (state_id == 0) continue;
-
                 const layer = @intFromEnum(BlockState.renderLayer(state_id));
 
                 if (BlockState.isShaped(state_id)) {
@@ -831,9 +952,15 @@ pub fn generateChunkMesh(
                 const water_lowered = is_water and
                     BlockState.getBlock(padded[@intCast(base + padded_face_deltas[4])]) != .water;
 
+                const bx_bit: u32 = @as(u32, 1) << @intCast(bx);
                 for (0..6) |face| {
-                    const neighbor = padded[@intCast(base + padded_face_deltas[face])];
+                    // Fast cull: if neighbor is fully opaque, skip without shouldCullFace
+                    if (vis.neighbor_opaque[face][by][bz] & bx_bit != 0) {
+                        // Simple blocks with opaque neighbors are always culled
+                        if (vis.is_simple[by][bz] & bx_bit != 0) continue;
+                    }
 
+                    const neighbor = padded[@intCast(base + padded_face_deltas[face])];
                     if (shouldCullFace(state_id, face, neighbor)) continue;
                     if (neighbor == state_id and BlockState.cullsSelf(state_id)) continue;
 
@@ -945,6 +1072,7 @@ pub fn generateChunkLightOnly(
 
     var padded: [PADDED_BLOCKS]StateId = undefined;
     buildPaddedStates(&padded, chunk, neighbors);
+    const vis = buildVisibilityMasks(&padded);
 
     var layer_lights: [LAYER_COUNT][6]std.ArrayList(LightEntry) = undefined;
     for (0..LAYER_COUNT) |l| {
@@ -960,11 +1088,13 @@ pub fn generateChunkLightOnly(
 
     for (0..CHUNK_SIZE) |by| {
         for (0..CHUNK_SIZE) |bz| {
-            for (0..CHUNK_SIZE) |bx| {
+            var remaining = vis.has_block[by][bz];
+            while (remaining != 0) {
+                const bx: usize = @intCast(@ctz(remaining));
+                remaining &= remaining - 1;
+
                 const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
                 const state_id = padded[@intCast(base)];
-                if (state_id == 0) continue;
-
                 const layer = @intFromEnum(BlockState.renderLayer(state_id));
 
                 if (BlockState.isShaped(state_id)) {
@@ -988,9 +1118,13 @@ pub fn generateChunkLightOnly(
                 const emits = BlockState.emittedLight(state_id);
                 const is_emitter = emits[0] > 0 or emits[1] > 0 or emits[2] > 0;
 
+                const bx_bit: u32 = @as(u32, 1) << @intCast(bx);
                 for (0..6) |face| {
-                    const neighbor = padded[@intCast(base + padded_face_deltas[face])];
+                    if (vis.neighbor_opaque[face][by][bz] & bx_bit != 0) {
+                        if (vis.is_simple[by][bz] & bx_bit != 0) continue;
+                    }
 
+                    const neighbor = padded[@intCast(base + padded_face_deltas[face])];
                     if (shouldCullFace(state_id, face, neighbor)) continue;
                     if (neighbor == state_id and BlockState.cullsSelf(state_id)) continue;
 
