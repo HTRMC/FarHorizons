@@ -142,6 +142,10 @@ pub const ChunkStreamer = struct {
                 .debug => WorldState.generateDebugChunk(chunk, key),
             }
             _ = self.stats_generated.fetchAdd(1, .monotonic);
+            // Save to disk immediately so next join loads from cache
+            if (self.storage) |s| {
+                s.markDirty(key.cx, key.cy, key.cz, chunk);
+            }
         }
 
         // Push to output queue
