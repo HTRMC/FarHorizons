@@ -181,6 +181,28 @@ pub fn computeChunkLight(
 ) u6 {
     const tz = tracy.zone(@src(), "computeChunkLight");
     defer tz.end();
+
+    // Fast path: all-air chunk fully above the surface.
+    // Fill uniform max sky light, zero block light — skip all BFS.
+    if (chunk.blocks.palette_len == 1 and chunk.blocks.get(0) == AIR) {
+        if (surface_heights) |sh| {
+            const chunk_base_y: i32 = chunk_cy * @as(i32, CHUNK_SIZE);
+            var all_above = true;
+            for (sh) |h| {
+                if (chunk_base_y <= h) {
+                    all_above = false;
+                    break;
+                }
+            }
+            if (all_above) {
+                light_map.sky_light.fillUniform(255);
+                light_map.block_light.fillUniform(.{ 0, 0, 0 });
+                light_map.dirty = false;
+                return 0x3f; // all 6 faces have max sky light at boundary
+            }
+        }
+    }
+
     light_map.clear();
 
     computeSkyLight(chunk, neighbors, neighbor_borders, light_map, chunk_cy, surface_heights);
@@ -199,6 +221,25 @@ fn computeSkyLight(
     chunk_cy: i32,
     surface_heights: ?*const [CHUNK_SIZE * CHUNK_SIZE]i32,
 ) void {
+    // Fast path: if chunk is all air and entirely above the surface,
+    // fill uniform max sky light and skip BFS entirely (Cubyz optimization).
+    if (chunk.blocks.palette_len == 1 and chunk.blocks.get(0) == AIR) {
+        if (surface_heights) |sh| {
+            const chunk_base_y: i32 = chunk_cy * @as(i32, CHUNK_SIZE);
+            var all_above = true;
+            for (sh) |h| {
+                if (chunk_base_y <= h) {
+                    all_above = false;
+                    break;
+                }
+            }
+            if (all_above) {
+                light_map.sky_light.fillUniform(255);
+                return;
+            }
+        }
+    }
+
     var queue: [MAX_QUEUE]SkyQueueEntry = undefined;
     var head: u32 = 0;
     var tail: u32 = 0;
@@ -321,25 +362,36 @@ fn computeBlockLight(
     var head: u32 = 0;
     var tail: u32 = 0;
 
-    // Phase 1: Seed from emitters within chunk
-    for (0..CHUNK_SIZE) |y| {
-        for (0..CHUNK_SIZE) |z| {
-            for (0..CHUNK_SIZE) |x| {
-                const block = chunk.blocks.get(chunkIndex(x, y, z));
-                const emit = BlockState.emittedLight(block);
-                if (emit[0] > 0 or emit[1] > 0 or emit[2] > 0) {
-                    light_map.block_light.set(chunkIndex(x, y, z), emit);
-                    if (tail < MAX_QUEUE) {
-                        queue[tail] = .{
-                            .x = @intCast(x),
-                            .y = @intCast(y),
-                            .z = @intCast(z),
-                            .dir = 6, // no source direction
-                            .r = emit[0],
-                            .g = emit[1],
-                            .b = emit[2],
-                        };
-                        tail += 1;
+    // Phase 1: Seed from emitters within chunk.
+    // Fast path: check palette entries first — if no entry emits light, skip the full scan.
+    var has_emitter = false;
+    for (chunk.blocks.palette[0..chunk.blocks.palette_len]) |state| {
+        const emit = BlockState.emittedLight(state);
+        if (emit[0] > 0 or emit[1] > 0 or emit[2] > 0) {
+            has_emitter = true;
+            break;
+        }
+    }
+    if (has_emitter) {
+        for (0..CHUNK_SIZE) |y| {
+            for (0..CHUNK_SIZE) |z| {
+                for (0..CHUNK_SIZE) |x| {
+                    const block = chunk.blocks.get(chunkIndex(x, y, z));
+                    const emit = BlockState.emittedLight(block);
+                    if (emit[0] > 0 or emit[1] > 0 or emit[2] > 0) {
+                        light_map.block_light.set(chunkIndex(x, y, z), emit);
+                        if (tail < MAX_QUEUE) {
+                            queue[tail] = .{
+                                .x = @intCast(x),
+                                .y = @intCast(y),
+                                .z = @intCast(z),
+                                .dir = 6,
+                                .r = emit[0],
+                                .g = emit[1],
+                                .b = emit[2],
+                            };
+                            tail += 1;
+                        }
                     }
                 }
             }
