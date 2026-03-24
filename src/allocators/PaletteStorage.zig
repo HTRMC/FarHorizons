@@ -111,13 +111,106 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             }
         }
 
+        /// Pre-allocate palette and data arrays for a known number of unique values.
+        /// Resets contents. After calling, use setPaletteEntry + setRawIndex for bulk loading.
+        pub fn initCapacity(self: *Self, palette_len: u32) void {
+            // Free old storage
+            if (self.data) |d| {
+                self.allocator.free(d);
+                self.data = null;
+            }
+            self.allocator.free(self.palette);
+            self.allocator.free(self.occupancy);
+
+            // Determine bit size needed
+            const new_bs: u5 = if (palette_len <= 1) 0 else switch (@as(u5, @intCast(std.math.log2_int_ceil(u32, palette_len)))) {
+                0 => 0,
+                1 => 1,
+                2 => 2,
+                3, 4 => 4,
+                5, 6, 7, 8 => 8,
+                else => 16,
+            };
+            const new_cap: u32 = if (new_bs == 0) palette_len else @as(u32, 1) << new_bs;
+
+            self.palette = self.allocator.alloc(T, new_cap) catch @panic("PaletteStorage: OOM");
+            self.occupancy = self.allocator.alloc(u32, new_cap) catch @panic("PaletteStorage: OOM");
+            @memset(self.occupancy, 0);
+            self.palette_cap = new_cap;
+            self.palette_len = palette_len;
+            self.active_entries = palette_len;
+            self.bit_size = new_bs;
+
+            const words = dataWordsNeeded(new_bs);
+            if (words > 0) {
+                self.data = self.allocator.alloc(u32, words) catch @panic("PaletteStorage: OOM");
+                @memset(self.data.?, 0);
+            }
+        }
+
+        /// Set a palette entry directly (use after initCapacity).
+        pub fn setPaletteEntry(self: *Self, index: u32, value: T) void {
+            self.palette[index] = value;
+        }
+
+        /// Set the raw palette index for an element (use after initCapacity + setPaletteEntry).
+        /// O(1) — just packs a bit index, no palette search.
+        pub fn setRawIndex(self: *Self, element: u32, palette_index: u32) void {
+            self.setPackedIndex(element, palette_index);
+            self.occupancy[palette_index] += 1;
+        }
+
         /// Load values from a flat array, replacing all current contents.
-        /// Resets palette and rebuilds from the source data.
+        /// Two-pass: builds palette first, then packs indices.
         pub fn loadFromSlice(self: *Self, src: []const T) void {
             std.debug.assert(src.len == count);
-            self.fillUniform(src[0]);
-            for (src[1..], 1..) |val, i| {
-                self.set(i, val);
+
+            // Pass 1: build palette (find unique values)
+            var temp_palette: [256]T = undefined;
+            var palette_len: u32 = 0;
+            var overflow = false;
+
+            for (src) |val| {
+                var found = false;
+                for (temp_palette[0..palette_len]) |p| {
+                    if (valEql(p, val)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    if (palette_len >= 256) {
+                        overflow = true;
+                        break;
+                    }
+                    temp_palette[palette_len] = val;
+                    palette_len += 1;
+                }
+            }
+
+            if (overflow) {
+                // >256 unique values — fall back to individual set()
+                self.fillUniform(src[0]);
+                for (src[1..], 1..) |val, i| {
+                    self.set(i, val);
+                }
+                return;
+            }
+
+            // Pre-allocate exact capacity
+            self.initCapacity(palette_len);
+            for (0..palette_len) |i| {
+                self.palette[i] = temp_palette[i];
+            }
+
+            // Pass 2: pack indices using O(1) setRawIndex
+            for (src, 0..) |val, elem| {
+                for (0..palette_len) |pi| {
+                    if (valEql(temp_palette[pi], val)) {
+                        self.setRawIndex(@intCast(elem), @intCast(pi));
+                        break;
+                    }
+                }
             }
         }
 
