@@ -6,6 +6,11 @@ const std = @import("std");
 /// maintains a small palette of unique values and stores packed indices.
 /// Adapts bit-width (0/1/2/4/8) based on how many unique values exist.
 ///
+/// Uses RCU (Read-Copy-Update) for concurrent reader safety:
+/// - Readers load an atomic pointer to an immutable Impl snapshot
+/// - Writers create a new Impl, atomically swap the pointer, and retire the old one
+/// - Old Impls are deferred-freed after 3 generations (all readers should be done)
+///
 /// Typical savings for lighting data:
 ///   - Uniform chunk (all dark / all sky): 0 bits/element → ~16 bytes total
 ///   - Surface chunk (~30 unique values): 8 bits/element → ~33 KB
@@ -14,10 +19,69 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
     return struct {
         const Self = @This();
 
-        /// Packed palette indices (null when bit_size == 0; all elements are palette[0])
+        pub const Impl = struct {
+            data: ?[]u32,
+            bit_size: u5,
+            palette: []T,
+            occupancy: []u32,
+            palette_len: u32,
+            active_entries: u32,
+            palette_cap: u32,
+
+            fn getPackedIndex(imp: *const Impl, index: u32) u32 {
+                const bs: u5 = imp.bit_size;
+                const d = imp.data orelse return 0;
+                const bit_index: u32 = index * bs;
+                const word_index = bit_index >> 5;
+                const bit_offset: u5 = @intCast(bit_index & 31);
+                const mask: u32 = (@as(u32, 1) << bs) - 1;
+                return (d[word_index] >> bit_offset) & mask;
+            }
+
+            fn setPackedIndex(imp: *Impl, index: u32, value: u32) void {
+                const bs: u5 = imp.bit_size;
+                if (bs == 0) return;
+                const d = imp.data orelse return;
+                const bit_index: u32 = index * bs;
+                const word_index = bit_index >> 5;
+                const bit_offset: u5 = @intCast(bit_index & 31);
+                const mask: u32 = (@as(u32, 1) << bs) - 1;
+                d[word_index] = (d[word_index] & ~(mask << bit_offset)) | (@as(u32, value) << bit_offset);
+            }
+
+            fn getOrInsertPalette(imp: *Impl, self: *Self, value: T) u32 {
+                // Linear search (palette is small — typically <50 entries)
+                for (imp.palette[0..imp.palette_len], 0..) |entry, i| {
+                    if (valEql(entry, value)) return @intCast(i);
+                }
+
+                // Not found — grow if palette is full
+                if (imp.palette_len >= imp.palette_cap) {
+                    self.growBitSize();
+                    // After growth, self.impl points to a new Impl; get it
+                    const new_imp = self.impl.load(.acquire);
+                    const idx = new_imp.palette_len;
+                    new_imp.palette[idx] = value;
+                    new_imp.occupancy[idx] = 0;
+                    new_imp.palette_len += 1;
+                    self.syncFields(new_imp);
+                    return idx;
+                }
+
+                const idx = imp.palette_len;
+                imp.palette[idx] = value;
+                imp.occupancy[idx] = 0;
+                imp.palette_len += 1;
+                return idx;
+            }
+        };
+
+        /// Atomic pointer to current Impl (readers load with .acquire)
+        impl: std.atomic.Value(*Impl),
+
+        // Mirror fields for backward-compatible direct field access (writer's view)
         data: ?[]u32,
         bit_size: u5,
-
         palette: []T,
         occupancy: []u32,
         palette_len: u32,
@@ -26,6 +90,9 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
 
         allocator: std.mem.Allocator,
 
+        /// Ring buffer for deferred freeing of old Impls
+        retired: [3]?*Impl,
+
         const default_val: T = std.mem.zeroes(T);
 
         pub fn init(allocator: std.mem.Allocator) Self {
@@ -33,7 +100,20 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             const occupancy = allocator.alloc(u32, 1) catch @panic("PaletteStorage: OOM");
             palette[0] = default_val;
             occupancy[0] = count;
+
+            const imp = allocator.create(Impl) catch @panic("PaletteStorage: OOM");
+            imp.* = .{
+                .data = null,
+                .bit_size = 0,
+                .palette = palette,
+                .occupancy = occupancy,
+                .palette_len = 1,
+                .active_entries = 1,
+                .palette_cap = 1,
+            };
+
             return .{
+                .impl = std.atomic.Value(*Impl).init(imp),
                 .data = null,
                 .bit_size = 0,
                 .palette = palette,
@@ -42,88 +122,100 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
                 .active_entries = 1,
                 .palette_cap = 1,
                 .allocator = allocator,
+                .retired = .{ null, null, null },
             };
         }
 
         pub fn deinit(self: *Self) void {
-            if (self.data) |d| self.allocator.free(d);
-            self.allocator.free(self.palette);
-            self.allocator.free(self.occupancy);
+            // Free current impl
+            const imp = self.impl.load(.acquire);
+            self.destroyImpl(imp);
+            // Free all retired impls
+            for (&self.retired) |*slot| {
+                if (slot.*) |old| {
+                    self.destroyImpl(old);
+                    slot.* = null;
+                }
+            }
         }
 
         pub fn get(self: *const Self, index: usize) T {
-            if (self.bit_size == 0) return self.palette[0];
-            const pi = self.getPackedIndex(@intCast(index));
-            return self.palette[pi];
+            const imp = self.impl.load(.acquire);
+            if (imp.bit_size == 0) return imp.palette[0];
+            const pi = imp.getPackedIndex(@intCast(index));
+            return imp.palette[pi];
         }
 
         pub fn set(self: *Self, index: usize, value: T) void {
             const idx: u32 = @intCast(index);
+            const imp = self.impl.load(.acquire);
 
-            // Find or insert palette entry (may grow palette + data array)
-            const new_pi = self.getOrInsertPalette(value);
+            // Find or insert palette entry (may grow palette + data array via RCU swap)
+            const new_pi = imp.getOrInsertPalette(self, value);
+
+            // Re-load impl after potential growth
+            const cur = self.impl.load(.acquire);
 
             // Read old index AFTER potential growth (growth preserves index values)
-            const old_pi: u32 = if (self.bit_size == 0) 0 else self.getPackedIndex(idx);
+            const old_pi: u32 = if (cur.bit_size == 0) 0 else cur.getPackedIndex(idx);
 
             if (old_pi == new_pi) return;
 
-            self.setPackedIndex(idx, new_pi);
+            // In-place modification (caller holds external mutex; u32 writes are atomic on x86)
+            cur.setPackedIndex(idx, new_pi);
 
-            self.occupancy[new_pi] += 1;
-            if (self.occupancy[new_pi] == 1) self.active_entries += 1;
-            self.occupancy[old_pi] -= 1;
-            if (self.occupancy[old_pi] == 0) self.active_entries -= 1;
+            cur.occupancy[new_pi] += 1;
+            if (cur.occupancy[new_pi] == 1) cur.active_entries += 1;
+            cur.occupancy[old_pi] -= 1;
+            if (cur.occupancy[old_pi] == 0) cur.active_entries -= 1;
+
+            self.syncFields(cur);
         }
 
-        /// Reset all elements to a single value. Frees the index array
-        /// and shrinks the palette to 1 entry — minimal memory footprint.
+        /// Reset all elements to a single value. Allocates a new minimal Impl,
+        /// atomically swaps, and retires the old one.
         pub fn fillUniform(self: *Self, value: T) void {
-            if (self.data) |d| {
-                self.allocator.free(d);
-                self.data = null;
-            }
+            const new_palette = self.allocator.alloc(T, 1) catch @panic("PaletteStorage: OOM");
+            const new_occupancy = self.allocator.alloc(u32, 1) catch @panic("PaletteStorage: OOM");
+            new_palette[0] = value;
+            new_occupancy[0] = count;
 
-            if (self.palette_cap > 1) {
-                self.allocator.free(self.palette);
-                self.allocator.free(self.occupancy);
-                self.palette = self.allocator.alloc(T, 1) catch @panic("PaletteStorage: OOM");
-                self.occupancy = self.allocator.alloc(u32, 1) catch @panic("PaletteStorage: OOM");
-                self.palette_cap = 1;
-            }
+            const new_imp = self.allocator.create(Impl) catch @panic("PaletteStorage: OOM");
+            new_imp.* = .{
+                .data = null,
+                .bit_size = 0,
+                .palette = new_palette,
+                .occupancy = new_occupancy,
+                .palette_len = 1,
+                .active_entries = 1,
+                .palette_cap = 1,
+            };
 
-            self.palette[0] = value;
-            self.occupancy[0] = count;
-            self.palette_len = 1;
-            self.active_entries = 1;
-            self.bit_size = 0;
+            const old = self.impl.swap(new_imp, .release);
+            self.retireImpl(old);
+            self.syncFields(new_imp);
         }
 
         /// Copy a contiguous range of values into a destination slice.
         /// Optimized for the uniform case (bit_size == 0).
+        /// Loads impl with .acquire once for a consistent snapshot.
         pub fn getRange(self: *const Self, dst: []T, start: u32) void {
-            if (self.bit_size == 0) {
-                @memset(dst, self.palette[0]);
+            const imp = self.impl.load(.acquire);
+            if (imp.bit_size == 0) {
+                @memset(dst, imp.palette[0]);
                 return;
             }
             for (dst, 0..) |*d, i| {
-                d.* = self.get(start + @as(u32, @intCast(i)));
+                const pi = imp.getPackedIndex(start + @as(u32, @intCast(i)));
+                d.* = imp.palette[pi];
             }
         }
 
         /// Pre-allocate palette and data arrays for a known number of unique values.
         /// Resets contents. After calling, use setPaletteEntry + setRawIndex for bulk loading.
-        pub fn initCapacity(self: *Self, palette_len: u32) void {
-            // Free old storage
-            if (self.data) |d| {
-                self.allocator.free(d);
-                self.data = null;
-            }
-            self.allocator.free(self.palette);
-            self.allocator.free(self.occupancy);
-
+        pub fn initCapacity(self: *Self, palette_len_arg: u32) void {
             // Determine bit size needed
-            const new_bs: u5 = if (palette_len <= 1) 0 else switch (@as(u5, @intCast(std.math.log2_int_ceil(u32, palette_len)))) {
+            const new_bs: u5 = if (palette_len_arg <= 1) 0 else switch (@as(u5, @intCast(std.math.log2_int_ceil(u32, palette_len_arg)))) {
                 0 => 0,
                 1 => 1,
                 2 => 2,
@@ -131,33 +223,51 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
                 5, 6, 7, 8 => 8,
                 else => 16,
             };
-            const new_cap: u32 = if (new_bs == 0) palette_len else @as(u32, 1) << new_bs;
+            const new_cap: u32 = if (new_bs == 0) palette_len_arg else @as(u32, 1) << new_bs;
 
-            self.palette = self.allocator.alloc(T, new_cap) catch @panic("PaletteStorage: OOM");
-            self.occupancy = self.allocator.alloc(u32, new_cap) catch @panic("PaletteStorage: OOM");
-            @memset(self.occupancy, 0);
-            self.palette_cap = new_cap;
-            self.palette_len = palette_len;
-            self.active_entries = palette_len;
-            self.bit_size = new_bs;
+            const new_palette = self.allocator.alloc(T, new_cap) catch @panic("PaletteStorage: OOM");
+            const new_occupancy = self.allocator.alloc(u32, new_cap) catch @panic("PaletteStorage: OOM");
+            @memset(new_occupancy, 0);
 
+            var new_data: ?[]u32 = null;
             const words = dataWordsNeeded(new_bs);
             if (words > 0) {
-                self.data = self.allocator.alloc(u32, words) catch @panic("PaletteStorage: OOM");
-                @memset(self.data.?, 0);
+                new_data = self.allocator.alloc(u32, words) catch @panic("PaletteStorage: OOM");
+                @memset(new_data.?, 0);
             }
+
+            const new_imp = self.allocator.create(Impl) catch @panic("PaletteStorage: OOM");
+            new_imp.* = .{
+                .data = new_data,
+                .bit_size = new_bs,
+                .palette = new_palette,
+                .occupancy = new_occupancy,
+                .palette_len = palette_len_arg,
+                .active_entries = palette_len_arg,
+                .palette_cap = new_cap,
+            };
+
+            const old = self.impl.swap(new_imp, .release);
+            self.retireImpl(old);
+            self.syncFields(new_imp);
         }
 
         /// Set a palette entry directly (use after initCapacity).
+        /// Bulk-load only — no concurrent readers expected.
         pub fn setPaletteEntry(self: *Self, index: u32, value: T) void {
-            self.palette[index] = value;
+            const imp = self.impl.load(.acquire);
+            imp.palette[index] = value;
+            self.palette = imp.palette;
         }
 
         /// Set the raw palette index for an element (use after initCapacity + setPaletteEntry).
         /// O(1) — just packs a bit index, no palette search.
+        /// Bulk-load only — no concurrent readers expected.
         pub fn setRawIndex(self: *Self, element: u32, palette_index: u32) void {
-            self.setPackedIndex(element, palette_index);
-            self.occupancy[palette_index] += 1;
+            const imp = self.impl.load(.acquire);
+            imp.setPackedIndex(element, palette_index);
+            imp.occupancy[palette_index] += 1;
+            self.syncFields(imp);
         }
 
         /// Load values from a flat array, replacing all current contents.
@@ -167,24 +277,24 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
 
             // Pass 1: build palette (find unique values)
             var temp_palette: [256]T = undefined;
-            var palette_len: u32 = 0;
+            var temp_palette_len: u32 = 0;
             var overflow = false;
 
             for (src) |val| {
                 var found = false;
-                for (temp_palette[0..palette_len]) |p| {
+                for (temp_palette[0..temp_palette_len]) |p| {
                     if (valEql(p, val)) {
                         found = true;
                         break;
                     }
                 }
                 if (!found) {
-                    if (palette_len >= 256) {
+                    if (temp_palette_len >= 256) {
                         overflow = true;
                         break;
                     }
-                    temp_palette[palette_len] = val;
-                    palette_len += 1;
+                    temp_palette[temp_palette_len] = val;
+                    temp_palette_len += 1;
                 }
             }
 
@@ -198,27 +308,32 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             }
 
             // Pre-allocate exact capacity
-            self.initCapacity(palette_len);
-            for (0..palette_len) |i| {
-                self.palette[i] = temp_palette[i];
+            self.initCapacity(temp_palette_len);
+
+            const imp = self.impl.load(.acquire);
+            for (0..temp_palette_len) |i| {
+                imp.palette[i] = temp_palette[i];
             }
 
             // Pass 2: pack indices using O(1) setRawIndex
             for (src, 0..) |val, elem| {
-                for (0..palette_len) |pi| {
+                for (0..temp_palette_len) |pi| {
                     if (valEql(temp_palette[pi], val)) {
-                        self.setRawIndex(@intCast(elem), @intCast(pi));
+                        imp.setPackedIndex(@intCast(elem), @intCast(pi));
+                        imp.occupancy[@intCast(pi)] += 1;
                         break;
                     }
                 }
             }
+            self.syncFields(imp);
         }
 
         /// Estimated heap bytes used by this storage (palette + occupancy + packed data).
         pub fn memoryUsage(self: *const Self) usize {
-            var total: usize = self.palette_cap * @sizeOf(T);
-            total += self.palette_cap * @sizeOf(u32);
-            if (self.data) |d| total += d.len * @sizeOf(u32);
+            const imp = self.impl.load(.acquire);
+            var total: usize = imp.palette_cap * @sizeOf(T);
+            total += imp.palette_cap * @sizeOf(u32);
+            if (imp.data) |d| total += d.len * @sizeOf(u32);
             return total;
         }
 
@@ -234,47 +349,40 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             return (total_bits + 31) / 32;
         }
 
-        fn getPackedIndex(self: *const Self, index: u32) u32 {
-            const bs: u5 = self.bit_size;
-            const d = self.data orelse return 0;
-            const bit_index: u32 = index * bs;
-            const word_index = bit_index >> 5;
-            const bit_offset: u5 = @intCast(bit_index & 31);
-            const mask: u32 = (@as(u32, 1) << bs) - 1;
-            return (d[word_index] >> bit_offset) & mask;
+        /// Synchronize mirror fields from an Impl (for backward-compatible field access).
+        fn syncFields(self: *Self, imp: *Impl) void {
+            self.data = imp.data;
+            self.bit_size = imp.bit_size;
+            self.palette = imp.palette;
+            self.occupancy = imp.occupancy;
+            self.palette_len = imp.palette_len;
+            self.active_entries = imp.active_entries;
+            self.palette_cap = imp.palette_cap;
         }
 
-        fn setPackedIndex(self: *Self, index: u32, value: u32) void {
-            const bs: u5 = self.bit_size;
-            if (bs == 0) return;
-            const d = self.data orelse return;
-            const bit_index: u32 = index * bs;
-            const word_index = bit_index >> 5;
-            const bit_offset: u5 = @intCast(bit_index & 31);
-            const mask: u32 = (@as(u32, 1) << bs) - 1;
-            d[word_index] = (d[word_index] & ~(mask << bit_offset)) | (@as(u32, value) << bit_offset);
+        fn destroyImpl(self: *Self, imp: *Impl) void {
+            if (imp.data) |d| self.allocator.free(d);
+            self.allocator.free(imp.palette);
+            self.allocator.free(imp.occupancy);
+            self.allocator.destroy(imp);
         }
 
-        fn getOrInsertPalette(self: *Self, value: T) u32 {
-            // Linear search (palette is small — typically <50 entries)
-            for (self.palette[0..self.palette_len], 0..) |entry, i| {
-                if (valEql(entry, value)) return @intCast(i);
+        fn retireImpl(self: *Self, old: *Impl) void {
+            // Free oldest if ring is full
+            if (self.retired[self.retired.len - 1]) |oldest| {
+                self.destroyImpl(oldest);
             }
-
-            // Not found — grow if palette is full
-            if (self.palette_len >= self.palette_cap) {
-                self.growBitSize();
+            // Shift ring
+            comptime var i = self.retired.len - 1;
+            inline while (i > 0) : (i -= 1) {
+                self.retired[i] = self.retired[i - 1];
             }
-
-            const idx = self.palette_len;
-            self.palette[idx] = value;
-            self.occupancy[idx] = 0;
-            self.palette_len += 1;
-            return idx;
+            self.retired[0] = old;
         }
 
         fn growBitSize(self: *Self) void {
-            const old_bs = self.bit_size;
+            const cur = self.impl.load(.acquire);
+            const old_bs = cur.bit_size;
             const new_bs: u5 = switch (old_bs) {
                 0 => 1,
                 1 => 2,
@@ -285,24 +393,19 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
             };
             const new_cap: u32 = @as(u32, 1) << new_bs;
 
-            // Grow palette + occupancy arrays
+            // Allocate new palette + occupancy arrays
             const new_palette = self.allocator.alloc(T, new_cap) catch @panic("PaletteStorage: OOM");
             const new_occupancy = self.allocator.alloc(u32, new_cap) catch @panic("PaletteStorage: OOM");
-            @memcpy(new_palette[0..self.palette_len], self.palette[0..self.palette_len]);
-            @memcpy(new_occupancy[0..self.palette_len], self.occupancy[0..self.palette_len]);
-            @memset(new_occupancy[self.palette_len..new_cap], 0);
-            self.allocator.free(self.palette);
-            self.allocator.free(self.occupancy);
-            self.palette = new_palette;
-            self.occupancy = new_occupancy;
-            self.palette_cap = new_cap;
+            @memcpy(new_palette[0..cur.palette_len], cur.palette[0..cur.palette_len]);
+            @memcpy(new_occupancy[0..cur.palette_len], cur.occupancy[0..cur.palette_len]);
+            @memset(new_occupancy[cur.palette_len..new_cap], 0);
 
-            // Grow packed index array (re-pack existing indices at new bit width)
+            // Allocate new packed index array (re-pack existing indices at new bit width)
             const new_words = dataWordsNeeded(new_bs);
             const new_data = self.allocator.alloc(u32, new_words) catch @panic("PaletteStorage: OOM");
             @memset(new_data, 0);
 
-            if (self.data) |old_data| {
+            if (cur.data) |old_data| {
                 if (old_bs > 0) {
                     const obs: u5 = old_bs;
                     const nbs: u5 = new_bs;
@@ -321,12 +424,23 @@ pub fn PaletteStorage(comptime T: type, comptime count: u32) type {
                         new_data[new_word] |= @as(u32, val) << new_off;
                     }
                 }
-                self.allocator.free(old_data);
             }
-            // If old bit_size was 0, new_data is already zeroed (all indices = 0). ✓
+            // If old bit_size was 0, new_data is already zeroed (all indices = 0).
 
-            self.data = new_data;
-            self.bit_size = new_bs;
+            const new_imp = self.allocator.create(Impl) catch @panic("PaletteStorage: OOM");
+            new_imp.* = .{
+                .data = new_data,
+                .bit_size = new_bs,
+                .palette = new_palette,
+                .occupancy = new_occupancy,
+                .palette_len = cur.palette_len,
+                .active_entries = cur.active_entries,
+                .palette_cap = new_cap,
+            };
+
+            const old = self.impl.swap(new_imp, .release);
+            self.retireImpl(old);
+            self.syncFields(new_imp);
         }
     };
 }

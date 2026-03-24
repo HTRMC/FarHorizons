@@ -374,7 +374,7 @@ pub const HandRenderer = struct {
         scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(l * x_swing_pos, y_swing_pos, z_swing_pos));
 
         // HMI scenePoseMain offset — applied for ALL held items (blocks + tools + sticks)
-        const has_item = self.held_tool_type != null or BlockState.getBlock(self.held_block) == .stick;
+        const has_item = self.held_tool_type != null or Item.isToolItem(self.held_block) or BlockState.getBlock(self.held_block) == .stick;
         if (has_block or has_item) {
             scene_mat = zlm.Mat4.mul(scene_mat, mat4Translate(0, -0.35, 0.2));
         }
