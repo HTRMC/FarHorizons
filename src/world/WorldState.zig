@@ -555,75 +555,84 @@ fn buildPaddedStates(padded: *[PADDED_BLOCKS]StateId, chunk: *const Chunk, neigh
     }
 }
 
-fn packLight(sky_val: u8, block_light_val: [3]u8) u32 {
-    const s5: u32 = @as(u32, sky_val) >> 3;
-    const br5: u32 = @as(u32, block_light_val[0]) >> 3;
-    const bg5: u32 = @as(u32, block_light_val[1]) >> 3;
-    const bb5: u32 = @as(u32, block_light_val[2]) >> 3;
-    return (s5 << 0) | (s5 << 5) | (s5 << 10) | (br5 << 15) | (bg5 << 20) | (bb5 << 25);
+/// SIMD light vector: [br, bg, bb, _, sr, sg, sb, _]
+/// Block light RGB in [0..2], sky light (replicated to RGB) in [4..6].
+/// u16 to avoid overflow in directional darkening arithmetic.
+const LightVector = @Vector(8, u16);
+
+const LIGHT_ZERO: LightVector = @splat(0);
+
+fn lightVectorFrom(block: [3]u8, sky: u8) LightVector {
+    return .{ block[0], block[1], block[2], 0, sky, sky, sky, 0 };
 }
 
-const TrilinearLightResult = struct { sky: u8, block: [3]u8 };
+fn packLight(v: LightVector) u32 {
+    return (@as(u32, @intCast(v[4])) >> 3) << 0 | // sky r
+        (@as(u32, @intCast(v[5])) >> 3) << 5 | // sky g
+        (@as(u32, @intCast(v[6])) >> 3) << 10 | // sky b
+        (@as(u32, @intCast(v[0])) >> 3) << 15 | // block r
+        (@as(u32, @intCast(v[1])) >> 3) << 20 | // block g
+        (@as(u32, @intCast(v[2])) >> 3) << 25; // block b
+}
 
-const LightVal = struct { sky: u8, block: [3]u8 };
+fn lightBlockBrightness(v: LightVector) u8 {
+    return @max(@as(u8, @intCast(v[0])), @max(@as(u8, @intCast(v[1])), @as(u8, @intCast(v[2]))));
+}
 
 /// Read light at a padded-space position, like Cubyz's getLightAt.
-/// Interior positions read from the chunk's own LightMap (locked by caller).
-/// Border positions read directly from the neighbor's LightMap via RCU-safe
-/// atomic get() — no locks or snapshots needed. Edge/corner positions clamp
-/// to the chunk's own data. Returns dark (0) if the neighbor doesn't exist.
+/// Returns a LightVector for SIMD operations. Interior positions read from
+/// the chunk's own LightMap (locked by caller). Border positions read directly
+/// from the neighbor's LightMap via RCU-safe atomic get(). Returns LIGHT_ZERO
+/// if the neighbor doesn't exist.
 inline fn getLightAt(
     px: i32,
     py: i32,
     pz: i32,
     light_map: ?*const LightMap,
     neighbor_lights: [6]?*const LightMap,
-) LightVal {
+) LightVector {
     const S = @as(i32, CHUNK_SIZE);
     const cx = px - 1;
     const cy = py - 1;
     const cz = pz - 1;
 
     if (cx >= 0 and cx < S and cy >= 0 and cy < S and cz >= 0 and cz < S) {
-        const lm = light_map orelse return .{ .sky = 0, .block = .{ 0, 0, 0 } };
+        const lm = light_map orelse return LIGHT_ZERO;
         const ci = chunkIndex(@intCast(cx), @intCast(cy), @intCast(cz));
-        return .{ .sky = lm.sky_light.get(ci), .block = lm.block_light.get(ci) };
+        return lightVectorFrom(lm.block_light.get(ci), lm.sky_light.get(ci));
     }
 
-    // Border — determine which face neighbor.
-    // Face indices: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
     const face: ?usize = if (cx < 0 and cy >= 0 and cy < S and cz >= 0 and cz < S)
-        @as(usize, 2) // -X
+        @as(usize, 2)
     else if (cx >= S and cy >= 0 and cy < S and cz >= 0 and cz < S)
-        @as(usize, 3) // +X
+        @as(usize, 3)
     else if (cy < 0 and cx >= 0 and cx < S and cz >= 0 and cz < S)
-        @as(usize, 5) // -Y
+        @as(usize, 5)
     else if (cy >= S and cx >= 0 and cx < S and cz >= 0 and cz < S)
-        @as(usize, 4) // +Y
+        @as(usize, 4)
     else if (cz < 0 and cx >= 0 and cx < S and cy >= 0 and cy < S)
-        @as(usize, 1) // -Z
+        @as(usize, 1)
     else if (cz >= S and cx >= 0 and cx < S and cy >= 0 and cy < S)
-        @as(usize, 0) // +Z
+        @as(usize, 0)
     else
         null;
 
     const f = face orelse {
-        const lm = light_map orelse return .{ .sky = 0, .block = .{ 0, 0, 0 } };
+        const lm = light_map orelse return LIGHT_ZERO;
         const ci = chunkIndex(
             @intCast(std.math.clamp(cx, 0, S - 1)),
             @intCast(std.math.clamp(cy, 0, S - 1)),
             @intCast(std.math.clamp(cz, 0, S - 1)),
         );
-        return .{ .sky = lm.sky_light.get(ci), .block = lm.block_light.get(ci) };
+        return lightVectorFrom(lm.block_light.get(ci), lm.sky_light.get(ci));
     };
 
-    // Read directly from neighbor's LightMap via RCU-safe PaletteStorage.get()
-    const lm = neighbor_lights[f] orelse return .{ .sky = 0, .block = .{ 0, 0, 0 } };
+    const lm = neighbor_lights[f] orelse return LIGHT_ZERO;
     const lx: usize = @intCast(if (f == 2) S - 1 else if (f == 3) @as(i32, 0) else cx);
     const ly: usize = @intCast(if (f == 5) S - 1 else if (f == 4) @as(i32, 0) else cy);
     const lz: usize = @intCast(if (f == 1) S - 1 else if (f == 0) @as(i32, 0) else cz);
     const ci = chunkIndex(lx, ly, lz);
-    return .{ .sky = lm.sky_light.get(ci), .block = lm.block_light.get(ci) };
+    return lightVectorFrom(lm.block_light.get(ci), lm.sky_light.get(ci));
 }
 
 fn sampleTrilinearLight(
@@ -635,15 +644,14 @@ fn sampleTrilinearLight(
     padded: *const [PADDED_BLOCKS]StateId,
     light_map: ?*const LightMap,
     neighbor_lights: [6]?*const LightMap,
-) TrilinearLightResult {
+) LightVector {
     const samples = trilinear_light_samples[face][corner];
     const face_normal = face_neighbor_offsets[face];
     const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
     const base_px: i32 = @intCast(bx + 1);
     const base_py: i32 = @intCast(by + 1);
     const base_pz: i32 = @intCast(bz + 1);
-    var sky_sum: u32 = 0;
-    var blk_sum: [3]u32 = .{ 0, 0, 0 };
+    var light_sum: @Vector(8, u32) = @splat(0);
     var total_weight: u32 = 0;
 
     for (0..4) |s| {
@@ -657,37 +665,22 @@ fn sampleTrilinearLight(
         const spx = base_px + sample.dx;
         const spy = base_py + sample.dy;
         const spz = base_pz + sample.dz;
-        const sample_light = getLightAt(spx, spy, spz, light_map, neighbor_lights);
-        var sky_val = sample_light.sky;
-        var blk_val = sample_light.block;
+        var light_val = getLightAt(spx, spy, spz, light_map, neighbor_lights);
 
-        const next = getLightAt(spx + face_normal[0], spy + face_normal[1], spz + face_normal[2], light_map, neighbor_lights);
-        const sky_diff: u8 = @min(8, sky_val -| next.sky);
-        sky_val -|= sky_diff * 5 / 2;
-        inline for (0..3) |ch| {
-            const blk_diff: u8 = @min(8, blk_val[ch] -| next.block[ch]);
-            blk_val[ch] -|= blk_diff * 5 / 2;
-        }
+        // Directional darkening — single SIMD operation on all channels
+        const next_val = getLightAt(spx + face_normal[0], spy + face_normal[1], spz + face_normal[2], light_map, neighbor_lights);
+        const diff = @min(@as(LightVector, @splat(8)), light_val -| next_val);
+        light_val -|= diff * @as(LightVector, @splat(5)) / @as(LightVector, @splat(2));
 
-        sky_sum += @as(u32, sky_val) * w;
-        blk_sum[0] += @as(u32, blk_val[0]) * w;
-        blk_sum[1] += @as(u32, blk_val[1]) * w;
-        blk_sum[2] += @as(u32, blk_val[2]) * w;
+        const wide: @Vector(8, u32) = light_val;
+        light_sum += wide * @as(@Vector(8, u32), @splat(w));
     }
 
     if (total_weight == 0) {
-        const fallback = getLightAt(base_px + face_normal[0], base_py + face_normal[1], base_pz + face_normal[2], light_map, neighbor_lights);
-        return .{ .sky = fallback.sky, .block = fallback.block };
+        return getLightAt(base_px + face_normal[0], base_py + face_normal[1], base_pz + face_normal[2], light_map, neighbor_lights);
     }
 
-    return .{
-        .sky = @intCast(sky_sum / total_weight),
-        .block = .{
-            @intCast(blk_sum[0] / total_weight),
-            @intCast(blk_sum[1] / total_weight),
-            @intCast(blk_sum[2] / total_weight),
-        },
-    };
+    return @intCast(light_sum / @as(@Vector(8, u32), @splat(total_weight)));
 }
 
 pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
@@ -800,8 +793,8 @@ pub fn generateChunkMesh(
                         var corner_block_brightness: [4]u8 = .{ 0, 0, 0, 0 };
                         for (0..4) |corner| {
                             const result = sampleTrilinearLight(bx, by, bz, face, corner, &padded, light_map, neighbor_lights);
-                            corner_packed[corner] = packLight(result.sky, result.block);
-                            corner_block_brightness[corner] = @max(result.block[0], @max(result.block[1], result.block[2]));
+                            corner_packed[corner] = packLight(result);
+                            corner_block_brightness[corner] = lightBlockBrightness(result);
                         }
                         var ao: [4]u2 = undefined;
                         for (0..4) |corner| {
@@ -860,8 +853,8 @@ pub fn generateChunkMesh(
                     } else {
                         for (0..4) |corner| {
                             const result = sampleTrilinearLight(bx, by, bz, face, corner, &padded, light_map, neighbor_lights);
-                            corner_packed[corner] = packLight(result.sky, result.block);
-                            corner_block_brightness[corner] = @max(result.block[0], @max(result.block[1], result.block[2]));
+                            corner_packed[corner] = packLight(result);
+                            corner_block_brightness[corner] = lightBlockBrightness(result);
                         }
                     }
 
@@ -985,7 +978,7 @@ pub fn generateChunkLightOnly(
                         var corner_packed: [4]u32 = undefined;
                         for (0..4) |corner| {
                             const result = sampleTrilinearLight(bx, by, bz, face, corner, &padded, light_map, neighbor_lights);
-                            corner_packed[corner] = packLight(result.sky, result.block);
+                            corner_packed[corner] = packLight(result);
                         }
                         try layer_lights[layer][face].append(allocator, .{ .corners = corner_packed });
                     }
@@ -1012,7 +1005,7 @@ pub fn generateChunkLightOnly(
                     } else {
                         for (0..4) |corner| {
                             const result = sampleTrilinearLight(bx, by, bz, face, corner, &padded, light_map, neighbor_lights);
-                            corner_packed[corner] = packLight(result.sky, result.block);
+                            corner_packed[corner] = packLight(result);
                         }
                     }
 
