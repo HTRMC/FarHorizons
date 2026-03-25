@@ -371,6 +371,13 @@ pub const TransferPipeline = struct {
             var has_commands = false;
 
             // 4. For each mesh result: TLSF alloc, stage, record copy
+            // Buffer committed entries — they must not be pushed until AFTER
+            // the transfer command buffer is submitted, otherwise the main thread
+            // could drain entries whose timeline_value hasn't been signaled yet,
+            // causing the graphics queue to wait on an unsignaled semaphore → deadlock.
+            var pending_committed: [MeshWorker.MAX_OUTPUT]CommittedChunk = undefined;
+            var pending_committed_count: u32 = 0;
+
             for (local_results[0..local_count]) |result| {
                 const key = result.key;
 
@@ -378,7 +385,7 @@ pub const TransferPipeline = struct {
                 if (result.light_only) {
                     if (result.light_count == 0) {
                         // No visible faces — commit light-only with no alloc
-                        self.pushCommitted(.{
+                        pending_committed[pending_committed_count] = .{
                             .key = key,
                             .chunk_data = .{
                                 .position = key.position(),
@@ -403,7 +410,8 @@ pub const TransferPipeline = struct {
                             .timeline_value = self.timeline_value,
                             .light_only = true,
                             .layer_face_counts = result.layer_face_counts,
-                        });
+                        };
+                        pending_committed_count += 1;
                         mw.allocator.free(result.lights);
                         continue;
                     }
@@ -444,7 +452,7 @@ pub const TransferPipeline = struct {
                     vk.cmdCopyBuffer(self.command_buffers[current_slot], light_staging.buffer, self.light_buffer, 1, &light_regions);
                     has_commands = true;
 
-                    self.pushCommitted(.{
+                    pending_committed[pending_committed_count] = .{
                         .key = key,
                         .chunk_data = .{
                             .position = key.position(),
@@ -469,7 +477,8 @@ pub const TransferPipeline = struct {
                         .timeline_value = self.timeline_value + 1,
                         .light_only = true,
                         .layer_face_counts = result.layer_face_counts,
-                    });
+                    };
+                    pending_committed_count += 1;
 
                     mw.allocator.free(result.lights);
                     continue;
@@ -478,7 +487,7 @@ pub const TransferPipeline = struct {
                 // --- Full remesh path ---
                 if (result.total_face_count == 0) {
                     // Empty chunk — commit with no alloc
-                    self.pushCommitted(.{
+                    pending_committed[pending_committed_count] = .{
                         .key = key,
                         .chunk_data = .{
                             .position = key.position(),
@@ -495,7 +504,8 @@ pub const TransferPipeline = struct {
                         .timeline_value = self.timeline_value,
                         .light_only = false,
                         .layer_face_counts = .{ .{ 0, 0, 0, 0, 0, 0 } } ** WorldState.LAYER_COUNT,
-                    });
+                    };
+                    pending_committed_count += 1;
                     mw.allocator.free(result.faces);
                     mw.allocator.free(result.lights);
                     continue;
@@ -558,7 +568,7 @@ pub const TransferPipeline = struct {
                         self.tlsf_mutex.unlock(io);
                         mw.allocator.free(result.faces);
                         mw.allocator.free(result.lights);
-                        self.pushCommitted(.{
+                        pending_committed[pending_committed_count] = .{
                             .key = key,
                             .chunk_data = .{
                                 .position = key.position(),
@@ -583,7 +593,8 @@ pub const TransferPipeline = struct {
                             .timeline_value = self.timeline_value + 1,
                             .light_only = false,
                             .layer_face_counts = result.layer_face_counts,
-                        });
+                        };
+                        pending_committed_count += 1;
                         continue;
                     };
 
@@ -599,8 +610,8 @@ pub const TransferPipeline = struct {
                     vk.cmdCopyBuffer(self.command_buffers[current_slot], light_staging.buffer, self.light_buffer, 1, &light_regions);
                 }
 
-                // Push to committed queue
-                self.pushCommitted(.{
+                // Buffer for committed queue (pushed after submit)
+                pending_committed[pending_committed_count] = .{
                     .key = key,
                     .chunk_data = .{
                         .position = key.position(),
@@ -625,7 +636,8 @@ pub const TransferPipeline = struct {
                     .timeline_value = self.timeline_value + 1,
                     .light_only = false,
                     .layer_face_counts = result.layer_face_counts,
-                });
+                };
+                pending_committed_count += 1;
 
                 // Free mesh result heap memory
                 mw.allocator.free(result.faces);
@@ -665,6 +677,14 @@ pub const TransferPipeline = struct {
                 vk.queueSubmit(self.transfer_queue, 1, &[_]vk.VkSubmitInfo{submit_info}, null) catch |err| {
                     std.log.err("Failed to submit transfer: {}", .{err});
                 };
+            }
+
+            // 6. Push committed entries now that the transfer is submitted.
+            // The timeline value in each entry is guaranteed to be signaled
+            // (or already was for no-data entries), so the main thread can
+            // safely use it for the graphics queue wait.
+            for (pending_committed[0..pending_committed_count]) |entry| {
+                self.pushCommitted(entry);
             }
 
             current_slot = (current_slot + 1) % MAX_FRAMES_IN_FLIGHT;
