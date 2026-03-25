@@ -315,45 +315,22 @@ pub const MeshWorker = struct {
                 }
             } else if (lm.incremental) |update| {
                 lm.incremental = null;
-                if (LightEngine.applyBlockChange(chunk, lm, update.lx, update.ly, update.lz, update.old_block)) |boundary_mask| {
-                    // Incremental succeeded — light-only refresh for affected neighbors
-                    if (boundary_mask != 0) {
-                        var lo_keys: [6]ChunkKey = undefined;
-                        var lo_count: usize = 0;
-                        for (0..6) |i| {
-                            if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                                lo_keys[lo_count] = .{
-                                    .cx = key.cx + offsets[i][0],
-                                    .cy = key.cy + offsets[i][1],
-                                    .cz = key.cz + offsets[i][2],
-                                };
-                                lo_count += 1;
-                            }
-                        }
-                        if (lo_count > 0) {
-                            if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
+                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.lx, update.ly, update.lz, update.old_block);
+                if (boundary_mask != 0) {
+                    var lo_keys: [6]ChunkKey = undefined;
+                    var lo_count: usize = 0;
+                    for (0..6) |i| {
+                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                            lo_keys[lo_count] = .{
+                                .cx = key.cx + offsets[i][0],
+                                .cy = key.cy + offsets[i][1],
+                                .cz = key.cz + offsets[i][2],
+                            };
+                            lo_count += 1;
                         }
                     }
-                } else {
-                    // Incremental declined (sky light affected) — fall back to full recompute
-                    const surface_heights = local_shm.getHeights(key.cx, key.cz);
-                    const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
-                    if (boundary_mask != 0) {
-                        var lo_keys: [6]ChunkKey = undefined;
-                        var lo_count: usize = 0;
-                        for (0..6) |i| {
-                            if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                                lo_keys[lo_count] = .{
-                                    .cx = key.cx + offsets[i][0],
-                                    .cy = key.cy + offsets[i][1],
-                                    .cz = key.cz + offsets[i][2],
-                                };
-                                lo_count += 1;
-                            }
-                        }
-                        if (lo_count > 0) {
-                            if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
-                        }
+                    if (lo_count > 0) {
+                        if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
                     }
                 }
             }

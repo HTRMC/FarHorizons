@@ -592,6 +592,60 @@ fn propagateBlockLightBFS(
     if (track_boundary) return boundary_mask;
 }
 
+/// Shared sky light BFS propagation with column rule support.
+/// Downward propagation (-Y, dir=3) at max brightness (255) has no attenuation,
+/// matching Cubyz's isSun column behavior.
+/// When `track_boundary` is true, returns a 6-bit mask of boundary faces reached.
+fn propagateSkyLightBFS(
+    queue: []SkyQueueEntry,
+    head: *u32,
+    tail: *u32,
+    chunk: *const WorldState.Chunk,
+    light_map: *LightMap,
+    comptime track_boundary: bool,
+) if (track_boundary) u6 else void {
+    var boundary_mask: u6 = 0;
+
+    while (head.* < tail.*) {
+        const e = queue[head.*];
+        head.* += 1;
+
+        for (0..6) |dir| {
+            if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
+
+            const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
+            const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
+            const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
+
+            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
+                if (track_boundary) boundary_mask |= @as(u6, 1) << faceBit(dir);
+                continue;
+            }
+
+            const ux: usize = @intCast(nx);
+            const uy: usize = @intCast(ny);
+            const uz: usize = @intCast(nz);
+
+            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
+
+            // Column rule: no attenuation going downward at max brightness.
+            const new_level: u8 = if (dir == 3 and e.level == 255) 255 else e.level -| ATTENUATION;
+            if (new_level == 0) continue;
+
+            const idx = chunkIndex(ux, uy, uz);
+            if (new_level <= light_map.sky_light.get(idx)) continue;
+
+            light_map.sky_light.set(idx, new_level);
+            if (tail.* < queue.len) {
+                queue[tail.*] = .{ .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz), .dir = @intCast(dir), .level = new_level };
+                tail.* += 1;
+            }
+        }
+    }
+
+    if (track_boundary) return boundary_mask;
+}
+
 /// Fast check: would propagateFromNeighbor actually change any light values?
 /// Replicates the seeding conditions without allocating BFS queues.
 /// Returns true if any neighbor border value would seed new light that
@@ -888,9 +942,8 @@ fn faceBit(dir: usize) u3 {
 }
 
 /// Attempts an incremental light update for a single block change.
-/// Only handles block light; falls back (returns null) if sky light is affected.
-/// Returns the boundary mask (which faces had light changes reaching the boundary),
-/// or null if the caller should do a full recompute instead.
+/// Handles both block light and sky light destructively (no full recompute needed).
+/// Returns the boundary mask (which faces had light changes reaching the boundary).
 pub fn applyBlockChange(
     chunk: *const WorldState.Chunk,
     light_map: *LightMap,
@@ -898,7 +951,7 @@ pub fn applyBlockChange(
     ly: u8,
     lz: u8,
     old_block: StateId,
-) ?u6 {
+) u6 {
     const tz = tracy.zone(@src(), "applyBlockChange");
     defer tz.end();
     const idx = chunkIndex(lx, ly, lz);
@@ -909,13 +962,9 @@ pub fn applyBlockChange(
     const old_emit = BlockState.emittedLight(old_block);
     const new_emit = BlockState.emittedLight(new_block);
 
-    // If opacity changed, check whether sky light is affected.
-    // If so, fall back to full recompute (sky light has complex column/surface logic).
-    if (old_opaque != new_opaque) {
-        if (skyLightAffected(light_map, lx, ly, lz, new_opaque)) return null;
-    }
-
     var boundary_mask: u6 = 0;
+
+    // ── Block light ──
 
     const current_light = light_map.block_light.get(idx);
     const has_current_light = current_light[0] > 0 or current_light[1] > 0 or current_light[2] > 0;
@@ -931,14 +980,14 @@ pub fn applyBlockChange(
         light_map.block_light.set(idx, new_emit);
     }
 
-    // STEP 3: Propagate new light outward.
+    // STEP 3: Propagate new block light outward.
     const has_new_emit = new_emit[0] > 0 or new_emit[1] > 0 or new_emit[2] > 0;
     if (has_new_emit) {
         // New emitter placed — propagate its light.
         light_map.block_light.set(idx, new_emit);
         boundary_mask |= additiveBlockLight(light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), new_emit);
     } else if (old_opaque and !new_opaque) {
-        // Opened up (was opaque, now transparent) — seed from neighbors' light.
+        // Opened up (was opaque, now transparent) — seed from neighbors' block light.
         var seed_val: [3]u8 = .{ 0, 0, 0 };
         for (0..6) |dir| {
             const nx = @as(i32, lx) + BFS_OFFSETS[dir][0];
@@ -956,31 +1005,36 @@ pub fn applyBlockChange(
         }
     }
 
-    return boundary_mask;
-}
+    // ── Sky light (destructive, avoids full recompute) ──
 
-/// Returns true if sky light values would be affected by this opacity change,
-/// meaning the caller should fall back to a full recompute.
-fn skyLightAffected(light_map: *LightMap, lx: u8, ly: u8, lz: u8, new_opaque: bool) bool {
-    if (new_opaque) {
-        // Placing opaque block: affected if position currently has sky light.
-        return light_map.sky_light.get(chunkIndex(lx, ly, lz)) > 0;
-    } else {
-        // Breaking opaque block: affected if any neighbor has sky light
-        // (it would flow into the newly opened position).
-        for (0..6) |dir| {
-            const nx = @as(i32, lx) + BFS_OFFSETS[dir][0];
-            const ny = @as(i32, ly) + BFS_OFFSETS[dir][1];
-            const nz = @as(i32, lz) + BFS_OFFSETS[dir][2];
-            if (nx >= 0 and nx < CHUNK_SIZE and ny >= 0 and ny < CHUNK_SIZE and nz >= 0 and nz < CHUNK_SIZE) {
-                if (light_map.sky_light.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))) > 0) return true;
-            } else {
-                // Neighbor is outside the chunk — conservatively assume sky light exists.
-                return true;
+    if (old_opaque != new_opaque) {
+        const current_sky = light_map.sky_light.get(idx);
+        if (new_opaque) {
+            // Placing opaque block — destructively remove sky light flowing through here.
+            if (current_sky > 0) {
+                boundary_mask |= destructiveSkyLight(light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), current_sky);
+            }
+        } else {
+            // Breaking opaque block — seed sky light from neighbors.
+            var seed_sky: u8 = 0;
+            for (0..6) |dir| {
+                const nx = @as(i32, lx) + BFS_OFFSETS[dir][0];
+                const ny = @as(i32, ly) + BFS_OFFSETS[dir][1];
+                const nz = @as(i32, lz) + BFS_OFFSETS[dir][2];
+                if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) continue;
+                const n_sky = light_map.sky_light.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz)));
+                // Column rule: if neighbor above has 255, light comes down with no attenuation.
+                const attenuated: u8 = if (dir == 2 and n_sky == 255) 255 else n_sky -| ATTENUATION;
+                seed_sky = @max(seed_sky, attenuated);
+            }
+            if (seed_sky > 0) {
+                light_map.sky_light.set(idx, seed_sky);
+                boundary_mask |= additiveSkyLight(light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), seed_sky);
             }
         }
-        return false;
     }
+
+    return boundary_mask;
 }
 
 /// Destructive block light BFS: removes block light from the cone of a removed source,
@@ -1183,6 +1237,127 @@ fn additiveBlockLight(
     tail = 1;
 
     return propagateBlockLightBFS(&queue, &head, &tail, chunk, light_map, true);
+}
+
+/// Destructive sky light BFS: removes sky light from the cone of a blocked position,
+/// then re-propagates from any other sources found during removal.
+/// Handles the column rule: downward propagation at max brightness (255) has no attenuation.
+fn destructiveSkyLight(
+    light_map: *LightMap,
+    chunk: *const WorldState.Chunk,
+    sx: i8,
+    sy: i8,
+    sz: i8,
+    start_level: u8,
+) u6 {
+    var queue: [BLOCKS_PER_CHUNK]SkyQueueEntry = undefined;
+    var head: u32 = 0;
+    var tail: u32 = 0;
+
+    var reseed: [BLOCKS_PER_CHUNK]ReseedPos = undefined;
+    var reseed_count: u32 = 0;
+    var boundary_mask: u6 = 0;
+
+    // Zero the starting position and seed the queue.
+    light_map.sky_light.set(chunkIndex(@intCast(sx), @intCast(sy), @intCast(sz)), 0);
+    queue[tail] = .{ .x = sx, .y = sy, .z = sz, .dir = 6, .level = start_level };
+    tail += 1;
+
+    // Phase 1: Destructive BFS — walk the sky light cone, zeroing values from our source.
+    while (head < tail) {
+        const e = queue[head];
+        head += 1;
+
+        for (0..6) |dir| {
+            if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
+
+            const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
+            const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
+            const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
+
+            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
+                boundary_mask |= @as(u6, 1) << faceBit(dir);
+                continue;
+            }
+
+            const ux: usize = @intCast(nx);
+            const uy: usize = @intCast(ny);
+            const uz: usize = @intCast(nz);
+
+            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
+
+            // Column rule: no attenuation going downward at max brightness.
+            const expected: u8 = if (dir == 3 and e.level == 255) 255 else e.level -| ATTENUATION;
+            if (expected == 0) continue;
+
+            const n_idx = chunkIndex(ux, uy, uz);
+            const actual = light_map.sky_light.get(n_idx);
+
+            if (actual == expected) {
+                // Came from our source — zero it and continue propagating.
+                light_map.sky_light.set(n_idx, 0);
+                if (tail < BLOCKS_PER_CHUNK) {
+                    queue[tail] = .{ .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz), .dir = @intCast(dir), .level = expected };
+                    tail += 1;
+                }
+            } else if (actual > 0) {
+                // Different source — mark for reseed.
+                if (reseed_count < BLOCKS_PER_CHUNK) {
+                    reseed[reseed_count] = .{ .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz) };
+                    reseed_count += 1;
+                }
+            }
+        }
+    }
+
+    // Phase 2: Re-propagate from reseed positions.
+    if (reseed_count > 0) {
+        boundary_mask |= reseedSkyLight(light_map, chunk, reseed[0..reseed_count]);
+    }
+
+    return boundary_mask;
+}
+
+/// Re-propagates sky light from a list of reseed positions using additive BFS.
+fn reseedSkyLight(
+    light_map: *LightMap,
+    chunk: *const WorldState.Chunk,
+    reseeds: []const ReseedPos,
+) u6 {
+    var queue: [MAX_QUEUE]SkyQueueEntry = undefined;
+    var head: u32 = 0;
+    var tail: u32 = 0;
+
+    for (reseeds) |rs| {
+        const rs_idx = chunkIndex(@intCast(rs.x), @intCast(rs.y), @intCast(rs.z));
+        const val = light_map.sky_light.get(rs_idx);
+        if (val == 0) continue;
+        if (tail < MAX_QUEUE) {
+            queue[tail] = .{ .x = rs.x, .y = rs.y, .z = rs.z, .dir = 6, .level = val };
+            tail += 1;
+        }
+    }
+
+    return propagateSkyLightBFS(&queue, &head, &tail, chunk, light_map, true);
+}
+
+/// Additive sky light BFS: propagates sky light outward from a single position.
+fn additiveSkyLight(
+    light_map: *LightMap,
+    chunk: *const WorldState.Chunk,
+    sx: i8,
+    sy: i8,
+    sz: i8,
+    start_level: u8,
+) u6 {
+    var queue: [BLOCKS_PER_CHUNK]SkyQueueEntry = undefined;
+    var head: u32 = 0;
+    var tail: u32 = 0;
+
+    queue[0] = .{ .x = sx, .y = sy, .z = sz, .dir = 6, .level = start_level };
+    tail = 1;
+
+    return propagateSkyLightBFS(&queue, &head, &tail, chunk, light_map, true);
 }
 
 // ─── Tests ───
@@ -1577,8 +1752,7 @@ test "incremental: remove glowstone clears its light" {
     const old_block = chunk.blocks.get(chunkIndex(16, 16, 16));
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
 
-    const result = applyBlockChange(chunk, lm, 16, 16, 16, old_block);
-    try testing.expect(result != null);
+    _ = applyBlockChange(chunk, lm, 16, 16, 16, old_block);
 
     // Emitter position should be dark
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
@@ -1606,8 +1780,7 @@ test "incremental: place opaque block blocks light" {
 
     // Place stone at (17, 16, 16) — blocks light from passing through
     chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
-    const result = applyBlockChange(chunk, lm, 17, 16, 16, AIR);
-    try testing.expect(result != null);
+    _ = applyBlockChange(chunk, lm, 17, 16, 16, AIR);
 
     // The stone block should have no light
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
@@ -1636,8 +1809,7 @@ test "incremental: break opaque block lets light through" {
 
     // Break the wall
     chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
-    const result = applyBlockChange(chunk, lm, 17, 16, 16, BlockState.defaultState(.stone));
-    try testing.expect(result != null);
+    _ = applyBlockChange(chunk, lm, 17, 16, 16, BlockState.defaultState(.stone));
 
     // (17, 16, 16) should now have light from glowstone
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
@@ -1664,8 +1836,7 @@ test "incremental: two glowstones, remove one preserves other" {
 
     // Remove glowstone at (10, 16, 16)
     chunk.blocks.set(chunkIndex(10, 16, 16), AIR);
-    const result = applyBlockChange(chunk, lm, 10, 16, 16, BlockState.defaultState(.glowstone));
-    try testing.expect(result != null);
+    _ = applyBlockChange(chunk, lm, 10, 16, 16, BlockState.defaultState(.glowstone));
 
     // (10, 16, 16) still gets light from glowstone at (20,16,16), distance 10: 255 - 80 = 175
     try testing.expectEqual(@as(u8, 255 - 10 * ATTENUATION), lm.block_light.get(chunkIndex(10, 16, 16))[0]);
@@ -1696,8 +1867,7 @@ test "incremental: place glowstone adds light" {
 
     // Place glowstone
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
-    const result = applyBlockChange(chunk, lm, 16, 16, 16, AIR);
-    try testing.expect(result != null);
+    _ = applyBlockChange(chunk, lm, 16, 16, 16, AIR);
 
     // Should now have light
     try testing.expectEqual(@as(u8, 255), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
@@ -1800,7 +1970,7 @@ test "incremental: matches full recompute for break wall" {
     }
 }
 
-test "incremental: sky light affected returns null for surface change" {
+test "incremental: place stone in sky light removes sky destructively" {
     const chunk = try allocChunk();
     defer {
         chunk.blocks.deinit();
@@ -1812,10 +1982,81 @@ test "incremental: sky light affected returns null for surface change" {
     // All air, no surface → sky light everywhere = 255
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, null);
 
-    // Place stone in a sky-lit area: should return null (fall back to full)
+    // Place stone in a sky-lit area: should handle destructively (not null)
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
     const result = applyBlockChange(chunk, lm, 16, 16, 16, AIR);
-    try testing.expectEqual(@as(?u6, null), result);
+    try testing.expect(result != 0); // boundary reached
+
+    // Stone block should have no sky light
+    try testing.expectEqual(@as(u8, 0), lm.sky_light.get(chunkIndex(16, 16, 16)));
+    // Block above should still have full sky
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(16, 17, 16)));
+    // Neighboring column should still have full sky
+    try testing.expectEqual(@as(u8, 255), lm.sky_light.get(chunkIndex(17, 16, 16)));
+    // Block below: column blocked, gets light from sides (255 - 8 = 247)
+    try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.sky_light.get(chunkIndex(16, 15, 16)));
+}
+
+test "incremental: sky light matches full recompute for place stone" {
+    const chunk = try allocChunk();
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+
+    const lm_inc = try allocLightMap();
+    defer freeLightMap(lm_inc);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, null);
+
+    // Incremental place
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
+    _ = applyBlockChange(chunk, lm_inc, 16, 16, 16, AIR);
+
+    // Full recompute
+    const lm_full = try allocLightMap();
+    defer freeLightMap(lm_full);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_full, 0, null);
+
+    // Compare all sky light values
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        try testing.expectEqual(lm_full.sky_light.get(i), lm_inc.sky_light.get(i));
+    }
+    // Also compare block light
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        const inc = lm_inc.block_light.get(i);
+        const full = lm_full.block_light.get(i);
+        try testing.expectEqual(full[0], inc[0]);
+        try testing.expectEqual(full[1], inc[1]);
+        try testing.expectEqual(full[2], inc[2]);
+    }
+}
+
+test "incremental: break stone in sky column matches full recompute" {
+    const chunk = try allocChunk();
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    // Start with a stone block blocking a column
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
+
+    const lm_inc = try allocLightMap();
+    defer freeLightMap(lm_inc);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, null);
+
+    // Incremental break
+    chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
+    _ = applyBlockChange(chunk, lm_inc, 16, 16, 16, BlockState.defaultState(.stone));
+
+    // Full recompute
+    const lm_full = try allocLightMap();
+    defer freeLightMap(lm_full);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_full, 0, null);
+
+    // Compare all sky light values
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        try testing.expectEqual(lm_full.sky_light.get(i), lm_inc.sky_light.get(i));
+    }
 }
 
 test "incremental: no-op change in dark area" {
@@ -1832,6 +2073,5 @@ test "incremental: no-op change in dark area" {
     // Place and break stone in a completely dark interior area
     chunk.blocks.set(chunkIndex(16, 10, 16), BlockState.defaultState(.stone));
     const result = applyBlockChange(chunk, lm, 16, 10, 16, AIR);
-    try testing.expect(result != null);
-    try testing.expectEqual(@as(u6, 0), result.?);
+    try testing.expectEqual(@as(u6, 0), result);
 }
