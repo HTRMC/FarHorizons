@@ -1162,6 +1162,17 @@ pub fn main() !void {
                             input_state.drop_cooldown = 1;
                         }
                         state.fixedUpdate(input_state.move_speed);
+
+                        // Send position to server if connected
+                        if (client_net) |cn| {
+                            const cam = state.camera;
+                            cn.sendPosition(
+                                .{ cam.position.x, cam.position.y, cam.position.z },
+                                .{ 0, 0, 0 },
+                                .{ cam.pitch, cam.yaw, 0 },
+                            );
+                        }
+
                         tick_accumulator -= GameState.TICK_INTERVAL;
                     }
 
@@ -1411,6 +1422,10 @@ const ClientNetState = struct {
         self.conn.state.store(.connected, .release); // skip handshake for now
         self.conn_manager.addConnection(self.conn);
         self.conn_manager.start();
+
+        // Send initial handshake so server learns our address
+        const handshake = @import("network/protocols/handshake.zig");
+        handshake.sendClientHello(self.conn, self.conn_manager.socket, "Player");
 
         std.log.info("Connected to server at {}", .{remote});
         return self;
