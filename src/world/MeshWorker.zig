@@ -104,6 +104,115 @@ pub const MeshWorker = struct {
         self.state_mutex.unlock(io);
     }
 
+    /// Compute lighting for a chunk and update the 27-chunk bitmask.
+    /// When all existing neighbors of a chunk are lit, submits a mesh task for it.
+    /// Returns true if processed, false if should be re-enqueued.
+    pub fn processLightTask(self: *MeshWorker, key: ChunkKey) bool {
+        const io = Io.Threaded.global_single_threaded.io();
+
+        // Snapshot state pointers
+        self.state_mutex.lockUncancelable(io);
+        const local_chunk_map = self.chunk_map;
+        const local_light_maps: *const LightMaps = self.light_maps;
+        const local_shm: *const SurfaceHeightMap = self.surface_height_map;
+        self.state_mutex.unlock(io);
+
+        // Skip stale chunks
+        const player_snapshot = if (self.pool) |p| p.player_chunk else ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
+        const ud: i64 = ChunkStreamer.UNLOAD_DISTANCE;
+        if (distSq(key, player_snapshot) > ud * ud) {
+            _ = self.stats_stale.fetchAdd(1, .monotonic);
+            return true;
+        }
+
+        const chunk = local_chunk_map.get(key) orelse return true;
+        const neighbors = local_chunk_map.getNeighbors(key);
+        const face_offsets = WorldState.face_neighbor_offsets;
+        const light_map: ?*LightMap = local_light_maps.get(key);
+        var neighbor_lights: [6]?*const LightMap = .{null} ** 6;
+        for (0..6) |i| {
+            const nk = ChunkKey{
+                .cx = key.cx + face_offsets[i][0],
+                .cy = key.cy + face_offsets[i][1],
+                .cz = key.cz + face_offsets[i][2],
+            };
+            neighbor_lights[i] = local_light_maps.get(nk);
+        }
+
+        const neighbor_borders = LightMapMod.snapshotNeighborBorders(neighbor_lights);
+
+        if (light_map) |lm| lm.mutex.lockUncancelable(io);
+        defer {
+            if (light_map) |lm| lm.mutex.unlock(io);
+        }
+
+        // Compute light if dirty
+        if (light_map) |lm| {
+            if (lm.dirty) {
+                lm.incremental = null;
+                const surface_heights = local_shm.getHeights(key.cx, key.cz);
+                const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
+
+                // Cascade: submit light tasks for neighbors with changed borders
+                if (boundary_mask != 0) {
+                    var lo_keys: [6]ChunkKey = undefined;
+                    var lo_count: usize = 0;
+                    for (0..6) |i| {
+                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                            lo_keys[lo_count] = .{
+                                .cx = key.cx + face_offsets[i][0],
+                                .cy = key.cy + face_offsets[i][1],
+                                .cz = key.cz + face_offsets[i][2],
+                            };
+                            lo_count += 1;
+                        }
+                    }
+                    if (lo_count > 0) {
+                        if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
+                    }
+                }
+            }
+        }
+
+        // Update 27-chunk bitmask: notify all neighbors that we're lit,
+        // and check if any chunk (including self) is ready to mesh.
+        self.updateLitNeighborMasks(key, local_light_maps);
+
+        return true;
+    }
+
+    /// After a chunk's lighting completes, set our bit in each neighbor's
+    /// lit_neighbors mask. If any neighbor's mask becomes complete (all
+    /// existing neighbors lit), submit a mesh task for it.
+    fn updateLitNeighborMasks(self: *MeshWorker, key: ChunkKey, light_maps: *const LightMaps) void {
+        const offsets_27 = WorldState.neighbor_offsets_27;
+
+        for (offsets_27) |off| {
+            const nk = ChunkKey{
+                .cx = key.cx + off[0],
+                .cy = key.cy + off[1],
+                .cz = key.cz + off[2],
+            };
+            const neighbor_lm = light_maps.get(nk) orelse continue;
+
+            // Our position relative to the neighbor is (-dx, -dy, -dz)
+            const bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(-off[0], -off[1], -off[2]);
+
+            // Atomically set our bit in the neighbor's lit_neighbors mask
+            const old = neighbor_lm.lit_neighbors.fetchOr(bit, .acq_rel);
+            const new = old | bit;
+            const required = neighbor_lm.required_neighbors.load(.acquire);
+
+            // If all required neighbors are now lit, submit mesh for that neighbor
+            if (required != 0 and (new & required) == required) {
+                // Only submit if this was the bit that completed the mask
+                if ((old & required) != required) {
+                    if (self.pool) |p| p.submitMesh(nk);
+                }
+            }
+        }
+    }
+
     /// Process one mesh task. Called by ThreadPool workers.
     /// Returns true if processed, false if output is full (caller should re-enqueue).
     pub fn processTask(self: *MeshWorker, key: ChunkKey, light_only: bool) bool {

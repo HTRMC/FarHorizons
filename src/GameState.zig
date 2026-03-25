@@ -337,6 +337,9 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
 }
 
 pub fn save(self: *GameState) void {
+    const tz = tracy.zone(@src(), "GameState.save");
+    defer tz.end();
+
     const s = self.streaming.storage orelse return;
     const io = std.Io.Threaded.global_single_threaded.io();
     const save_start = std.Io.Clock.now(.awake, io);
@@ -361,7 +364,11 @@ pub fn save(self: *GameState) void {
     const dirty_ns: i64 = @intCast(dirty_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
 
     const flush_start = std.Io.Clock.now(.awake, io);
-    s.flush();
+    {
+        const tz2 = tracy.zone(@src(), "storage.flush");
+        defer tz2.end();
+        s.flush();
+    }
     const flush_ns: i64 = @intCast(flush_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
 
     const total_ns: i64 = @intCast(save_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
@@ -381,16 +388,32 @@ pub fn deinit(self: *GameState) void {
     }
     self.dirty_chunks.deinit();
     self.streaming.player_dirty_chunks.deinit();
-    if (self.streaming.storage) |s| s.deinit();
-    var lm_it = self.light_maps.iterator();
-    while (lm_it.next()) |entry| {
-        self.light_map_pool.release(entry.value_ptr.*);
+    {
+        const tz2 = tracy.zone(@src(), "deinit.storage");
+        defer tz2.end();
+        if (self.streaming.storage) |s| s.deinit();
     }
-    self.light_maps.deinit();
-    self.light_map_pool.deinit();
+    {
+        const tz2 = tracy.zone(@src(), "deinit.lightMaps");
+        defer tz2.end();
+        var lm_it = self.light_maps.iterator();
+        while (lm_it.next()) |entry| {
+            self.light_map_pool.release(entry.value_ptr.*);
+        }
+        self.light_maps.deinit();
+        self.light_map_pool.deinit();
+    }
     self.surface_height_map.deinit();
-    self.chunk_map.deinit();
-    self.chunk_pool.deinit();
+    {
+        const tz2 = tracy.zone(@src(), "deinit.chunkMap");
+        defer tz2.end();
+        self.chunk_map.deinit();
+    }
+    {
+        const tz2 = tracy.zone(@src(), "deinit.chunkPool");
+        defer tz2.end();
+        self.chunk_pool.deinit();
+    }
 }
 
 pub fn toggleDebugCamera(self: *GameState) void {
@@ -1819,18 +1842,6 @@ fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     s.markDirty(key.cx, key.cy, key.cz, chunk);
 }
 
-fn hasAllNeighbors(chunk_map: *const ChunkMap, key: WorldState.ChunkKey, offsets: *const [6][3]i32) bool {
-    for (offsets) |off| {
-        const nk = WorldState.ChunkKey{
-            .cx = key.cx + off[0],
-            .cy = key.cy + off[1],
-            .cz = key.cz + off[2],
-        };
-        if (chunk_map.get(nk) == null) return false;
-    }
-    return true;
-}
-
 pub fn worldTick(self: *GameState) void {
     // Update player chunk from camera position
     const pos = self.camera.position;
@@ -1862,24 +1873,43 @@ pub fn worldTick(self: *GameState) void {
             self.light_map_pool.release(lm);
             continue;
         };
-        // Only mesh a chunk once all 6 face neighbors are loaded, so that
-        // computeChunkLight gets correct border data on the first run and
-        // avoids cascading light-only re-mesh tasks.
-        const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
-        if (hasAllNeighbors(&self.chunk_map, result.key, &offsets)) {
-            self.dirty_chunks.add(result.key);
+        // Compute required_neighbors mask for the new chunk and update neighbors.
+        // Each bit in the 27-bit mask represents a position in the 3x3x3 cube.
+        // A chunk meshes when all its existing neighbors have finished lighting.
+        const offsets_27 = WorldState.neighbor_offsets_27;
+        const new_lm = self.light_maps.get(result.key);
+
+        if (new_lm) |nlm| {
+            var required: u32 = 0;
+            for (offsets_27, 0..) |off, i| {
+                const nk = WorldState.ChunkKey{
+                    .cx = result.key.cx + off[0],
+                    .cy = result.key.cy + off[1],
+                    .cz = result.key.cz + off[2],
+                };
+                if (self.light_maps.get(nk) != null) {
+                    required |= @as(u32, 1) << @intCast(i);
+                }
+            }
+            nlm.required_neighbors.store(required, .release);
         }
-        // Check each neighbor: if it now has all ITS neighbors, it becomes ready too.
-        for (offsets) |off| {
+
+        // Update each neighbor's required_neighbors to include the new chunk
+        for (offsets_27) |off| {
             const nk = WorldState.ChunkKey{
                 .cx = result.key.cx + off[0],
                 .cy = result.key.cy + off[1],
                 .cz = result.key.cz + off[2],
             };
-            if (self.chunk_map.get(nk) != null and hasAllNeighbors(&self.chunk_map, nk, &offsets)) {
-                self.dirty_chunks.add(nk);
-            }
+            const neighbor_lm = self.light_maps.get(nk) orelse continue;
+            // The new chunk's position relative to the neighbor is (-off)
+            const bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(-off[0], -off[1], -off[2]);
+            _ = neighbor_lm.required_neighbors.fetchOr(bit, .release);
         }
+
+        // Submit a light task (not a mesh task) — mesh will be triggered
+        // automatically by the 27-chunk bitmask when all neighbors are lit.
+        if (self.streaming.pool) |pool| pool.submitLight(result.key);
     }
 
     // Scan for chunks to unload (incremental cursor)
@@ -2052,6 +2082,21 @@ pub fn applyUnloadsToGpu(
         }
         wr.releaseSlot(key);
 
+        // Clear this chunk's bit from all neighbors' bitmasks before removing
+        {
+            const offsets_27 = WorldState.neighbor_offsets_27;
+            for (offsets_27) |off| {
+                const nk = WorldState.ChunkKey{
+                    .cx = key.cx + off[0],
+                    .cy = key.cy + off[1],
+                    .cz = key.cz + off[2],
+                };
+                const neighbor_lm = self.light_maps.get(nk) orelse continue;
+                const bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(-off[0], -off[1], -off[2]);
+                _ = neighbor_lm.required_neighbors.fetchAnd(~bit, .release);
+                _ = neighbor_lm.lit_neighbors.fetchAnd(~bit, .release);
+            }
+        }
         if (self.light_maps.fetchRemove(key)) |lm_kv| {
             self.light_map_pool.release(lm_kv.value);
         }

@@ -8,8 +8,9 @@ pub const ThreadPool = struct {
 
     const ChunkKey = WorldState.ChunkKey;
 
-    pub const TaskKind = enum(u2) {
+    pub const TaskKind = enum(u3) {
         chunk_load,
+        light,
         mesh,
         mesh_light_only,
     };
@@ -26,6 +27,7 @@ pub const ThreadPool = struct {
     // Single priority heap + dedup
     heap: Heap,
     load_dedup: LoadDedup,
+    light_dedup: LoadDedup,
     mesh_dedup: MeshDedup,
     heap_mutex: Io.Mutex,
     player_chunk: ChunkKey,
@@ -61,6 +63,7 @@ pub const ThreadPool = struct {
         self.* = .{
             .heap = Heap.initContext(self),
             .load_dedup = LoadDedup.init(allocator),
+            .light_dedup = LoadDedup.init(allocator),
             .mesh_dedup = MeshDedup.init(allocator),
             .heap_mutex = .init,
             .player_chunk = .{ .cx = 0, .cy = 0, .cz = 0 },
@@ -77,6 +80,7 @@ pub const ThreadPool = struct {
         self.heap.context = self;
         self.heap.ensureTotalCapacity(allocator, HEAP_CAPACITY) catch {};
         self.load_dedup.ensureTotalCapacity(@intCast(HEAP_CAPACITY)) catch {};
+        self.light_dedup.ensureTotalCapacity(@intCast(HEAP_CAPACITY)) catch {};
         self.mesh_dedup.ensureTotalCapacity(@intCast(HEAP_CAPACITY)) catch {};
     }
 
@@ -98,19 +102,25 @@ pub const ThreadPool = struct {
     }
 
     pub fn stop(self: *ThreadPool) void {
+        const tracy = @import("platform/tracy.zig");
         self.shutdown.store(true, .release);
         const io = Io.Threaded.global_single_threaded.io();
         for (0..self.thread_count) |_| {
             self.semaphore.post(io);
         }
-        for (0..self.thread_count) |i| {
-            if (self.threads[i]) |t| {
-                t.join();
-                self.threads[i] = null;
+        {
+            const tz = tracy.zone(@src(), "ThreadPool.joinAll");
+            defer tz.end();
+            for (0..self.thread_count) |i| {
+                if (self.threads[i]) |t| {
+                    t.join();
+                    self.threads[i] = null;
+                }
             }
         }
         self.heap.deinit(self.allocator);
         self.load_dedup.deinit();
+        self.light_dedup.deinit();
         self.mesh_dedup.deinit();
     }
 
@@ -123,7 +133,10 @@ pub const ThreadPool = struct {
 
         if (self.load_dedup.contains(key)) return;
         self.load_dedup.put(key, {}) catch return;
-        self.heap.push(self.allocator, .{ .key = key, .kind = .chunk_load }) catch return;
+        self.heap.push(self.allocator, .{ .key = key, .kind = .chunk_load }) catch {
+            _ = self.load_dedup.remove(key);
+            return;
+        };
         _ = self.load_task_count.fetchAdd(1, .monotonic);
         self.semaphore.post(io);
     }
@@ -137,11 +150,52 @@ pub const ThreadPool = struct {
         for (keys) |key| {
             if (self.load_dedup.contains(key)) continue;
             self.load_dedup.put(key, {}) catch continue;
-            self.heap.push(self.allocator, .{ .key = key, .kind = .chunk_load }) catch continue;
+            self.heap.push(self.allocator, .{ .key = key, .kind = .chunk_load }) catch {
+                _ = self.load_dedup.remove(key);
+                continue;
+            };
             added += 1;
         }
         if (added > 0) {
             _ = self.load_task_count.fetchAdd(added, .monotonic);
+            for (0..@min(added, self.thread_count)) |_| {
+                self.semaphore.post(io);
+            }
+        }
+    }
+
+    pub fn submitLight(self: *ThreadPool, key: ChunkKey) void {
+        const io = Io.Threaded.global_single_threaded.io();
+        self.heap_mutex.lockUncancelable(io);
+        defer self.heap_mutex.unlock(io);
+
+        if (self.light_dedup.contains(key)) return;
+        self.light_dedup.put(key, {}) catch return;
+        self.heap.push(self.allocator, .{ .key = key, .kind = .light }) catch {
+            _ = self.light_dedup.remove(key);
+            return;
+        };
+        _ = self.mesh_task_count.fetchAdd(1, .monotonic);
+        self.semaphore.post(io);
+    }
+
+    pub fn submitLightBatch(self: *ThreadPool, keys: []const ChunkKey) void {
+        const io = Io.Threaded.global_single_threaded.io();
+        self.heap_mutex.lockUncancelable(io);
+        defer self.heap_mutex.unlock(io);
+
+        var added: u32 = 0;
+        for (keys) |key| {
+            if (self.light_dedup.contains(key)) continue;
+            self.light_dedup.put(key, {}) catch continue;
+            self.heap.push(self.allocator, .{ .key = key, .kind = .light }) catch {
+                _ = self.light_dedup.remove(key);
+                continue;
+            };
+            added += 1;
+        }
+        if (added > 0) {
+            _ = self.mesh_task_count.fetchAdd(added, .monotonic);
             for (0..@min(added, self.thread_count)) |_| {
                 self.semaphore.post(io);
             }
@@ -159,7 +213,10 @@ pub const ThreadPool = struct {
             return;
         }
         self.mesh_dedup.put(key, false) catch return;
-        self.heap.push(self.allocator, .{ .key = key, .kind = .mesh }) catch return;
+        self.heap.push(self.allocator, .{ .key = key, .kind = .mesh }) catch {
+            _ = self.mesh_dedup.remove(key);
+            return;
+        };
         _ = self.mesh_task_count.fetchAdd(1, .monotonic);
         self.semaphore.post(io);
     }
@@ -176,7 +233,10 @@ pub const ThreadPool = struct {
                 continue;
             }
             self.mesh_dedup.put(key, false) catch continue;
-            self.heap.push(self.allocator, .{ .key = key, .kind = .mesh }) catch continue;
+            self.heap.push(self.allocator, .{ .key = key, .kind = .mesh }) catch {
+                _ = self.mesh_dedup.remove(key);
+                continue;
+            };
             added += 1;
         }
         if (added > 0) {
@@ -196,7 +256,10 @@ pub const ThreadPool = struct {
         for (keys) |key| {
             if (self.mesh_dedup.contains(key)) continue;
             self.mesh_dedup.put(key, true) catch continue;
-            self.heap.push(self.allocator, .{ .key = key, .kind = .mesh_light_only }) catch continue;
+            self.heap.push(self.allocator, .{ .key = key, .kind = .mesh_light_only }) catch {
+                _ = self.mesh_dedup.remove(key);
+                continue;
+            };
             added += 1;
         }
         if (added > 0) {
@@ -280,6 +343,12 @@ pub const ThreadPool = struct {
                         return task;
                     }
                 },
+                .light => {
+                    if (self.light_dedup.remove(task.key)) {
+                        _ = self.mesh_task_count.fetchSub(1, .monotonic);
+                        return task;
+                    }
+                },
                 .mesh, .mesh_light_only => {
                     if (self.mesh_dedup.fetchRemove(task.key)) |entry| {
                         _ = self.mesh_task_count.fetchSub(1, .monotonic);
@@ -303,6 +372,7 @@ pub const ThreadPool = struct {
 
             const processed = switch (task.kind) {
                 .chunk_load => if (self.streamer) |s| s.processTask(task.key) else true,
+                .light => if (self.mesh_worker) |mw| mw.processLightTask(task.key) else true,
                 .mesh => if (self.mesh_worker) |mw| mw.processTask(task.key, false) else true,
                 .mesh_light_only => if (self.mesh_worker) |mw| mw.processTask(task.key, true) else true,
             };
@@ -311,6 +381,7 @@ pub const ThreadPool = struct {
                 // Output was full — re-enqueue and wait for drain
                 switch (task.kind) {
                     .chunk_load => self.submitChunkLoad(task.key),
+                    .light => self.submitLight(task.key),
                     .mesh => self.submitMesh(task.key),
                     .mesh_light_only => self.submitMeshLightOnlyBatch(&.{task.key}),
                 }

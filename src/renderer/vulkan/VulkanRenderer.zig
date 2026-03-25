@@ -199,9 +199,13 @@ pub const VulkanRenderer = struct {
         const tz = tracy.zone(@src(), "VulkanRenderer.deinit");
         defer tz.end();
 
-        vk.deviceWaitIdle(self.ctx.device) catch |err| {
-            std.log.err("vkDeviceWaitIdle failed: {}", .{err});
-        };
+        {
+            const tz2 = tracy.zone(@src(), "deinit.deviceWaitIdle");
+            defer tz2.end();
+            vk.deviceWaitIdle(self.ctx.device) catch |err| {
+                std.log.err("vkDeviceWaitIdle failed: {}", .{err});
+            };
+        }
 
         self.stopWorkerPipeline();
         self.transfer_pipeline.deinit();
@@ -322,8 +326,12 @@ pub const VulkanRenderer = struct {
 
     fn stopWorkerPipeline(self: *VulkanRenderer) void {
         // Stop pool first (stops all streaming + meshing work)
-        if (self.thread_pool) |pool| {
-            pool.stop();
+        {
+            const tz = tracy.zone(@src(), "stop.pool");
+            defer tz.end();
+            if (self.thread_pool) |pool| {
+                pool.stop();
+            }
         }
 
         // Clear game_state references
@@ -335,13 +343,21 @@ pub const VulkanRenderer = struct {
         }
 
         // Stop transfer thread (consumes mesh output)
-        self.transfer_pipeline.stop();
+        {
+            const tz = tracy.zone(@src(), "stop.transfer");
+            defer tz.end();
+            self.transfer_pipeline.stop();
+        }
         if (self.mesh_worker) |mw| {
             mw.stop();
         }
 
         // Wait for all in-flight GPU transfers before freeing TLSF handles
-        self.transfer_pipeline.waitAllPending();
+        {
+            const tz = tracy.zone(@src(), "stop.waitGPU");
+            defer tz.end();
+            self.transfer_pipeline.waitAllPending();
+        }
 
         // Drain committed queue — free TLSF handles for chunks that were never applied
         self.drainAndFreeCommitted();

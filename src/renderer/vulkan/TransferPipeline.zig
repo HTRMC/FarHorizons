@@ -195,6 +195,8 @@ pub const TransferPipeline = struct {
     }
 
     pub fn stop(self: *TransferPipeline) void {
+        const tz = tracy.zone(@src(), "TransferPipeline.stop");
+        defer tz.end();
         self.shutdown.store(true, .release);
         const io = Io.Threaded.global_single_threaded.io();
         // Unblock the worker if it's waiting on mesh_worker output
@@ -208,6 +210,8 @@ pub const TransferPipeline = struct {
         self.committed_drained_cond.broadcast(io);
         self.committed_mutex.unlock(io);
         if (self.thread) |t| {
+            const tz2 = tracy.zone(@src(), "TransferPipeline.joinThread");
+            defer tz2.end();
             t.join();
             self.thread = null;
         }

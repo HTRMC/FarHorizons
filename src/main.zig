@@ -761,7 +761,11 @@ pub fn main() !void {
     var save_thread: ?std.Thread = null;
     var save_done = std.atomic.Value(bool).init(false);
     defer {
+        const tz2 = tracy.zone(@src(), "shutdown.cleanup");
+        defer tz2.end();
         if (save_thread) |t| {
+            const tz3 = tracy.zone(@src(), "shutdown.joinSave");
+            defer tz3.end();
             t.join();
             save_thread = null;
         }
@@ -771,7 +775,11 @@ pub fn main() !void {
             } else {
                 state.save();
             }
-            renderer.setGameState(null);
+            {
+                const tz3 = tracy.zone(@src(), "shutdown.setGameState");
+                defer tz3.end();
+                renderer.setGameState(null);
+            }
             state.deinit();
         }
     }
@@ -876,7 +884,18 @@ pub fn main() !void {
                     captureMouse(&input_state);
                 },
                 .return_to_title => {
+                    const rtt_tz = tracy.zone(@src(), "returnToTitle");
+                    defer rtt_tz.end();
                     if (game_state) |*state| {
+                        // Stop workers before save so they don't compete for disk I/O.
+                        // Workers may be mid-task doing storage.loadChunkInto (100ms+);
+                        // without stopping them first, pool.stop() after save blocks
+                        // for seconds waiting on disk-contended worker threads.
+                        {
+                            const stz = tracy.zone(@src(), "returnToTitle.stopPipeline");
+                            defer stz.end();
+                            renderer.setGameState(null);
+                        }
                         save_done.store(false, .release);
                         save_thread = std.Thread.spawn(.{}, saveWorkerFn, .{ state, &save_done }) catch null;
                         if (save_thread != null) {
@@ -921,11 +940,19 @@ pub fn main() !void {
 
         // Check if background save completed
         if (menu_ctrl.app_state == .saving and save_done.load(.acquire)) {
+            const save_tz = tracy.zone(@src(), "saveDone.cleanup");
+            defer save_tz.end();
             if (save_thread) |t| {
+                const jtz = tracy.zone(@src(), "saveDone.joinThread");
+                defer jtz.end();
                 t.join();
                 save_thread = null;
             }
-            renderer.setGameState(null);
+            {
+                const stz = tracy.zone(@src(), "saveDone.setGameState");
+                defer stz.end();
+                renderer.setGameState(null);
+            }
             if (game_state) |*state| {
                 state.deinit();
             }
@@ -1251,7 +1278,11 @@ pub fn main() !void {
         tracy.frameMark();
     }
 
-    options.save(allocator);
+    {
+        const tz2 = tracy.zone(@src(), "postLoop.optionsSave");
+        defer tz2.end();
+        options.save(allocator);
+    }
     std.log.info("Shutting down...", .{});
 }
 

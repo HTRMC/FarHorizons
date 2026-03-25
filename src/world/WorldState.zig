@@ -64,6 +64,26 @@ pub const face_neighbor_offsets = [6][3]i32{
     .{ 0, -1, 0 },
 };
 
+/// All 27 offsets in a 3x3x3 cube (including self at index 13).
+pub const neighbor_offsets_27: [27][3]i32 = blk: {
+    var result: [27][3]i32 = undefined;
+    var i: usize = 0;
+    for ([_]i32{ -1, 0, 1 }) |dx| {
+        for ([_]i32{ -1, 0, 1 }) |dy| {
+            for ([_]i32{ -1, 0, 1 }) |dz| {
+                result[i] = .{ dx, dy, dz };
+                i += 1;
+            }
+        }
+    }
+    break :blk result;
+};
+
+/// Bit index for a neighbor at offset (dx,dy,dz) in the 27-chunk bitmask.
+pub fn neighborBitIndex(dx: i32, dy: i32, dz: i32) u5 {
+    return @intCast(@as(u32, @intCast(dx + 1)) * 9 + @as(u32, @intCast(dy + 1)) * 3 + @as(u32, @intCast(dz + 1)));
+}
+
 // --- Water face models (same as cube faces but top at 14/16) ---
 // Models 6-11 mirror faces 0-5 with py clamped to WATER_HEIGHT.
 pub const WATER_HEIGHT: f32 = 14.0 / 16.0;

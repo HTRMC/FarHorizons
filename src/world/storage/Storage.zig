@@ -118,6 +118,8 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8) !*Storage {
 }
 
 pub fn deinit(self: *Storage) void {
+    const tz = tracy.zone(@src(), "Storage.deinit");
+    defer tz.end();
     const pool = self.game_chunk_pool orelse {
         log.warn("Storage.deinit: no game_chunk_pool set, skipping dirty save", .{});
         self.io_pipeline.stop();
@@ -131,9 +133,17 @@ pub fn deinit(self: *Storage) void {
         return;
     };
     self.saveAllDirty(pool);
-    self.io_pipeline.stop();
+    {
+        const tz2 = tracy.zone(@src(), "Storage.ioPipelineStop");
+        defer tz2.end();
+        self.io_pipeline.stop();
+    }
     self.dirty_set.deinit(pool);
-    self.region_cache.deinit();
+    {
+        const tz2 = tracy.zone(@src(), "Storage.regionCacheDeinit");
+        defer tz2.end();
+        self.region_cache.deinit();
+    }
     const allocator = self.allocator;
     allocator.free(self.region_dir);
     allocator.free(self.world_dir);
