@@ -2,7 +2,7 @@
 
 struct FaceData { uint word0; uint word1; };
 struct QuadModel { float corners[12]; float uvs[8]; float normal[3]; };
-struct ChunkData { int position[3]; uint lightStart; uint faceStart; uint faceCounts[6]; };
+struct ChunkData { int position[3]; uint lightStart; uint faceStart; uint faceCounts[6]; uint visibilityState; float aabbMin[3]; float aabbMax[3]; uint layerFaceCounts[18]; };
 struct LightEntry { uint corners[4]; };
 
 layout(set=0, binding=0) readonly buffer FaceBuffer { FaceData faces[]; };

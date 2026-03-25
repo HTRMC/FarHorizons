@@ -291,6 +291,16 @@ pub const TransferPipeline = struct {
         return result;
     }
 
+    fn flattenLfc(lfc: [WorldState.LAYER_COUNT][6]u32) [18]u32 {
+        var flat: [18]u32 = .{0} ** 18;
+        for (0..WorldState.LAYER_COUNT) |l| {
+            for (0..6) |n| {
+                flat[l * 6 + n] = lfc[l][n];
+            }
+        }
+        return flat;
+    }
+
     fn workerFn(self: *TransferPipeline) void {
         tracy.setThreadName("TransferPipeline");
         const io = Io.Threaded.global_single_threaded.io();
@@ -375,7 +385,18 @@ pub const TransferPipeline = struct {
                                 .light_start = 0,
                                 .face_start = 0,
                                 .face_counts = totalFaceCounts(result.layer_face_counts),
-
+                                .visibility_state = 1,
+                                .aabb_min = .{
+                                    @floatFromInt(key.position()[0]),
+                                    @floatFromInt(key.position()[1]),
+                                    @floatFromInt(key.position()[2]),
+                                },
+                                .aabb_max = .{
+                                    @floatFromInt(key.position()[0] + WorldState.CHUNK_SIZE),
+                                    @floatFromInt(key.position()[1] + WorldState.CHUNK_SIZE),
+                                    @floatFromInt(key.position()[2] + WorldState.CHUNK_SIZE),
+                                },
+                                .layer_face_counts = flattenLfc(result.layer_face_counts),
                             },
                             .face_alloc = null,
                             .light_alloc = null,
@@ -430,6 +451,18 @@ pub const TransferPipeline = struct {
                             .light_start = la.offset,
                             .face_start = 0,
                             .face_counts = totalFaceCounts(result.layer_face_counts),
+                            .visibility_state = 1,
+                            .aabb_min = .{
+                                @floatFromInt(key.position()[0]),
+                                @floatFromInt(key.position()[1]),
+                                @floatFromInt(key.position()[2]),
+                            },
+                            .aabb_max = .{
+                                @floatFromInt(key.position()[0] + WorldState.CHUNK_SIZE),
+                                @floatFromInt(key.position()[1] + WorldState.CHUNK_SIZE),
+                                @floatFromInt(key.position()[2] + WorldState.CHUNK_SIZE),
+                            },
+                            .layer_face_counts = flattenLfc(result.layer_face_counts),
                         },
                         .face_alloc = null,
                         .light_alloc = light_alloc,
@@ -452,6 +485,10 @@ pub const TransferPipeline = struct {
                             .light_start = 0,
                             .face_start = 0,
                             .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+                            .visibility_state = 0,
+                            .aabb_min = .{ 0, 0, 0 },
+                            .aabb_max = .{ 0, 0, 0 },
+                            .layer_face_counts = .{0} ** 18,
                         },
                         .face_alloc = null,
                         .light_alloc = null,
@@ -528,7 +565,18 @@ pub const TransferPipeline = struct {
                                 .light_start = 0,
                                 .face_start = fa.offset,
                                 .face_counts = totalFaceCounts(result.layer_face_counts),
-
+                                .visibility_state = 1,
+                                .aabb_min = .{
+                                    @floatFromInt(key.position()[0]),
+                                    @floatFromInt(key.position()[1]),
+                                    @floatFromInt(key.position()[2]),
+                                },
+                                .aabb_max = .{
+                                    @floatFromInt(key.position()[0] + WorldState.CHUNK_SIZE),
+                                    @floatFromInt(key.position()[1] + WorldState.CHUNK_SIZE),
+                                    @floatFromInt(key.position()[2] + WorldState.CHUNK_SIZE),
+                                },
+                                .layer_face_counts = flattenLfc(result.layer_face_counts),
                             },
                             .face_alloc = fa,
                             .light_alloc = null,
@@ -559,6 +607,18 @@ pub const TransferPipeline = struct {
                         .light_start = la.offset,
                         .face_start = fa.offset,
                         .face_counts = totalFaceCounts(result.layer_face_counts),
+                        .visibility_state = 1,
+                        .aabb_min = .{
+                            @floatFromInt(key.position()[0]),
+                            @floatFromInt(key.position()[1]),
+                            @floatFromInt(key.position()[2]),
+                        },
+                        .aabb_max = .{
+                            @floatFromInt(key.position()[0] + WorldState.CHUNK_SIZE),
+                            @floatFromInt(key.position()[1] + WorldState.CHUNK_SIZE),
+                            @floatFromInt(key.position()[2] + WorldState.CHUNK_SIZE),
+                        },
+                        .layer_face_counts = flattenLfc(result.layer_face_counts),
                     },
                     .face_alloc = fa,
                     .light_alloc = if (result.light_count > 0) light_alloc else null,

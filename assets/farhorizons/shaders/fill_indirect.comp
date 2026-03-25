@@ -1,0 +1,128 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct ChunkData {
+    int position[3];
+    uint lightStart;
+    uint faceStart;
+    uint faceCounts[6];
+    uint visibilityState;
+    float aabbMin[3];
+    float aabbMax[3];
+    uint layerFaceCounts[18]; // [layer * 6 + normal]
+};
+
+struct DrawCommand {
+    uint indexCount;
+    uint instanceCount;
+    uint firstIndex;
+    int  baseVertex;
+    uint baseInstance;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer ChunkDataBuf { ChunkData chunks[]; };
+layout(std430, set = 0, binding = 1) writeonly buffer CommandBuf { DrawCommand commands[]; };
+layout(std430, set = 0, binding = 2) buffer DrawCountBuf { uint drawCounts[]; };
+layout(std430, set = 0, binding = 3) readonly buffer ActiveSlotBuf { uint activeSlots[]; };
+
+layout(push_constant) uniform PC {
+    vec3 cameraPos;
+    uint activeCount;
+    uint layer;
+    uint maxCommands;
+    uint onlyNewlyVisible;
+};
+
+// AABB signed distance: returns 0 per axis when camera is inside the chunk,
+// negative when camera is below/left, positive when above/right.
+// Matches the CPU aabbSignedDist function.
+ivec3 aabbSignedDist(ivec3 chunkPos, int cs) {
+    ivec3 cam = ivec3(floor(cameraPos));
+    ivec3 pd = cam - chunkPos;
+    if (pd.x > 0) pd.x = max(0, pd.x - cs);
+    if (pd.y > 0) pd.y = max(0, pd.y - cs);
+    if (pd.z > 0) pd.z = max(0, pd.z - cs);
+    return pd;
+}
+
+// face_neighbor_offsets: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
+bool isNormalVisible(uint normal, ivec3 pd) {
+    switch (normal) {
+        case 0: return pd.z >= 0; // +Z
+        case 1: return pd.z <= 0; // -Z
+        case 2: return pd.x <= 0; // -X
+        case 3: return pd.x >= 0; // +X
+        case 4: return pd.y >= 0; // +Y
+        case 5: return pd.y <= 0; // -Y
+    }
+    return true;
+}
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    if (idx >= activeCount) return;
+
+    uint slot = activeSlots[idx];
+    ChunkData chunk = chunks[slot];
+
+    // Visibility filter
+    if (onlyNewlyVisible != 0) {
+        if (chunk.visibilityState != 2) return; // only newly visible
+    } else {
+        if (chunk.visibilityState == 0) return; // skip invisible
+    }
+
+    ivec3 chunkPos = ivec3(chunk.position[0], chunk.position[1], chunk.position[2]);
+    ivec3 pd = aabbSignedDist(chunkPos, 32);
+
+    // Compute face offset for this layer: sum of all previous layers' face counts
+    uint layerOffset = 0;
+    for (uint l = 0; l < layer; l++) {
+        for (uint n = 0; n < 6; n++) {
+            layerOffset += chunk.layerFaceCounts[l * 6 + n];
+        }
+    }
+
+    // Group consecutive visible normals into single draw commands
+    uint groupOffset = 0;
+    uint groupCount = 0;
+
+    for (uint n = 0; n < 6; n++) {
+        uint faceCount = chunk.layerFaceCounts[layer * 6 + n];
+
+        if (faceCount > 0 && isNormalVisible(n, pd)) {
+            groupCount += faceCount;
+        } else {
+            if (groupCount > 0) {
+                uint cmdIdx = atomicAdd(drawCounts[layer], 1);
+                if (cmdIdx < maxCommands) {
+                    commands[layer * maxCommands + cmdIdx] = DrawCommand(
+                        groupCount * 6,  // 6 indices per face (2 tris)
+                        1,
+                        0,
+                        int((chunk.faceStart + layerOffset + groupOffset) * 4),
+                        slot
+                    );
+                }
+                groupOffset += groupCount;
+                groupCount = 0;
+            }
+            groupOffset += faceCount;
+        }
+    }
+
+    // Flush remaining group
+    if (groupCount > 0) {
+        uint cmdIdx = atomicAdd(drawCounts[layer], 1);
+        if (cmdIdx < maxCommands) {
+            commands[layer * maxCommands + cmdIdx] = DrawCommand(
+                groupCount * 6,
+                1,
+                0,
+                int((chunk.faceStart + layerOffset + groupOffset) * 4),
+                slot
+            );
+        }
+    }
+}

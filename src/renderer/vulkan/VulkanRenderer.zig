@@ -437,16 +437,15 @@ pub const VulkanRenderer = struct {
 
                 }
 
-                // Always: rebuild draw commands for this frame
-                // Use actual camera eye position (offset in third person) for face culling
+                // Always: update active slots and cull position for GPU-driven draw command generation
                 {
-                    const tz2 = tracy.zone(@src(), "buildDrawCmds");
+                    const tz2 = tracy.zone(@src(), "updateActiveSlots");
                     defer tz2.end();
                     const cull_pos = if (game_state.third_person) blk: {
                         const forward = game_state.camera.getForward();
                         break :blk zlm.Vec3.sub(game_state.camera.position, zlm.Vec3.scale(forward, third_person_dist));
                     } else game_state.camera.position;
-                    self.render_state.world_renderer.buildIndirectCommands(&self.ctx, cull_pos);
+                    self.render_state.world_renderer.updateActiveSlots(cull_pos);
                     self.render_state.debug_renderer.updateVertices(self.ctx.device, game_state);
                 }
             }
@@ -564,7 +563,6 @@ pub const VulkanRenderer = struct {
 
                 // Apply NEW data
                 wr.chunk_data[slot] = entry.chunk_data;
-                wr.chunk_layer_counts[slot] = entry.layer_face_counts;
                 wr.chunk_face_alloc[slot] = entry.face_alloc;
                 wr.chunk_light_alloc[slot] = entry.light_alloc;
                 wr.writeChunkData(slot);
@@ -807,6 +805,7 @@ pub const VulkanRenderer = struct {
         const has_game = self.game_state != null;
         const overdraw = if (self.game_state) |game_state| game_state.overdraw_mode else false;
 
+        if (has_game) self.render_state.world_renderer.recordCompute(command_buffer);
         if (has_game and !overdraw) self.render_state.debug_renderer.recordCompute(command_buffer);
 
         const depth_barrier = vk.VkImageMemoryBarrier{

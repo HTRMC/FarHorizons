@@ -1225,6 +1225,18 @@ pub fn cmdBindDescriptorSets(
     }
 }
 
+pub fn cmdFillBuffer(
+    command_buffer: VkCommandBuffer,
+    dst_buffer: VkBuffer,
+    dst_offset: VkDeviceSize,
+    size: VkDeviceSize,
+    data: u32,
+) void {
+    if (c.vkCmdFillBuffer) |fn_ptr| {
+        fn_ptr(command_buffer, dst_buffer, dst_offset, size, data);
+    }
+}
+
 pub fn cmdDispatch(
     command_buffer: VkCommandBuffer,
     group_count_x: u32,

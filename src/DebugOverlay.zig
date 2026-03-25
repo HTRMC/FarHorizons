@@ -127,9 +127,7 @@ fn drawF4(text: *TextRenderer, game_state: *GameState, wr: *const WorldRenderer,
     text.drawText(x, y, stream_text, yellow);
     y += LINE_HEIGHT;
 
-    var total_dc: u32 = 0;
-    for (wr.draw_counts) |dc| total_dc += dc;
-    const dc_text = std.fmt.bufPrint(&buf, "Draw Calls: {d}", .{total_dc}) catch "Draw Calls: ?";
+    const dc_text = std.fmt.bufPrint(&buf, "Active Chunks: {d}", .{wr.active_slot_count}) catch "Active Chunks: ?";
     text.drawText(x, y, dc_text, yellow);
     y += LINE_HEIGHT;
 

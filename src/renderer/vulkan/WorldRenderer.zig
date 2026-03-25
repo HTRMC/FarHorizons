@@ -51,7 +51,6 @@ pub const WorldRenderer = struct {
     chunk_face_alloc: [TOTAL_RENDER_CHUNKS]?TlsfAllocator.Allocation,
     chunk_light_alloc: [TOTAL_RENDER_CHUNKS]?TlsfAllocator.Allocation,
     chunk_data: [TOTAL_RENDER_CHUNKS]ChunkData,
-    chunk_layer_counts: [TOTAL_RENDER_CHUNKS][LAYER_COUNT][6]u32,
 
     // Slot pool: maps ChunkKey → GPU slot index
     allocator: std.mem.Allocator,
@@ -59,7 +58,15 @@ pub const WorldRenderer = struct {
     free_slots: [TOTAL_RENDER_CHUNKS]u16,
     free_slot_count: u32,
 
-    draw_counts: [LAYER_COUNT]u32,
+    // Compute pipeline for GPU-driven indirect draw command generation
+    compute_pipeline: vk.VkPipeline,
+    compute_pipeline_layout: vk.VkPipelineLayout,
+    compute_descriptor_set_layout: vk.VkDescriptorSetLayout,
+    compute_descriptor_pool: vk.VkDescriptorPool,
+    compute_descriptor_set: vk.VkDescriptorSet,
+    active_slots_alloc: BufferAllocation,
+    active_slot_count: u32,
+    cull_pos: [3]f32,
 
     pub fn initInPlace(
         self: *WorldRenderer,
@@ -97,6 +104,10 @@ pub const WorldRenderer = struct {
             .light_start = 0,
             .face_start = 0,
             .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+            .visibility_state = 0,
+            .aabb_min = .{ 0, 0, 0 },
+            .aabb_max = .{ 0, 0, 0 },
+            .layer_face_counts = .{0} ** 18,
         });
         self.allocator = allocator;
         self.chunk_slot_map = std.AutoHashMap(WorldState.ChunkKey, u16).init(allocator);
@@ -105,8 +116,15 @@ pub const WorldRenderer = struct {
             self.free_slots[i] = @intCast(TOTAL_RENDER_CHUNKS - 1 - i);
         }
         self.free_slot_count = TOTAL_RENDER_CHUNKS;
-        @memset(&self.chunk_layer_counts, .{ .{ 0, 0, 0, 0, 0, 0 } } ** LAYER_COUNT);
-        self.draw_counts = .{ 0, 0, 0 };
+
+        self.compute_pipeline = null;
+        self.compute_pipeline_layout = null;
+        self.compute_descriptor_set_layout = null;
+        self.compute_descriptor_pool = null;
+        self.compute_descriptor_set = null;
+        self.active_slots_alloc = BufferAllocation.EMPTY;
+        self.active_slot_count = 0;
+        self.cull_pos = .{ 0, 0, 0 };
 
         try self.createGraphicsPipeline(shader_compiler, ctx, swapchain_format, texture_manager.bindless_descriptor_set_layout);
         errdefer {
@@ -118,6 +136,15 @@ pub const WorldRenderer = struct {
 
         try self.createIndirectBuffer(ctx, gpu_alloc);
         try self.createPersistentBuffers(allocator, ctx, gpu_alloc);
+
+        // Active slots buffer (host-visible storage for uploading active chunk indices)
+        self.active_slots_alloc = try gpu_alloc.createBuffer(
+            @as(vk.VkDeviceSize, TOTAL_RENDER_CHUNKS) * @sizeOf(u32),
+            vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            .host_visible,
+        );
+
+        try self.createComputePipeline(shader_compiler, ctx);
     }
 
     pub fn deinit(self: *WorldRenderer, device: vk.VkDevice) void {
@@ -129,6 +156,11 @@ pub const WorldRenderer = struct {
         self.chunk_slot_map.deinit();
         self.gpu_alloc.destroyBuffer(self.indirect_alloc);
         self.gpu_alloc.destroyBuffer(self.indirect_count_alloc);
+        vk.destroyPipeline(device, self.compute_pipeline, null);
+        vk.destroyPipelineLayout(device, self.compute_pipeline_layout, null);
+        vk.destroyDescriptorPool(device, self.compute_descriptor_pool, null);
+        vk.destroyDescriptorSetLayout(device, self.compute_descriptor_set_layout, null);
+        self.gpu_alloc.destroyBuffer(self.active_slots_alloc);
         vk.destroyPipeline(device, self.overdraw_pipeline, null);
         vk.destroyPipeline(device, self.translucent_pipeline, null);
         vk.destroyPipeline(device, self.graphics_pipeline, null);
@@ -169,6 +201,10 @@ pub const WorldRenderer = struct {
             .light_start = 0,
             .face_start = 0,
             .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+            .visibility_state = 0,
+            .aabb_min = .{ 0, 0, 0 },
+            .aabb_max = .{ 0, 0, 0 },
+            .layer_face_counts = .{0} ** 18,
         };
 
         var it = self.chunk_slot_map.iterator();
@@ -202,6 +238,10 @@ pub const WorldRenderer = struct {
             .light_start = 0,
             .face_start = 0,
             .face_counts = .{ 0, 0, 0, 0, 0, 0 },
+            .visibility_state = 0,
+            .aabb_min = .{ 0, 0, 0 },
+            .aabb_max = .{ 0, 0, 0 },
+            .layer_face_counts = .{0} ** 18,
         };
         self.writeChunkData(slot);
         self.chunk_face_alloc[slot] = null;
@@ -222,15 +262,14 @@ pub const WorldRenderer = struct {
         dst.* = self.chunk_data[slot];
     }
 
-    pub fn buildIndirectCommands(self: *WorldRenderer, ctx: *const VulkanContext, camera_pos: zlm.Vec3) void {
-        _ = ctx;
-        const tz = tracy.zone(@src(), "buildIndirectCommands");
+    pub fn updateActiveSlots(self: *WorldRenderer, camera_pos: zlm.Vec3) void {
+        const tz = tracy.zone(@src(), "updateActiveSlots");
         defer tz.end();
 
-        const commands: [*]DrawCommand = @ptrCast(@alignCast(self.indirect_alloc.mapped_ptr orelse return));
+        const base_ptr = self.active_slots_alloc.mapped_ptr orelse return;
+        const slots: [*]u32 = @ptrCast(@alignCast(base_ptr));
 
-        var layer_counts: [LAYER_COUNT]u32 = .{ 0, 0, 0 };
-
+        var count: u32 = 0;
         var it = self.chunk_slot_map.iterator();
         while (it.next()) |entry| {
             const slot = entry.value_ptr.*;
@@ -240,48 +279,139 @@ pub const WorldRenderer = struct {
             for (cd.face_counts) |fc| total += fc;
             if (total == 0) continue;
 
-            const cs: i32 = WorldState.CHUNK_SIZE;
-            const pd = aabbSignedDist(camera_pos.x, camera_pos.y, camera_pos.z, cd.position, cs);
-            const lfc = self.chunk_layer_counts[slot];
-
-            // Faces are stored: [layer0_n0..n5][layer1_n0..n5][layer2_n0..n5]
-            var layer_offset: u32 = 0;
-            for (0..LAYER_COUNT) |layer| {
-                var normal_offset: u32 = 0;
-                for (0..6) |normal_idx| {
-                    const fc = lfc[layer][normal_idx];
-                    if (fc > 0 and isNormalVisible(normal_idx, pd)) {
-                        const cmd_idx = layer * MAX_INDIRECT_COMMANDS + layer_counts[layer];
-                        commands[cmd_idx] = .{
-                            .index_count = fc * 6,
-                            .instance_count = 1,
-                            .first_index = 0,
-                            .vertex_offset = @intCast((cd.face_start + layer_offset + normal_offset) * 4),
-                            .first_instance = @intCast(slot),
-                        };
-                        layer_counts[layer] += 1;
-                    }
-                    normal_offset += fc;
-                }
-                layer_offset += normal_offset;
-            }
+            slots[count] = slot;
+            count += 1;
         }
 
-        const count_base: [*]u32 = @ptrCast(@alignCast(self.indirect_count_alloc.mapped_ptr orelse return));
-        for (0..LAYER_COUNT) |l| {
-            count_base[l] = layer_counts[l];
+        self.active_slot_count = count;
+        self.cull_pos = .{ camera_pos.x, camera_pos.y, camera_pos.z };
+    }
+
+    pub fn recordCompute(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer) void {
+        const tz = tracy.zone(@src(), "WorldRenderer.recordCompute");
+        defer tz.end();
+
+        if (self.active_slot_count == 0) return;
+
+        // Zero the indirect count buffer
+        const count_size: vk.VkDeviceSize = @as(u64, LAYER_COUNT) * @sizeOf(u32);
+        vk.cmdFillBuffer(command_buffer, self.indirect_count_alloc.buffer, 0, count_size, 0);
+
+        // Barrier: transfer write -> compute read/write
+        const fill_barrier = vk.VkBufferMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT | vk.VK_ACCESS_SHADER_WRITE_BIT,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .buffer = self.indirect_count_alloc.buffer,
+            .offset = 0,
+            .size = count_size,
+        };
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_TRANSFER_BIT,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            0,
+            null,
+            1,
+            &[_]vk.VkBufferMemoryBarrier{fill_barrier},
+            0,
+            null,
+        );
+
+        // Bind compute pipeline + descriptor set
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_COMPUTE, self.compute_pipeline);
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_COMPUTE,
+            self.compute_pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.compute_descriptor_set},
+            0,
+            null,
+        );
+
+        const active_count = self.active_slot_count;
+        const workgroups = (active_count + 63) / 64;
+
+        // Dispatch per layer
+        for (0..LAYER_COUNT) |layer| {
+            const PushConstants = extern struct {
+                cull_x: f32,
+                cull_y: f32,
+                cull_z: f32,
+                active_count: u32,
+                layer: u32,
+                max_commands: u32,
+                pad0: u32,
+            };
+            const pc = PushConstants{
+                .cull_x = self.cull_pos[0],
+                .cull_y = self.cull_pos[1],
+                .cull_z = self.cull_pos[2],
+                .active_count = active_count,
+                .layer = @intCast(layer),
+                .max_commands = MAX_INDIRECT_COMMANDS,
+                .pad0 = 0,
+            };
+            vk.cmdPushConstants(
+                command_buffer,
+                self.compute_pipeline_layout,
+                vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                0,
+                @sizeOf(PushConstants),
+                @ptrCast(&pc),
+            );
+            vk.cmdDispatch(command_buffer, workgroups, 1, 1);
         }
 
-        self.draw_counts = layer_counts;
+        // Barrier: compute write -> indirect command read
+        const indirect_barrier = vk.VkBufferMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .buffer = self.indirect_alloc.buffer,
+            .offset = 0,
+            .size = @as(u64, MAX_INDIRECT_COMMANDS) * LAYER_COUNT * @sizeOf(DrawCommand),
+        };
+        const count_barrier = vk.VkBufferMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .buffer = self.indirect_count_alloc.buffer,
+            .offset = 0,
+            .size = count_size,
+        };
+        const barriers = [_]vk.VkBufferMemoryBarrier{ indirect_barrier, count_barrier };
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            vk.VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+            0,
+            0,
+            null,
+            2,
+            &barriers,
+            0,
+            null,
+        );
     }
 
     pub fn record(self: *const WorldRenderer, command_buffer: vk.VkCommandBuffer, mvp: *const [16]f32, overdraw_active: bool, ambient_light: [3]f32, fog_color: [3]f32, fog_start: f32, fog_end: f32) void {
         const tz = tracy.zone(@src(), "WorldRenderer.record");
         defer tz.end();
 
-        var total_draws: u32 = 0;
-        for (self.draw_counts) |dc| total_draws += dc;
-        if (total_draws == 0) return;
+        if (self.active_slot_count == 0) return;
 
         // Bind shared state
         vk.cmdBindDescriptorSets(
@@ -341,7 +471,6 @@ pub const WorldRenderer = struct {
         // Pass 1: Opaque (no blend, depth write)
         // Pass 2: Cutout (same pipeline as opaque for now)
         for (0..2) |layer| {
-            if (self.draw_counts[layer] == 0) continue;
             const pipeline = if (overdraw_active) self.overdraw_pipeline else self.graphics_pipeline;
             vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
             vk.cmdDrawIndexedIndirectCount(
@@ -361,7 +490,7 @@ pub const WorldRenderer = struct {
         const tz = tracy.zone(@src(), "WorldRenderer.recordTranslucent");
         defer tz.end();
 
-        if (self.draw_counts[2] == 0) return;
+        if (self.active_slot_count == 0) return;
 
         const cmd_stride: u32 = @sizeOf(vk.VkDrawIndexedIndirectCommand);
         const count_stride: u32 = @sizeOf(u32);
@@ -786,23 +915,234 @@ pub const WorldRenderer = struct {
 
         self.indirect_alloc = try gpu_alloc.createBuffer(
             buffer_size,
-            vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            .host_visible,
+            vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .device_local,
         );
-
-        const dst: [*]u8 = self.indirect_alloc.mapped_ptr.?;
-        @memset(dst[0..@intCast(buffer_size)], 0);
 
         self.indirect_count_alloc = try gpu_alloc.createBuffer(
             @sizeOf(u32) * LAYER_COUNT,
-            vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            .host_visible,
+            vk.VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | vk.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | vk.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .device_local,
         );
 
-        const count_base: [*]u32 = @ptrCast(@alignCast(self.indirect_count_alloc.mapped_ptr.?));
-        for (0..LAYER_COUNT) |l| count_base[l] = 0;
+        std.log.info("Indirect draw buffers created (max {} draw commands per layer, {} layers, device-local)", .{ MAX_INDIRECT_COMMANDS, LAYER_COUNT });
+    }
 
-        std.log.info("Indirect draw buffers created (max {} draw commands per layer, {} layers)", .{ MAX_INDIRECT_COMMANDS, LAYER_COUNT });
+    fn createComputePipeline(self: *WorldRenderer, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext) !void {
+        const tz = tracy.zone(@src(), "createFillIndirectComputePipeline");
+        defer tz.end();
+
+        const comp_spirv = try shader_compiler.compile("fill_indirect.comp", .compute);
+        defer shader_compiler.allocator.free(comp_spirv);
+
+        const comp_module_info = vk.VkShaderModuleCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = comp_spirv.len,
+            .pCode = @ptrCast(@alignCast(comp_spirv.ptr)),
+        };
+
+        const comp_module = try vk.createShaderModule(ctx.device, &comp_module_info, null);
+        defer vk.destroyShaderModule(ctx.device, comp_module, null);
+
+        // Descriptor set layout: 4 storage buffer bindings
+        const bindings = [_]vk.VkDescriptorSetLayoutBinding{
+            .{
+                .binding = 0,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 2,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = null,
+            },
+            .{
+                .binding = 3,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .descriptorCount = 1,
+                .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+                .pImmutableSamplers = null,
+            },
+        };
+
+        const layout_info = vk.VkDescriptorSetLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .bindingCount = bindings.len,
+            .pBindings = &bindings,
+        };
+
+        self.compute_descriptor_set_layout = try vk.createDescriptorSetLayout(ctx.device, &layout_info, null);
+
+        // Push constant range: 28 bytes
+        const push_constant_range = vk.VkPushConstantRange{
+            .stageFlags = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            .offset = 0,
+            .size = 28,
+        };
+
+        const compute_layout_info = vk.VkPipelineLayoutCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &self.compute_descriptor_set_layout,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges = &push_constant_range,
+        };
+
+        self.compute_pipeline_layout = try vk.createPipelineLayout(ctx.device, &compute_layout_info, null);
+
+        // Create compute pipeline
+        const compute_stage_info = vk.VkPipelineShaderStageCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = vk.VK_SHADER_STAGE_COMPUTE_BIT,
+            .module = comp_module,
+            .pName = "main",
+            .pSpecializationInfo = null,
+        };
+
+        const compute_pipeline_info = vk.VkComputePipelineCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .stage = compute_stage_info,
+            .layout = self.compute_pipeline_layout,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
+        };
+
+        var pipelines: [1]vk.VkPipeline = undefined;
+        try vk.createComputePipelines(ctx.device, ctx.pipeline_cache, 1, &[_]vk.VkComputePipelineCreateInfo{compute_pipeline_info}, null, &pipelines);
+        self.compute_pipeline = pipelines[0];
+
+        // Descriptor pool
+        const pool_size = vk.VkDescriptorPoolSize{
+            .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 4,
+        };
+
+        const pool_info = vk.VkDescriptorPoolCreateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .maxSets = 1,
+            .poolSizeCount = 1,
+            .pPoolSizes = &pool_size,
+        };
+
+        self.compute_descriptor_pool = try vk.createDescriptorPool(ctx.device, &pool_info, null);
+
+        // Allocate descriptor set
+        const alloc_info = vk.VkDescriptorSetAllocateInfo{
+            .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .pNext = null,
+            .descriptorPool = self.compute_descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &self.compute_descriptor_set_layout,
+        };
+
+        var sets: [1]vk.VkDescriptorSet = undefined;
+        try vk.allocateDescriptorSets(ctx.device, &alloc_info, &sets);
+        self.compute_descriptor_set = sets[0];
+
+        // Write descriptor set
+        const cd_capacity: vk.VkDeviceSize = TOTAL_RENDER_CHUNKS * @sizeOf(ChunkData);
+        const indirect_size: vk.VkDeviceSize = @as(u64, MAX_INDIRECT_COMMANDS) * LAYER_COUNT * @sizeOf(DrawCommand);
+        const count_size: vk.VkDeviceSize = @sizeOf(u32) * LAYER_COUNT;
+        const active_slots_size: vk.VkDeviceSize = @as(u64, TOTAL_RENDER_CHUNKS) * @sizeOf(u32);
+
+        const chunk_data_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.chunk_data_alloc.buffer,
+            .offset = 0,
+            .range = cd_capacity,
+        };
+        const indirect_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.indirect_alloc.buffer,
+            .offset = 0,
+            .range = indirect_size,
+        };
+        const count_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.indirect_count_alloc.buffer,
+            .offset = 0,
+            .range = count_size,
+        };
+        const active_slots_info = vk.VkDescriptorBufferInfo{
+            .buffer = self.active_slots_alloc.buffer,
+            .offset = 0,
+            .range = active_slots_size,
+        };
+
+        const writes = [_]vk.VkWriteDescriptorSet{
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.compute_descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &chunk_data_info,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.compute_descriptor_set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &indirect_info,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.compute_descriptor_set,
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &count_info,
+                .pTexelBufferView = null,
+            },
+            .{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.compute_descriptor_set,
+                .dstBinding = 3,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &active_slots_info,
+                .pTexelBufferView = null,
+            },
+        };
+
+        vk.updateDescriptorSets(ctx.device, writes.len, &writes, 0, null);
+
+        std.log.info("Fill indirect compute pipeline created", .{});
     }
 
     fn createPersistentBuffers(self: *WorldRenderer, allocator: std.mem.Allocator, ctx: *const VulkanContext, gpu_alloc: *GpuAllocator) !void {
