@@ -5,6 +5,10 @@ const Address = Socket.Address;
 const Connection = @import("Connection.zig").Connection;
 const protocol = @import("protocol.zig");
 
+fn io() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 pub const ConnectionManager = @This();
 
 socket: Socket,
@@ -13,7 +17,7 @@ running: Atomic(bool) = Atomic(bool).init(false),
 local_port: u16,
 
 connections: std.ArrayList(*Connection),
-connections_mutex: std.Thread.Mutex = .{},
+connections_mutex: std.Io.Mutex = .init,
 
 allocator: std.mem.Allocator,
 
@@ -71,8 +75,8 @@ pub fn stop(self: *ConnectionManager) void {
 
 /// Add a connection to be managed.
 pub fn addConnection(self: *ConnectionManager, conn: *Connection) void {
-    self.connections_mutex.lock();
-    defer self.connections_mutex.unlock();
+    self.connections_mutex.lockUncancelable(io());
+    defer self.connections_mutex.unlock(io());
     self.connections.append(self.allocator, conn) catch {
         std.log.err("Failed to add connection", .{});
     };
@@ -80,8 +84,8 @@ pub fn addConnection(self: *ConnectionManager, conn: *Connection) void {
 
 /// Remove a connection from management.
 pub fn removeConnection(self: *ConnectionManager, conn: *Connection) void {
-    self.connections_mutex.lock();
-    defer self.connections_mutex.unlock();
+    self.connections_mutex.lockUncancelable(io());
+    defer self.connections_mutex.unlock(io());
     for (self.connections.items, 0..) |c, i| {
         if (c == conn) {
             _ = self.connections.swapRemove(i);
@@ -92,8 +96,8 @@ pub fn removeConnection(self: *ConnectionManager, conn: *Connection) void {
 
 /// Find a connection by remote address.
 fn findConnection(self: *ConnectionManager, addr: Address) ?*Connection {
-    self.connections_mutex.lock();
-    defer self.connections_mutex.unlock();
+    self.connections_mutex.lockUncancelable(io());
+    defer self.connections_mutex.unlock(io());
     for (self.connections.items) |conn| {
         if (conn.remote_address.eql(addr)) return conn;
     }
@@ -102,8 +106,8 @@ fn findConnection(self: *ConnectionManager, addr: Address) ?*Connection {
 
 /// Get a snapshot of current connections (caller must not hold connections_mutex).
 pub fn getConnections(self: *ConnectionManager, allocator: std.mem.Allocator) []*Connection {
-    self.connections_mutex.lock();
-    defer self.connections_mutex.unlock();
+    self.connections_mutex.lockUncancelable(io());
+    defer self.connections_mutex.unlock(io());
     return allocator.dupe(*Connection, self.connections.items) catch &.{};
 }
 
@@ -156,8 +160,8 @@ fn handlePacket(self: *ConnectionManager, conn: *Connection, data: []const u8) v
 
 /// Periodic maintenance: retransmit timed-out packets, detect dead connections.
 fn maintenance(self: *ConnectionManager) void {
-    self.connections_mutex.lock();
-    defer self.connections_mutex.unlock();
+    self.connections_mutex.lockUncancelable(io());
+    defer self.connections_mutex.unlock(io());
 
     var i: usize = 0;
     while (i < self.connections.items.len) {

@@ -6,6 +6,15 @@ const protocol = @import("protocol.zig");
 const BinaryWriter = protocol.BinaryWriter;
 const BinaryReader = protocol.BinaryReader;
 
+fn io() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+fn milliTimestamp() i64 {
+    const ts = std.Io.Clock.Timestamp.now(io(), if (@import("builtin").os.tag == .windows) .real else .awake);
+    return @intCast(@divTrunc(ts.raw.toNanoseconds(), 1_000_000));
+}
+
 pub const Connection = @This();
 
 pub const max_packet_size: u32 = 65507;
@@ -35,12 +44,12 @@ next_send_seq: Atomic(u32) = Atomic(u32).init(0),
 next_recv_seq: Atomic(u32) = Atomic(u32).init(0),
 
 // Unconfirmed reliable packets for retransmission
-unconfirmed: std.ArrayList(UnconfirmedPacket),
-unconfirmed_mutex: std.Thread.Mutex = .{},
+unconfirmed: std.ArrayList(UnconfirmedPacket) = .empty,
+unconfirmed_mutex: std.Io.Mutex = .init,
 
 // Receive buffer for reordering reliable packets
 recv_buffer: std.AutoHashMap(u32, []const u8),
-recv_mutex: std.Thread.Mutex = .{},
+recv_mutex: std.Io.Mutex = .init,
 
 allocator: std.mem.Allocator,
 
@@ -73,7 +82,7 @@ pub fn init(allocator: std.mem.Allocator, remote: Address, is_server_side: bool)
         .is_server_side = is_server_side,
         .recv_buffer = std.AutoHashMap(u32, []const u8).init(allocator),
         .allocator = allocator,
-        .last_receive_time = std.time.milliTimestamp(),
+        .last_receive_time = milliTimestamp(),
     };
 }
 
@@ -106,7 +115,7 @@ pub fn send(self: *Connection, socket: Socket, channel: Channel, protocol_id: u8
         .lossy => self.sendLossy(socket, protocol_id, payload),
         .reliable => self.sendReliable(socket, protocol_id, payload),
     }
-    self.last_send_time = std.time.milliTimestamp();
+    self.last_send_time = milliTimestamp();
 }
 
 fn sendLossy(self: *Connection, socket: Socket, protocol_id: u8, payload: []const u8) void {
@@ -139,12 +148,12 @@ fn sendReliable(self: *Connection, socket: Socket, protocol_id: u8, payload: []c
 
     // Store for retransmission
     const data_copy = self.allocator.dupe(u8, packet_data) catch return;
-    self.unconfirmed_mutex.lock();
-    defer self.unconfirmed_mutex.unlock();
+    self.unconfirmed_mutex.lockUncancelable(io());
+    defer self.unconfirmed_mutex.unlock(io());
     self.unconfirmed.append(self.allocator, .{
         .seq = seq,
         .data = data_copy,
-        .send_time = std.time.milliTimestamp(),
+        .send_time = milliTimestamp(),
     }) catch {
         self.allocator.free(data_copy);
     };
@@ -161,7 +170,7 @@ fn sendAck(self: *Connection, socket: Socket, seq: u32) void {
 /// Process a received raw packet. Returns protocol data to dispatch, or null.
 pub fn onReceive(self: *Connection, socket: Socket, data: []const u8) ?struct { protocol_id: u8, payload: []const u8 } {
     if (data.len < 1) return null;
-    self.last_receive_time = std.time.milliTimestamp();
+    self.last_receive_time = milliTimestamp();
 
     const channel_byte = data[0];
 
@@ -173,7 +182,11 @@ pub fn onReceive(self: *Connection, socket: Socket, data: []const u8) ?struct { 
         return null;
     }
 
-    const channel: Channel = std.meta.intToEnum(Channel, channel_byte) catch return null;
+    const channel: Channel = switch (channel_byte) {
+        0 => .lossy,
+        1 => .reliable,
+        else => return null,
+    };
 
     switch (channel) {
         .lossy => {
@@ -202,8 +215,8 @@ pub fn onReceive(self: *Connection, socket: Socket, data: []const u8) ?struct { 
                 };
             } else if (seq > expected) {
                 // Future packet — buffer it
-                self.recv_mutex.lock();
-                defer self.recv_mutex.unlock();
+                self.recv_mutex.lockUncancelable(io());
+                defer self.recv_mutex.unlock(io());
                 const copy = self.allocator.dupe(u8, data) catch return null;
                 self.recv_buffer.put(seq, copy) catch {
                     self.allocator.free(copy);
@@ -218,8 +231,8 @@ pub fn onReceive(self: *Connection, socket: Socket, data: []const u8) ?struct { 
 }
 
 fn processAck(self: *Connection, ack_seq: u32) void {
-    self.unconfirmed_mutex.lock();
-    defer self.unconfirmed_mutex.unlock();
+    self.unconfirmed_mutex.lockUncancelable(io());
+    defer self.unconfirmed_mutex.unlock(io());
 
     var i: usize = 0;
     while (i < self.unconfirmed.items.len) {
@@ -234,9 +247,9 @@ fn processAck(self: *Connection, ack_seq: u32) void {
 
 /// Retransmit unconfirmed reliable packets that have timed out.
 pub fn retransmitTimedOut(self: *Connection, socket: Socket, timeout_ms: i64) void {
-    const now = std.time.milliTimestamp();
-    self.unconfirmed_mutex.lock();
-    defer self.unconfirmed_mutex.unlock();
+    const now = milliTimestamp();
+    self.unconfirmed_mutex.lockUncancelable(io());
+    defer self.unconfirmed_mutex.unlock(io());
 
     for (self.unconfirmed.items) |*pkt| {
         if (now - pkt.send_time > timeout_ms) {
@@ -249,5 +262,5 @@ pub fn retransmitTimedOut(self: *Connection, socket: Socket, timeout_ms: i64) vo
 
 /// Check if connection has timed out (no packets received for timeout_ms).
 pub fn hasTimedOut(self: *const Connection, timeout_ms: i64) bool {
-    return std.time.milliTimestamp() - self.last_receive_time > timeout_ms;
+    return milliTimestamp() - self.last_receive_time > timeout_ms;
 }

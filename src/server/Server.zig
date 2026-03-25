@@ -7,6 +7,15 @@ const Address = network.Address;
 const ServerWorld = @import("ServerWorld.zig");
 const User = @import("User.zig");
 
+fn io() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+fn nanoTimestamp() i128 {
+    const ts = std.Io.Clock.Timestamp.now(io(), if (@import("builtin").os.tag == .windows) .real else .awake);
+    return ts.raw.toNanoseconds();
+}
+
 pub const Server = @This();
 
 pub const TICK_RATE: u32 = 20;
@@ -18,7 +27,7 @@ world: *ServerWorld,
 conn_manager: ConnectionManager,
 
 users: std.ArrayList(*User),
-users_mutex: std.Thread.Mutex = .{},
+users_mutex: std.Io.Mutex = .init,
 next_user_id: u32 = 1,
 
 running: Atomic(bool) = Atomic(bool).init(false),
@@ -49,13 +58,13 @@ pub fn deinit(self: *Server) void {
     self.stop();
 
     // Disconnect all users
-    self.users_mutex.lock();
+    self.users_mutex.lockUncancelable(io());
     for (self.users.items) |user| {
         user.conn.disconnect();
         user.decreaseRefCount();
     }
     self.users.deinit(self.allocator);
-    self.users_mutex.unlock();
+    self.users_mutex.unlock(io());
 
     self.world.save();
     self.world.deinit();
@@ -97,16 +106,16 @@ pub fn stop(self: *Server) void {
 }
 
 fn serverLoop(self: *Server) void {
-    var last_time = std.time.nanoTimestamp();
+    var last_time = nanoTimestamp();
 
     while (self.running.load(.acquire)) {
-        const now = std.time.nanoTimestamp();
+        const now = nanoTimestamp();
         const elapsed: u64 = @intCast(@max(0, now - last_time));
 
         if (elapsed < TICK_INTERVAL_NS) {
             // Sleep for remaining time
             const remaining = TICK_INTERVAL_NS - elapsed;
-            std.time.sleep(remaining);
+            io().sleep(.{ .nanoseconds = remaining }, .awake) catch {};
             last_time += @as(i128, TICK_INTERVAL_NS);
         } else {
             last_time = now;
@@ -126,20 +135,25 @@ fn update(self: *Server) void {
     if (self.world.storage) |s| s.tick();
 
     // Update each user
-    self.users_mutex.lock();
+    self.users_mutex.lockUncancelable(io());
     const user_snapshot = self.allocator.dupe(*User, self.users.items) catch {
-        self.users_mutex.unlock();
+        self.users_mutex.unlock(io());
         return;
     };
-    self.users_mutex.unlock();
+    self.users_mutex.unlock(io());
     defer self.allocator.free(user_snapshot);
 
     for (user_snapshot) |user| {
         self.updateUser(user);
     }
 
+    // Broadcast positions to all clients every tick
+    if (user_snapshot.len > 0) {
+        self.broadcastPositions(user_snapshot);
+    }
+
     // Clean up disconnected users
-    self.users_mutex.lock();
+    self.users_mutex.lockUncancelable(io());
     var i: usize = 0;
     while (i < self.users.items.len) {
         const user = self.users.items[i];
@@ -151,14 +165,36 @@ fn update(self: *Server) void {
         }
         i += 1;
     }
-    self.users_mutex.unlock();
+    self.users_mutex.unlock(io());
 }
 
 fn updateUser(self: *Server, user: *User) void {
+    if (!user.connected.load(.acquire)) return;
     _ = self;
-    _ = user;
-    // TODO: Phase 3 — send chunk data, broadcast positions
-    // For now, this is a stub. Protocol handlers will fill this in.
+    // TODO: send chunk data to users within render distance
+}
+
+/// Broadcast all player positions to all connected clients (called each tick).
+fn broadcastPositions(self: *Server, users: []*User) void {
+    const player_position = @import("../network/protocols/player_position.zig");
+
+    // Build player info list
+    var infos: [64]player_position.PlayerInfo = undefined;
+    const count = @min(users.len, infos.len);
+    for (users[0..count], 0..) |u, i| {
+        infos[i] = .{
+            .id = u.id,
+            .pos = u.pos,
+            .rotation = u.rotation,
+        };
+    }
+
+    // Send to each user (excluding themselves)
+    for (users[0..count]) |user| {
+        if (!user.connected.load(.acquire)) continue;
+        // For now send all players including self — client can filter
+        player_position.sendOtherPlayers(user.conn, self.conn_manager.socket, infos[0..count]);
+    }
 }
 
 /// Callback from ConnectionManager when a new connection arrives.
@@ -178,14 +214,14 @@ fn onNewConnection(manager: *ConnectionManager, addr: Address) ?*Connection {
         return null;
     };
 
-    self.users_mutex.lock();
+    self.users_mutex.lockUncancelable(io());
     self.users.append(self.allocator, user) catch {
-        self.users_mutex.unlock();
+        self.users_mutex.unlock(io());
         user.decreaseRefCount();
         self.allocator.destroy(conn);
         return null;
     };
-    self.users_mutex.unlock();
+    self.users_mutex.unlock(io());
 
     std.log.info("User {} connected from {}", .{ id, addr });
     return conn;
@@ -193,7 +229,7 @@ fn onNewConnection(manager: *ConnectionManager, addr: Address) ?*Connection {
 
 /// Get number of connected users.
 pub fn userCount(self: *Server) usize {
-    self.users_mutex.lock();
-    defer self.users_mutex.unlock();
+    self.users_mutex.lockUncancelable(io());
+    defer self.users_mutex.unlock(io());
     return self.users.items.len;
 }

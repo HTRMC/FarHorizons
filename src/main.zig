@@ -723,6 +723,16 @@ pub fn main() !void {
         }
     }
 
+    // Register network protocols
+    const network = @import("network.zig");
+    network.protocols.registerAll();
+
+    // ── Parse CLI args for headless server mode ──
+    const cli = parseCliArgs(allocator);
+    if (cli.headless) {
+        return runHeadlessServer(allocator, cli);
+    }
+
     const file_logger = Logger.FileLogger.init(allocator) catch null;
     if (file_logger) |fl| {
         file_logger_instance = fl;
@@ -1284,6 +1294,45 @@ pub fn main() !void {
         options.save(allocator);
     }
     std.log.info("Shutting down...", .{});
+}
+
+// ─── CLI args and headless server ───
+
+const CliArgs = struct {
+    headless: bool = false,
+    world_name: []const u8 = "world",
+    port: u16 = @import("server/Server.zig").Server.DEFAULT_PORT,
+};
+
+fn parseCliArgs(_: std.mem.Allocator) CliArgs {
+    var result = CliArgs{};
+    // Check environment variables for server configuration.
+    // Usage: set FH_HEADLESS=1 & set FH_WORLD=myworld & set FH_PORT=7777 & FarHorizons.exe
+    const c_getenv = std.c.getenv;
+    if (c_getenv("FH_HEADLESS")) |_| {
+        result.headless = true;
+    }
+    if (c_getenv("FH_WORLD")) |val| {
+        result.world_name = std.mem.span(val);
+    }
+    if (c_getenv("FH_PORT")) |val| {
+        result.port = std.fmt.parseInt(u16, std.mem.span(val), 10) catch result.port;
+    }
+    return result;
+}
+
+fn runHeadlessServer(allocator: std.mem.Allocator, cli: CliArgs) !void {
+    const Server = @import("server/Server.zig").Server;
+    std.log.info("Starting headless server: world='{s}', port={}", .{ cli.world_name, cli.port });
+
+    const server = Server.init(allocator, cli.world_name, cli.port) catch |err| {
+        std.log.err("Failed to start server: {s}", .{@errorName(err)});
+        return err;
+    };
+    defer server.deinit();
+
+    // Run server on main thread (blocks until stopped)
+    server.run();
 }
 
 comptime {

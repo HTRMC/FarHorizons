@@ -7,7 +7,7 @@ const Storage = @import("../world/storage/Storage.zig");
 const LightMap = @import("../world/LightMap.zig").LightMap;
 const LightMapPool = @import("../world/LightMap.zig").LightMapPool;
 const LightEngine = @import("../world/LightEngine.zig");
-const SurfaceHeightMap = @import("../world/SurfaceHeightMap.zig");
+const SurfaceHeightMap = @import("../world/SurfaceHeightMap.zig").SurfaceHeightMap;
 const ThreadPool = @import("../ThreadPool.zig").ThreadPool;
 
 pub const ServerWorld = @This();
