@@ -769,6 +769,7 @@ pub fn main() !void {
 
     var game_state: ?GameState = null;
     var integrated_server: ?*@import("server/Server.zig").Server = null;
+    var client_net: ?*ClientNetState = null;
     var save_thread: ?std.Thread = null;
     var save_done = std.atomic.Value(bool).init(false);
     defer {
@@ -792,6 +793,10 @@ pub fn main() !void {
                 renderer.setGameState(null);
             }
             state.deinit();
+        }
+        if (client_net) |cn| {
+            cn.deinit();
+            client_net = null;
         }
         if (integrated_server) |srv| {
             srv.deinit();
@@ -852,19 +857,32 @@ pub fn main() !void {
                     }
 
                     if (world_name.len > 0) {
-                        // Start integrated server for this world (multiplayer-ready)
-                        const Server = @import("server/Server.zig").Server;
-                        integrated_server = Server.init(allocator, world_name, Server.DEFAULT_PORT) catch |err| blk: {
-                            std.log.warn("Integrated server failed to start: {s} (singleplayer continues without it)", .{@errorName(err)});
-                            break :blk null;
-                        };
-                        if (integrated_server) |srv| srv.startBackground();
+                        // If not connecting to remote server, start integrated server
+                        if (cli.connect == null) {
+                            const Server = @import("server/Server.zig").Server;
+                            integrated_server = Server.init(allocator, world_name, Server.DEFAULT_PORT) catch |err| blk: {
+                                std.log.warn("Integrated server failed to start: {s} (singleplayer continues without it)", .{@errorName(err)});
+                                break :blk null;
+                            };
+                            if (integrated_server) |srv| srv.startBackground();
+                        }
 
                         game_state = GameState.init(allocator, 1280, 720, world_name, world_type_override, game_mode_override) catch |err| blk: {
                             std.log.err("Failed to load world '{s}': {}", .{ world_name, err });
                             break :blk null;
                         };
                         if (game_state) |*state| {
+                            // If connecting to remote server, set up network
+                            if (cli.connect) |addr| {
+                                client_net = ClientNetState.connectToServer(allocator, addr) catch |err| blk: {
+                                    std.log.err("Failed to connect to server '{s}': {s}", .{ addr, @errorName(err) });
+                                    break :blk null;
+                                };
+                                if (client_net != null) {
+                                    ClientNetState.setGameState(state);
+                                }
+                            }
+
                             state.third_person_crosshair = options.third_person_crosshair;
                             renderer.setGameState(@ptrCast(state));
                             input_state.game_state = state;
@@ -980,7 +998,11 @@ pub fn main() !void {
                 state.deinit();
             }
             game_state = null;
-            // Stop integrated server
+            // Stop network and integrated server
+            if (client_net) |cn| {
+                cn.deinit();
+                client_net = null;
+            }
             if (integrated_server) |srv| {
                 srv.deinit();
                 integrated_server = null;
@@ -1320,12 +1342,14 @@ const CliArgs = struct {
     headless: bool = false,
     world_name: []const u8 = "world",
     port: u16 = @import("server/Server.zig").Server.DEFAULT_PORT,
+    connect: ?[]const u8 = null, // ip:port to connect to as client
 };
 
 fn parseCliArgs(_: std.mem.Allocator) CliArgs {
     var result = CliArgs{};
-    // Check environment variables for server configuration.
-    // Usage: set FH_HEADLESS=1 & set FH_WORLD=myworld & set FH_PORT=7777 & FarHorizons.exe
+    // Check environment variables for configuration.
+    // Server: $env:FH_HEADLESS="1"; $env:FH_WORLD="myworld"; $env:FH_PORT="7777"
+    // Client: $env:FH_CONNECT="127.0.0.1:7777"
     const c_getenv = std.c.getenv;
     if (c_getenv("FH_HEADLESS")) |_| {
         result.headless = true;
@@ -1335,6 +1359,9 @@ fn parseCliArgs(_: std.mem.Allocator) CliArgs {
     }
     if (c_getenv("FH_PORT")) |val| {
         result.port = std.fmt.parseInt(u16, std.mem.span(val), 10) catch result.port;
+    }
+    if (c_getenv("FH_CONNECT")) |val| {
+        result.connect = std.mem.span(val);
     }
     return result;
 }
@@ -1352,6 +1379,73 @@ fn runHeadlessServer(allocator: std.mem.Allocator, cli: CliArgs) !void {
     // Run server on main thread (blocks until stopped)
     server.run();
 }
+
+/// Client-side network state for connecting to a remote server.
+const ClientNetState = struct {
+    const network = @import("network.zig");
+
+    conn_manager: network.ConnectionManager,
+    conn: *network.Connection,
+    allocator: std.mem.Allocator,
+
+    fn connectToServer(allocator: std.mem.Allocator, addr_str: []const u8) !*ClientNetState {
+        const self = try allocator.create(ClientNetState);
+        errdefer allocator.destroy(self);
+
+        // Parse ip:port
+        var ip_str: []const u8 = addr_str;
+        var port: u16 = @import("server/Server.zig").Server.DEFAULT_PORT;
+        if (std.mem.indexOfScalar(u8, addr_str, ':')) |colon| {
+            ip_str = addr_str[0..colon];
+            port = std.fmt.parseInt(u16, addr_str[colon + 1 ..], 10) catch port;
+        }
+
+        const ip = try network.Socket.resolveIp(ip_str);
+        const remote = network.Address.fromIpPort(ip, port);
+
+        self.conn_manager = try network.ConnectionManager.init(allocator, 0); // bind any port
+        self.allocator = allocator;
+
+        self.conn = try allocator.create(network.Connection);
+        self.conn.* = network.Connection.init(allocator, remote, false);
+        self.conn.state.store(.connected, .release); // skip handshake for now
+        self.conn_manager.addConnection(self.conn);
+        self.conn_manager.start();
+
+        std.log.info("Connected to server at {}", .{remote});
+        return self;
+    }
+
+    fn setGameState(state: *@import("GameState.zig")) void {
+        @import("network/protocols/chunk_transmission.zig").client_game_state = state;
+        @import("network/protocols/block_update.zig").client_game_state = state;
+        @import("network/protocols/player_position.zig").client_game_state = state;
+    }
+
+    fn clearGameState() void {
+        @import("network/protocols/chunk_transmission.zig").client_game_state = null;
+        @import("network/protocols/block_update.zig").client_game_state = null;
+        @import("network/protocols/player_position.zig").client_game_state = null;
+    }
+
+    fn sendPosition(self: *ClientNetState, pos: [3]f64, vel: [3]f64, rotation: [3]f32) void {
+        @import("network/protocols/player_position.zig").sendPosition(
+            self.conn,
+            self.conn_manager.socket,
+            pos,
+            vel,
+            rotation,
+        );
+    }
+
+    fn deinit(self: *ClientNetState) void {
+        clearGameState();
+        self.conn_manager.deinit();
+        self.conn.deinit();
+        self.allocator.destroy(self.conn);
+        self.allocator.destroy(self);
+    }
+};
 
 comptime {
     if (@import("builtin").is_test) {

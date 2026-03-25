@@ -1162,6 +1162,11 @@ pub fn restoreAfterRender(self: *GameState) void {
     }
 }
 
+/// Mark a block position dirty from a network update (triggers remesh).
+pub fn markDirtyFromNetwork(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+    self.markDirty(wx, wy, wz, false);
+}
+
 fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
     const affected = WorldState.affectedChunks(wx, wy, wz);
     const target = if (player) &self.streaming.player_dirty_chunks else &self.dirty_chunks;

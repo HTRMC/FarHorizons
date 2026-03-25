@@ -193,19 +193,15 @@ pub fn resolveIp(name: []const u8) !u32 {
     if (name.len == 0) return error.UnknownHostName;
 
     const io = std.Io.Threaded.global_single_threaded.io();
-    std.Io.net.HostName.lookup(.{ .bytes = name }, io, &result_queue, .{ .canonical_name_buffer = &name_buf, .port = 0 });
+    try std.Io.net.HostName.lookup(.{ .bytes = name }, io, &result_queue, .{ .canonical_name_buffer = &name_buf, .port = 0 });
     while (true) {
-        const entry = result_queue.getOneUncancelable(io);
+        const entry = result_queue.getOneUncancelable(io) catch break;
         switch (entry) {
             .address => |addr| {
                 if (addr != .ip4) continue;
                 return std.mem.bytesToValue(u32, addr.ip4.bytes[0..4]);
             },
             .canonical_name => {},
-            .end => |err| {
-                try err;
-                break;
-            },
         }
     }
     return error.UnknownHostName;

@@ -7,6 +7,12 @@ const WorldState = @import("../../world/WorldState.zig");
 
 pub const id: u8 = protocol.BLOCK_UPDATE;
 
+/// Pointer to server instance (set on server init).
+pub var server_instance: ?*@import("../../server/Server.zig").Server = null;
+
+/// Pointer to client game state (set on client connect).
+pub var client_game_state: ?*@import("../../GameState.zig") = null;
+
 pub const BlockChange = struct {
     wx: i32,
     wy: i32,
@@ -25,6 +31,7 @@ pub fn sendBlockChangeRequest(
 ) void {
     var writer = BinaryWriter.init(std.heap.page_allocator);
     defer writer.deinit();
+    writer.writeInt(u8, 0); // sub-type: request
     writer.writeInt(i32, wx);
     writer.writeInt(i32, wy);
     writer.writeInt(i32, wz);
@@ -40,6 +47,7 @@ pub fn sendBlockUpdates(
 ) void {
     var writer = BinaryWriter.init(std.heap.page_allocator);
     defer writer.deinit();
+    writer.writeInt(u8, 1); // sub-type: confirmed update
     writer.writeInt(u32, @intCast(changes.len));
     for (changes) |change| {
         writer.writeInt(i32, change.wx);
@@ -52,30 +60,57 @@ pub fn sendBlockUpdates(
 
 /// Server receives block change request from client.
 pub fn serverReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
-    _ = conn;
+    const sub_type = try reader.readInt(u8);
+    if (sub_type != 0) return; // only handle requests
+
     const wx = try reader.readInt(i32);
     const wy = try reader.readInt(i32);
     const wz = try reader.readInt(i32);
     const new_block = try reader.readInt(u16);
 
-    _ = wx;
-    _ = wy;
-    _ = wz;
-    _ = new_block;
-    // TODO: Validate and apply via ServerWorld.setBlock(), broadcast to all clients
+    const srv = server_instance orelse return;
+
+    // Apply to server world
+    if (!srv.world.setBlock(wx, wy, wz, new_block)) return;
+
+    // Broadcast to all connected clients
+    const change = [1]BlockChange{.{ .wx = wx, .wy = wy, .wz = wz, .new_block = new_block }};
+    const io = std.Io.Threaded.global_single_threaded.io();
+    srv.users_mutex.lockUncancelable(io);
+    const users = srv.allocator.dupe(*@import("../../server/User.zig"), srv.users.items) catch {
+        srv.users_mutex.unlock(io);
+        return;
+    };
+    srv.users_mutex.unlock(io);
+    defer srv.allocator.free(users);
+
+    for (users) |user| {
+        if (!user.connected.load(.acquire)) continue;
+        sendBlockUpdates(user.conn, srv.conn_manager.socket, &change);
+    }
+    _ = conn;
 }
 
-/// Client receives confirmed block updates.
-pub fn clientReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
-    _ = conn;
+/// Client receives confirmed block updates from server.
+pub fn clientReceive(_: *Connection, reader: *BinaryReader) anyerror!void {
+    const sub_type = try reader.readInt(u8);
+    if (sub_type != 1) return; // only handle confirmed updates
+
     const count = try reader.readInt(u32);
+    const state = client_game_state orelse return;
+
     for (0..count) |_| {
-        _ = try reader.readInt(i32); // wx
-        _ = try reader.readInt(i32); // wy
-        _ = try reader.readInt(i32); // wz
-        _ = try reader.readInt(u16); // new_block
+        const wx = try reader.readInt(i32);
+        const wy = try reader.readInt(i32);
+        const wz = try reader.readInt(i32);
+        const new_block = try reader.readInt(u16);
+
+        // Apply to client chunk map
+        state.chunk_map.setBlock(wx, wy, wz, new_block);
+
+        // Mark dirty for remesh
+        state.markDirtyFromNetwork(wx, wy, wz);
     }
-    // TODO: Phase 4 — apply to client ChunkMap and trigger remesh
 }
 
 pub fn register() void {

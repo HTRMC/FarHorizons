@@ -82,20 +82,41 @@ pub fn serverReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
     }
 }
 
+/// Pointer to client game state (set on client connect).
+pub var client_game_state: ?*@import("../../GameState.zig") = null;
+
 /// Client receives other players' positions.
 pub fn clientReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
     _ = conn;
     const count = try reader.readInt(u32);
+    const state = client_game_state orelse {
+        // Drain the data even if no game state
+        for (0..count) |_| {
+            _ = try reader.readInt(u32);
+            _ = try reader.readFloat(f64);
+            _ = try reader.readFloat(f64);
+            _ = try reader.readFloat(f64);
+            _ = try reader.readFloat(f32);
+            _ = try reader.readFloat(f32);
+            _ = try reader.readFloat(f32);
+        }
+        return;
+    };
+
     for (0..count) |_| {
-        _ = try reader.readInt(u32); // id
-        _ = try reader.readFloat(f64); // x
-        _ = try reader.readFloat(f64); // y
-        _ = try reader.readFloat(f64); // z
-        _ = try reader.readFloat(f32); // pitch
-        _ = try reader.readFloat(f32); // yaw
-        _ = try reader.readFloat(f32); // roll
+        const pid = try reader.readInt(u32);
+        const pos = [3]f64{
+            try reader.readFloat(f64),
+            try reader.readFloat(f64),
+            try reader.readFloat(f64),
+        };
+        const rotation = [3]f32{
+            try reader.readFloat(f32),
+            try reader.readFloat(f32),
+            try reader.readFloat(f32),
+        };
+        state.updateRemotePlayer(pid, pos, rotation);
     }
-    // TODO: Phase 5 — update client-side remote player list for rendering
 }
 
 pub fn register() void {

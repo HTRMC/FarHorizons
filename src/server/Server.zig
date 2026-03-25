@@ -50,11 +50,15 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8, port: u16) !*S
         .users = .empty,
     };
 
+    // Set global server pointer for protocol handlers
+    @import("../network/protocols/block_update.zig").server_instance = self;
+
     std.log.info("Server initialized on port {}", .{conn_manager.local_port});
     return self;
 }
 
 pub fn deinit(self: *Server) void {
+    @import("../network/protocols/block_update.zig").server_instance = null;
     self.stop();
 
     // Disconnect all users
@@ -168,10 +172,46 @@ fn update(self: *Server) void {
     self.users_mutex.unlock(io());
 }
 
+const WorldState = @import("../world/WorldState.zig");
+const chunk_codec = @import("../world/storage/chunk_codec.zig");
+const chunk_transmission = @import("../network/protocols/chunk_transmission.zig");
+const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
+
+/// Send unsent chunks within render distance to the user (max per tick to avoid flooding).
 fn updateUser(self: *Server, user: *User) void {
     if (!user.connected.load(.acquire)) return;
-    _ = self;
-    // TODO: send chunk data to users within render distance
+
+    const center = user.getChunkPos();
+    const rd: i32 = @intCast(@min(user.render_distance, 8)); // cap for safety
+    var sent: u32 = 0;
+    const max_per_tick: u32 = 4; // limit bandwidth
+
+    var cy: i32 = center.cy - rd;
+    while (cy <= center.cy + rd) : (cy += 1) {
+        var cx: i32 = center.cx - rd;
+        while (cx <= center.cx + rd) : (cx += 1) {
+            var cz: i32 = center.cz - rd;
+            while (cz <= center.cz + rd) : (cz += 1) {
+                if (sent >= max_per_tick) return;
+                const key = WorldState.ChunkKey{ .cx = cx, .cy = cy, .cz = cz };
+                if (user.hasChunk(key)) continue;
+
+                // Check if server has this chunk loaded
+                const chunk = self.world.chunk_map.get(key) orelse continue;
+
+                // Encode chunk data
+                var flat_blocks: [BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+                chunk.blocks.getRange(&flat_blocks, 0);
+                var encoded = chunk_codec.encode(self.allocator, &flat_blocks) catch continue;
+                defer encoded.deinit();
+
+                // Send via protocol
+                chunk_transmission.sendChunk(user.conn, self.conn_manager.socket, key, encoded.data);
+                user.markChunkLoaded(key);
+                sent += 1;
+            }
+        }
+    }
 }
 
 /// Broadcast all player positions to all connected clients (called each tick).
