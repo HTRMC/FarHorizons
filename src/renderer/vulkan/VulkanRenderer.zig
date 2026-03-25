@@ -445,7 +445,7 @@ pub const VulkanRenderer = struct {
                         const forward = game_state.camera.getForward();
                         break :blk zlm.Vec3.sub(game_state.camera.position, zlm.Vec3.scale(forward, third_person_dist));
                     } else game_state.camera.position;
-                    self.render_state.world_renderer.updateActiveSlots(cull_pos);
+                    self.render_state.world_renderer.updateActiveSlots(cull_pos, cf);
                     self.render_state.debug_renderer.updateVertices(self.ctx.device, game_state);
                 }
             }
@@ -538,7 +538,7 @@ pub const VulkanRenderer = struct {
                     wr.chunk_data[slot].light_start = la.offset;
                 }
                 wr.chunk_light_alloc[slot] = entry.light_alloc;
-                wr.writeChunkData(slot);
+                // GPU buffer synced in updateActiveSlots
             } else {
                 // Full remesh: replace everything
                 // Defer OLD alloc handles for this frame slot
@@ -565,7 +565,7 @@ pub const VulkanRenderer = struct {
                 wr.chunk_data[slot] = entry.chunk_data;
                 wr.chunk_face_alloc[slot] = entry.face_alloc;
                 wr.chunk_light_alloc[slot] = entry.light_alloc;
-                wr.writeChunkData(slot);
+                // GPU buffer synced in updateActiveSlots
             }
 
             // Track max timeline for graphics wait
@@ -805,7 +805,8 @@ pub const VulkanRenderer = struct {
         const has_game = self.game_state != null;
         const overdraw = if (self.game_state) |game_state| game_state.overdraw_mode else false;
 
-        if (has_game) self.render_state.world_renderer.recordCompute(command_buffer);
+        const cf = self.render_state.current_frame;
+        if (has_game) self.render_state.world_renderer.recordCompute(command_buffer, cf);
         if (has_game and !overdraw) self.render_state.debug_renderer.recordCompute(command_buffer);
 
         const depth_barrier = vk.VkImageMemoryBarrier{
@@ -989,7 +990,7 @@ pub const VulkanRenderer = struct {
             {
                 const tz2 = tracy.zone(@src(), "record.world");
                 defer tz2.end();
-                self.render_state.world_renderer.record(command_buffer, &mvp.m, overdraw, day_night.ambient_light, fog_color, fog_start, fog_end);
+                self.render_state.world_renderer.record(command_buffer, cf, &mvp.m, overdraw, day_night.ambient_light, fog_color, fog_start, fog_end);
             }
 
             // Sun/moon celestial bodies (rendered on sky background via depth test)
@@ -1024,7 +1025,7 @@ pub const VulkanRenderer = struct {
             if (!overdraw) {
                 const tz2 = tracy.zone(@src(), "record.translucent");
                 defer tz2.end();
-                self.render_state.world_renderer.recordTranslucent(command_buffer, &mvp.m, day_night.ambient_light, fog_color, fog_start, fog_end);
+                self.render_state.world_renderer.recordTranslucent(command_buffer, cf, &mvp.m, day_night.ambient_light, fog_color, fog_start, fog_end);
             }
 
             if (!overdraw) {

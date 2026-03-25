@@ -5,6 +5,8 @@ const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const vk_utils = @import("vk_utils.zig");
 const app_config = @import("../../app_config.zig");
 const tracy = @import("../../platform/tracy.zig");
+const render_state_mod = @import("RenderState.zig");
+const MAX_FRAMES_IN_FLIGHT = render_state_mod.MAX_FRAMES_IN_FLIGHT;
 
 const Io = std.Io;
 const Dir = Io.Dir;
@@ -73,7 +75,7 @@ pub const TextureManager = struct {
     texture_sampler: vk.VkSampler,
     bindless_descriptor_set_layout: vk.VkDescriptorSetLayout,
     bindless_descriptor_pool: vk.VkDescriptorPool,
-    bindless_descriptor_set: vk.VkDescriptorSet,
+    bindless_descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSet,
 
     // Animation state
     animations: [MAX_ANIMATED_TEXTURES]AnimatedTexture,
@@ -95,7 +97,7 @@ pub const TextureManager = struct {
             .texture_sampler = null,
             .bindless_descriptor_set_layout = null,
             .bindless_descriptor_pool = null,
-            .bindless_descriptor_set = null,
+            .bindless_descriptor_sets = .{null} ** MAX_FRAMES_IN_FLIGHT,
             .animations = std.mem.zeroes([MAX_ANIMATED_TEXTURES]AnimatedTexture),
             .animation_count = 0,
             .anim_staging_buffer = null,
@@ -288,8 +290,8 @@ pub const TextureManager = struct {
         self.updateStorageDescriptor(ctx, 0, buffer, size);
     }
 
-    pub fn updateChunkDataDescriptor(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
-        self.updateStorageDescriptor(ctx, 2, buffer, size);
+    pub fn updateChunkDataDescriptor(self: *TextureManager, ctx: *const VulkanContext, cf: u32, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
+        self.updateStorageDescriptorForFrame(ctx, cf, 2, buffer, size);
     }
 
     pub fn updateModelDescriptor(self: *TextureManager, ctx: *const VulkanContext, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
@@ -301,6 +303,12 @@ pub const TextureManager = struct {
     }
 
     fn updateStorageDescriptor(self: *TextureManager, ctx: *const VulkanContext, binding: u32, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
+        for (0..MAX_FRAMES_IN_FLIGHT) |cf| {
+            self.updateStorageDescriptorForFrame(ctx, @intCast(cf), binding, buffer, size);
+        }
+    }
+
+    fn updateStorageDescriptorForFrame(self: *TextureManager, ctx: *const VulkanContext, cf: u32, binding: u32, buffer: vk.VkBuffer, size: vk.VkDeviceSize) void {
         const buffer_info = vk.VkDescriptorBufferInfo{
             .buffer = buffer,
             .offset = 0,
@@ -310,7 +318,7 @@ pub const TextureManager = struct {
         const descriptor_write = vk.VkWriteDescriptorSet{
             .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = null,
-            .dstSet = self.bindless_descriptor_set,
+            .dstSet = self.bindless_descriptor_sets[cf],
             .dstBinding = binding,
             .dstArrayElement = 0,
             .descriptorCount = 1,
@@ -797,11 +805,11 @@ pub const TextureManager = struct {
         const pool_sizes = [_]vk.VkDescriptorPoolSize{
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .descriptorCount = 4,
+                .descriptorCount = 4 * MAX_FRAMES_IN_FLIGHT,
             },
             .{
                 .type = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .descriptorCount = 1,
+                .descriptorCount = MAX_FRAMES_IN_FLIGHT,
             },
         };
 
@@ -809,24 +817,27 @@ pub const TextureManager = struct {
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
             .pNext = null,
             .flags = vk.VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
-            .maxSets = 1,
+            .maxSets = MAX_FRAMES_IN_FLIGHT,
             .poolSizeCount = pool_sizes.len,
             .pPoolSizes = &pool_sizes,
         };
 
         self.bindless_descriptor_pool = try vk.createDescriptorPool(ctx.device, &pool_info, null);
 
+        var set_layouts: [MAX_FRAMES_IN_FLIGHT]vk.VkDescriptorSetLayout = undefined;
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            set_layouts[i] = self.bindless_descriptor_set_layout;
+        }
+
         const alloc_info = vk.VkDescriptorSetAllocateInfo{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .pNext = null,
             .descriptorPool = self.bindless_descriptor_pool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &self.bindless_descriptor_set_layout,
+            .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,
+            .pSetLayouts = &set_layouts,
         };
 
-        var descriptor_sets: [1]vk.VkDescriptorSet = undefined;
-        try vk.allocateDescriptorSets(ctx.device, &alloc_info, &descriptor_sets);
-        self.bindless_descriptor_set = descriptor_sets[0];
+        try vk.allocateDescriptorSets(ctx.device, &alloc_info, &self.bindless_descriptor_sets);
 
         const image_info = vk.VkDescriptorImageInfo{
             .sampler = self.texture_sampler,
@@ -834,20 +845,22 @@ pub const TextureManager = struct {
             .imageLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         };
 
-        const descriptor_write = vk.VkWriteDescriptorSet{
-            .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = null,
-            .dstSet = self.bindless_descriptor_set,
-            .dstBinding = 1,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-            .pImageInfo = &image_info,
-            .pBufferInfo = null,
-            .pTexelBufferView = null,
-        };
+        for (0..MAX_FRAMES_IN_FLIGHT) |cf| {
+            const descriptor_write = vk.VkWriteDescriptorSet{
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.bindless_descriptor_sets[cf],
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &image_info,
+                .pBufferInfo = null,
+                .pTexelBufferView = null,
+            };
 
-        vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
+            vk.updateDescriptorSets(ctx.device, 1, &[_]vk.VkWriteDescriptorSet{descriptor_write}, 0, null);
+        }
         std.log.info("Descriptor set created (texture array with {} layers, {} animated)", .{ TOTAL_TEXTURE_COUNT, self.animation_count });
     }
 };
