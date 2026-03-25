@@ -43,8 +43,8 @@ fn linkDependencies(b: *std.Build, exe: *std.Build.Step.Compile, tracy_enabled: 
         exe.root_module.linkSystemLibrary("shell32", .{});
         exe.root_module.linkSystemLibrary("opengl32", .{});
         exe.root_module.linkSystemLibrary("dwmapi", .{});
+        exe.root_module.linkSystemLibrary("ws2_32", .{}); // Networking (UDP sockets)
         if (tracy_enabled) {
-            exe.root_module.linkSystemLibrary("ws2_32", .{});
             exe.root_module.linkSystemLibrary("dbghelp", .{});
         }
     }

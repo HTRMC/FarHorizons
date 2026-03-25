@@ -1292,5 +1292,6 @@ comptime {
         _ = @import("world/TerrainGen.zig");
         _ = @import("world/LightEngine.zig");
         _ = @import("world/SurfaceHeightMap.zig");
+        _ = @import("network/protocol.zig");
     }
 }
