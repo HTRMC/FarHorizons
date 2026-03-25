@@ -1873,42 +1873,9 @@ pub fn worldTick(self: *GameState) void {
             self.light_map_pool.release(lm);
             continue;
         };
-        // Compute required_neighbors mask for the new chunk and update neighbors.
-        // Each bit in the 27-bit mask represents a position in the 3x3x3 cube.
-        // A chunk meshes when all its existing neighbors have finished lighting.
-        const offsets_27 = WorldState.neighbor_offsets_27;
-        const new_lm = self.light_maps.get(result.key);
-
-        if (new_lm) |nlm| {
-            var required: u32 = 0;
-            for (offsets_27, 0..) |off, i| {
-                const nk = WorldState.ChunkKey{
-                    .cx = result.key.cx + off[0],
-                    .cy = result.key.cy + off[1],
-                    .cz = result.key.cz + off[2],
-                };
-                if (self.light_maps.get(nk) != null) {
-                    required |= @as(u32, 1) << @intCast(i);
-                }
-            }
-            nlm.required_neighbors.store(required, .release);
-        }
-
-        // Update each neighbor's required_neighbors to include the new chunk
-        for (offsets_27) |off| {
-            const nk = WorldState.ChunkKey{
-                .cx = result.key.cx + off[0],
-                .cy = result.key.cy + off[1],
-                .cz = result.key.cz + off[2],
-            };
-            const neighbor_lm = self.light_maps.get(nk) orelse continue;
-            // The new chunk's position relative to the neighbor is (-off)
-            const bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(-off[0], -off[1], -off[2]);
-            _ = neighbor_lm.required_neighbors.fetchOr(bit, .release);
-        }
-
-        // Submit a light task (not a mesh task) — mesh will be triggered
-        // automatically by the 27-chunk bitmask when all neighbors are lit.
+        // Submit a light task — mesh will be triggered automatically by the
+        // 27-chunk bitmask when all 27 neighbors have finished lighting.
+        // Missing neighbors (outside render distance) are skipped, never blocking.
         if (self.streaming.pool) |pool| pool.submitLight(result.key);
     }
 
@@ -2082,7 +2049,7 @@ pub fn applyUnloadsToGpu(
         }
         wr.releaseSlot(key);
 
-        // Clear this chunk's bit from all neighbors' bitmasks before removing
+        // Clear this chunk's bit from all neighbors' lit_neighbors bitmasks
         {
             const offsets_27 = WorldState.neighbor_offsets_27;
             for (offsets_27) |off| {
@@ -2093,7 +2060,6 @@ pub fn applyUnloadsToGpu(
                 };
                 const neighbor_lm = self.light_maps.get(nk) orelse continue;
                 const bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(-off[0], -off[1], -off[2]);
-                _ = neighbor_lm.required_neighbors.fetchAnd(~bit, .release);
                 _ = neighbor_lm.lit_neighbors.fetchAnd(~bit, .release);
             }
         }

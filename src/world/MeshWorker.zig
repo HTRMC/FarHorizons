@@ -141,13 +141,11 @@ pub const MeshWorker = struct {
 
         const neighbor_borders = LightMapMod.snapshotNeighborBorders(neighbor_lights);
 
-        if (light_map) |lm| lm.mutex.lockUncancelable(io);
-        defer {
-            if (light_map) |lm| lm.mutex.unlock(io);
-        }
-
-        // Compute light if dirty
+        // Compute light under mutex, then UNLOCK before bitmask iteration
+        // to avoid AB/BA deadlock with concurrent neighbor light tasks.
         if (light_map) |lm| {
+            lm.mutex.lockUncancelable(io);
+
             if (lm.dirty) {
                 lm.incremental = null;
                 const surface_heights = local_shm.getHeights(key.cx, key.cz);
@@ -172,20 +170,27 @@ pub const MeshWorker = struct {
                     }
                 }
             }
+
+            lm.mutex.unlock(io);
         }
 
-        // Update 27-chunk bitmask: notify all neighbors that we're lit,
-        // and check if any chunk (including self) is ready to mesh.
+        // Bitmask iteration with own mutex RELEASED — safe to lock neighbors.
         self.updateLitNeighborMasks(key, local_light_maps);
 
         return true;
     }
 
-    /// After a chunk's lighting completes, set our bit in each neighbor's
-    /// lit_neighbors mask. If any neighbor's mask becomes complete (all
-    /// existing neighbors lit), submit a mesh task for it.
+    /// Bidirectional 27-chunk bitmask update (matches Cubyz's generateLightingData).
+    /// For each of the 27 neighbor positions:
+    ///   1. Set OUR bit in the NEIGHBOR's mask → may trigger neighbor's mesh
+    ///   2. If the neighbor has finished lighting, set NEIGHBOR's bit in OUR mask → may trigger our mesh
+    /// Missing neighbors are skipped — their bit stays 0.
     fn updateLitNeighborMasks(self: *MeshWorker, key: ChunkKey, light_maps: *const LightMaps) void {
+        const ALL_LIT: u32 = (1 << 27) - 1; // 0x7FFFFFF
         const offsets_27 = WorldState.neighbor_offsets_27;
+        const io = Io.Threaded.global_single_threaded.io();
+
+        const self_lm = light_maps.get(key) orelse return;
 
         for (offsets_27) |off| {
             const nk = ChunkKey{
@@ -195,19 +200,24 @@ pub const MeshWorker = struct {
             };
             const neighbor_lm = light_maps.get(nk) orelse continue;
 
-            // Our position relative to the neighbor is (-dx, -dy, -dz)
-            const bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(-off[0], -off[1], -off[2]);
+            const self_bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(-off[0], -off[1], -off[2]);
+            const neighbor_bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(off[0], off[1], off[2]);
 
-            // Atomically set our bit in the neighbor's lit_neighbors mask
-            const old = neighbor_lm.lit_neighbors.fetchOr(bit, .acq_rel);
-            const new = old | bit;
-            const required = neighbor_lm.required_neighbors.load(.acquire);
+            // 1. Set our bit in the neighbor's mask
+            const neighbor_old = neighbor_lm.lit_neighbors.fetchOr(self_bit, .monotonic);
+            if ((neighbor_old | self_bit) == ALL_LIT and neighbor_old != ALL_LIT) {
+                if (self.pool) |p| p.submitMesh(nk);
+            }
 
-            // If all required neighbors are now lit, submit mesh for that neighbor
-            if (required != 0 and (new & required) == required) {
-                // Only submit if this was the bit that completed the mask
-                if ((old & required) != required) {
-                    if (self.pool) |p| p.submitMesh(nk);
+            // 2. If the neighbor has finished lighting, set its bit in our mask
+            neighbor_lm.mutex.lockUncancelable(io);
+            const neighbor_lit = !neighbor_lm.dirty;
+            neighbor_lm.mutex.unlock(io);
+
+            if (neighbor_lit) {
+                const self_old = self_lm.lit_neighbors.fetchOr(neighbor_bit, .monotonic);
+                if ((self_old | neighbor_bit) == ALL_LIT and self_old != ALL_LIT) {
+                    if (self.pool) |p| p.submitMesh(key);
                 }
             }
         }

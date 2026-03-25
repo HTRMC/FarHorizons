@@ -26,10 +26,8 @@ pub const LightMap = struct {
     /// Each bit corresponds to a neighbor at offset (dx,dy,dz) in {-1,0,1}³
     /// using index (dx+1)*9 + (dy+1)*3 + (dz+1).
     /// A set bit means that neighbor has finished its lighting computation.
+    /// Mesh is triggered when all 27 bits are set (0x7FFFFFF).
     lit_neighbors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
-    /// Mask of which of the 27 positions actually have loaded chunks with light maps.
-    /// Meshing is allowed when (lit_neighbors & required_neighbors) == required_neighbors.
-    required_neighbors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub fn init(allocator: std.mem.Allocator) LightMap {
         return .{
@@ -39,7 +37,6 @@ pub const LightMap = struct {
             .incremental = null,
             .mutex = .init,
             .lit_neighbors = std.atomic.Value(u32).init(0),
-            .required_neighbors = std.atomic.Value(u32).init(0),
         };
     }
 
@@ -54,7 +51,6 @@ pub const LightMap = struct {
         self.dirty = true;
         self.incremental = null;
         self.lit_neighbors.store(0, .monotonic);
-        self.required_neighbors.store(0, .monotonic);
     }
 };
 
