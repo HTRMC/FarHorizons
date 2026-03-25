@@ -592,6 +592,164 @@ fn propagateBlockLightBFS(
     if (track_boundary) return boundary_mask;
 }
 
+/// Fast check: would propagateFromNeighbor actually change any light values?
+/// Replicates the seeding conditions without allocating BFS queues.
+/// Returns true if any neighbor border value would seed new light that
+/// exceeds the existing light map at the corresponding boundary position.
+pub fn needsPropagation(
+    chunk: *const WorldState.Chunk,
+    neighbor_borders: [6]LightBorderSnapshot,
+    light_map: *const LightMap,
+) bool {
+    // Check block light + sky light for all 6 faces.
+    // Face layout matches propagateFromNeighbor seeding order.
+    // +X (face 3) and -X (face 2): iterate y,z
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |z| {
+            const bi = y * CHUNK_SIZE + z;
+            // +X: seed at x=CHUNK_SIZE-1 from neighbor face 3
+            {
+                const nl = getNeighborLight(neighbor_borders, 3, bi);
+                const nr = nl[0] -| ATTENUATION;
+                const ng = nl[1] -| ATTENUATION;
+                const nb = nl[2] -| ATTENUATION;
+                if (nr != 0 or ng != 0 or nb != 0) {
+                    const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        const ex = light_map.block_light.get(idx);
+                        if (nr > ex[0] or ng > ex[1] or nb > ex[2]) return true;
+                    }
+                }
+                const sl = getNeighborSkyLight(neighbor_borders, 3, bi);
+                if (sl > ATTENUATION) {
+                    const idx = chunkIndex(CHUNK_SIZE - 1, y, z);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        if (sl - ATTENUATION > light_map.sky_light.get(idx)) return true;
+                    }
+                }
+            }
+            // -X: seed at x=0 from neighbor face 2
+            {
+                const nl = getNeighborLight(neighbor_borders, 2, bi);
+                const nr = nl[0] -| ATTENUATION;
+                const ng = nl[1] -| ATTENUATION;
+                const nb = nl[2] -| ATTENUATION;
+                if (nr != 0 or ng != 0 or nb != 0) {
+                    const idx = chunkIndex(0, y, z);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        const ex = light_map.block_light.get(idx);
+                        if (nr > ex[0] or ng > ex[1] or nb > ex[2]) return true;
+                    }
+                }
+                const sl = getNeighborSkyLight(neighbor_borders, 2, bi);
+                if (sl > ATTENUATION) {
+                    const idx = chunkIndex(0, y, z);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        if (sl - ATTENUATION > light_map.sky_light.get(idx)) return true;
+                    }
+                }
+            }
+        }
+    }
+    // +Z (face 0) and -Z (face 1): iterate y,x
+    for (0..CHUNK_SIZE) |y| {
+        for (0..CHUNK_SIZE) |x| {
+            const bi = y * CHUNK_SIZE + x;
+            // +Z: seed at z=CHUNK_SIZE-1 from neighbor face 0
+            {
+                const nl = getNeighborLight(neighbor_borders, 0, bi);
+                const nr = nl[0] -| ATTENUATION;
+                const ng = nl[1] -| ATTENUATION;
+                const nb = nl[2] -| ATTENUATION;
+                if (nr != 0 or ng != 0 or nb != 0) {
+                    const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        const ex = light_map.block_light.get(idx);
+                        if (nr > ex[0] or ng > ex[1] or nb > ex[2]) return true;
+                    }
+                }
+                const sl = getNeighborSkyLight(neighbor_borders, 0, bi);
+                if (sl > ATTENUATION) {
+                    const idx = chunkIndex(x, y, CHUNK_SIZE - 1);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        if (sl - ATTENUATION > light_map.sky_light.get(idx)) return true;
+                    }
+                }
+            }
+            // -Z: seed at z=0 from neighbor face 1
+            {
+                const nl = getNeighborLight(neighbor_borders, 1, bi);
+                const nr = nl[0] -| ATTENUATION;
+                const ng = nl[1] -| ATTENUATION;
+                const nb = nl[2] -| ATTENUATION;
+                if (nr != 0 or ng != 0 or nb != 0) {
+                    const idx = chunkIndex(x, y, 0);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        const ex = light_map.block_light.get(idx);
+                        if (nr > ex[0] or ng > ex[1] or nb > ex[2]) return true;
+                    }
+                }
+                const sl = getNeighborSkyLight(neighbor_borders, 1, bi);
+                if (sl > ATTENUATION) {
+                    const idx = chunkIndex(x, y, 0);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        if (sl - ATTENUATION > light_map.sky_light.get(idx)) return true;
+                    }
+                }
+            }
+        }
+    }
+    // +Y (face 4) and -Y (face 5): iterate z,x
+    for (0..CHUNK_SIZE) |z| {
+        for (0..CHUNK_SIZE) |x| {
+            const bi = z * CHUNK_SIZE + x;
+            // +Y: seed at y=CHUNK_SIZE-1 from neighbor face 4
+            {
+                const nl = getNeighborLight(neighbor_borders, 4, bi);
+                const nr = nl[0] -| ATTENUATION;
+                const ng = nl[1] -| ATTENUATION;
+                const nb = nl[2] -| ATTENUATION;
+                if (nr != 0 or ng != 0 or nb != 0) {
+                    const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        const ex = light_map.block_light.get(idx);
+                        if (nr > ex[0] or ng > ex[1] or nb > ex[2]) return true;
+                    }
+                }
+                const sl = getNeighborSkyLight(neighbor_borders, 4, bi);
+                if (sl > ATTENUATION) {
+                    const idx = chunkIndex(x, CHUNK_SIZE - 1, z);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        if (sl - ATTENUATION > light_map.sky_light.get(idx)) return true;
+                    }
+                }
+            }
+            // -Y: seed at y=0 from neighbor face 5
+            {
+                const nl = getNeighborLight(neighbor_borders, 5, bi);
+                const nr = nl[0] -| ATTENUATION;
+                const ng = nl[1] -| ATTENUATION;
+                const nb = nl[2] -| ATTENUATION;
+                if (nr != 0 or ng != 0 or nb != 0) {
+                    const idx = chunkIndex(x, 0, z);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        const ex = light_map.block_light.get(idx);
+                        if (nr > ex[0] or ng > ex[1] or nb > ex[2]) return true;
+                    }
+                }
+                const sl = getNeighborSkyLight(neighbor_borders, 5, bi);
+                if (sl > ATTENUATION) {
+                    const idx = chunkIndex(x, 0, z);
+                    if (!BlockState.isOpaque(chunk.blocks.get(idx))) {
+                        if (sl - ATTENUATION > light_map.sky_light.get(idx)) return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
 /// Additively propagate light from neighbor borders into an already-computed
 /// light map. Seeds from all 6 borders and runs BFS for both sky and block
 /// light, but only updates positions where incoming light exceeds existing

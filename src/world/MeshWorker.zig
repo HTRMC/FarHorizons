@@ -241,10 +241,13 @@ pub const MeshWorker = struct {
         }
 
         if (light_only) {
-            // Propagate neighbor border light into this chunk's light map additively,
-            // so that light from torches near chunk borders continues inward via BFS.
+            // Only run the expensive border BFS if neighbor light would actually
+            // change values in this chunk's light map. During initial world load
+            // most cascading light-only refreshes have no new light to propagate.
             if (light_map) |lm| {
-                LightEngine.propagateFromNeighbor(chunk, neighbor_borders, lm);
+                if (LightEngine.needsPropagation(chunk, neighbor_borders, lm)) {
+                    LightEngine.propagateFromNeighbor(chunk, neighbor_borders, lm);
+                }
             }
 
             const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {

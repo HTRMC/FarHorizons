@@ -1819,6 +1819,18 @@ fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     s.markDirty(key.cx, key.cy, key.cz, chunk);
 }
 
+fn hasAllNeighbors(chunk_map: *const ChunkMap, key: WorldState.ChunkKey, offsets: *const [6][3]i32) bool {
+    for (offsets) |off| {
+        const nk = WorldState.ChunkKey{
+            .cx = key.cx + off[0],
+            .cy = key.cy + off[1],
+            .cz = key.cz + off[2],
+        };
+        if (chunk_map.get(nk) == null) return false;
+    }
+    return true;
+}
+
 pub fn worldTick(self: *GameState) void {
     // Update player chunk from camera position
     const pos = self.camera.position;
@@ -1850,18 +1862,21 @@ pub fn worldTick(self: *GameState) void {
             self.light_map_pool.release(lm);
             continue;
         };
-        self.dirty_chunks.add(result.key);
-        // Mark neighbors for re-mesh so they update faces against the new chunk.
-        // Don't mark their LightMaps dirty — they keep their own light and
-        // pick up border values from the new chunk during mesh generation.
+        // Only mesh a chunk once all 6 face neighbors are loaded, so that
+        // computeChunkLight gets correct border data on the first run and
+        // avoids cascading light-only re-mesh tasks.
         const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
+        if (hasAllNeighbors(&self.chunk_map, result.key, &offsets)) {
+            self.dirty_chunks.add(result.key);
+        }
+        // Check each neighbor: if it now has all ITS neighbors, it becomes ready too.
         for (offsets) |off| {
             const nk = WorldState.ChunkKey{
                 .cx = result.key.cx + off[0],
                 .cy = result.key.cy + off[1],
                 .cz = result.key.cz + off[2],
             };
-            if (self.chunk_map.get(nk) != null) {
+            if (self.chunk_map.get(nk) != null and hasAllNeighbors(&self.chunk_map, nk, &offsets)) {
                 self.dirty_chunks.add(nk);
             }
         }
