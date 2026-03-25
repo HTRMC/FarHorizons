@@ -768,6 +768,7 @@ pub fn main() !void {
     menu_ctrl.options = &options;
 
     var game_state: ?GameState = null;
+    var integrated_server: ?*@import("server/Server.zig").Server = null;
     var save_thread: ?std.Thread = null;
     var save_done = std.atomic.Value(bool).init(false);
     defer {
@@ -791,6 +792,10 @@ pub fn main() !void {
                 renderer.setGameState(null);
             }
             state.deinit();
+        }
+        if (integrated_server) |srv| {
+            srv.deinit();
+            integrated_server = null;
         }
     }
 
@@ -847,6 +852,14 @@ pub fn main() !void {
                     }
 
                     if (world_name.len > 0) {
+                        // Start integrated server for this world (multiplayer-ready)
+                        const Server = @import("server/Server.zig").Server;
+                        integrated_server = Server.init(allocator, world_name, Server.DEFAULT_PORT) catch |err| blk: {
+                            std.log.warn("Integrated server failed to start: {s} (singleplayer continues without it)", .{@errorName(err)});
+                            break :blk null;
+                        };
+                        if (integrated_server) |srv| srv.startBackground();
+
                         game_state = GameState.init(allocator, 1280, 720, world_name, world_type_override, game_mode_override) catch |err| blk: {
                             std.log.err("Failed to load world '{s}': {}", .{ world_name, err });
                             break :blk null;
@@ -967,6 +980,11 @@ pub fn main() !void {
                 state.deinit();
             }
             game_state = null;
+            // Stop integrated server
+            if (integrated_server) |srv| {
+                srv.deinit();
+                integrated_server = null;
+            }
             menu_ctrl.showTitleMenu();
         }
 

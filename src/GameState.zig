@@ -111,6 +111,19 @@ frame_timing: FrameTiming = .{},
 prev_camera_pos: zlm.Vec3,
 tick_camera_pos: zlm.Vec3,
 
+// ── Remote players (multiplayer) ──
+remote_players: RemotePlayerList = .empty,
+
+pub const RemotePlayer = struct {
+    id: u32,
+    pos: [3]f64,
+    prev_pos: [3]f64,
+    rotation: [3]f32,
+    name: []const u8 = "Player",
+};
+
+pub const RemotePlayerList = std.ArrayList(RemotePlayer);
+
 pub const FrameTiming = struct {
     update_ms: f32 = 0,
     render_ms: f32 = 0,
@@ -379,9 +392,39 @@ pub fn save(self: *GameState) void {
     });
 }
 
+/// Update a remote player's position (called from network protocol handler).
+pub fn updateRemotePlayer(self: *GameState, id: u32, pos: [3]f64, rotation: [3]f32) void {
+    for (self.remote_players.items) |*rp| {
+        if (rp.id == id) {
+            rp.prev_pos = rp.pos;
+            rp.pos = pos;
+            rp.rotation = rotation;
+            return;
+        }
+    }
+    // New player
+    self.remote_players.append(self.allocator, .{
+        .id = id,
+        .pos = pos,
+        .prev_pos = pos,
+        .rotation = rotation,
+    }) catch {};
+}
+
+/// Remove a remote player.
+pub fn removeRemotePlayer(self: *GameState, id: u32) void {
+    for (self.remote_players.items, 0..) |rp, i| {
+        if (rp.id == id) {
+            _ = self.remote_players.swapRemove(i);
+            return;
+        }
+    }
+}
+
 pub fn deinit(self: *GameState) void {
     const tz = tracy.zone(@src(), "GameState.deinit");
     defer tz.end();
+    self.remote_players.deinit(self.allocator);
     // Free entity inventories
     for (self.entities.inventory[0..self.entities.count]) |inv| {
         if (inv) |ptr| self.allocator.destroy(ptr);
