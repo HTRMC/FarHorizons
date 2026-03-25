@@ -679,8 +679,14 @@ pub const VulkanRenderer = struct {
         };
         const signal_semaphores = [_]vk.VkSemaphore{self.surface_state.render_finished_semaphores.items[image_index]};
 
-        // Timeline semaphore submit info: 0 for binary semaphores (ignored by driver)
-        const wait_values = [_]u64{ 0, self.max_graphics_wait_timeline };
+        // Skip the GPU-side timeline wait if the transfer has already completed.
+        // vkGetSemaphoreCounterValue is a cheap host-memory read. When the counter
+        // already meets the required value (common case — DMA finishes in microseconds),
+        // we pass 0 so the GPU doesn't stall at VERTEX_INPUT waiting for the semaphore.
+        var current_timeline: u64 = 0;
+        vk.getSemaphoreCounterValue(self.ctx.device, self.transfer_pipeline.timeline_semaphore, &current_timeline) catch {};
+        const effective_timeline_wait: u64 = if (current_timeline >= self.max_graphics_wait_timeline) 0 else self.max_graphics_wait_timeline;
+        const wait_values = [_]u64{ 0, effective_timeline_wait };
         const signal_values = [_]u64{0};
         const timeline_info = vk.VkTimelineSemaphoreSubmitInfo{
             .sType = vk.VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO,
