@@ -118,8 +118,12 @@ tick_camera_pos: zlm.Vec3,
 
 // ── Remote players (multiplayer) ──
 remote_players: RemotePlayerList = .empty,
+pending_updates: [MAX_PENDING_UPDATES]PendingUpdate = undefined,
+pending_write: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+pending_read: usize = 0,
 
 pub const INTERPOLATION_STEPS: u8 = 3;
+const MAX_PENDING_UPDATES: usize = 64;
 
 pub const RemotePlayer = struct {
     id: u32,
@@ -134,6 +138,12 @@ pub const RemotePlayer = struct {
 };
 
 pub const RemotePlayerList = std.ArrayList(RemotePlayer);
+
+const PendingUpdate = struct {
+    id: u32,
+    pos: [3]f64,
+    rotation: [3]f32,
+};
 
 pub const FrameTiming = struct {
     update_ms: f32 = 0,
@@ -347,9 +357,27 @@ pub fn save(self: *GameState) void {
     });
 }
 
-/// Update a remote player's position (called from network protocol handler).
-/// Sets interpolation target — actual position moves toward target over INTERPOLATION_STEPS ticks.
+/// Queue a remote player position update (called from network thread — thread-safe).
 pub fn updateRemotePlayer(self: *GameState, id: u32, pos: [3]f64, rotation: [3]f32) void {
+    const write = self.pending_write.load(.acquire);
+    const next = (write + 1) % MAX_PENDING_UPDATES;
+    // Drop update if buffer is full (read is main-thread only, so relaxed is fine)
+    if (next == self.pending_read) return;
+    self.pending_updates[write] = .{ .id = id, .pos = pos, .rotation = rotation };
+    self.pending_write.store(next, .release);
+}
+
+/// Drain pending updates into remote_players (called from main thread only).
+fn drainRemotePlayerUpdates(self: *GameState) void {
+    const write = self.pending_write.load(.acquire);
+    while (self.pending_read != write) {
+        const update = self.pending_updates[self.pending_read];
+        self.pending_read = (self.pending_read + 1) % MAX_PENDING_UPDATES;
+        self.applyRemotePlayerUpdate(update.id, update.pos, update.rotation);
+    }
+}
+
+fn applyRemotePlayerUpdate(self: *GameState, id: u32, pos: [3]f64, rotation: [3]f32) void {
     for (self.remote_players.items) |*rp| {
         if (rp.id == id) {
             rp.target_pos = pos;
@@ -359,10 +387,17 @@ pub fn updateRemotePlayer(self: *GameState, id: u32, pos: [3]f64, rotation: [3]f
         }
     }
     // New player — snap to position immediately
+    const render_pos: [3]f32 = .{
+        @floatCast(pos[0]),
+        @floatCast(pos[1]),
+        @floatCast(pos[2]),
+    };
     self.remote_players.append(self.allocator, .{
         .id = id,
         .target_pos = pos,
         .current_pos = pos,
+        .render_pos = render_pos,
+        .prev_render_pos = render_pos,
         .target_rotation = rotation,
         .current_rotation = rotation,
     }) catch {};
@@ -370,6 +405,7 @@ pub fn updateRemotePlayer(self: *GameState, id: u32, pos: [3]f64, rotation: [3]f
 
 /// Advance remote player interpolation by one tick.
 pub fn tickRemotePlayers(self: *GameState) void {
+    self.drainRemotePlayerUpdates();
     for (self.remote_players.items) |*rp| {
         rp.prev_render_pos = .{
             @floatCast(rp.current_pos[0]),
