@@ -222,13 +222,16 @@ pub fn craft(game_state: *GameState, recipe: *const Recipe) bool {
         removeItems(game_state, inp.item, inp.count);
     }
 
-    // Add output
+    // Add output — drop into world if inventory is full
     const output = recipe.output;
-    if (Item.isToolItem(output.item)) {
+    const stack = if (Item.isToolItem(output.item)) blk: {
         const info = Item.toolFromId(output.item) orelse return true;
-        _ = InventoryOps.addToInventory(game_state,Entity.ItemStack.ofTool(info.tool_type, info.tier));
-    } else {
-        _ = InventoryOps.addToInventory(game_state,Entity.ItemStack.of(output.item, output.count));
+        break :blk Entity.ItemStack.ofTool(info.tool_type, info.tier);
+    } else Entity.ItemStack.of(output.item, output.count);
+
+    if (!InventoryOps.addToInventory(game_state, stack)) {
+        const pos = game_state.entities.pos[Entity.PLAYER];
+        game_state.entities.spawnItemDrop(pos, stack.block, stack.count);
     }
 
     return true;
