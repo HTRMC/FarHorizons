@@ -1,7 +1,7 @@
 const std = @import("std");
-const WorldState = @import("world/WorldState.zig");
+const WorldState = @import("../WorldState.zig");
 const BlockState = WorldState.BlockState;
-pub const Item = @import("Item.zig");
+pub const Item = @import("../item/Item.zig");
 
 pub const EntityId = u32;
 pub const PLAYER: EntityId = 0;

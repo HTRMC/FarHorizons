@@ -403,7 +403,7 @@ pub const UiRenderer = struct {
 
         const WorldState = @import("../../world/WorldState.zig");
         const BlockState = WorldState.BlockState;
-        const Item = @import("../../Item.zig");
+        const Item = @import("../../world/item/Item.zig");
         const TextureManager = @import("TextureManager.zig");
 
         if (Item.isToolItem(state)) {

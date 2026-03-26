@@ -1,5 +1,5 @@
 const std = @import("std");
-const compression = @import("world/storage/compression.zig");
+const compression = @import("compression.zig");
 
 /// Binary Tag format — a compact, self-describing binary data format.
 ///

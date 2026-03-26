@@ -495,9 +495,9 @@ fn loadWorldType(io: Io, allocator: std.mem.Allocator, world_dir: []const u8) Wo
     return .normal;
 }
 
-const BinaryTag = @import("../../BinaryTag.zig");
+const BinaryTag = @import("BinaryTag.zig");
 
-const Entity = @import("../../Entity.zig");
+const Entity = @import("../entity/Entity.zig");
 
 pub const PlayerData = struct {
     x: f32,

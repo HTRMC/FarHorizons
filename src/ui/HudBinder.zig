@@ -10,7 +10,7 @@ const SpriteRect = ui_renderer_mod.SpriteRect;
 const GameState = @import("../GameState.zig");
 const WorldState = @import("../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
-const Gamepad = @import("../Gamepad.zig");
+const Gamepad = @import("../platform/Gamepad.zig");
 
 const log = std.log.scoped(.UI);
 

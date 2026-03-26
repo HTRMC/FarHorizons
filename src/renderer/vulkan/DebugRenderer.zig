@@ -8,7 +8,7 @@ const LineVertex = types.LineVertex;
 const tracy = @import("../../platform/tracy.zig");
 const zlm = @import("zlm");
 const GameState = @import("../../GameState.zig");
-const Raycast = @import("../../Raycast.zig");
+const Raycast = @import("../../world/Raycast.zig");
 const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
 const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
@@ -411,7 +411,7 @@ pub const DebugRenderer = struct {
         }
 
         if (game_state.hit_result) |hit| {
-            const Physics = @import("../../Physics.zig");
+            const Physics = @import("../../world/entity/Physics.zig");
             const WorldState = @import("../../world/WorldState.zig");
             const BlockState = WorldState.BlockState;
             const block = game_state.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);

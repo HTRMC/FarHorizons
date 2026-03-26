@@ -9,11 +9,11 @@ const UiManager = @import("ui/UiManager.zig").UiManager;
 const Focus = @import("ui/Focus.zig");
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
-const Logger = @import("Logger.zig");
+const Logger = @import("platform/Logger.zig");
 const app_config = @import("app_config.zig");
 const Options = @import("Options.zig");
-const Gamepad = @import("Gamepad.zig");
-const Item = @import("Item.zig");
+const Gamepad = @import("platform/Gamepad.zig");
+const Item = @import("world/item/Item.zig");
 
 var file_logger_instance: ?*Logger.FileLogger = null;
 

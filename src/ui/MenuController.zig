@@ -12,9 +12,9 @@ const BlockState = @import("../world/WorldState.zig").BlockState;
 const app_config = @import("../app_config.zig");
 const Options = @import("../Options.zig");
 const glfw = @import("../platform/glfw.zig");
-const Gamepad = @import("../Gamepad.zig");
+const Gamepad = @import("../platform/Gamepad.zig");
 
-const Crafting = @import("../Crafting.zig");
+const Crafting = @import("../world/item/Crafting.zig");
 const log = std.log.scoped(.UI);
 
 pub const MAX_WORLDS: u8 = 32;

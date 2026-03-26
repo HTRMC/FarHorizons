@@ -1,10 +1,10 @@
 const std = @import("std");
-const GameState = @import("GameState.zig");
+const GameState = @import("../../GameState.zig");
 const Entity = GameState.Entity;
-const WorldState = @import("world/WorldState.zig");
+const WorldState = @import("../WorldState.zig");
 const BlockState = WorldState.BlockState;
-const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
-const tracy = @import("platform/tracy.zig");
+const ChunkMap = @import("../ChunkMap.zig").ChunkMap;
+const tracy = @import("../../platform/tracy.zig");
 
 const GRAVITY: f32 = 32.0;
 const Y_DRAG: f32 = 0.9866;

@@ -1,10 +1,10 @@
 const std = @import("std");
-const WorldState = @import("world/WorldState.zig");
-const ChunkStreamer = @import("world/ChunkStreamer.zig").ChunkStreamer;
-const Storage = @import("world/storage/Storage.zig");
-const MeshWorker = @import("world/MeshWorker.zig").MeshWorker;
-const ThreadPool = @import("ThreadPool.zig").ThreadPool;
-const TransferPipeline = @import("renderer/vulkan/TransferPipeline.zig").TransferPipeline;
+const WorldState = @import("WorldState.zig");
+const ChunkStreamer = @import("ChunkStreamer.zig").ChunkStreamer;
+const Storage = @import("storage/Storage.zig");
+const MeshWorker = @import("MeshWorker.zig").MeshWorker;
+const ThreadPool = @import("../ThreadPool.zig").ThreadPool;
+const TransferPipeline = @import("../renderer/vulkan/TransferPipeline.zig").TransferPipeline;
 const Io = std.Io;
 
 pub const MAX_PENDING_UNLOADS: u32 = 256;

@@ -1,7 +1,7 @@
 const std = @import("std");
-const GameState = @import("GameState.zig");
-const Entity = @import("Entity.zig");
-const BlockState = @import("world/WorldState.zig").BlockState;
+const GameState = @import("../../GameState.zig");
+const Entity = @import("../entity/Entity.zig");
+const BlockState = @import("../WorldState.zig").BlockState;
 const Item = @import("Item.zig");
 
 pub const MAX_INGREDIENTS = 4;

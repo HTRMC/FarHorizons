@@ -240,7 +240,7 @@ pub fn getFenceConnections(state: StateId) ?struct { n: bool, s: bool, e: bool, 
 
 // ==== Per-State Comptime Properties ====
 
-const Item = @import("../Item.zig");
+const Item = @import("item/Item.zig");
 
 const StateProps = struct {
     is_opaque: bool,

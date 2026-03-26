@@ -1,6 +1,6 @@
-const WorldState = @import("world/WorldState.zig");
+const WorldState = @import("WorldState.zig");
 const BlockState = WorldState.BlockState;
-const Item = @import("Item.zig");
+const Item = @import("item/Item.zig");
 
 // Day/night cycle: 36000 ticks at 30Hz = 20 minutes per full day
 pub const DAY_CYCLE: i64 = 36000;

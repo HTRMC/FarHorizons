@@ -1,4 +1,4 @@
-const WorldState = @import("world/WorldState.zig");
+const WorldState = @import("../WorldState.zig");
 const BlockState = WorldState.BlockState;
 const Entity = @import("Entity.zig");
 

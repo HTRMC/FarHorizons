@@ -1,10 +1,10 @@
 const std = @import("std");
 const zlm = @import("zlm");
-const WorldState = @import("world/WorldState.zig");
-const ChunkMap = @import("world/ChunkMap.zig").ChunkMap;
-const Physics = @import("Physics.zig");
-const Entity = @import("Entity.zig");
-const tracy = @import("platform/tracy.zig");
+const WorldState = @import("WorldState.zig");
+const ChunkMap = @import("ChunkMap.zig").ChunkMap;
+const Physics = @import("entity/Physics.zig");
+const Entity = @import("entity/Entity.zig");
+const tracy = @import("../platform/tracy.zig");
 
 const BlockState = WorldState.BlockState;
 const AABB = BlockState.AABB;

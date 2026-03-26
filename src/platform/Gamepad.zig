@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("platform/c.zig").c;
+const c = @import("c.zig").c;
 const build_options = @import("build_options");
 
 const Gamepad = @This();
