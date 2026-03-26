@@ -24,6 +24,7 @@ pub const MAX_DISPLAY_LEN: u8 = 32;
 pub const AppState = enum {
     title_menu,
     singleplayer_menu,
+    multiplayer_menu,
     create_world,
     edit_world,
     controls_title,
@@ -37,17 +38,18 @@ pub const AppState = enum {
 
     pub fn isMenu(self: AppState) bool {
         return switch (self) {
-            .title_menu, .singleplayer_menu, .create_world, .edit_world, .controls_title, .controls_pause, .pause_menu, .inventory, .crafting => true,
+            .title_menu, .singleplayer_menu, .multiplayer_menu, .create_world, .edit_world, .controls_title, .controls_pause, .pause_menu, .inventory, .crafting => true,
             .loading, .playing, .saving => false,
         };
     }
 };
 
-pub const Action = enum { load_world, create_world, delete_world, backup_world, edit_world, resume_game, return_to_title, quit };
+pub const Action = enum { load_world, create_world, delete_world, backup_world, edit_world, connect_to_server, resume_game, return_to_title, quit };
 
 const ScreenType = enum {
     title,
     singleplayer,
+    multiplayer,
     create_world,
     edit_world,
     controls,
@@ -125,6 +127,9 @@ pub const MenuController = struct {
 
     coming_soon_modal_id: WidgetId = NULL_WIDGET,
 
+    // Multiplayer screen state
+    server_address_input_id: WidgetId = NULL_WIDGET,
+
     world_list_id: WidgetId = NULL_WIDGET,
     no_worlds_label_id: WidgetId = NULL_WIDGET,
     delete_confirm_id: WidgetId = NULL_WIDGET,
@@ -180,6 +185,7 @@ pub const MenuController = struct {
         return switch (state) {
             .title_menu => .title,
             .singleplayer_menu => .singleplayer,
+            .multiplayer_menu => .multiplayer,
             .create_world => .create_world,
             .edit_world => .edit_world,
             .controls_title, .controls_pause => .controls,
@@ -194,6 +200,7 @@ pub const MenuController = struct {
         const file = switch (screen) {
             .title => "title_menu.xml",
             .singleplayer => "singleplayer_menu.xml",
+            .multiplayer => "multiplayer_menu.xml",
             .create_world => "create_world_menu.xml",
             .edit_world => "edit_world_menu.xml",
             .controls => "controls_menu.xml",
@@ -208,6 +215,7 @@ pub const MenuController = struct {
                     self.cacheSingleplayerWidgetIds();
                     self.refreshWorldList();
                 },
+                .multiplayer => self.cacheMultiplayerWidgetIds(),
                 .create_world => {
                     self.cacheCreateWorldWidgetIds();
                     self.selected_world_type = .normal;
@@ -238,6 +246,9 @@ pub const MenuController = struct {
                 self.coming_soon_modal_id = NULL_WIDGET;
             },
             .singleplayer => self.resetSingleplayerWidgetIds(),
+            .multiplayer => {
+                self.server_address_input_id = NULL_WIDGET;
+            },
             .create_world => {
                 self.create_world_input_id = NULL_WIDGET;
                 self.seed_input_id = NULL_WIDGET;
@@ -270,6 +281,11 @@ pub const MenuController = struct {
     fn cacheTitleWidgetIds(self: *MenuController) void {
         const tree = self.menuTree() orelse return;
         self.coming_soon_modal_id = tree.findById("coming_soon_modal") orelse NULL_WIDGET;
+    }
+
+    fn cacheMultiplayerWidgetIds(self: *MenuController) void {
+        const tree = self.menuTree() orelse return;
+        self.server_address_input_id = tree.findById("server_address_input") orelse NULL_WIDGET;
     }
 
     fn cacheSingleplayerWidgetIds(self: *MenuController) void {
@@ -541,6 +557,8 @@ pub const MenuController = struct {
         reg.register("quit_game", actionQuitGame, ctx);
         reg.register("world_select", actionWorldSelect, ctx);
         reg.register("show_singleplayer", actionShowSingleplayer, ctx);
+        reg.register("show_multiplayer", actionShowMultiplayer, ctx);
+        reg.register("connect_to_server", actionConnectToServer, ctx);
         reg.register("search_worlds", actionSearchWorlds, ctx);
         reg.register("back_to_title", actionBackToTitle, ctx);
         reg.register("show_coming_soon", actionShowComingSoon, ctx);
@@ -1347,6 +1365,14 @@ pub const MenuController = struct {
         };
     }
 
+    pub fn getConnectAddress(self: *const MenuController) []const u8 {
+        if (self.server_address_input_id == NULL_WIDGET) return "";
+        if (self.ui_manager.screen_count == 0) return "";
+        const tree = &self.ui_manager.screens[self.ui_manager.screen_count - 1].tree;
+        const data = tree.getDataConst(self.server_address_input_id) orelse return "";
+        return data.text_input.getText();
+    }
+
     // ============================================================
     // Controls screen
     // ============================================================
@@ -1690,6 +1716,17 @@ pub const MenuController = struct {
 
     fn actionShowSingleplayer(ctx: ?*anyopaque) void {
         getSelf(ctx).transitionTo(.singleplayer_menu);
+    }
+
+    fn actionShowMultiplayer(ctx: ?*anyopaque) void {
+        getSelf(ctx).transitionTo(.multiplayer_menu);
+    }
+
+    fn actionConnectToServer(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const addr = self.getConnectAddress();
+        if (addr.len == 0) return;
+        self.action = .connect_to_server;
     }
 
     fn actionBackToTitle(ctx: ?*anyopaque) void {

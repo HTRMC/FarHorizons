@@ -286,6 +286,12 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 input_state.menu_ctrl.showDeleteConfirm();
             }
         },
+        .multiplayer_menu => {
+            const consumed = input_state.ui_manager.handleKey(key, action, mods);
+            if (!consumed and key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
+                input_state.menu_ctrl.transitionTo(.title_menu);
+            }
+        },
         .create_world, .edit_world => {
             const consumed = input_state.ui_manager.handleKey(key, action, mods);
             if (!consumed and key == glfw.GLFW_KEY_ESCAPE and action == glfw.GLFW_PRESS) {
@@ -634,7 +640,7 @@ fn processGamepadInput(input_state: *InputState) void {
         .title_menu => {
             gamepadNavigateUi(input_state);
         },
-        .singleplayer_menu => {
+        .singleplayer_menu, .multiplayer_menu => {
             gamepadNavigateUi(input_state);
             if (gp.pressed(.b)) {
                 input_state.menu_ctrl.transitionTo(.title_menu);
@@ -920,6 +926,36 @@ pub fn main() !void {
                         app_config.saveWorldGameMode(allocator, folder, menu_ctrl.edit_game_mode);
                     }
                     menu_ctrl.transitionTo(.singleplayer_menu);
+                },
+                .connect_to_server => {
+                    const addr = menu_ctrl.getConnectAddress();
+                    if (addr.len > 0) {
+                        // Use "remote" as the local world name for multiplayer cache
+                        const world_name = "remote";
+
+                        game_state = GameState.init(allocator, 1280, 720, world_name, null, null) catch |err| blk: {
+                            std.log.err("Failed to init game state for multiplayer: {}", .{err});
+                            break :blk null;
+                        };
+                        if (game_state) |*state| {
+                            client_net = ClientNetState.connectToServer(allocator, addr) catch |err| blk: {
+                                std.log.err("Failed to connect to server '{s}': {s}", .{ addr, @errorName(err) });
+                                break :blk null;
+                            };
+                            if (client_net != null) {
+                                ClientNetState.setGameState(state);
+                            }
+
+                            state.third_person_crosshair = options.third_person_crosshair;
+                            renderer.setGameState(@ptrCast(state));
+                            input_state.game_state = state;
+                            menu_ctrl.hideTitleMenu();
+                            const vk_impl: *VulkanRenderer = @ptrCast(@alignCast(renderer.impl));
+                            menu_ctrl.loadHud(&vk_impl.render_state.ui_renderer);
+                            menu_ctrl.app_state = .loading;
+                            tick_accumulator = 0.0;
+                        }
+                    }
                 },
                 .resume_game => {
                     captureMouse(&input_state);

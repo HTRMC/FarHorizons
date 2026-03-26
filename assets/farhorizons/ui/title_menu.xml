@@ -16,7 +16,7 @@
         <button text="Singleplayer" width="fill" height="40" background="#335588FF" shadow="true"
                 on_click="show_singleplayer"/>
         <button text="Multiplayer" width="fill" height="40" background="#335588FF" shadow="true"
-                on_click="show_coming_soon"/>
+                on_click="show_multiplayer"/>
         <button text="Options" width="fill" height="40" background="#335588FF" shadow="true"
                 on_click="show_controls"/>
         <button text="Credits" width="fill" height="40" background="#335588FF" shadow="true"
