@@ -877,7 +877,7 @@ pub fn main() !void {
                             if (integrated_server) |srv| srv.startBackground();
                         }
 
-                        game_state = GameState.init(allocator, 1280, 720, world_name, world_type_override, game_mode_override) catch |err| blk: {
+                        game_state = GameState.init(allocator, 1280, 720, world_name, world_type_override, game_mode_override, cli.connect != null) catch |err| blk: {
                             std.log.err("Failed to load world '{s}': {}", .{ world_name, err });
                             break :blk null;
                         };
@@ -938,7 +938,7 @@ pub fn main() !void {
                         // Use "remote" as the local world name for multiplayer cache
                         const world_name = "remote";
 
-                        game_state = GameState.init(allocator, 1280, 720, world_name, null, null) catch |err| blk: {
+                        game_state = GameState.init(allocator, 1280, 720, world_name, null, null, true) catch |err| blk: {
                             std.log.err("Failed to init game state for multiplayer: {}", .{err});
                             break :blk null;
                         };

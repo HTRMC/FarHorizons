@@ -187,7 +187,7 @@ pub fn playerInv(self: anytype) if (@TypeOf(self) == *const GameState) *const En
 
 pub const InventoryOps = @import("entity/InventoryOps.zig");
 
-pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8, world_type_override: ?WorldState.WorldType, game_mode_override: ?GameMode) !GameState {
+pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8, world_type_override: ?WorldState.WorldType, game_mode_override: ?GameMode, skip_storage: bool) !GameState {
     const tz = tracy.zone(@src(), "GameState.init");
     defer tz.end();
     var cam = Camera.init(width, height);
@@ -198,7 +198,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
     const light_map_pool = LightMapPool.init(allocator);
     const surface_height_map = SurfaceHeightMap.init(allocator);
 
-    const storage_inst = Storage.init(allocator, world_name) catch |err| blk: {
+    const storage_inst = if (skip_storage) null else Storage.init(allocator, world_name) catch |err| blk: {
         std.log.warn("Storage init failed: {}, world will not be saved", .{err});
         break :blk null;
     };
