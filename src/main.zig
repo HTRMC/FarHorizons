@@ -965,17 +965,21 @@ pub fn main() !void {
                     const rtt_tz = tracy.zone(@src(), "returnToTitle");
                     defer rtt_tz.end();
                     if (game_state) |*state| {
-                        // Stop workers before save so they don't compete for disk I/O.
-                        // Workers may be mid-task doing storage.loadChunkInto (100ms+);
-                        // without stopping them first, pool.stop() after save blocks
-                        // for seconds waiting on disk-contended worker threads.
-                        {
-                            const stz = tracy.zone(@src(), "returnToTitle.stopPipeline");
-                            defer stz.end();
-                            renderer.setGameState(null);
+                        // Shutdown order matters to avoid deadlocks:
+                        // 1. Stop the IO pipeline first — its workers hold exclusive
+                        //    rw_locks on region files for batch saves. If the ThreadPool
+                        //    is stopped first, its workers get starved trying to acquire
+                        //    shared rw_locks for chunk reads, causing pool.stop() to hang.
+                        // 2. Stop the integrated server — prevents its storage.tick()
+                        //    from submitting new batch saves and contending on disk I/O.
+                        // 3. Stop the renderer/ThreadPool — workers can now complete
+                        //    their reads uncontested since no exclusive locks are held.
+                        // 4. Save the world.
+                        if (state.streaming.storage) |s| {
+                            const iotz = tracy.zone(@src(), "returnToTitle.stopIoPipeline");
+                            defer iotz.end();
+                            s.io_pipeline.stop();
                         }
-                        // Stop integrated server and network before saving to
-                        // prevent I/O contention on shared region files.
                         if (integrated_server) |srv| {
                             const sstz = tracy.zone(@src(), "returnToTitle.stopServer");
                             defer sstz.end();
@@ -985,6 +989,11 @@ pub fn main() !void {
                         if (client_net) |cn| {
                             cn.deinit();
                             client_net = null;
+                        }
+                        {
+                            const stz = tracy.zone(@src(), "returnToTitle.stopRendererPipeline");
+                            defer stz.end();
+                            renderer.setGameState(null);
                         }
                         save_done.store(false, .release);
                         save_thread = std.Thread.spawn(.{}, saveWorkerFn, .{ state, &save_done }) catch null;
@@ -1038,11 +1047,7 @@ pub fn main() !void {
                 t.join();
                 save_thread = null;
             }
-            {
-                const stz = tracy.zone(@src(), "saveDone.setGameState");
-                defer stz.end();
-                renderer.setGameState(null);
-            }
+            // renderer.setGameState(null) already called in return_to_title handler
             if (game_state) |*state| {
                 state.deinit();
             }

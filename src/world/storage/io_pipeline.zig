@@ -126,6 +126,12 @@ pub const IoPipeline = struct {
                 w.* = null;
             }
         }
+
+        // Workers have exited. Clean up any remaining queue items.
+        for (self.queue[0..self.queue_len]) |req| {
+            if (req.batch) |batch| batch.deinit();
+        }
+        self.queue_len = 0;
     }
 
     pub fn requestLoad(self: *IoPipeline, key: ChunkKey, priority: Priority) AsyncHandle {
@@ -247,6 +253,10 @@ pub const IoPipeline = struct {
             if (self.shutdown.load(.acquire)) return null;
             self.queue_cond.waitUncancelable(self.io, &self.queue_mutex);
         }
+
+        // During shutdown, don't drain remaining items — exit immediately.
+        // The caller (stop) cleans up remaining queue items after join.
+        if (self.shutdown.load(.acquire)) return null;
 
         const request = self.queue[0];
         self.queue_len -= 1;

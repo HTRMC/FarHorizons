@@ -132,12 +132,15 @@ pub fn deinit(self: *Storage) void {
         allocator.destroy(self);
         return;
     };
-    self.saveAllDirty(pool);
+    // Stop IO pipeline first so workers don't contend with saveAllDirty
+    // for region file locks. Workers exit after their current operation;
+    // remaining queue items are cleaned up by stop().
     {
         const tz2 = tracy.zone(@src(), "Storage.ioPipelineStop");
         defer tz2.end();
         self.io_pipeline.stop();
     }
+    self.saveAllDirty(pool);
     self.dirty_set.deinit(pool);
     {
         const tz2 = tracy.zone(@src(), "Storage.regionCacheDeinit");
@@ -220,67 +223,70 @@ pub fn saveAllDirty(self: *Storage, pool: *GameChunkPool) void {
     defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
 
-    self.dirty_mutex.lockUncancelable(io);
-    const dirty_count = self.dirty_set.count();
-    if (dirty_count == 0) {
+    var total_saved: u32 = 0;
+
+    // drainBatch caps at MAX_BATCH_SIZE entries per call, so loop until
+    // the dirty set is fully drained to avoid silently losing chunks.
+    while (true) {
+        self.dirty_mutex.lockUncancelable(io);
+        const dirty_count = self.dirty_set.count();
+        if (dirty_count == 0) {
+            self.dirty_mutex.unlock(io);
+            break;
+        }
+
+        if (total_saved == 0) {
+            log.info("Saving {d} dirty chunks...", .{dirty_count});
+        }
+
+        const drain_result = self.dirty_set.drainBatch(dirty_count);
         self.dirty_mutex.unlock(io);
-        return;
-    }
 
-    log.info("Saving {d} dirty chunks...", .{dirty_count});
+        const result = drain_result orelse break;
 
-    const drain_result = self.dirty_set.drainBatch(dirty_count);
-    self.dirty_mutex.unlock(io);
+        for (0..result.batch_count) |bi| {
+            const batch = &result.batches[bi];
+            const coord = batch.region_coord;
+            const region = self.region_cache.getOrOpen(coord) catch {
+                log.err("Failed to open region for shutdown save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
+                for (batch.chunks[0..batch.count]) |chunk_ptr| {
+                    pool.release(chunk_ptr);
+                }
+                continue;
+            };
+            defer self.region_cache.releaseRegion(region);
 
-    const result = drain_result orelse return;
+            var indices: [dirty_set_mod.MAX_BATCH_SIZE]u9 = undefined;
+            var temp_blocks_batch: [dirty_set_mod.MAX_BATCH_SIZE][WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+            var block_ptrs: [dirty_set_mod.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+            for (0..batch.count) |i| {
+                indices[i] = batch.indices[i];
+                // Lock chunk to snapshot data safely
+                const cio = Io.Threaded.global_single_threaded.io();
+                batch.chunks[i].mutex.lockUncancelable(cio);
+                batch.chunks[i].blocks.getRange(&temp_blocks_batch[i], 0);
+                batch.chunks[i].mutex.unlock(cio);
+                block_ptrs[i] = &temp_blocks_batch[i];
+            }
 
-    for (0..result.batch_count) |bi| {
-        const batch = &result.batches[bi];
-        const coord = batch.region_coord;
-        const region_start = std.Io.Clock.now(.awake, io);
-        const region = self.region_cache.getOrOpen(coord) catch {
-            log.err("Failed to open region for shutdown save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
+            region.writeChunkBatch(
+                indices[0..batch.count],
+                block_ptrs[0..batch.count],
+                self.default_compression,
+            ) catch |err| {
+                log.err("Shutdown batch save failed: {}", .{err});
+            };
+
             for (batch.chunks[0..batch.count]) |chunk_ptr| {
                 pool.release(chunk_ptr);
             }
-            continue;
-        };
-        defer self.region_cache.releaseRegion(region);
-
-        var indices: [dirty_set_mod.MAX_BATCH_SIZE]u9 = undefined;
-        var temp_blocks_batch: [dirty_set_mod.MAX_BATCH_SIZE][WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
-        var block_ptrs: [dirty_set_mod.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
-        for (0..batch.count) |i| {
-            indices[i] = batch.indices[i];
-            // Lock chunk to snapshot data safely
-            const cio = Io.Threaded.global_single_threaded.io();
-            batch.chunks[i].mutex.lockUncancelable(cio);
-            batch.chunks[i].blocks.getRange(&temp_blocks_batch[i], 0);
-            batch.chunks[i].mutex.unlock(cio);
-            block_ptrs[i] = &temp_blocks_batch[i];
-        }
-
-        region.writeChunkBatch(
-            indices[0..batch.count],
-            block_ptrs[0..batch.count],
-            self.default_compression,
-        ) catch |err| {
-            log.err("Shutdown batch save failed: {}", .{err});
-        };
-
-        const region_ns: i64 = @intCast(region_start.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
-        log.info("[saveAllDirty] region({d},{d},{d}) {d} chunks in {d:.1}ms", .{
-            coord.rx, coord.ry, coord.rz,
-            batch.count,
-            @as(f64, @floatFromInt(region_ns)) / 1_000_000.0,
-        });
-
-        for (batch.chunks[0..batch.count]) |chunk_ptr| {
-            pool.release(chunk_ptr);
+            total_saved += batch.count;
         }
     }
 
-    log.info("All dirty chunks saved", .{});
+    if (total_saved > 0) {
+        log.info("All {d} dirty chunks saved", .{total_saved});
+    }
 }
 
 
