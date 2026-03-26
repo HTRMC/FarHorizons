@@ -87,6 +87,8 @@ pub const MenuController = struct {
     tp_crosshair_cb_id: WidgetId = NULL_WIDGET,
     fov_slider_id: WidgetId = NULL_WIDGET,
     fov_label_id: WidgetId = NULL_WIDGET,
+    sensitivity_slider_id: WidgetId = NULL_WIDGET,
+    sensitivity_label_id: WidgetId = NULL_WIDGET,
 
     // Game state reference (set during updateInventory for action handlers)
     game_state: ?*GameState = null,
@@ -360,6 +362,8 @@ pub const MenuController = struct {
         self.tp_crosshair_cb_id = tree.findById("tp_crosshair_cb") orelse NULL_WIDGET;
         self.fov_slider_id = tree.findById("fov_slider") orelse NULL_WIDGET;
         self.fov_label_id = tree.findById("fov_label") orelse NULL_WIDGET;
+        self.sensitivity_slider_id = tree.findById("sensitivity_slider") orelse NULL_WIDGET;
+        self.sensitivity_label_id = tree.findById("sensitivity_label") orelse NULL_WIDGET;
 
         // Sync checkbox state from options
         if (self.options) |opts| {
@@ -375,6 +379,13 @@ pub const MenuController = struct {
                 }
             }
             self.updateFovLabel();
+            // Sync sensitivity slider from options
+            if (self.sensitivity_slider_id != NULL_WIDGET) {
+                if (tree.getData(self.sensitivity_slider_id)) |data| {
+                    data.slider.value = opts.mouse_sensitivity * 100.0;
+                }
+            }
+            self.updateSensitivityLabel();
         }
     }
 
@@ -572,6 +583,7 @@ pub const MenuController = struct {
         reg.register("toggle_tp_crosshair", actionToggleTpCrosshair, ctx);
         reg.register("toggle_tp_crosshair_cb", actionToggleTpCrosshairCb, ctx);
         reg.register("change_fov", actionChangeFov, ctx);
+        reg.register("change_sensitivity", actionChangeSensitivity, ctx);
         reg.register("inv_slot_click", actionInvSlotClick, ctx);
         reg.register("inv_drop_outside", actionInvDropOutside, ctx);
         reg.register("craft_recipe_select", actionCraftRecipeSelect, ctx);
@@ -1818,6 +1830,33 @@ pub const MenuController = struct {
                 const val: i32 = @intFromFloat(opts.fov);
                 var buf: [8]u8 = undefined;
                 const slice = std.fmt.bufPrint(&buf, "{d}", .{val}) catch return;
+                data.label.setText(slice);
+            }
+        }
+    }
+
+    fn actionChangeSensitivity(ctx: ?*anyopaque) void {
+        const self = getSelf(ctx);
+        const opts = self.options orelse return;
+        const tree = self.menuTree() orelse return;
+        if (self.sensitivity_slider_id != NULL_WIDGET) {
+            if (tree.getData(self.sensitivity_slider_id)) |data| {
+                opts.mouse_sensitivity = @round(data.slider.value) / 100.0;
+                data.slider.value = @round(data.slider.value);
+            }
+        }
+        self.updateSensitivityLabel();
+        opts.save(self.allocator);
+    }
+
+    fn updateSensitivityLabel(self: *MenuController) void {
+        const tree = self.menuTree() orelse return;
+        const opts = self.options orelse return;
+        if (self.sensitivity_label_id != NULL_WIDGET) {
+            if (tree.getData(self.sensitivity_label_id)) |data| {
+                const val: i32 = @intFromFloat(opts.mouse_sensitivity * 100.0);
+                var buf: [8]u8 = undefined;
+                const slice = std.fmt.bufPrint(&buf, "{d}%", .{val}) catch return;
                 data.label.setText(slice);
             }
         }

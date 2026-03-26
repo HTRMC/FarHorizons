@@ -353,7 +353,6 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                 return;
             }
 
-
             // Track drop key held state for tick-based dropping
             if (opts.keyMatches(.drop_item, key)) {
                 input_state.drop_key_held = (action == glfw.GLFW_PRESS or action == glfw.GLFW_REPEAT);
@@ -369,8 +368,6 @@ fn keyCallback(window: ?*glfw.Window, key: c_int, scancode: c_int, action: c_int
                     state.third_person = !state.third_person;
                 }
             }
-
-
 
             // F3 held state tracking
             if (opts.keyMatches(.debug_f3, key)) {
@@ -835,7 +832,6 @@ pub fn main() !void {
 
     std.log.info("Entering main loop...", .{});
 
-    const mouse_sensitivity: f32 = options.mouse_sensitivity;
     var last_time = glfw.getTime();
     var tick_accumulator: f32 = 0.0;
 
@@ -978,6 +974,18 @@ pub fn main() !void {
                             defer stz.end();
                             renderer.setGameState(null);
                         }
+                        // Stop integrated server and network before saving to
+                        // prevent I/O contention on shared region files.
+                        if (integrated_server) |srv| {
+                            const sstz = tracy.zone(@src(), "returnToTitle.stopServer");
+                            defer sstz.end();
+                            srv.deinit();
+                            integrated_server = null;
+                        }
+                        if (client_net) |cn| {
+                            cn.deinit();
+                            client_net = null;
+                        }
                         save_done.store(false, .release);
                         save_thread = std.Thread.spawn(.{}, saveWorkerFn, .{ state, &save_done }) catch null;
                         if (save_thread != null) {
@@ -1039,7 +1047,8 @@ pub fn main() !void {
                 state.deinit();
             }
             game_state = null;
-            // Stop network and integrated server
+            // Network and integrated server already stopped in return_to_title handler.
+            // Guard in case of edge cases where they weren't cleaned up yet.
             if (client_net) |cn| {
                 cn.deinit();
                 client_net = null;
@@ -1095,7 +1104,10 @@ pub fn main() !void {
                         input_state.last_cursor_x = cursor_x;
                         input_state.last_cursor_y = cursor_y;
 
-                        state.camera.look(-dx * mouse_sensitivity, -dy * mouse_sensitivity);
+                        // (s*0.6+0.2)³ * 8 * 0.15 deg → radians
+                        const sb: f32 = options.mouse_sensitivity * 0.6 + 0.2;
+                        const ms: f32 = sb * sb * sb * 8.0 * 0.15 * (std.math.pi / 180.0);
+                        state.camera.look(-dx * ms, -dy * ms);
                     }
                 }
 
@@ -1199,7 +1211,7 @@ pub fn main() !void {
                         if (input_state.drop_cooldown > 0) {
                             input_state.drop_cooldown -= 1;
                         } else if (input_state.drop_key_held and !state.debug_camera_active) {
-                            InventoryOps.dropFromSlot(state,state.inv.selected_slot, input_state.drop_key_ctrl);
+                            InventoryOps.dropFromSlot(state, state.inv.selected_slot, input_state.drop_key_ctrl);
                             input_state.drop_cooldown = 1;
                         }
                         state.fixedUpdate(input_state.move_speed);
@@ -1239,7 +1251,7 @@ pub fn main() !void {
                         input_state.drop_cooldown -= 1;
                     } else if (input_state.drop_key_held) {
                         if (menu_ctrl.hoveredSlot()) |slot| {
-                            InventoryOps.dropFromSlot(state,slot, input_state.drop_key_ctrl);
+                            InventoryOps.dropFromSlot(state, slot, input_state.drop_key_ctrl);
                             input_state.drop_cooldown = 1;
                         }
                     }
@@ -1347,7 +1359,7 @@ pub fn main() !void {
             }
         }
 
-        // Tick animated textures (Minecraft-style 20Hz frame advancement)
+        // Tick animated textures ( 20Hz frame advancement)
         {
             const vk_impl: *VulkanRenderer = @ptrCast(@alignCast(renderer.impl));
             vk_impl.render_state.world_renderer.texture_manager.tickAnimations(delta_time);

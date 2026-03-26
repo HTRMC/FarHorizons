@@ -10,12 +10,20 @@
       </scroll_view>
       <!-- Options -->
       <panel direction="row" gap="8" cross_align="center" padding="4,8,4,8">
-        <label text="FOV" color="#BBBBCCFF" width="40"/>
-        <slider id="fov_slider" width="280" height="16"
+        <label text="FOV" color="#BBBBCCFF" width="80"/>
+        <slider id="fov_slider" width="240" height="16"
                 min_value="30" max_value="110" value="70"
                 track_color="#333355FF" fill_color="#335588FF" thumb_color="#FFCC00FF"
                 on_change="change_fov"/>
         <label id="fov_label" text="70" color="#BBBBCCFF" width="30"/>
+      </panel>
+      <panel direction="row" gap="8" cross_align="center" padding="4,8,4,8">
+        <label text="Sensitivity" color="#BBBBCCFF" width="80"/>
+        <slider id="sensitivity_slider" width="240" height="16"
+                min_value="0" max_value="100" value="50"
+                track_color="#333355FF" fill_color="#335588FF" thumb_color="#FFCC00FF"
+                on_change="change_sensitivity"/>
+        <label id="sensitivity_label" text="50%" color="#BBBBCCFF" width="30"/>
       </panel>
       <panel direction="row" gap="8" cross_align="center" padding="4,8,4,8"
              on_click="toggle_tp_crosshair" hover_color="#FFFFFF11">

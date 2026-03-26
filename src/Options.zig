@@ -12,7 +12,7 @@ pub const Options = @This();
 // -- Video --
 fov: f32 = 70.0,
 render_distance: i32 = 16,
-mouse_sensitivity: f32 = 0.003,
+mouse_sensitivity: f32 = 0.5,
 invert_y_mouse: bool = false,
 third_person_crosshair: bool = false,
 
