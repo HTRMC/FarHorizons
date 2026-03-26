@@ -119,12 +119,17 @@ tick_camera_pos: zlm.Vec3,
 // ── Remote players (multiplayer) ──
 remote_players: RemotePlayerList = .empty,
 
+pub const INTERPOLATION_STEPS: u8 = 3;
+
 pub const RemotePlayer = struct {
     id: u32,
-    pos: [3]f64,
-    prev_pos: [3]f64,
-    render_pos: [3]f32 = .{ 0, 0, 0 },
-    rotation: [3]f32,
+    target_pos: [3]f64,       // Position received from server (interpolation target)
+    current_pos: [3]f64,      // Current interpolated position (updated each tick)
+    render_pos: [3]f32 = .{ 0, 0, 0 }, // Final render position (sub-tick interpolated)
+    prev_render_pos: [3]f32 = .{ 0, 0, 0 }, // Previous tick render position for sub-tick lerp
+    target_rotation: [3]f32,  // Rotation target
+    current_rotation: [3]f32 = .{ 0, 0, 0 },
+    steps_remaining: u8 = 0,  // Steps left to reach target
     name: []const u8 = "Player",
 };
 
@@ -343,22 +348,92 @@ pub fn save(self: *GameState) void {
 }
 
 /// Update a remote player's position (called from network protocol handler).
+/// Sets interpolation target — actual position moves toward target over INTERPOLATION_STEPS ticks.
 pub fn updateRemotePlayer(self: *GameState, id: u32, pos: [3]f64, rotation: [3]f32) void {
     for (self.remote_players.items) |*rp| {
         if (rp.id == id) {
-            rp.prev_pos = rp.pos;
-            rp.pos = pos;
-            rp.rotation = rotation;
+            rp.target_pos = pos;
+            rp.target_rotation = rotation;
+            rp.steps_remaining = INTERPOLATION_STEPS;
             return;
         }
     }
-    // New player
+    // New player — snap to position immediately
     self.remote_players.append(self.allocator, .{
         .id = id,
-        .pos = pos,
-        .prev_pos = pos,
-        .rotation = rotation,
+        .target_pos = pos,
+        .current_pos = pos,
+        .target_rotation = rotation,
+        .current_rotation = rotation,
     }) catch {};
+}
+
+/// Advance remote player interpolation by one tick.
+pub fn tickRemotePlayers(self: *GameState) void {
+    for (self.remote_players.items) |*rp| {
+        rp.prev_render_pos = .{
+            @floatCast(rp.current_pos[0]),
+            @floatCast(rp.current_pos[1]),
+            @floatCast(rp.current_pos[2]),
+        };
+        if (rp.steps_remaining > 0) {
+            const t: f64 = 1.0 / @as(f64, @floatFromInt(rp.steps_remaining));
+            rp.current_pos[0] += (rp.target_pos[0] - rp.current_pos[0]) * t;
+            rp.current_pos[1] += (rp.target_pos[1] - rp.current_pos[1]) * t;
+            rp.current_pos[2] += (rp.target_pos[2] - rp.current_pos[2]) * t;
+            rp.current_rotation[0] += (rp.target_rotation[0] - rp.current_rotation[0]) * @as(f32, @floatCast(t));
+            rp.current_rotation[1] += (rp.target_rotation[1] - rp.current_rotation[1]) * @as(f32, @floatCast(t));
+            rp.current_rotation[2] += (rp.target_rotation[2] - rp.current_rotation[2]) * @as(f32, @floatCast(t));
+            rp.steps_remaining -= 1;
+        }
+    }
+}
+
+/// Apply a server position correction to the local player. Snaps immediately (no interpolation).
+pub fn applyPositionCorrection(
+    self: *GameState,
+    pos: [3]f64,
+    vel: [3]f64,
+    rotation: [2]f32,
+    relatives: @import("../network/protocols/position_correction.zig").Relative,
+) void {
+    // Position: apply as absolute or relative
+    const new_x: f64 = if (relatives.x) @as(f64, self.camera.position.x) + pos[0] else pos[0];
+    const new_y: f64 = if (relatives.y) @as(f64, self.camera.position.y) + pos[1] else pos[1];
+    const new_z: f64 = if (relatives.z) @as(f64, self.camera.position.z) + pos[2] else pos[2];
+
+    // Rotation: apply as absolute or relative
+    const new_pitch: f32 = if (relatives.pitch) self.camera.pitch + rotation[0] else rotation[0];
+    const new_yaw: f32 = if (relatives.yaw) self.camera.yaw + rotation[1] else rotation[1];
+
+    // Velocity: apply as absolute or relative
+    const new_vel: [3]f32 = .{
+        if (relatives.vel_x) self.entities.vel[0][0] + @as(f32, @floatCast(vel[0])) else @floatCast(vel[0]),
+        if (relatives.vel_y) self.entities.vel[0][1] + @as(f32, @floatCast(vel[1])) else @floatCast(vel[1]),
+        if (relatives.vel_z) self.entities.vel[0][2] + @as(f32, @floatCast(vel[2])) else @floatCast(vel[2]),
+    };
+
+    // Snap camera position
+    self.camera.position.x = @floatCast(new_x);
+    self.camera.position.y = @floatCast(new_y);
+    self.camera.position.z = @floatCast(new_z);
+    self.camera.pitch = new_pitch;
+    self.camera.yaw = new_yaw;
+
+    // Snap entity position (entity pos is camera pos minus eye offset for walking mode)
+    self.entities.pos[0] = .{
+        @floatCast(new_x),
+        @floatCast(new_y - EYE_OFFSET),
+        @floatCast(new_z),
+    };
+    self.entities.vel[0] = new_vel;
+
+    // Sync interpolation state to prevent rubber-banding
+    self.prev_camera_pos = self.camera.position;
+    self.tick_camera_pos = self.camera.position;
+    self.entities.prev_pos[0] = self.entities.pos[0];
+
+    std.log.info("Position corrected to ({d:.2}, {d:.2}, {d:.2})", .{ new_x, new_y, new_z });
 }
 
 /// Remove a remote player.
@@ -430,6 +505,7 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     PlayerMovement.updatePlayerMovement(self, P, move_speed);
     PlayerActions.updateCombatSystems(self);
     MobSim.updateEntities(self);
+    self.tickRemotePlayers();
 
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
     self.entity_hit = Raycast.raycastEntities(&self.entities, self.camera.position, self.camera.getForward());
@@ -449,13 +525,12 @@ pub fn interpolateForRender(self: *GameState, alpha: f32) void {
         self.entities.render_pos[i] = lerpArray3(self.entities.prev_pos[i], self.entities.pos[i], alpha);
         self.entities.render_walk_anim[i] = self.entities.prev_walk_anim[i] + (self.entities.walk_anim[i] - self.entities.prev_walk_anim[i]) * alpha;
     }
-    // Interpolate remote players
-    const alpha64: f64 = @floatCast(alpha);
+    // Interpolate remote players (sub-tick smoothing between prev and current)
     for (self.remote_players.items) |*rp| {
         rp.render_pos = .{
-            @floatCast(rp.prev_pos[0] + (rp.pos[0] - rp.prev_pos[0]) * alpha64),
-            @floatCast(rp.prev_pos[1] + (rp.pos[1] - rp.prev_pos[1]) * alpha64),
-            @floatCast(rp.prev_pos[2] + (rp.pos[2] - rp.prev_pos[2]) * alpha64),
+            rp.prev_render_pos[0] + (@as(f32, @floatCast(rp.current_pos[0])) - rp.prev_render_pos[0]) * alpha,
+            rp.prev_render_pos[1] + (@as(f32, @floatCast(rp.current_pos[1])) - rp.prev_render_pos[1]) * alpha,
+            rp.prev_render_pos[2] + (@as(f32, @floatCast(rp.current_pos[2])) - rp.prev_render_pos[2]) * alpha,
         };
     }
     switch (self.mode) {

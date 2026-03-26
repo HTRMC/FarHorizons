@@ -18,6 +18,12 @@ fn nanoTimestamp() i128 {
 
 pub const Server = @This();
 
+var global_instance: ?*Server = null;
+
+pub fn getGlobalInstance() ?*Server {
+    return global_instance;
+}
+
 pub const TICK_RATE: u32 = 20;
 pub const TICK_INTERVAL_NS: u64 = 1_000_000_000 / TICK_RATE;
 pub const DEFAULT_PORT: u16 = 7777;
@@ -52,6 +58,7 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8, port: u16) !*S
 
     // Set global server pointer for protocol handlers
     @import("../network/protocols/block_update.zig").server_instance = self;
+    global_instance = self;
 
     std.log.info("Server initialized on port {}", .{conn_manager.local_port});
     return self;
@@ -59,6 +66,7 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8, port: u16) !*S
 
 pub fn deinit(self: *Server) void {
     @import("../network/protocols/block_update.zig").server_instance = null;
+    global_instance = null;
     self.stop();
 
     // Disconnect all users

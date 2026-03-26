@@ -132,6 +132,9 @@ pub const CHUNK_REQUEST: u8 = 2;
 pub const CHUNK_TRANSMISSION: u8 = 3;
 pub const PLAYER_POSITION: u8 = 4;
 pub const BLOCK_UPDATE: u8 = 5;
+pub const POSITION_CORRECTION: u8 = 6;
+pub const ACCEPT_TELEPORT: u8 = 7;
+pub const PLAYER_INPUT: u8 = 8;
 
 // ─── Tests ───
 

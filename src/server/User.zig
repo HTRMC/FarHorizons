@@ -1,9 +1,15 @@
 const std = @import("std");
 const Atomic = std.atomic.Value;
 const Connection = @import("../network/Connection.zig").Connection;
+const Socket = @import("../network/Socket.zig");
 const WorldState = @import("../world/WorldState.zig");
+const position_correction = @import("../network/protocols/position_correction.zig");
+const player_input = @import("../network/protocols/player_input.zig");
 
 pub const User = @This();
+
+/// Max allowed speed in blocks/tick for validation (generous to avoid false positives).
+const MAX_SPEED_PER_TICK: f64 = 20.0;
 
 conn: *Connection,
 allocator: std.mem.Allocator,
@@ -16,6 +22,14 @@ id: u32 = 0,
 pos: [3]f64 = .{ 0, 64, 0 },
 vel: [3]f64 = .{ 0, 0, 0 },
 rotation: [3]f32 = .{ 0, 0, 0 }, // pitch, yaw, roll
+on_ground: bool = false,
+
+// Client input state (received from client)
+input: player_input.InputState = .{},
+
+// Teleport/correction tracking
+next_teleport_id: u32 = 0,
+pending_teleport_id: ?u32 = null,
 
 // Chunk management
 render_distance: u16 = 8,
@@ -50,6 +64,72 @@ pub fn increaseRefCount(self: *User) void {
 pub fn decreaseRefCount(self: *User) void {
     if (self.ref_count.fetchSub(1, .monotonic) == 1) {
         self.deinit();
+    }
+}
+
+/// Handle a position update from the client. Validates and applies or corrects.
+pub fn handlePositionUpdate(self: *User, pos: ?[3]f64, rotation: ?[2]f32, on_ground: bool) void {
+    // Ignore position updates while a teleport is pending acknowledgment
+    if (self.pending_teleport_id != null) return;
+
+    self.on_ground = on_ground;
+
+    if (rotation) |rot| {
+        self.rotation[0] = rot[0]; // pitch
+        self.rotation[1] = rot[1]; // yaw
+    }
+
+    if (pos) |new_pos| {
+        const dx = new_pos[0] - self.pos[0];
+        const dy = new_pos[1] - self.pos[1];
+        const dz = new_pos[2] - self.pos[2];
+        const dist_sq = dx * dx + dy * dy + dz * dz;
+
+        // Speed validation: reject if moving too fast
+        if (dist_sq > MAX_SPEED_PER_TICK * MAX_SPEED_PER_TICK) {
+            std.log.warn("Player {} moved too fast ({d:.1} blocks), correcting", .{
+                self.id,
+                @sqrt(dist_sq),
+            });
+            self.teleport(self.pos, .{ 0, 0, 0 }, .{ self.rotation[0], self.rotation[1] }, .{});
+            return;
+        }
+
+        self.pos = new_pos;
+    }
+}
+
+/// Send a position correction to the client and track the pending teleport.
+pub fn teleport(
+    self: *User,
+    pos: [3]f64,
+    vel: [3]f64,
+    rotation: [2]f32,
+    relatives: position_correction.Relative,
+) void {
+    const teleport_id = self.next_teleport_id;
+    self.next_teleport_id +%= 1;
+    self.pending_teleport_id = teleport_id;
+
+    // Find socket from ConnectionManager — the server stores it
+    const server = @import("Server.zig").getGlobalInstance() orelse return;
+    position_correction.send(
+        self.conn,
+        server.conn_manager.socket,
+        teleport_id,
+        pos,
+        vel,
+        rotation,
+        relatives,
+    );
+}
+
+/// Called when the client acknowledges a teleport.
+pub fn acknowledgeTeleport(self: *User, teleport_id: u32) void {
+    if (self.pending_teleport_id) |pending| {
+        if (pending == teleport_id) {
+            self.pending_teleport_id = null;
+        }
     }
 }
 
