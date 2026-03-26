@@ -278,8 +278,9 @@ pub const HandRenderer = struct {
         const aspect = screen_width / @max(screen_height, 1.0);
         const proj = zlm.Mat4.perspective(std.math.degreesToRadians(70.0), aspect, 0.05, 100.0);
 
-        const view_bob_x = mat4RotX((self.bob_pitch - self.cam_pitch) * 0.1);
-        const view_bob_y = mat4RotY((self.bob_yaw - self.cam_yaw) * 0.1);
+        const d2r: f32 = std.math.pi / 180.0;
+        const view_bob_x = mat4RotX((self.bob_pitch - self.cam_pitch) * d2r * 0.1);
+        const view_bob_y = mat4RotY((self.bob_yaw - self.cam_yaw) * d2r * 0.1);
         const view_bob_mat = zlm.Mat4.mul(view_bob_x, view_bob_y);
 
         const deg = std.math.degreesToRadians;

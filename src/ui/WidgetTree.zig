@@ -11,6 +11,10 @@ pub const WidgetTree = struct {
     data: [MAX_WIDGETS]WidgetData = [_]WidgetData{.{ .panel = .{} }} ** MAX_WIDGETS,
     count: WidgetId = 0,
     root: WidgetId = NULL_WIDGET,
+    /// True when focus was set by keyboard/gamepad navigation.
+    /// False when focus was set by mouse click. Controls whether
+    /// the focus outline is drawn.
+    focus_visible: bool = false,
 
     pub fn addWidget(self: *WidgetTree, kind: WidgetKind, parent: WidgetId) ?WidgetId {
         if (self.count >= MAX_WIDGETS) return null;

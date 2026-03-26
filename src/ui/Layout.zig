@@ -131,8 +131,8 @@ fn layoutWidget(tree: *WidgetTree, id: WidgetId, parent_w: f32, parent_h: f32, t
     const w = &tree.widgets[id];
     if (!w.active or !w.visible) return;
 
-    w.computed_rect.w = resolveSizeSpec(w.width, parent_w, w.intrinsic_width);
-    w.computed_rect.h = resolveSizeSpec(w.height, parent_h, w.intrinsic_height);
+    w.computed_rect.w = @max(resolveSizeSpec(w.width, parent_w, w.intrinsic_width), w.min_width);
+    w.computed_rect.h = @max(resolveSizeSpec(w.height, parent_h, w.intrinsic_height), w.min_height);
 
     if (w.kind == .label) {
         const data = &tree.data[id];
@@ -241,9 +241,9 @@ fn layoutFlexChildrenOffset(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy:
             visible_count += 1;
 
             const child_main = if (is_column)
-                resolveColumnChildHeight(tree, cid, child, parent.cross_align, cw, ch, text_renderer) + child.margin.vertical()
+                @max(resolveColumnChildHeight(tree, cid, child, parent.cross_align, cw, ch, text_renderer), child.min_height) + child.margin.vertical()
             else
-                resolveSizeSpec(child.width, cw, child.intrinsic_width) + child.margin.horizontal();
+                @max(resolveSizeSpec(child.width, cw, child.intrinsic_width), child.min_width) + child.margin.horizontal();
 
             if (child.flex_grow > 0) {
                 total_grow += child.flex_grow;
@@ -284,15 +284,15 @@ fn layoutFlexChildrenOffset(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy:
                 child_main = remaining * (child.flex_grow / total_grow);
             } else {
                 child_main = if (is_column)
-                    resolveColumnChildHeight(tree, cid, child, parent.cross_align, cw, ch, text_renderer)
+                    @max(resolveColumnChildHeight(tree, cid, child, parent.cross_align, cw, ch, text_renderer), child.min_height)
                 else
-                    resolveSizeSpec(child.width, cw, child.intrinsic_width);
+                    @max(resolveSizeSpec(child.width, cw, child.intrinsic_width), child.min_width);
             }
 
             const child_cross_natural = if (is_column)
-                resolveSizeSpec(child.width, cw, child.intrinsic_width)
+                @max(resolveSizeSpec(child.width, cw, child.intrinsic_width), child.min_width)
             else
-                resolveSizeSpec(child.height, ch, child.intrinsic_height);
+                @max(resolveSizeSpec(child.height, ch, child.intrinsic_height), child.min_height);
 
             const child_cross = if (parent.cross_align == .stretch)
                 cross_size - (if (is_column) child.margin.horizontal() else child.margin.vertical())
@@ -334,8 +334,8 @@ fn layoutAnchorChildren(tree: *WidgetTree, parent_id: WidgetId, cx: f32, cy: f32
         const child = &tree.widgets[cid];
         if (!child.active or !child.visible) continue;
 
-        const child_w = resolveSizeSpec(child.width, cw, child.intrinsic_width);
-        const child_h = resolveSizeSpec(child.height, ch, child.intrinsic_height);
+        const child_w = @max(resolveSizeSpec(child.width, cw, child.intrinsic_width), child.min_width);
+        const child_h = @max(resolveSizeSpec(child.height, ch, child.intrinsic_height), child.min_height);
 
         const base_x: f32 = switch (child.anchor_x) {
             .start => cx,

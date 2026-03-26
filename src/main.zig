@@ -520,7 +520,7 @@ fn captureMouse(input_state: *InputState) void {
     input_state.mouse_captured = true;
     input_state.first_mouse = true;
     glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
-    if (glfw.rawMouseMotionSupported()) {
+    if (input_state.options.raw_mouse_input and glfw.rawMouseMotionSupported()) {
         glfw.setInputMode(input_state.window.handle, glfw.GLFW_RAW_MOUSE_MOTION, glfw.GLFW_TRUE);
     }
 }
@@ -1112,10 +1112,9 @@ pub fn main() !void {
                         input_state.last_cursor_x = cursor_x;
                         input_state.last_cursor_y = cursor_y;
 
-                        // (s*0.6+0.2)³ * 8 * 0.15 deg → radians
-                        const sb: f32 = options.mouse_sensitivity * 0.6 + 0.2;
-                        const ms: f32 = sb * sb * sb * 8.0 * 0.15 * (std.math.pi / 180.0);
-                        state.camera.look(-dx * ms, -dy * ms);
+                        const ss: f32 = options.mouse_sensitivity * 0.6 + 0.2;
+                        const sens: f32 = ss * ss * ss * 8.0;
+                        state.camera.look(-dx * sens * 0.15, -dy * sens * 0.15);
                     }
                 }
 

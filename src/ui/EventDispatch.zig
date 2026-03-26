@@ -78,6 +78,7 @@ pub fn dispatchMousePress(tree: *WidgetTree, target: WidgetId, registry: *const 
 
     if (w.focusable) {
         setFocusTo(tree, effective);
+        tree.focus_visible = false;
     }
 
     return switch (w.kind) {

@@ -370,13 +370,12 @@ fn resolveOrientation(block_state: BlockState.StateId, yaw: f32, hit: Raycast.Bl
     const block = BlockState.getBlock(block_state);
     switch (block) {
         .oak_stairs => {
-            const pi = std.math.pi;
-            const norm_yaw = @mod(yaw, 2.0 * pi);
-            const facing: BlockState.Facing = if (norm_yaw >= 0.25 * pi and norm_yaw < 0.75 * pi)
+            const norm_yaw = @mod(yaw, 360.0);
+            const facing: BlockState.Facing = if (norm_yaw >= 45.0 and norm_yaw < 135.0)
                 .east
-            else if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi)
+            else if (norm_yaw >= 135.0 and norm_yaw < 225.0)
                 .north
-            else if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi)
+            else if (norm_yaw >= 225.0 and norm_yaw < 315.0)
                 .west
             else
                 .south;

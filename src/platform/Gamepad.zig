@@ -17,8 +17,8 @@ const forced_gamepad_type: ?ControllerType = blk: {
 pub const STICK_DEADZONE: f32 = 0.15;
 pub const TRIGGER_DEADZONE: f32 = 0.1;
 
-/// Gamepad look sensitivity (radians per second at full deflection).
-pub const LOOK_SPEED: f32 = 3.0;
+/// Gamepad look sensitivity (degrees per second at full deflection).
+pub const LOOK_SPEED: f32 = 172.0;
 
 pub const ControllerType = enum {
     xbox,

@@ -183,8 +183,9 @@ pub const EntityRenderer = struct {
 
         if (!self.world_visible or self.vertex_count == 0) return;
 
-        const sin_y = @sin(self.world_yaw + std.math.pi);
-        const cos_y = @cos(self.world_yaw + std.math.pi);
+        const yaw_rad = self.world_yaw * (std.math.pi / 180.0) + std.math.pi;
+        const sin_y = @sin(yaw_rad);
+        const cos_y = @cos(yaw_rad);
         const model = zlm.Mat4{
             .m = .{ cos_y, 0, -sin_y, 0, 0, 1, 0, 0, sin_y, 0, cos_y, 0, self.world_pos[0], self.world_pos[1], self.world_pos[2], 1 },
         };

@@ -37,6 +37,7 @@ pub fn navigateSpatial(tree: *WidgetTree, dir: Direction) void {
             .down, .right => 0,
         };
         EventDispatch.setFocusTo(tree, focusable[pick]);
+        tree.focus_visible = true;
         return;
     }
 
@@ -108,6 +109,7 @@ pub fn navigateSpatial(tree: *WidgetTree, dir: Direction) void {
 
     if (best != NULL_WIDGET) {
         EventDispatch.setFocusTo(tree, best);
+        tree.focus_visible = true;
     } else if (count > 1) {
         // Wrap: find the widget furthest away in the navigation direction.
         // e.g. pressing down past the bottom wraps to the topmost widget;
@@ -141,6 +143,7 @@ pub fn navigateSpatial(tree: *WidgetTree, dir: Direction) void {
 
         if (wrap_best != NULL_WIDGET) {
             EventDispatch.setFocusTo(tree, wrap_best);
+            tree.focus_visible = true;
         }
     }
 }
@@ -180,6 +183,7 @@ pub fn cycleFocus(tree: *WidgetTree, reverse: bool) void {
     } else 0;
 
     EventDispatch.setFocusTo(tree, focusable[next_idx]);
+    tree.focus_visible = true;
 }
 
 /// Check that all ancestors of a widget are visible.

@@ -14,6 +14,7 @@ fov: f32 = 70.0,
 render_distance: i32 = 16,
 mouse_sensitivity: f32 = 0.5,
 invert_y_mouse: bool = false,
+raw_mouse_input: bool = true,
 third_person_crosshair: bool = false,
 
 // -- Keybinds (resolved GLFW codes) --
@@ -328,6 +329,9 @@ pub fn load(allocator: std.mem.Allocator) Options {
     if (root.get("invertYMouse")) |v| {
         if (v == .bool) opts.invert_y_mouse = v.bool;
     }
+    if (root.get("rawMouseInput")) |v| {
+        if (v == .bool) opts.raw_mouse_input = v.bool;
+    }
     if (root.get("thirdPersonCrosshair")) |v| {
         if (v == .bool) opts.third_person_crosshair = v.bool;
     }
@@ -375,6 +379,7 @@ pub fn save(self: *const Options, allocator: std.mem.Allocator) void {
     pos += fmtLine(&buf, pos, "  \"renderDistance\": {d},\n", .{self.render_distance});
     pos += fmtLine(&buf, pos, "  \"mouseSensitivity\": {d:.6},\n", .{self.mouse_sensitivity});
     pos += fmtLine(&buf, pos, "  \"invertYMouse\": {s},\n", .{if (self.invert_y_mouse) "true" else "false"});
+    pos += fmtLine(&buf, pos, "  \"rawMouseInput\": {s},\n", .{if (self.raw_mouse_input) "true" else "false"});
     pos += fmtLine(&buf, pos, "  \"thirdPersonCrosshair\": {s},\n", .{if (self.third_person_crosshair) "true" else "false"});
 
     // Keybinds

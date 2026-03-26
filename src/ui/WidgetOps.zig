@@ -79,7 +79,7 @@ pub fn drawWidget(
                 ui.drawRect(r.x, r.y, r.w, r.h, btn.hover_color.toArray());
             }
 
-            if (w.focused) {
+            if (w.focused and tree.focus_visible) {
                 ui.drawRectOutline(r.x, r.y, r.w, r.h, 1.0, Color.fromHex(0xFFCC00FF).toArray());
             }
 
@@ -174,7 +174,7 @@ pub fn drawWidget(
                 const inset: f32 = 3;
                 ui.drawRect(r.x + inset, r.y + inset, r.w - inset * 2, r.h - inset * 2, cb.check_color.toArray());
             }
-            if (w.focused) {
+            if (w.focused and tree.focus_visible) {
                 ui.drawRectOutline(r.x - 1, r.y - 1, r.w + 2, r.h + 2, 1.0, Color.fromHex(0xFFCC00FF).toArray());
             }
         },
@@ -189,7 +189,7 @@ pub fn drawWidget(
             const thumb_w: f32 = 8;
             const thumb_x = r.x + (r.w - thumb_w) * fill_frac;
             ui.drawRect(thumb_x, r.y, thumb_w, r.h, sl.thumb_color.toArray());
-            if (w.focused) {
+            if (w.focused and tree.focus_visible) {
                 ui.drawRectOutline(r.x - 1, r.y - 1, r.w + 2, r.h + 2, 1.0, Color.fromHex(0xFFCC00FF).toArray());
             }
         },
@@ -230,7 +230,7 @@ pub fn drawWidget(
                 ui.drawRect(r.x, r.y, r.w, r.h, Color.fromHex(0x444444FF).toArray());
             }
 
-            if (w.focused) {
+            if (w.focused and tree.focus_visible) {
                 ui.drawRectOutline(r.x, r.y, r.w, r.h, 1.0, Color.fromHex(0xFFCC00FF).toArray());
             }
 

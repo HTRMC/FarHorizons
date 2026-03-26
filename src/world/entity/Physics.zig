@@ -40,8 +40,9 @@ pub fn updateEntity(
     const forward_input = input_move[0];
     const right_input = input_move[2];
 
-    const sin_yaw = @sin(camera_yaw);
-    const cos_yaw = @cos(camera_yaw);
+    const yaw_rad = camera_yaw * (std.math.pi / 180.0);
+    const sin_yaw = @sin(yaw_rad);
+    const cos_yaw = @cos(yaw_rad);
 
     var wish_x = -forward_input * sin_yaw + right_input * cos_yaw;
     var wish_z = -forward_input * cos_yaw - right_input * sin_yaw;

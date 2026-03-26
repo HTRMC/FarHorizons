@@ -65,9 +65,8 @@ fn drawF3(text: *TextRenderer, game_state: *GameState, start_y: f32) f32 {
     text.drawText(x, y, vel_text, yellow);
     y += LINE_HEIGHT;
 
-    const deg = 180.0 / std.math.pi;
-    const yaw_deg = game_state.camera.yaw * deg;
-    const pitch_deg = game_state.camera.pitch * deg;
+    const yaw_deg = game_state.camera.yaw;
+    const pitch_deg = game_state.camera.pitch;
     const facing = yawFacing(game_state.camera.yaw);
     const ang_text = std.fmt.bufPrint(&buf, "Facing: {s}  Yaw: {d:.2}  Pitch: {d:.2}", .{ facing, yaw_deg, pitch_deg }) catch "Facing: ?";
     text.drawText(x, y, ang_text, yellow);
@@ -240,15 +239,14 @@ fn drawF5(text: *TextRenderer, game_state: *GameState) void {
 }
 
 fn yawFacing(yaw: f32) []const u8 {
-    // Normalize to [0, 2π)
-    const tau = std.math.pi * 2.0;
-    const normalized = @mod(yaw, tau);
+    // Normalize to [0, 360)
+    const normalized = @mod(yaw, 360.0);
     // yaw=0 → -Z (north), increases counterclockwise: N → W → S → E
-    if (normalized < std.math.pi * 0.25 or normalized >= std.math.pi * 1.75)
+    if (normalized < 45.0 or normalized >= 315.0)
         return "North (-Z)"
-    else if (normalized < std.math.pi * 0.75)
+    else if (normalized < 135.0)
         return "West (-X)"
-    else if (normalized < std.math.pi * 1.25)
+    else if (normalized < 225.0)
         return "South (+Z)"
     else
         return "East (+X)";
