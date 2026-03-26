@@ -291,8 +291,8 @@ pub const VulkanRenderer = struct {
         pool.start();
         self.transfer_pipeline.start();
 
-        // 7. Request initial load batch if async loading
-        if (!game_state.streaming.initial_load_ready) {
+        // 7. Request initial load batch if async loading (singleplayer only)
+        if (!game_state.streaming.initial_load_ready and !game_state.multiplayer_client) {
             const WorldState = @import("../../world/WorldState.zig");
             const rd: i32 = 3;
             const rd_sq = rd * rd;

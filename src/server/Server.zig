@@ -186,6 +186,7 @@ const chunk_transmission = @import("../network/protocols/chunk_transmission.zig"
 const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
 
 /// Send unsent chunks within render distance to the user (max per tick to avoid flooding).
+/// Loads/generates missing chunks synchronously on the server if needed.
 fn updateUser(self: *Server, user: *User) void {
     if (!user.connected.load(.acquire)) return;
 
@@ -193,6 +194,7 @@ fn updateUser(self: *Server, user: *User) void {
     const rd: i32 = @intCast(@min(user.render_distance, 8)); // cap for safety
     var sent: u32 = 0;
     const max_per_tick: u32 = 4; // limit bandwidth
+    const TerrainGen = @import("../world/TerrainGen.zig");
 
     var cy: i32 = center.cy - rd;
     while (cy <= center.cy + rd) : (cy += 1) {
@@ -204,12 +206,32 @@ fn updateUser(self: *Server, user: *User) void {
                 const key = WorldState.ChunkKey{ .cx = cx, .cy = cy, .cz = cz };
                 if (user.hasChunk(key)) continue;
 
-                // Check if server has this chunk loaded
-                const chunk = self.world.chunk_map.get(key) orelse continue;
+                // Load or generate the chunk if not present on server
+                var chunk = self.world.chunk_map.get(key);
+                if (chunk == null) {
+                    const new_chunk = self.world.chunk_pool.acquire();
+                    var loaded = false;
+                    if (self.world.storage) |s| {
+                        if (s.loadChunkInto(key.cx, key.cy, key.cz, new_chunk)) {
+                            loaded = true;
+                        }
+                    }
+                    if (!loaded) {
+                        switch (self.world.world_type) {
+                            .normal => TerrainGen.generateChunk(new_chunk, key, self.world.seed),
+                            .debug => WorldState.generateDebugChunk(new_chunk, key),
+                        }
+                        if (self.world.storage) |s| {
+                            s.markDirty(key.cx, key.cy, key.cz, new_chunk);
+                        }
+                    }
+                    self.world.chunk_map.put(key, new_chunk);
+                    chunk = new_chunk;
+                }
 
                 // Encode chunk data
                 var flat_blocks: [BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
-                chunk.blocks.getRange(&flat_blocks, 0);
+                chunk.?.blocks.getRange(&flat_blocks, 0);
                 var encoded = chunk_codec.encode(self.allocator, &flat_blocks) catch continue;
                 defer encoded.deinit();
 

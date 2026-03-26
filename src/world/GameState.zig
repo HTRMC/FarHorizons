@@ -104,6 +104,7 @@ render_alpha: f32 = 0,
 game_mode: GameMode = .creative,
 combat: PlayerCombat = .{},
 streaming: WorldStreamingState,
+multiplayer_client: bool = false,
 
 game_time: i64 = 0,
 debug_screens: u8 = 0,
@@ -115,6 +116,11 @@ frame_timing: FrameTiming = .{},
 
 prev_camera_pos: zlm.Vec3,
 tick_camera_pos: zlm.Vec3,
+
+// ── Network chunk reception (thread-safe queue) ──
+pending_chunks: [MAX_PENDING_CHUNKS]PendingChunk = undefined,
+pending_chunks_write: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+pending_chunks_read: usize = 0,
 
 // ── Network block changes (thread-safe queue) ──
 pending_blocks: [MAX_PENDING_BLOCKS]PendingBlock = undefined,
@@ -148,6 +154,13 @@ const PendingUpdate = struct {
     id: u32,
     pos: [3]f64,
     rotation: [3]f32,
+};
+
+const MAX_PENDING_CHUNKS: usize = 128;
+
+const PendingChunk = struct {
+    key: WorldState.ChunkKey,
+    chunk: *WorldState.Chunk,
 };
 
 const MAX_PENDING_BLOCKS: usize = 256;
@@ -316,7 +329,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
             .player_chunk = spawn_key,
             .streaming_initialized = false,
             .initial_load_ready = false,
-            .initial_load_target = 75,
+            .initial_load_target = if (skip_storage) @as(u32, 1) else 75,
             .player_dirty_chunks = DirtyChunkSet.init(allocator),
         },
         .game_time = saved_game_time,
@@ -325,6 +338,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .saved_camera = cam,
         .prev_camera_pos = cam.position,
         .tick_camera_pos = cam.position,
+        .multiplayer_client = skip_storage,
     };
 }
 
@@ -616,6 +630,49 @@ pub fn restoreAfterRender(self: *GameState) void {
 }
 
 /// Mark a block position dirty from a network update (triggers remesh).
+/// Queue a decoded chunk from the network thread (thread-safe).
+pub fn queueNetworkChunk(self: *GameState, key: WorldState.ChunkKey, chunk: *WorldState.Chunk) void {
+    const write = self.pending_chunks_write.load(.acquire);
+    const next = (write + 1) % MAX_PENDING_CHUNKS;
+    if (next == self.pending_chunks_read) {
+        // Full — release chunk back to pool
+        self.chunk_pool.release(chunk);
+        return;
+    }
+    self.pending_chunks[write] = .{ .key = key, .chunk = chunk };
+    self.pending_chunks_write.store(next, .release);
+}
+
+/// Apply queued network chunks on the main thread.
+pub fn drainNetworkChunks(self: *GameState) void {
+    const write = self.pending_chunks_write.load(.acquire);
+    while (self.pending_chunks_read != write) {
+        const pc = self.pending_chunks[self.pending_chunks_read];
+        self.pending_chunks_read = (self.pending_chunks_read + 1) % MAX_PENDING_CHUNKS;
+
+        // If chunk already loaded, replace it with server data
+        if (self.chunk_map.get(pc.key) != null) {
+            // Remove old and replace
+            if (self.chunk_map.remove(pc.key)) |old| {
+                self.chunk_pool.release(old);
+            }
+        }
+        self.chunk_map.put(pc.key, pc.chunk);
+        self.surface_height_map.updateFromChunk(pc.key, pc.chunk);
+
+        // Allocate light map if not present
+        if (self.light_maps.get(pc.key) == null) {
+            const lm = self.light_map_pool.acquire();
+            self.light_maps.put(pc.key, lm) catch {
+                self.light_map_pool.release(lm);
+            };
+        }
+
+        // Submit light task
+        if (self.streaming.pool) |pool| pool.submitLight(pc.key);
+    }
+}
+
 /// Queue a block change from the network thread (thread-safe).
 pub fn queueNetworkBlockChange(self: *GameState, wx: i32, wy: i32, wz: i32, new_block: WorldState.StateId) void {
     const write = self.pending_blocks_write.load(.acquire);

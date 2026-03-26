@@ -29,6 +29,7 @@ pub fn sendChunk(
 }
 
 /// Client receives chunk data from server.
+/// Decodes the chunk and queues it for main-thread integration (thread-safe).
 pub fn clientReceive(_: *Connection, reader: *BinaryReader) anyerror!void {
     const cx = try reader.readInt(i32);
     const cy = try reader.readInt(i32);
@@ -38,10 +39,7 @@ pub fn clientReceive(_: *Connection, reader: *BinaryReader) anyerror!void {
 
     const state = client_game_state orelse return;
 
-    // Skip if already loaded
-    if (state.chunk_map.get(key) != null) return;
-
-    // Acquire chunk from pool and decode
+    // Acquire chunk from pool (thread-safe) and decode
     const chunk = state.chunk_pool.acquire();
     chunk_codec.decodeToPalette(data, &chunk.blocks) catch |err| {
         std.log.warn("Failed to decode chunk ({},{},{}): {s}", .{ cx, cy, cz, @errorName(err) });
@@ -49,19 +47,8 @@ pub fn clientReceive(_: *Connection, reader: *BinaryReader) anyerror!void {
         return;
     };
 
-    // Insert into chunk map
-    state.chunk_map.put(key, chunk);
-
-    // Allocate light map
-    const lm = state.light_map_pool.acquire();
-    state.light_maps.put(key, lm) catch {
-        state.light_map_pool.release(lm);
-    };
-
-    // Update surface heights
-    state.surface_height_map.updateFromChunk(key, chunk);
-
-    std.log.debug("Received chunk ({},{},{})", .{ cx, cy, cz });
+    // Queue for main-thread integration (thread-safe ring buffer)
+    state.queueNetworkChunk(key, chunk);
 }
 
 pub fn register() void {

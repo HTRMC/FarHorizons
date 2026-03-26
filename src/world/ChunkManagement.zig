@@ -11,9 +11,12 @@ const Io = std.Io;
 const MAX_PENDING_UNLOADS = WorldStreamingMod.MAX_PENDING_UNLOADS;
 
 /// Request load for missing chunks within render distance.
-/// Iterates center-outward so the first batch contains chunks near the player.
+/// In singleplayer: submits to local ChunkStreamer via ThreadPool.
+/// In multiplayer: chunks come from the server — no local loading.
 pub fn requestMissingChunks(self: *GameState) void {
     if (!self.streaming.streaming_initialized) return;
+    // In multiplayer, chunks are sent by the server — don't load/generate locally.
+    if (self.multiplayer_client) return;
 
     const rd = ChunkStreamer.RENDER_DISTANCE;
     const rd_sq = rd * rd;
@@ -55,6 +58,9 @@ pub fn requestMissingChunks(self: *GameState) void {
 }
 
 pub fn worldTick(self: *GameState) void {
+    // Drain chunks received from server (multiplayer)
+    self.drainNetworkChunks();
+
     // Update player chunk from camera position
     const pos = self.camera.position;
     const current_chunk = WorldState.ChunkKey.fromWorldPos(
