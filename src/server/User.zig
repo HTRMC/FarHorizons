@@ -30,6 +30,7 @@ input: player_input.InputState = .{},
 // Teleport/correction tracking
 next_teleport_id: u32 = 0,
 pending_teleport_id: ?u32 = null,
+has_received_position: bool = false,
 
 // Chunk management
 render_distance: u16 = 8,
@@ -80,6 +81,13 @@ pub fn handlePositionUpdate(self: *User, pos: ?[3]f64, rotation: ?[2]f32, on_gro
     }
 
     if (pos) |new_pos| {
+        // Accept the first position unconditionally (client knows its spawn location)
+        if (!self.has_received_position) {
+            self.has_received_position = true;
+            self.pos = new_pos;
+            return;
+        }
+
         const dx = new_pos[0] - self.pos[0];
         const dy = new_pos[1] - self.pos[1];
         const dz = new_pos[2] - self.pos[2];
