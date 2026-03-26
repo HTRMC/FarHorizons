@@ -14,9 +14,9 @@ const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 
 const MAX_QUADS = 4096;
 const MAX_VERTICES = MAX_QUADS * 6;
-const MAX_DRAW_LAYERS = 8;
+pub const MAX_DRAW_STRATA = 8;
 
-const DrawLayer = struct {
+const DrawStratum = struct {
     normal_start: u32 = 0,
     normal_count: u32 = 0,
     inverted_start: u32 = 0,
@@ -50,10 +50,10 @@ pub const UiRenderer = struct {
     clip_depth: u8 = 0,
     clip_scale: f32 = 1.0,
 
-    draw_layers: [MAX_DRAW_LAYERS]DrawLayer = [_]DrawLayer{.{}} ** MAX_DRAW_LAYERS,
-    draw_layer_count: u8 = 0,
-    layer_normal_start: u32 = 0,
-    layer_inverted_start: u32 = 0,
+    strata: [MAX_DRAW_STRATA]DrawStratum = [_]DrawStratum{.{}} ** MAX_DRAW_STRATA,
+    stratum_count: u8 = 0,
+    stratum_normal_start: u32 = 0,
+    stratum_inverted_start: u32 = 0,
 
     atlas_image: vk.VkImage,
     atlas_image_memory: vk.VkDeviceMemory,
@@ -142,7 +142,9 @@ pub const UiRenderer = struct {
         self.mapped_vertices = @ptrCast(@alignCast(self.vertex_allocs[cf].mapped_ptr));
         self.vertex_count = 0;
         self.inverted_vertex_count = 0;
-        self.draw_layer_count = 0;
+        self.stratum_count = 0;
+        self.stratum_normal_start = 0;
+        self.stratum_inverted_start = 0;
         self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
         self.clip_depth = 0;
     }
@@ -152,80 +154,82 @@ pub const UiRenderer = struct {
         self.mapped_vertices = null;
     }
 
-    pub fn beginLayer(self: *UiRenderer) void {
-        self.layer_normal_start = self.vertex_count;
-        self.layer_inverted_start = self.inverted_vertex_count;
+    pub fn beginStratum(self: *UiRenderer) void {
+        self.stratum_normal_start = self.vertex_count;
+        self.stratum_inverted_start = self.inverted_vertex_count;
     }
 
-    pub fn endLayer(self: *UiRenderer) void {
-        if (self.draw_layer_count >= MAX_DRAW_LAYERS) return;
-        const normal_count = self.vertex_count - self.layer_normal_start;
-        const inverted_count = self.inverted_vertex_count - self.layer_inverted_start;
+    pub fn endStratum(self: *UiRenderer) void {
+        if (self.stratum_count >= MAX_DRAW_STRATA) return;
+        const normal_count = self.vertex_count - self.stratum_normal_start;
+        const inverted_count = self.inverted_vertex_count - self.stratum_inverted_start;
         if (normal_count == 0 and inverted_count == 0) return;
-        self.draw_layers[self.draw_layer_count] = .{
-            .normal_start = self.layer_normal_start,
+        self.strata[self.stratum_count] = .{
+            .normal_start = self.stratum_normal_start,
             .normal_count = normal_count,
-            .inverted_start = self.layer_inverted_start,
+            .inverted_start = self.stratum_inverted_start,
             .inverted_count = inverted_count,
         };
-        self.draw_layer_count += 1;
+        self.stratum_count += 1;
     }
 
-    pub fn recordDraw(self: *const UiRenderer, command_buffer: vk.VkCommandBuffer) void {
-        const tz = tracy.zone(@src(), "UiRenderer.recordDraw");
-        defer tz.end();
+    /// Close the current stratum (if it has content) and begin a new one.
+    pub fn nextStratum(self: *UiRenderer) void {
+        self.endStratum();
+        self.beginStratum();
+    }
 
-        if (self.vertex_count == 0 and self.inverted_vertex_count == 0) return;
+    pub fn recordDrawStratum(self: *const UiRenderer, command_buffer: vk.VkCommandBuffer, stratum_index: u8) void {
+        if (stratum_index >= self.stratum_count) return;
+        const stratum = self.strata[stratum_index];
 
         const ortho = orthoMatrix(self.screen_width, self.screen_height);
 
-        for (self.draw_layers[0..self.draw_layer_count]) |layer| {
-            if (layer.inverted_count > 0) {
-                vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.inverted_pipeline);
-                vk.cmdBindDescriptorSets(
-                    command_buffer,
-                    vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    self.pipeline_layout,
-                    0,
-                    1,
-                    &[_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]},
-                    0,
-                    null,
-                );
-                vk.cmdPushConstants(
-                    command_buffer,
-                    self.pipeline_layout,
-                    vk.VK_SHADER_STAGE_VERTEX_BIT,
-                    0,
-                    64,
-                    &ortho,
-                );
-                const first = MAX_VERTICES - layer.inverted_start - layer.inverted_count;
-                vk.cmdDraw(command_buffer, layer.inverted_count, 1, first, 0);
-            }
+        if (stratum.inverted_count > 0) {
+            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.inverted_pipeline);
+            vk.cmdBindDescriptorSets(
+                command_buffer,
+                vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                self.pipeline_layout,
+                0,
+                1,
+                &[_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]},
+                0,
+                null,
+            );
+            vk.cmdPushConstants(
+                command_buffer,
+                self.pipeline_layout,
+                vk.VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                64,
+                &ortho,
+            );
+            const first = MAX_VERTICES - stratum.inverted_start - stratum.inverted_count;
+            vk.cmdDraw(command_buffer, stratum.inverted_count, 1, first, 0);
+        }
 
-            if (layer.normal_count > 0) {
-                vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
-                vk.cmdBindDescriptorSets(
-                    command_buffer,
-                    vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    self.pipeline_layout,
-                    0,
-                    1,
-                    &[_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]},
-                    0,
-                    null,
-                );
-                vk.cmdPushConstants(
-                    command_buffer,
-                    self.pipeline_layout,
-                    vk.VK_SHADER_STAGE_VERTEX_BIT,
-                    0,
-                    64,
-                    &ortho,
-                );
-                vk.cmdDraw(command_buffer, layer.normal_count, 1, layer.normal_start, 0);
-            }
+        if (stratum.normal_count > 0) {
+            vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
+            vk.cmdBindDescriptorSets(
+                command_buffer,
+                vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                self.pipeline_layout,
+                0,
+                1,
+                &[_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]},
+                0,
+                null,
+            );
+            vk.cmdPushConstants(
+                command_buffer,
+                self.pipeline_layout,
+                vk.VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                64,
+                &ortho,
+            );
+            vk.cmdDraw(command_buffer, stratum.normal_count, 1, stratum.normal_start, 0);
         }
     }
 

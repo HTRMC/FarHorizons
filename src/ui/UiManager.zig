@@ -126,7 +126,8 @@ pub const UiManager = struct {
             const screen = &self.screens[i];
             if (!screen.active) continue;
 
-            ui.beginLayer();
+            ui.beginStratum();
+            tr.beginStratum();
 
             if (screen.tree.root != NULL_WIDGET) {
                 WidgetOps.drawWidget(&screen.tree, screen.tree.root, ui, tr);
@@ -139,12 +140,15 @@ pub const UiManager = struct {
                 }
             }
 
-            ui.endLayer();
+            ui.endStratum();
+            tr.endStratum();
         }
 
+        // Overlays (dropdowns, tooltips) render on a final stratum above everything
         if (self.topScreen()) |screen| {
             if (screen.active) {
-                ui.beginLayer();
+                ui.beginStratum();
+                tr.beginStratum();
                 const tooltip_id = if (self.hover_timer >= 30) self.hover_widget else NULL_WIDGET;
                 WidgetOps.drawOverlays(
                     &screen.tree,
@@ -156,7 +160,8 @@ pub const UiManager = struct {
                     self.screen_width,
                     self.screen_height,
                 );
-                ui.endLayer();
+                ui.endStratum();
+                tr.endStratum();
             }
         }
     }

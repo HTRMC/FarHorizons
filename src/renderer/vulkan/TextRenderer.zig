@@ -19,6 +19,12 @@ const GLYPH_SCALE = 2;
 const RENDER_SIZE = GLYPH_SIZE * GLYPH_SCALE;
 const MAX_CHARS = 4096;
 const MAX_VERTICES = MAX_CHARS * 6;
+const MAX_DRAW_STRATA = 8;
+
+const DrawStratum = struct {
+    start: u32 = 0,
+    count: u32 = 0,
+};
 
 const sep = std.fs.path.sep_str;
 
@@ -44,6 +50,10 @@ pub const TextRenderer = struct {
     clip_stack: [8][4]f32 = .{.{ 0, 0, 0, 0 }} ** 8,
     clip_depth: u8 = 0,
     clip_scale: f32 = 1.0,
+
+    strata: [MAX_DRAW_STRATA]DrawStratum = [_]DrawStratum{.{}} ** MAX_DRAW_STRATA,
+    stratum_count: u8 = 0,
+    stratum_start: u32 = 0,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -106,6 +116,8 @@ pub const TextRenderer = struct {
         self.vertex_count = 0;
         self.clip_rect = .{ -1e9, -1e9, 1e9, 1e9 };
         self.clip_depth = 0;
+        self.stratum_count = 0;
+        self.stratum_start = 0;
     }
 
     pub fn setClipRect(self: *TextRenderer, x: f32, y: f32, w: f32, h: f32) void {
@@ -189,16 +201,30 @@ pub const TextRenderer = struct {
         }
     }
 
+    pub fn beginStratum(self: *TextRenderer) void {
+        self.stratum_start = self.vertex_count;
+    }
+
+    pub fn endStratum(self: *TextRenderer) void {
+        if (self.stratum_count >= MAX_DRAW_STRATA) return;
+        const count = self.vertex_count - self.stratum_start;
+        if (count == 0) return;
+        self.strata[self.stratum_count] = .{
+            .start = self.stratum_start,
+            .count = count,
+        };
+        self.stratum_count += 1;
+    }
+
     pub fn endFrame(self: *TextRenderer, device: vk.VkDevice) void {
         _ = device;
         self.mapped_vertices = null;
     }
 
-    pub fn recordDraw(self: *const TextRenderer, command_buffer: vk.VkCommandBuffer) void {
-        const tz = tracy.zone(@src(), "TextRenderer.recordDraw");
-        defer tz.end();
-
-        if (self.vertex_count == 0) return;
+    pub fn recordDrawStratum(self: *const TextRenderer, command_buffer: vk.VkCommandBuffer, stratum_index: u8) void {
+        if (stratum_index >= self.stratum_count) return;
+        const stratum = self.strata[stratum_index];
+        if (stratum.count == 0) return;
 
         const ortho = orthoMatrix(self.screen_width, self.screen_height);
 
@@ -221,7 +247,43 @@ pub const TextRenderer = struct {
             64,
             &ortho,
         );
-        vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
+        vk.cmdDraw(command_buffer, stratum.count, 1, stratum.start, 0);
+    }
+
+    /// Draw all text that wasn't assigned to any stratum (e.g. debug overlay).
+    pub fn recordDrawUnstratified(self: *const TextRenderer, command_buffer: vk.VkCommandBuffer) void {
+        // Find vertex ranges not covered by any stratum
+        var covered_end: u32 = 0;
+        for (self.strata[0..self.stratum_count]) |s| {
+            covered_end = @max(covered_end, s.start + s.count);
+        }
+        if (covered_end >= self.vertex_count) return;
+
+        const remaining = self.vertex_count - covered_end;
+        if (remaining == 0) return;
+
+        const ortho = orthoMatrix(self.screen_width, self.screen_height);
+
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline);
+        vk.cmdBindDescriptorSets(
+            command_buffer,
+            vk.VK_PIPELINE_BIND_POINT_GRAPHICS,
+            self.pipeline_layout,
+            0,
+            1,
+            &[_]vk.VkDescriptorSet{self.descriptor_sets[self.current_frame]},
+            0,
+            null,
+        );
+        vk.cmdPushConstants(
+            command_buffer,
+            self.pipeline_layout,
+            vk.VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            64,
+            &ortho,
+        );
+        vk.cmdDraw(command_buffer, remaining, 1, covered_end, 0);
     }
 
     pub fn measureText(self: *const TextRenderer, text: []const u8) f32 {

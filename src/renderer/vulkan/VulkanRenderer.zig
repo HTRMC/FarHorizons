@@ -1084,16 +1084,24 @@ pub const VulkanRenderer = struct {
             const tz2 = tracy.zone(@src(), "record.ui");
             defer tz2.end();
 
-            self.render_state.ui_renderer.recordDraw(command_buffer);
+            const max_strata = @max(self.render_state.ui_renderer.stratum_count, self.render_state.text_renderer.stratum_count);
+            for (0..max_strata) |i| {
+                const idx: u8 = @intCast(i);
+                self.render_state.ui_renderer.recordDrawStratum(command_buffer, idx);
 
-            {
-                const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
-                const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
-                const ui_scale = self.render_state.ui_renderer.clip_scale;
-                self.render_state.entity_renderer.recordDraw(command_buffer, sw, sh, ui_scale);
+                // Entity renderer (3D UI previews) draws after the first stratum
+                if (i == 0) {
+                    const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
+                    const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
+                    const ui_scale = self.render_state.ui_renderer.clip_scale;
+                    self.render_state.entity_renderer.recordDraw(command_buffer, sw, sh, ui_scale);
+                }
+
+                self.render_state.text_renderer.recordDrawStratum(command_buffer, idx);
             }
 
-            self.render_state.text_renderer.recordDraw(command_buffer);
+            // Draw any text not assigned to a stratum (e.g. debug overlay)
+            self.render_state.text_renderer.recordDrawUnstratified(command_buffer);
         }
 
         vk.cmdEndRendering(command_buffer);
