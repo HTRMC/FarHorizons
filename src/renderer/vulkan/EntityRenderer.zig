@@ -10,6 +10,7 @@ const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
 const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 const app_config = @import("../../app_config.zig");
+const GameState = @import("../../GameState.zig");
 const Io = std.Io;
 const Dir = Io.Dir;
 
@@ -201,6 +202,53 @@ pub const EntityRenderer = struct {
         };
         vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
         vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
+    }
+
+    pub fn recordDrawRemotePlayers(
+        self: *const EntityRenderer,
+        command_buffer: vk.VkCommandBuffer,
+        game_state: *const GameState,
+        view_proj: zlm.Mat4,
+        ambient_light: [3]f32,
+        sun_dir: [3]f32,
+    ) void {
+        const tz = tracy.zone(@src(), "EntityRenderer.recordDrawRemotePlayers");
+        defer tz.end();
+
+        if (self.vertex_count == 0) return;
+        if (game_state.remote_players.items.len == 0) return;
+
+        vk.cmdBindPipeline(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_depth);
+        vk.cmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &[_]vk.VkDescriptorSet{self.descriptor_set}, 0, null);
+
+        for (game_state.remote_players.items) |player| {
+            const px = player.render_pos[0];
+            const py = player.render_pos[1];
+            const pz = player.render_pos[2];
+            const yaw = player.rotation[1];
+
+            const angle = yaw + std.math.pi;
+            const sin_y = @sin(angle);
+            const cos_y = @cos(angle);
+            const model = zlm.Mat4{
+                .m = .{ cos_y, 0, -sin_y, 0, 0, 1, 0, 0, sin_y, 0, cos_y, 0, px, py, pz, 1 },
+            };
+            const mvp = zlm.Mat4.mul(view_proj, model);
+
+            const light = game_state.sampleLightAt(px, py + 0.9, pz);
+
+            const pc = EntityPushConstants{
+                .mvp = mvp.m,
+                .ambient_light = ambient_light,
+                .contrast = 0.25,
+                .sun_dir = sun_dir,
+                .sky_level = light[3],
+                .block_light = .{ light[0], light[1], light[2] },
+                .model_yaw = angle,
+            };
+            vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
+            vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);
+        }
     }
 
     // ============================================================

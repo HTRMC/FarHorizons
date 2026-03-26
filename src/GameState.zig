@@ -118,6 +118,7 @@ pub const RemotePlayer = struct {
     id: u32,
     pos: [3]f64,
     prev_pos: [3]f64,
+    render_pos: [3]f32 = .{ 0, 0, 0 },
     rotation: [3]f32,
     name: []const u8 = "Player",
 };
@@ -1130,6 +1131,15 @@ pub fn interpolateForRender(self: *GameState, alpha: f32) void {
     for (0..self.entities.count) |i| {
         self.entities.render_pos[i] = lerpArray3(self.entities.prev_pos[i], self.entities.pos[i], alpha);
         self.entities.render_walk_anim[i] = self.entities.prev_walk_anim[i] + (self.entities.walk_anim[i] - self.entities.prev_walk_anim[i]) * alpha;
+    }
+    // Interpolate remote players
+    const alpha64: f64 = @floatCast(alpha);
+    for (self.remote_players.items) |*rp| {
+        rp.render_pos = .{
+            @floatCast(rp.prev_pos[0] + (rp.pos[0] - rp.prev_pos[0]) * alpha64),
+            @floatCast(rp.prev_pos[1] + (rp.pos[1] - rp.prev_pos[1]) * alpha64),
+            @floatCast(rp.prev_pos[2] + (rp.pos[2] - rp.prev_pos[2]) * alpha64),
+        };
     }
     switch (self.mode) {
         .flying => {

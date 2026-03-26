@@ -1028,6 +1028,11 @@ pub const VulkanRenderer = struct {
                 self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp, day_night.ambient_light, sun_dir, player_light[3], .{ player_light[0], player_light[1], player_light[2] });
             }
 
+            // Remote players (multiplayer)
+            if (!overdraw) {
+                self.render_state.entity_renderer.recordDrawRemotePlayers(command_buffer, game_state, mvp, day_night.ambient_light, sun_dir);
+            }
+
             // Item drop entities (rendered with world depth)
             if (!overdraw) {
                 self.render_state.item_drop_renderer.recordDraw(command_buffer, game_state, mvp, day_night.ambient_light, sun_dir);

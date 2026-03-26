@@ -232,8 +232,18 @@ fn broadcastPositions(self: *Server, users: []*User) void {
     // Send to each user (excluding themselves)
     for (users[0..count]) |user| {
         if (!user.connected.load(.acquire)) continue;
-        // For now send all players including self — client can filter
-        player_position.sendOtherPlayers(user.conn, self.conn_manager.socket, infos[0..count]);
+        // Build a filtered list excluding the recipient
+        var filtered: [64]player_position.PlayerInfo = undefined;
+        var filtered_count: usize = 0;
+        for (infos[0..count]) |info| {
+            if (info.id != user.id) {
+                filtered[filtered_count] = info;
+                filtered_count += 1;
+            }
+        }
+        if (filtered_count > 0) {
+            player_position.sendOtherPlayers(user.conn, self.conn_manager.socket, filtered[0..filtered_count]);
+        }
     }
 }
 
