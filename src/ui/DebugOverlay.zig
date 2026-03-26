@@ -1,13 +1,13 @@
 const std = @import("std");
-const GameState = @import("GameState.zig");
+const GameState = @import("../GameState.zig");
 const ChunkStreamer = GameState.ChunkStreamer;
-const WorldState = @import("world/WorldState.zig");
+const WorldState = @import("../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
-const TextRenderer = @import("renderer/vulkan/TextRenderer.zig").TextRenderer;
-const Raycast = @import("world/Raycast.zig");
-const world_renderer_mod = @import("renderer/vulkan/WorldRenderer.zig");
+const TextRenderer = @import("../renderer/vulkan/TextRenderer.zig").TextRenderer;
+const Raycast = @import("../world/Raycast.zig");
+const world_renderer_mod = @import("../renderer/vulkan/WorldRenderer.zig");
 const WorldRenderer = world_renderer_mod.WorldRenderer;
-const GpuAllocator = @import("allocators/GpuAllocator.zig").GpuAllocator;
+const GpuAllocator = @import("../allocators/GpuAllocator.zig").GpuAllocator;
 
 pub const SCREEN_F3: u8 = 0x01;
 pub const SCREEN_F4: u8 = 0x02;
@@ -149,7 +149,7 @@ fn drawF4(text: *TextRenderer, game_state: *GameState, wr: *const WorldRenderer,
     y += LINE_HEIGHT;
 
     const mb = 1024.0 * 1024.0;
-    const pools = [_]struct { name: []const u8, pool: *const @import("allocators/GpuMemoryPool.zig").GpuMemoryPool }{
+    const pools = [_]struct { name: []const u8, pool: *const @import("../allocators/GpuMemoryPool.zig").GpuMemoryPool }{
         .{ .name = "Device Local", .pool = gpu_alloc.device_local_pool },
         .{ .name = "Host Visible", .pool = gpu_alloc.host_visible_pool },
         .{ .name = "Staging", .pool = gpu_alloc.staging_pool },

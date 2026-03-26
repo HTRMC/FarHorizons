@@ -12,7 +12,7 @@ const vk_utils = @import("vk_utils.zig");
 const TransferPipeline = @import("TransferPipeline.zig").TransferPipeline;
 const GpuAllocator = @import("../../allocators/GpuAllocator.zig").GpuAllocator;
 const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
-const ThreadPool = @import("../../ThreadPool.zig").ThreadPool;
+const ThreadPool = @import("../../platform/ThreadPool.zig").ThreadPool;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const GameState = @import("../../GameState.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
@@ -477,7 +477,7 @@ pub const VulkanRenderer = struct {
         if (self.game_state) |game_state| {
             const tz2 = tracy.zone(@src(), "debugOverlay");
             defer tz2.end();
-            const DebugOverlay = @import("../../DebugOverlay.zig");
+            const DebugOverlay = @import("../../ui/DebugOverlay.zig");
             DebugOverlay.draw(&self.render_state.text_renderer, game_state, &self.render_state.world_renderer, self.gpu_allocator);
         }
 

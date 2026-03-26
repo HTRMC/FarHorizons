@@ -5,7 +5,7 @@ const Storage = @import("storage/Storage.zig");
 const TerrainGen = @import("TerrainGen.zig");
 const tracy = @import("../platform/tracy.zig");
 const Chunk = WorldState.Chunk;
-const ThreadPool = @import("../ThreadPool.zig").ThreadPool;
+const ThreadPool = @import("../platform/ThreadPool.zig").ThreadPool;
 const Io = std.Io;
 
 pub const ChunkStreamer = struct {

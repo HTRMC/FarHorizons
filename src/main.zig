@@ -730,7 +730,7 @@ pub fn main() !void {
     }
 
     // Register network protocols
-    const network = @import("network.zig");
+    const network = @import("network/network.zig");
     network.protocols.registerAll();
 
     // ── Parse CLI args for headless server mode ──
@@ -1429,7 +1429,7 @@ fn runHeadlessServer(allocator: std.mem.Allocator, cli: CliArgs) !void {
 
 /// Client-side network state for connecting to a remote server.
 const ClientNetState = struct {
-    const network = @import("network.zig");
+    const network = @import("network/network.zig");
 
     conn_manager: network.ConnectionManager,
     conn: *network.Connection,

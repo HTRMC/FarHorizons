@@ -1,6 +1,6 @@
 const std = @import("std");
 const Atomic = std.atomic.Value;
-const network = @import("../network.zig");
+const network = @import("../network/network.zig");
 const ConnectionManager = network.ConnectionManager;
 const Connection = network.Connection;
 const Address = network.Address;

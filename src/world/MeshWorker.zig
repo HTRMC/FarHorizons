@@ -11,7 +11,7 @@ const types = @import("../renderer/vulkan/types.zig");
 const FaceData = types.FaceData;
 const LightEntry = types.LightEntry;
 const tracy = @import("../platform/tracy.zig");
-const ThreadPool = @import("../ThreadPool.zig").ThreadPool;
+const ThreadPool = @import("../platform/ThreadPool.zig").ThreadPool;
 const Io = std.Io;
 const BlockState = WorldState.BlockState;
 

@@ -3,7 +3,7 @@ const WorldState = @import("WorldState.zig");
 const ChunkStreamer = @import("ChunkStreamer.zig").ChunkStreamer;
 const Storage = @import("storage/Storage.zig");
 const MeshWorker = @import("MeshWorker.zig").MeshWorker;
-const ThreadPool = @import("../ThreadPool.zig").ThreadPool;
+const ThreadPool = @import("../platform/ThreadPool.zig").ThreadPool;
 const TransferPipeline = @import("../renderer/vulkan/TransferPipeline.zig").TransferPipeline;
 const Io = std.Io;
 

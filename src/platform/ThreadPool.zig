@@ -1,5 +1,5 @@
 const std = @import("std");
-const WorldState = @import("world/WorldState.zig");
+const WorldState = @import("../world/WorldState.zig");
 const Io = std.Io;
 
 pub const ThreadPool = struct {
@@ -33,8 +33,8 @@ pub const ThreadPool = struct {
     player_chunk: ChunkKey,
 
     // Processing targets (set before start)
-    streamer: ?*@import("world/ChunkStreamer.zig").ChunkStreamer,
-    mesh_worker: ?*@import("world/MeshWorker.zig").MeshWorker,
+    streamer: ?*@import("../world/ChunkStreamer.zig").ChunkStreamer,
+    mesh_worker: ?*@import("../world/MeshWorker.zig").MeshWorker,
 
     // Thread management
     threads: [MAX_THREADS]?std.Thread,
@@ -102,7 +102,7 @@ pub const ThreadPool = struct {
     }
 
     pub fn stop(self: *ThreadPool) void {
-        const tracy = @import("platform/tracy.zig");
+        const tracy = @import("tracy.zig");
         self.shutdown.store(true, .release);
         const io = Io.Threaded.global_single_threaded.io();
         for (0..self.thread_count) |_| {
