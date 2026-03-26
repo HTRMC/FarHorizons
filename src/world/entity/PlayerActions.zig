@@ -4,6 +4,7 @@ const GameState = @import("../GameState.zig");
 const Entity = GameState.Entity;
 const Item = GameState.Item;
 const BlockState = @import("../WorldState.zig").BlockState;
+const BlockOps = @import("../BlockOps.zig");
 
 pub fn takeDamage(self: *GameState, amount: f32) void {
     if (self.game_mode != .survival or self.combat.damage_cooldown > 0) return;
@@ -152,7 +153,7 @@ pub fn updateBreakProgress(self: *GameState) void {
 
     // Instant break
     if (hardness == 0) {
-        self.breakBlock();
+        BlockOps.breakBlock(self);
         self.combat.break_progress = 0;
         self.combat.breaking_pos = null;
         return;
@@ -179,9 +180,9 @@ pub fn updateBreakProgress(self: *GameState) void {
         const can_harvest = !BlockState.requiresTool(block_state) or (tool_multiplier > 1.0);
         if (!can_harvest) {
             // Break the block but don't drop it
-            self.breakBlockNoDrop();
+            BlockOps.breakBlockNoDrop(self);
         } else {
-            self.breakBlock();
+            BlockOps.breakBlock(self);
         }
 
         // Durability cost

@@ -549,30 +549,6 @@ pub fn toggleMode(self: *GameState) void {
     }
 }
 
-pub fn takeDamage(self: *GameState, amount: f32) void {
-    PlayerActions.takeDamage(self, amount);
-}
-
-fn dropInventoryWithScatter(self: *GameState, slots: []Entity.ItemStack, pos: [3]f32, random: std.Random) void {
-    PlayerActions.dropInventoryWithScatter(self, slots, pos, random);
-}
-
-fn spawnScatterDrop(self: *GameState, pos: [3]f32, item: Entity.ItemStack, random: std.Random) void {
-    PlayerActions.spawnScatterDrop(self, pos, item, random);
-}
-
-fn die(self: *GameState) void {
-    PlayerActions.die(self);
-}
-
-fn updateFallDamage(self: *GameState) void {
-    PlayerActions.updateFallDamage(self);
-}
-
-fn updateDrowning(self: *GameState) void {
-    PlayerActions.updateDrowning(self);
-}
-
 pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     const P = Entity.PLAYER;
     self.game_time +%= 1;
@@ -580,16 +556,16 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.prev_camera_pos = self.camera.position;
 
     self.updatePlayerMovement(P, move_speed);
-    self.updateCombatSystems();
-    self.updateEntities();
+    PlayerActions.updateCombatSystems(self);
+    MobSim.updateEntities(self);
 
     self.hit_result = Raycast.raycast(&self.chunk_map, self.camera.position, self.camera.getForward());
     self.entity_hit = Raycast.raycastEntities(&self.entities, self.camera.position, self.camera.getForward());
 
-    self.requestMissingChunks();
-    self.worldTick();
+    ChunkManagement.requestMissingChunks(self);
+    ChunkManagement.worldTick(self);
     self.streaming.world_tick_pending = true;
-    self.reportPipelineStats();
+    ChunkManagement.reportPipelineStats(self);
 }
 
 fn updatePlayerMovement(self: *GameState, player: u32, move_speed: f32) void {
@@ -634,48 +610,6 @@ fn updatePlayerMovement(self: *GameState, player: u32, move_speed: f32) void {
             );
         },
     }
-}
-
-fn updateCombatSystems(self: *GameState) void {
-    PlayerActions.updateCombatSystems(self);
-}
-
-fn updateEntities(self: *GameState) void {
-    MobSim.updateEntities(self);
-}
-
-fn requestMissingChunks(self: *GameState) void {
-    ChunkManagement.requestMissingChunks(self);
-}
-
-fn updateBreakProgress(self: *GameState) void {
-    PlayerActions.updateBreakProgress(self);
-}
-
-fn updateAttackDamage(self: *GameState) void {
-    PlayerActions.updateAttackDamage(self);
-}
-
-fn updateItemDrops(self: *GameState) void {
-    MobSim.updateItemDrops(self);
-}
-
-fn updateMobs(self: *GameState) void {
-    MobSim.updateMobs(self);
-}
-
-fn updateMobCombat(self: *GameState) void {
-    MobSim.updateMobCombat(self);
-}
-
-/// Try to attack the entity the player is looking at. Returns true if an entity
-/// was attacked (so the caller can skip block breaking).
-pub fn attackEntity(self: *GameState) bool {
-    return PlayerActions.attackEntity(self);
-}
-
-fn spawnPickupGhost(self: *GameState, entity_idx: u32) void {
-    MobSim.spawnPickupGhost(self, entity_idx);
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
@@ -784,22 +718,6 @@ pub fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_blo
 
     // Fall back to full recompute.
     self.markDirty(wx, wy, wz, true);
-}
-
-pub fn breakBlockNoDrop(self: *GameState) void {
-    BlockOps.breakBlockNoDrop(self);
-}
-
-pub fn breakBlock(self: *GameState) void {
-    BlockOps.breakBlock(self);
-}
-
-pub fn placeBlock(self: *GameState) void {
-    BlockOps.placeBlock(self);
-}
-
-pub fn pickBlock(self: *GameState) void {
-    BlockOps.pickBlock(self);
 }
 
 /// Drop items from an arbitrary inventory slot. If `drop_all` is true, drops the entire stack.
@@ -1020,29 +938,6 @@ pub fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
     const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
     const chunk = self.chunk_map.get(key) orelse return;
     s.markDirty(key.cx, key.cy, key.cz, chunk);
-}
-
-pub fn worldTick(self: *GameState) void {
-    ChunkManagement.worldTick(self);
-}
-
-fn reportPipelineStats(self: *GameState) void {
-    ChunkManagement.reportPipelineStats(self);
-}
-
-fn scanUnloads(self: *GameState) void {
-    ChunkManagement.scanUnloads(self);
-}
-
-pub fn applyUnloadsToGpu(
-    self: *GameState,
-    wr: *WorldRenderer,
-    deferred_face_frees: []TlsfAllocator.Handle,
-    deferred_face_free_count: *u32,
-    deferred_light_frees: []TlsfAllocator.Handle,
-    deferred_light_free_count: *u32,
-) void {
-    ChunkManagement.applyUnloadsToGpu(self, wr, deferred_face_frees, deferred_face_free_count, deferred_light_frees, deferred_light_free_count);
 }
 
 /// Spiral search from (0,0) outward to find a valid spawn on dry land.

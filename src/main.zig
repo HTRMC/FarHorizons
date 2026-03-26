@@ -3,6 +3,9 @@ const Window = @import("platform/Window.zig").Window;
 const Renderer = @import("renderer/Renderer.zig").Renderer;
 const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRenderer;
 const GameState = @import("world/GameState.zig");
+const BlockOps = @import("world/BlockOps.zig");
+const PlayerActions = @import("world/entity/PlayerActions.zig");
+const ChunkManagement = @import("world/ChunkManagement.zig");
 const WorldState = @import("world/WorldState.zig");
 const MenuController = @import("ui/MenuController.zig").MenuController;
 const UiManager = @import("ui/UiManager.zig").UiManager;
@@ -476,12 +479,12 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
     // Handle attack button held/released for hold-to-break
     if (opts.mouseMatches(.attack, button) and input_state.mouse_captured and !state.debug_camera_active) {
         if (action == glfw.GLFW_PRESS) {
-            if (!state.attackEntity()) {
+            if (!PlayerActions.attackEntity(state)) {
                 state.combat.attack_held = true;
                 state.swing_requested = true;
                 // Creative: instant break on press (no item drop)
                 if (state.game_mode == .creative) {
-                    state.breakBlockNoDrop();
+                    BlockOps.breakBlockNoDrop(state);
                 }
             }
         } else if (action == glfw.GLFW_RELEASE) {
@@ -496,13 +499,13 @@ fn mouseButtonCallback(window: ?*glfw.Window, button: c_int, action: c_int, mods
 
     if (opts.mouseMatches(.pick_item, button) and input_state.mouse_captured) {
         if (!state.debug_camera_active) {
-            state.pickBlock();
+            BlockOps.pickBlock(state);
         }
     } else if (opts.mouseMatches(.use_item, button)) {
         if (!input_state.mouse_captured) {
             captureMouse(input_state);
         } else if (!state.debug_camera_active) {
-            state.placeBlock();
+            BlockOps.placeBlock(state);
         }
     }
 }
@@ -564,7 +567,7 @@ fn processGamepadInput(input_state: *InputState) void {
 
             // Triggers → place / attack
             if (gp.leftTriggerPressed()) {
-                if (!state.debug_camera_active) state.placeBlock();
+                if (!state.debug_camera_active) BlockOps.placeBlock(state);
             }
             if (!state.debug_camera_active) {
                 // Track right trigger held for hold-to-break
@@ -572,7 +575,7 @@ fn processGamepadInput(input_state: *InputState) void {
                 if (gp.rightTriggerPressed()) {
                     state.swing_requested = true;
                     if (state.game_mode == .creative) {
-                        state.breakBlockNoDrop();
+                        BlockOps.breakBlockNoDrop(state);
                     }
                 }
             }
@@ -587,7 +590,7 @@ fn processGamepadInput(input_state: *InputState) void {
 
             // X → pick block
             if (gp.pressed(.x)) {
-                if (!state.debug_camera_active) state.pickBlock();
+                if (!state.debug_camera_active) BlockOps.pickBlock(state);
             }
 
             // D-pad up/down → speed adjust (debug camera)
@@ -1049,7 +1052,7 @@ pub fn main() !void {
         // Loading → playing transition: tick world until initial chunks are ready
         if (menu_ctrl.app_state == .loading) {
             if (game_state) |*state| {
-                state.worldTick();
+                ChunkManagement.worldTick(state);
                 state.streaming.world_tick_pending = true;
                 if (state.streaming.initial_load_ready) {
                     menu_ctrl.app_state = .playing;

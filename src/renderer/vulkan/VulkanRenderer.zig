@@ -15,6 +15,7 @@ const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const ThreadPool = @import("../../platform/ThreadPool.zig").ThreadPool;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const GameState = @import("../../world/GameState.zig");
+const ChunkManagement = @import("../../world/ChunkManagement.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
 const app_config = @import("../../app_config.zig");
 const zlm = @import("zlm");
@@ -432,7 +433,8 @@ pub const VulkanRenderer = struct {
                     defer tz2.end();
                     game_state.streaming.world_tick_pending = false;
 
-                    game_state.applyUnloadsToGpu(
+                    ChunkManagement.applyUnloadsToGpu(
+                        game_state,
                         &self.render_state.world_renderer,
                         &self.deferred_face_frees[cf],
                         &self.deferred_face_free_counts[cf],
