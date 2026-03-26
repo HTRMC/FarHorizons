@@ -8,6 +8,7 @@ const ActionRegistry = @import("ActionRegistry.zig").ActionRegistry;
 const HudBinder = @import("HudBinder.zig").HudBinder;
 const UiRenderer = @import("../renderer/vulkan/UiRenderer.zig").UiRenderer;
 const GameState = @import("../world/GameState.zig");
+const InventoryOps = GameState.InventoryOps;
 const BlockState = @import("../world/WorldState.zig").BlockState;
 const app_config = @import("../app_config.zig");
 const Options = @import("../Options.zig");
@@ -757,7 +758,7 @@ pub const MenuController = struct {
         if (game_state) |state| {
             state.inv.inventory_open = false;
             if (!state.inv.carried_item.isEmpty()) {
-                _ = state.addToInventory(state.inv.carried_item);
+                _ = InventoryOps.addToInventory(state, state.inv.carried_item);
                 state.inv.carried_item = GameState.Entity.ItemStack.EMPTY;
             }
         }
@@ -1855,9 +1856,9 @@ pub const MenuController = struct {
             if (self.game_state) |game_state| {
                 const shift = (self.ui_manager.last_mods & glfw.GLFW_MOD_SHIFT) != 0;
                 if (shift) {
-                    game_state.quickMove(s);
+                    InventoryOps.quickMove(game_state, s);
                 } else {
-                    game_state.clickSlot(s);
+                    InventoryOps.clickSlot(game_state, s);
                 }
             }
         }
@@ -1868,7 +1869,7 @@ pub const MenuController = struct {
         const game_state = self.game_state orelse return;
         if (game_state.inv.carried_item.isEmpty()) return;
         const drop_all = self.ui_manager.last_button != glfw.GLFW_MOUSE_BUTTON_RIGHT;
-        game_state.dropCarried(drop_all);
+        InventoryOps.dropCarried(game_state, drop_all);
     }
 
     fn actionResetKeybinds(ctx: ?*anyopaque) void {

@@ -1,5 +1,6 @@
 const std = @import("std");
 const GameState = @import("../GameState.zig");
+const InventoryOps = GameState.InventoryOps;
 const Entity = @import("../entity/Entity.zig");
 const BlockState = @import("../WorldState.zig").BlockState;
 const Item = @import("Item.zig");
@@ -225,9 +226,9 @@ pub fn craft(game_state: *GameState, recipe: *const Recipe) bool {
     const output = recipe.output;
     if (Item.isToolItem(output.item)) {
         const info = Item.toolFromId(output.item) orelse return true;
-        _ = game_state.addToInventory(Entity.ItemStack.ofTool(info.tool_type, info.tier));
+        _ = InventoryOps.addToInventory(game_state,Entity.ItemStack.ofTool(info.tool_type, info.tier));
     } else {
-        _ = game_state.addToInventory(Entity.ItemStack.of(output.item, output.count));
+        _ = InventoryOps.addToInventory(game_state,Entity.ItemStack.of(output.item, output.count));
     }
 
     return true;

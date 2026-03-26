@@ -3,8 +3,10 @@ const Window = @import("platform/Window.zig").Window;
 const Renderer = @import("renderer/Renderer.zig").Renderer;
 const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRenderer;
 const GameState = @import("world/GameState.zig");
+const InventoryOps = GameState.InventoryOps;
 const BlockOps = @import("world/BlockOps.zig");
 const PlayerActions = @import("world/entity/PlayerActions.zig");
+const PlayerMovement = @import("world/entity/PlayerMovement.zig");
 const ChunkManagement = @import("world/ChunkManagement.zig");
 const WorldState = @import("world/WorldState.zig");
 const MenuController = @import("ui/MenuController.zig").MenuController;
@@ -1136,7 +1138,7 @@ pub fn main() !void {
                     switch (state.game_mode) {
                         .creative => {
                             // Creative → Survival: force walking mode first (while still creative, so toggleMode allows it)
-                            if (state.mode == .flying) state.toggleMode();
+                            if (state.mode == .flying) PlayerMovement.toggleMode(state);
                             state.game_mode = .survival;
                         },
                         .survival => {
@@ -1180,7 +1182,7 @@ pub fn main() !void {
                 } else {
                     if (input_state.mode_toggle_requested) {
                         input_state.mode_toggle_requested = false;
-                        state.toggleMode();
+                        PlayerMovement.toggleMode(state);
                     }
 
                     state.input_move = .{ forward_input, up_input, right_input };
@@ -1197,7 +1199,7 @@ pub fn main() !void {
                         if (input_state.drop_cooldown > 0) {
                             input_state.drop_cooldown -= 1;
                         } else if (input_state.drop_key_held and !state.debug_camera_active) {
-                            state.dropFromSlot(state.inv.selected_slot, input_state.drop_key_ctrl);
+                            InventoryOps.dropFromSlot(state,state.inv.selected_slot, input_state.drop_key_ctrl);
                             input_state.drop_cooldown = 1;
                         }
                         state.fixedUpdate(input_state.move_speed);
@@ -1237,7 +1239,7 @@ pub fn main() !void {
                         input_state.drop_cooldown -= 1;
                     } else if (input_state.drop_key_held) {
                         if (menu_ctrl.hoveredSlot()) |slot| {
-                            state.dropFromSlot(slot, input_state.drop_key_ctrl);
+                            InventoryOps.dropFromSlot(state,slot, input_state.drop_key_ctrl);
                             input_state.drop_cooldown = 1;
                         }
                     }

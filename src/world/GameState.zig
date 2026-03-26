@@ -29,6 +29,7 @@ const BlockOps = @import("BlockOps.zig");
 const ChunkManagement = @import("ChunkManagement.zig");
 const MobSim = @import("entity/MobSim.zig");
 const PlayerActions = @import("entity/PlayerActions.zig");
+const PlayerMovement = @import("entity/PlayerMovement.zig");
 
 pub const PlayerCombat = @import("entity/PlayerCombat.zig").PlayerCombat;
 const WorldStreamingMod = @import("WorldStreaming.zig");
@@ -60,7 +61,7 @@ pub const MAX_PICKUP_GHOSTS = PlayerInventoryMod.MAX_PICKUP_GHOSTS;
 pub const PickupGhost = PlayerInventoryMod.PickupGhost;
 
 // Player physics
-const PLAYER_JUMP_VELOCITY: f32 = 8.7;
+pub const PLAYER_JUMP_VELOCITY: f32 = 8.7;
 const MOB_JUMP_VELOCITY: f32 = 8.0;
 pub const BREAK_TIME_MULTIPLIER: f32 = 1.5;
 pub const KNOCKBACK_STRENGTH: f32 = 5.0;
@@ -155,63 +156,7 @@ pub fn playerInv(self: anytype) if (@TypeOf(self) == *const GameState) *const En
     return self.entities.inventory[Entity.PLAYER].?;
 }
 
-/// Get a pointer to the item stack in a unified slot index.
-/// Slots 0-8: hotbar, 9-44: main inventory, 45-48: armor, 49-52: equip, 53: offhand.
-pub fn slotPtr(self: *GameState, slot: u8) *Entity.ItemStack {
-    const inv = self.playerInv();
-    if (slot < HOTBAR_SIZE) return &inv.hotbar[slot];
-    if (slot < HOTBAR_SIZE + INV_SIZE) return &inv.main[slot - HOTBAR_SIZE];
-    if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS) return &inv.armor[slot - HOTBAR_SIZE - INV_SIZE];
-    if (slot < HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS) return &inv.equip[slot - HOTBAR_SIZE - INV_SIZE - ARMOR_SLOTS];
-    return &inv.offhand;
-}
-
-/// Click a slot: pick up, place, or swap with carried item.
-pub fn clickSlot(self: *GameState, slot: u8) void {
-    const tz = tracy.zone(@src(), "clickSlot");
-    defer tz.end();
-    const ptr = self.slotPtr(slot);
-    if (self.inv.carried_item.isEmpty() and ptr.isEmpty()) return;
-    const tmp = ptr.*;
-    ptr.* = self.inv.carried_item;
-    self.inv.carried_item = tmp;
-}
-
-/// Shift+click: move item between hotbar and main inventory.
-/// First tries to merge into a matching stack, then into an empty slot.
-pub fn quickMove(self: *GameState, slot: u8) void {
-    const inv = self.playerInv();
-    const ptr = self.slotPtr(slot);
-    if (ptr.isEmpty()) return;
-
-    const target: []Entity.ItemStack = if (slot < HOTBAR_SIZE) &inv.main else &inv.hotbar;
-
-    // Tools: skip merge pass, go straight to empty slot
-    if (!ptr.isTool()) {
-        // First pass: try to merge into existing matching stacks
-        for (target) |*s| {
-            if (!s.isEmpty() and !s.isTool() and s.block == ptr.block and s.count < Entity.MAX_STACK) {
-                const space = Entity.MAX_STACK - s.count;
-                const transfer = @min(space, ptr.count);
-                s.count += transfer;
-                ptr.count -= transfer;
-                if (ptr.count == 0) {
-                    ptr.* = Entity.ItemStack.EMPTY;
-                    return;
-                }
-            }
-        }
-    }
-
-    // Second pass: find empty slot
-    for (target) |*s| {
-        if (s.isEmpty()) {
-            s.* = ptr.*;
-            ptr.* = Entity.ItemStack.EMPTY;
-            return;
-        }
-    }
-}
+pub const InventoryOps = @import("entity/InventoryOps.zig");
 
 pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: []const u8, world_type_override: ?WorldState.WorldType, game_mode_override: ?GameMode) !GameState {
     const tz = tracy.zone(@src(), "GameState.init");
@@ -476,86 +421,13 @@ pub fn toggleDebugCamera(self: *GameState) void {
     }
 }
 
-fn updateWaterState(self: *GameState) void {
-    const floori = Physics.floori;
-    const P = Entity.PLAYER;
-    const epos = self.entities.pos[P];
-
-    // In flying mode, use camera position; in walking mode, use entity position
-    const pos_x: f32 = if (self.mode == .flying) self.camera.position.x else epos[0];
-    const pos_y: f32 = if (self.mode == .flying) self.camera.position.y - EYE_OFFSET else epos[1];
-    const pos_z: f32 = if (self.mode == .flying) self.camera.position.z else epos[2];
-    const px = floori(pos_x);
-    const pz = floori(pos_z);
-
-    const feet_block = self.chunk_map.getBlock(px, floori(pos_y), pz);
-    const eye_block = self.chunk_map.getBlock(px, floori(pos_y + EYE_OFFSET), pz);
-
-    self.entities.flags[P].in_water = (BlockState.getBlock(feet_block) == .water);
-    self.entities.flags[P].eyes_in_water = (BlockState.getBlock(eye_block) == .water);
-
-    // Ladder detection: check feet and mid-body
-    self.entities.flags[P].on_ladder = isLadder(feet_block) or
-        isLadder(self.chunk_map.getBlock(px, floori(pos_y + 0.9), pz));
-
-    // Water vision time: MC 0-600 ticks @20Hz → 0-900 @30Hz
-    if (self.entities.flags[P].eyes_in_water) {
-        if (self.entities.water_vision_time[P] < 900) self.entities.water_vision_time[P] += 1;
-    } else {
-        self.entities.water_vision_time[P] = 0;
-    }
-}
-
-fn isLadder(state: BlockState.StateId) bool {
-    return BlockState.getBlock(state) == .ladder;
-}
-
-/// Returns 0.0 to 1.0 water vision factor (MC two-phase curve).
-pub fn waterVision(self: *const GameState) f32 {
-    const t: f32 = @floatFromInt(self.entities.water_vision_time[Entity.PLAYER]);
-    const a = std.math.clamp(t / 150.0, 0.0, 1.0);
-    const b = std.math.clamp((t - 150.0) / 750.0, 0.0, 1.0);
-    return a * 0.6 + b * 0.4;
-}
-
-pub fn toggleMode(self: *GameState) void {
-    if (self.game_mode == .survival) return; // no flying in survival
-    const P = Entity.PLAYER;
-    switch (self.mode) {
-        .flying => {
-            self.entities.pos[P] = .{
-                self.camera.position.x,
-                self.camera.position.y - EYE_OFFSET,
-                self.camera.position.z,
-            };
-            self.entities.prev_pos[P] = self.entities.pos[P];
-            self.entities.vel[P] = .{ 0.0, 0.0, 0.0 };
-            self.entities.flags[P].on_ground = false;
-            self.jump_requested = false;
-            self.jump_cooldown = 5;
-            self.combat.fall_start_y = self.entities.pos[P][1];
-            self.mode = .walking;
-        },
-        .walking => {
-            const epos = self.entities.pos[P];
-            self.camera.position = zlm.Vec3.init(
-                epos[0],
-                epos[1] + EYE_OFFSET,
-                epos[2],
-            );
-            self.prev_camera_pos = self.camera.position;
-            self.mode = .flying;
-        },
-    }
-}
-
 pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     const P = Entity.PLAYER;
     self.game_time +%= 1;
     self.entities.prev_pos[P] = self.entities.pos[P];
     self.prev_camera_pos = self.camera.position;
 
-    self.updatePlayerMovement(P, move_speed);
+    PlayerMovement.updatePlayerMovement(self, P, move_speed);
     PlayerActions.updateCombatSystems(self);
     MobSim.updateEntities(self);
 
@@ -566,50 +438,6 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     ChunkManagement.worldTick(self);
     self.streaming.world_tick_pending = true;
     ChunkManagement.reportPipelineStats(self);
-}
-
-fn updatePlayerMovement(self: *GameState, player: u32, move_speed: f32) void {
-    self.updateWaterState();
-
-    switch (self.mode) {
-        .flying => {
-            const forward_input = self.input_move[0];
-            const right_input = self.input_move[2];
-            const up_input = self.input_move[1];
-
-            if (forward_input != 0.0 or right_input != 0.0 or up_input != 0.0) {
-                const speed = move_speed * TICK_INTERVAL;
-                self.camera.move(forward_input * speed, right_input * speed, up_input * speed);
-            }
-
-            self.entities.pos[player] = .{
-                self.camera.position.x,
-                self.camera.position.y - EYE_OFFSET,
-                self.camera.position.z,
-            };
-        },
-        .walking => {
-            const flags = self.entities.flags[player];
-
-            if (self.jump_cooldown > 0) {
-                self.jump_cooldown -= 1;
-            } else if (self.jump_requested and flags.on_ladder) {
-                self.entities.vel[player][1] = Physics.LADDER_CLIMB_SPEED;
-            } else if (self.jump_requested and !flags.in_water and flags.on_ground) {
-                self.entities.vel[player][1] = PLAYER_JUMP_VELOCITY;
-            }
-            self.jump_requested = false;
-
-            Physics.updateEntity(&self.entities, player, &self.chunk_map, self.input_move, self.camera.yaw, TICK_INTERVAL);
-
-            const epos = self.entities.pos[player];
-            self.camera.position = zlm.Vec3.init(
-                epos[0],
-                epos[1] + EYE_OFFSET,
-                epos[2],
-            );
-        },
-    }
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {
@@ -718,141 +546,6 @@ pub fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_blo
 
     // Fall back to full recompute.
     self.markDirty(wx, wy, wz, true);
-}
-
-/// Drop items from an arbitrary inventory slot. If `drop_all` is true, drops the entire stack.
-pub fn dropFromSlot(self: *GameState, slot: u8, drop_all: bool) void {
-    const stack = self.slotPtr(slot);
-    if (stack.isEmpty()) return;
-    if (self.entities.count >= Entity.MAX_ENTITIES) return;
-
-    const P = Entity.PLAYER;
-    const epos = self.entities.pos[P];
-    const forward = self.camera.getForward();
-    const drop_pos = [3]f32{
-        epos[0] + forward.x * 0.5,
-        epos[1] + EYE_OFFSET + forward.y * 0.5,
-        epos[2] + forward.z * 0.5,
-    };
-    const drop_count: u8 = if (drop_all or stack.isTool()) stack.count else 1;
-    const prev_count = self.entities.count;
-    self.entities.spawnItemDropWithDurability(drop_pos, stack.block, drop_count, stack.durability);
-    if (self.entities.count <= prev_count) return;
-
-    const last = self.entities.count - 1;
-    self.entities.vel[last] = .{
-        forward.x * 5.0,
-        forward.y * 5.0 + 2.0,
-        forward.z * 5.0,
-    };
-
-    if (drop_all or stack.count <= 1) {
-        stack.* = Entity.ItemStack.EMPTY;
-    } else {
-        stack.count -= 1;
-    }
-}
-
-/// Drop carried item as an entity in the world.
-/// If `drop_all` is false, drops only 1 from the stack.
-pub fn dropCarried(self: *GameState, drop_all: bool) void {
-    if (self.inv.carried_item.isEmpty()) return;
-    if (self.entities.count >= Entity.MAX_ENTITIES) return;
-
-    const P = Entity.PLAYER;
-    const epos = self.entities.pos[P];
-    const forward = self.camera.getForward();
-    const drop_pos = [3]f32{
-        epos[0] + forward.x * 0.5,
-        epos[1] + EYE_OFFSET + forward.y * 0.5,
-        epos[2] + forward.z * 0.5,
-    };
-    const drop_count: u8 = if (drop_all or self.inv.carried_item.isTool()) self.inv.carried_item.count else 1;
-    const prev_count = self.entities.count;
-    self.entities.spawnItemDropWithDurability(drop_pos, self.inv.carried_item.block, drop_count, self.inv.carried_item.durability);
-    if (self.entities.count <= prev_count) return;
-
-    const last = self.entities.count - 1;
-    self.entities.vel[last] = .{
-        forward.x * 5.0,
-        forward.y * 5.0 + 2.0,
-        forward.z * 5.0,
-    };
-
-    if (drop_all or self.inv.carried_item.count <= 1) {
-        self.inv.carried_item = Entity.ItemStack.EMPTY;
-    } else {
-        self.inv.carried_item.count -= 1;
-    }
-}
-
-pub fn decrementSelectedStack(self: *GameState) void {
-    if (self.game_mode == .creative) return; // infinite blocks in creative
-    const stack = &self.playerInv().hotbar[self.inv.selected_slot];
-    if (stack.count > 1) {
-        stack.count -= 1;
-    } else {
-        stack.* = Entity.ItemStack.EMPTY;
-    }
-}
-
-/// Try to add an item stack to the player's inventory.
-/// Returns true if the entire stack was added, false if inventory is full.
-pub fn addToInventory(self: *GameState, item: Entity.ItemStack) bool {
-    if (item.isEmpty()) return true;
-    var remaining = item.count;
-    const inv = self.playerInv();
-
-    // Tools go to first empty slot only (no merge — unique durability)
-    if (item.isTool()) {
-        for (&inv.hotbar) |*s| {
-            if (s.isEmpty()) {
-                s.* = item;
-                return true;
-            }
-        }
-        for (&inv.main) |*s| {
-            if (s.isEmpty()) {
-                s.* = item;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    // First pass: merge into existing matching stacks (hotbar then main)
-    for (&inv.hotbar) |*s| {
-        if (!s.isEmpty() and !s.isTool() and s.block == item.block and s.count < Entity.MAX_STACK) {
-            const transfer = @min(Entity.MAX_STACK - s.count, remaining);
-            s.count += transfer;
-            remaining -= transfer;
-            if (remaining == 0) return true;
-        }
-    }
-    for (&inv.main) |*s| {
-        if (!s.isEmpty() and !s.isTool() and s.block == item.block and s.count < Entity.MAX_STACK) {
-            const transfer = @min(Entity.MAX_STACK - s.count, remaining);
-            s.count += transfer;
-            remaining -= transfer;
-            if (remaining == 0) return true;
-        }
-    }
-
-    // Second pass: find empty slots
-    for (&inv.hotbar) |*s| {
-        if (s.isEmpty()) {
-            s.* = .{ .block = item.block, .count = remaining };
-            return true;
-        }
-    }
-    for (&inv.main) |*s| {
-        if (s.isEmpty()) {
-            s.* = .{ .block = item.block, .count = remaining };
-            return true;
-        }
-    }
-
-    return false;
 }
 
 /// Sample block light (RGB) and sky light at a world position with
@@ -1038,7 +731,7 @@ test "slotPtr: hotbar slots 0-8" {
     defer destroyTestGameState(&game_state);
     const inv = game_state.playerInv();
     for (0..HOTBAR_SIZE) |i| {
-        const ptr = game_state.slotPtr(@intCast(i));
+        const ptr = InventoryOps.slotPtr(&game_state,@intCast(i));
         try testing.expectEqual(&inv.hotbar[i], ptr);
     }
 }
@@ -1049,7 +742,7 @@ test "slotPtr: inventory slots 9-44" {
     const inv = game_state.playerInv();
     for (0..INV_SIZE) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + i);
-        const ptr = game_state.slotPtr(slot);
+        const ptr = InventoryOps.slotPtr(&game_state,slot);
         try testing.expectEqual(&inv.main[i], ptr);
     }
 }
@@ -1060,7 +753,7 @@ test "slotPtr: armor slots 45-48" {
     const inv = game_state.playerInv();
     for (0..ARMOR_SLOTS) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + INV_SIZE + i);
-        const ptr = game_state.slotPtr(slot);
+        const ptr = InventoryOps.slotPtr(&game_state,slot);
         try testing.expectEqual(&inv.armor[i], ptr);
     }
 }
@@ -1071,7 +764,7 @@ test "slotPtr: equip slots 49-52" {
     const inv = game_state.playerInv();
     for (0..EQUIP_SLOTS) |i| {
         const slot: u8 = @intCast(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + i);
-        const ptr = game_state.slotPtr(slot);
+        const ptr = InventoryOps.slotPtr(&game_state,slot);
         try testing.expectEqual(&inv.equip[i], ptr);
     }
 }
@@ -1080,7 +773,7 @@ test "slotPtr: offhand slot 53" {
     var game_state = makeTestGameState();
     defer destroyTestGameState(&game_state);
     const inv = game_state.playerInv();
-    const ptr = game_state.slotPtr(HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS);
+    const ptr = InventoryOps.slotPtr(&game_state,HOTBAR_SIZE + INV_SIZE + ARMOR_SLOTS + EQUIP_SLOTS);
     try testing.expectEqual(&inv.offhand, ptr);
 }
 
@@ -1092,7 +785,7 @@ test "clickSlot: pick up item from hotbar" {
     game_state.playerInv().hotbar[0] = stone;
     game_state.inv.carried_item = S.EMPTY;
 
-    game_state.clickSlot(0);
+    InventoryOps.clickSlot(&game_state,0);
 
     try testing.expect(game_state.playerInv().hotbar[0].isEmpty());
     try testing.expectEqual(stone.block, game_state.inv.carried_item.block);
@@ -1108,7 +801,7 @@ test "clickSlot: swap carried with slot" {
     game_state.playerInv().hotbar[0] = stone;
     game_state.inv.carried_item = dirt;
 
-    game_state.clickSlot(0);
+    InventoryOps.clickSlot(&game_state,0);
 
     try testing.expectEqual(dirt.block, game_state.playerInv().hotbar[0].block);
     try testing.expectEqual(dirt.count, game_state.playerInv().hotbar[0].count);
@@ -1123,7 +816,7 @@ test "clickSlot: both empty does nothing" {
     game_state.playerInv().hotbar[0] = S.EMPTY;
     game_state.inv.carried_item = S.EMPTY;
 
-    game_state.clickSlot(0);
+    InventoryOps.clickSlot(&game_state,0);
 
     try testing.expect(game_state.playerInv().hotbar[0].isEmpty());
     try testing.expect(game_state.inv.carried_item.isEmpty());
@@ -1138,7 +831,7 @@ test "quickMove: hotbar to inventory" {
     inv.hotbar[0] = stone;
     inv.main[0] = S.EMPTY;
 
-    game_state.quickMove(0);
+    InventoryOps.quickMove(&game_state,0);
 
     try testing.expect(inv.hotbar[0].isEmpty());
     try testing.expectEqual(stone.block, inv.main[0].block);
@@ -1156,7 +849,7 @@ test "quickMove: inventory to hotbar" {
     inv.hotbar[2] = S.EMPTY;
     inv.main[0] = stone;
 
-    game_state.quickMove(HOTBAR_SIZE); // slot 9 = first inventory slot
+    InventoryOps.quickMove(&game_state,HOTBAR_SIZE); // slot 9 = first inventory slot
 
     try testing.expectEqual(stone.block, inv.hotbar[2].block);
     try testing.expectEqual(stone.count, inv.hotbar[2].count);
@@ -1173,7 +866,7 @@ test "quickMove: no empty target does nothing" {
     inv.hotbar[0] = stone;
     inv.main = .{dirt} ** INV_SIZE; // all full, different block
 
-    game_state.quickMove(0);
+    InventoryOps.quickMove(&game_state,0);
 
     // Item stays in place
     try testing.expectEqual(stone.block, inv.hotbar[0].block);
@@ -1188,7 +881,7 @@ test "addToInventory: merges into existing stack" {
     inv.hotbar[0] = S.of(BlockState.defaultState(.stone), 60);
     inv.hotbar[1] = S.EMPTY;
 
-    const result = game_state.addToInventory(S.of(BlockState.defaultState(.stone), 3));
+    const result = InventoryOps.addToInventory(&game_state,S.of(BlockState.defaultState(.stone), 3));
     try testing.expect(result);
     try testing.expectEqual(@as(u8, 63), inv.hotbar[0].count);
 }
@@ -1201,7 +894,7 @@ test "addToInventory: fills empty slot when no match" {
     for (&inv.hotbar) |*s| s.* = S.EMPTY;
     for (&inv.main) |*s| s.* = S.EMPTY;
 
-    const result = game_state.addToInventory(S.of(BlockState.defaultState(.dirt), 1));
+    const result = InventoryOps.addToInventory(&game_state,S.of(BlockState.defaultState(.dirt), 1));
     try testing.expect(result);
     try testing.expectEqual(BlockState.defaultState(.dirt), inv.hotbar[0].block);
     try testing.expectEqual(@as(u8, 1), inv.hotbar[0].count);

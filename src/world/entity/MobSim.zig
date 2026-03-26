@@ -1,5 +1,6 @@
 const std = @import("std");
 const GameState = @import("../GameState.zig");
+const InventoryOps = GameState.InventoryOps;
 const Entity = GameState.Entity;
 const Item = GameState.Item;
 const Physics = @import("Physics.zig");
@@ -61,7 +62,7 @@ pub fn updateItemDrops(state: *GameState) void {
                     .count = state.entities.item_count[i],
                     .durability = state.entities.item_durability[i],
                 };
-                if (state.addToInventory(item)) {
+                if (InventoryOps.addToInventory(state, item)) {
                     // Spawn pickup ghost animation before despawning
                     spawnPickupGhost(state, i);
                     state.entities.despawn(i);

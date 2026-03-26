@@ -15,6 +15,7 @@ const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const ThreadPool = @import("../../platform/ThreadPool.zig").ThreadPool;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const GameState = @import("../../world/GameState.zig");
+const PlayerMovement = @import("../../world/entity/PlayerMovement.zig");
 const ChunkManagement = @import("../../world/ChunkManagement.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
 const app_config = @import("../../app_config.zig");
@@ -921,7 +922,7 @@ pub const VulkanRenderer = struct {
         var fog_end: f32 = 10000.0;
         if (eyes_in_water) {
             if (self.game_state) |game_state| {
-                const vision = game_state.waterVision();
+                const vision = PlayerMovement.waterVision(game_state);
                 fog_start = 0.0;
                 fog_end = 15.0 + vision * 45.0; // 15 to 60 blocks
             }

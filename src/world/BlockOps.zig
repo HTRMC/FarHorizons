@@ -1,6 +1,7 @@
 const std = @import("std");
 const tracy = @import("../platform/tracy.zig");
 const GameState = @import("GameState.zig");
+const InventoryOps = GameState.InventoryOps;
 const WorldState = @import("WorldState.zig");
 const BlockState = WorldState.BlockState;
 const Raycast = @import("Raycast.zig");
@@ -154,7 +155,7 @@ pub fn placeBlock(state: *GameState) void {
             state.queueChunkSave(bx, by, bz);
             updateFenceNeighbors(state, bx, by, bz);
             state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
-            state.decrementSelectedStack();
+            InventoryOps.decrementSelectedStack(state);
             return;
         }
     }
@@ -200,7 +201,7 @@ pub fn placeBlock(state: *GameState) void {
         state.queueChunkSave(px, py + 1, pz);
 
         state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
-        state.decrementSelectedStack();
+        InventoryOps.decrementSelectedStack(state);
         return;
     }
 
@@ -221,7 +222,7 @@ pub fn placeBlock(state: *GameState) void {
     updateStairNeighbors(state, px, py, pz);
 
     state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
-    state.decrementSelectedStack();
+    InventoryOps.decrementSelectedStack(state);
 }
 
 pub fn pickBlock(state: *GameState) void {
