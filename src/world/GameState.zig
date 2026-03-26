@@ -116,6 +116,11 @@ frame_timing: FrameTiming = .{},
 prev_camera_pos: zlm.Vec3,
 tick_camera_pos: zlm.Vec3,
 
+// ── Network block changes (thread-safe queue) ──
+pending_blocks: [MAX_PENDING_BLOCKS]PendingBlock = undefined,
+pending_blocks_write: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+pending_blocks_read: usize = 0,
+
 // ── Remote players (multiplayer) ──
 remote_players: RemotePlayerList = .empty,
 pending_updates: [MAX_PENDING_UPDATES]PendingUpdate = undefined,
@@ -143,6 +148,15 @@ const PendingUpdate = struct {
     id: u32,
     pos: [3]f64,
     rotation: [3]f32,
+};
+
+const MAX_PENDING_BLOCKS: usize = 256;
+
+const PendingBlock = struct {
+    wx: i32,
+    wy: i32,
+    wz: i32,
+    new_block: WorldState.StateId,
 };
 
 pub const FrameTiming = struct {
@@ -538,6 +552,7 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     self.entities.prev_pos[P] = self.entities.pos[P];
     self.prev_camera_pos = self.camera.position;
 
+    self.drainNetworkBlockChanges();
     PlayerMovement.updatePlayerMovement(self, P, move_speed);
     PlayerActions.updateCombatSystems(self);
     MobSim.updateEntities(self);
@@ -601,8 +616,24 @@ pub fn restoreAfterRender(self: *GameState) void {
 }
 
 /// Mark a block position dirty from a network update (triggers remesh).
-pub fn markDirtyFromNetwork(self: *GameState, wx: i32, wy: i32, wz: i32) void {
-    self.markDirty(wx, wy, wz, false);
+/// Queue a block change from the network thread (thread-safe).
+pub fn queueNetworkBlockChange(self: *GameState, wx: i32, wy: i32, wz: i32, new_block: WorldState.StateId) void {
+    const write = self.pending_blocks_write.load(.acquire);
+    const next = (write + 1) % MAX_PENDING_BLOCKS;
+    if (next == self.pending_blocks_read) return; // full, drop
+    self.pending_blocks[write] = .{ .wx = wx, .wy = wy, .wz = wz, .new_block = new_block };
+    self.pending_blocks_write.store(next, .release);
+}
+
+/// Apply queued network block changes on the main thread.
+fn drainNetworkBlockChanges(self: *GameState) void {
+    const write = self.pending_blocks_write.load(.acquire);
+    while (self.pending_blocks_read != write) {
+        const b = self.pending_blocks[self.pending_blocks_read];
+        self.pending_blocks_read = (self.pending_blocks_read + 1) % MAX_PENDING_BLOCKS;
+        self.chunk_map.setBlock(b.wx, b.wy, b.wz, b.new_block);
+        self.markDirty(b.wx, b.wy, b.wz, false);
+    }
 }
 
 pub fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {

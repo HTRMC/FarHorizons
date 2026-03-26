@@ -105,11 +105,8 @@ pub fn clientReceive(_: *Connection, reader: *BinaryReader) anyerror!void {
         const wz = try reader.readInt(i32);
         const new_block = try reader.readInt(u16);
 
-        // Apply to client chunk map
-        state.chunk_map.setBlock(wx, wy, wz, new_block);
-
-        // Mark dirty for remesh
-        state.markDirtyFromNetwork(wx, wy, wz);
+        // Queue for main thread (thread-safe ring buffer)
+        state.queueNetworkBlockChange(wx, wy, wz, new_block);
     }
 }
 
