@@ -201,7 +201,7 @@ fn fireTextInputChange(ti: *WidgetData.TextInputData, registry: *const ActionReg
     }
 }
 
-pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, registry: *const ActionRegistry) bool {
+pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, registry: *const ActionRegistry, glfw_window: ?*glfw.Window) bool {
     if (action != glfw.GLFW_PRESS and action != glfw.GLFW_REPEAT) return false;
 
     const focused_id = findFocused(tree);
@@ -223,15 +223,17 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
             }
 
             if (ctrl and key == glfw.GLFW_KEY_V) {
-                if (glfw.getClipboardString()) |clip_ptr| {
-                    const clip = std.mem.span(clip_ptr);
-                    for (clip) |ch| {
-                        if (ch >= 32 and ch < 127) {
-                            ti.insertChar(ch);
+                if (glfw_window) |win| {
+                    if (glfw.getClipboardString(win)) |clip_ptr| {
+                        const clip = std.mem.span(clip_ptr);
+                        for (clip) |ch| {
+                            if (ch >= 32 and ch < 127) {
+                                ti.insertChar(ch);
+                            }
                         }
+                        ti.cursor_blink_counter = 0;
+                        fireTextInputChange(ti, registry);
                     }
-                    ti.cursor_blink_counter = 0;
-                    fireTextInputChange(ti, registry);
                 }
                 return true;
             }

@@ -215,8 +215,8 @@ pub fn getTime() f64 {
     return c.glfwGetTime();
 }
 
-pub fn getClipboardString() ?[*:0]const u8 {
-    return c.glfwGetClipboardString(null);
+pub fn getClipboardString(window: *Window) ?[*:0]const u8 {
+    return c.glfwGetClipboardString(@ptrCast(window));
 }
 
 pub fn getRequiredInstanceExtensions(count: *u32) ?[*]const [*:0]const u8 {

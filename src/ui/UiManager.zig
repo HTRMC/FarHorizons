@@ -34,6 +34,7 @@ pub const UiManager = struct {
     screen_height: f32 = 600.0,
     ui_scale: f32 = 1.0,
 
+    glfw_window: ?*glfw.Window = null,
     registry: ActionRegistry = .{},
     last_mouse_x: f32 = 0,
     last_mouse_y: f32 = 0,
@@ -250,7 +251,7 @@ pub const UiManager = struct {
             return true;
         }
 
-        return EventDispatch.dispatchKey(tree, key, action, mods, &self.registry);
+        return EventDispatch.dispatchKey(tree, key, action, mods, &self.registry, self.glfw_window);
     }
 
     pub fn handleChar(self: *UiManager, codepoint: u32) bool {

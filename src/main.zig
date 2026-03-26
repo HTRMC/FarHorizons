@@ -764,7 +764,7 @@ pub fn main() !void {
 
     const ui_manager = try allocator.create(UiManager);
     defer allocator.destroy(ui_manager);
-    ui_manager.* = .{};
+    ui_manager.* = .{ .glfw_window = window.handle };
     renderer.setUiManager(@ptrCast(ui_manager));
 
     var options = Options.load(allocator);
