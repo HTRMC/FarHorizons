@@ -59,11 +59,11 @@ const face_bucket_map = std.StaticStringMap(u3).initComptime(.{
 
 // Face normals for standard directions
 const face_normals = [6][3]f32{
-    .{ 0, 0, 1 },  // south +Z
+    .{ 0, 0, 1 }, // south +Z
     .{ 0, 0, -1 }, // north -Z
     .{ -1, 0, 0 }, // west -X
-    .{ 1, 0, 0 },  // east +X
-    .{ 0, 1, 0 },  // up +Y
+    .{ 1, 0, 0 }, // east +X
+    .{ 0, 1, 0 }, // up +Y
     .{ 0, -1, 0 }, // down -Y
 };
 
@@ -95,7 +95,7 @@ pub const BlockModelRegistry = struct {
     /// Bit layout: bit = row * 4 + col, where row/col are 0..3 subdivisions of the face plane.
     /// For vertical faces (S/N/E/W): col = horizontal axis, row = Y (0=bottom, 3=top).
     /// For horizontal faces (up/down): col = X, row = Z.
-    /// 0xFFFF = full face coverage. Used for Minecraft-style VoxelShape occlusion culling.
+    /// 0xFFFF = full face coverage. Used for  VoxelShape occlusion culling.
     state_face_bitmaps: [BlockState.TOTAL_STATES][6]u16,
 
     pub fn init(allocator: std.mem.Allocator) !*BlockModelRegistry {
@@ -395,33 +395,45 @@ pub fn elementFaceBitmap(from: [3]f32, to: [3]f32, face: u3) u16 {
     switch (face) {
         0 => { // south +Z: boundary at z=1, face plane = XY
             on_boundary = @abs(to[2] - 1.0) < eps;
-            axis_a_min = from[0]; axis_a_max = to[0]; // X → col
-            axis_b_min = from[1]; axis_b_max = to[1]; // Y → row
+            axis_a_min = from[0];
+            axis_a_max = to[0]; // X → col
+            axis_b_min = from[1];
+            axis_b_max = to[1]; // Y → row
         },
         1 => { // north -Z: boundary at z=0, face plane = XY
             on_boundary = @abs(from[2]) < eps;
-            axis_a_min = from[0]; axis_a_max = to[0];
-            axis_b_min = from[1]; axis_b_max = to[1];
+            axis_a_min = from[0];
+            axis_a_max = to[0];
+            axis_b_min = from[1];
+            axis_b_max = to[1];
         },
         2 => { // west -X: boundary at x=0, face plane = ZY
             on_boundary = @abs(from[0]) < eps;
-            axis_a_min = from[2]; axis_a_max = to[2]; // Z → col
-            axis_b_min = from[1]; axis_b_max = to[1]; // Y → row
+            axis_a_min = from[2];
+            axis_a_max = to[2]; // Z → col
+            axis_b_min = from[1];
+            axis_b_max = to[1]; // Y → row
         },
         3 => { // east +X: boundary at x=1, face plane = ZY
             on_boundary = @abs(to[0] - 1.0) < eps;
-            axis_a_min = from[2]; axis_a_max = to[2];
-            axis_b_min = from[1]; axis_b_max = to[1];
+            axis_a_min = from[2];
+            axis_a_max = to[2];
+            axis_b_min = from[1];
+            axis_b_max = to[1];
         },
         4 => { // up +Y: boundary at y=1, face plane = XZ
             on_boundary = @abs(to[1] - 1.0) < eps;
-            axis_a_min = from[0]; axis_a_max = to[0]; // X → col
-            axis_b_min = from[2]; axis_b_max = to[2]; // Z → row
+            axis_a_min = from[0];
+            axis_a_max = to[0]; // X → col
+            axis_b_min = from[2];
+            axis_b_max = to[2]; // Z → row
         },
         5 => { // down -Y: boundary at y=0, face plane = XZ
             on_boundary = @abs(from[1]) < eps;
-            axis_a_min = from[0]; axis_a_max = to[0];
-            axis_b_min = from[2]; axis_b_max = to[2];
+            axis_a_min = from[0];
+            axis_a_max = to[0];
+            axis_b_min = from[2];
+            axis_b_max = to[2];
         },
         else => return 0,
     }

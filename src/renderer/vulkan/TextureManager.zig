@@ -54,7 +54,7 @@ const TEX_W = 16;
 const TEX_H = 16;
 const FRAME_SIZE: usize = TEX_W * TEX_H * 4; // 1024 bytes per frame
 const MAX_ANIMATED_TEXTURES = 8;
-const TICK_RATE: f32 = 20.0; // Minecraft ticks per second
+const TICK_RATE: f32 = 20.0; // ticks per second
 const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
 
 const AnimatedTexture = struct {
@@ -134,7 +134,7 @@ pub const TextureManager = struct {
     pub fn tickAnimations(self: *TextureManager, dt: f32) void {
         self.tick_accumulator += dt;
 
-        // Process accumulated ticks at 20Hz (Minecraft tick rate)
+        // Process accumulated ticks at 20Hz (tick rate)
         while (self.tick_accumulator >= TICK_INTERVAL) {
             self.tick_accumulator -= TICK_INTERVAL;
             for (0..self.animation_count) |i| {
@@ -186,7 +186,7 @@ pub const TextureManager = struct {
                 const progress: f32 = @as(f32, @floatFromInt(anim.sub_frame)) /
                     @as(f32, @floatFromInt(anim.frametime));
 
-                // Linear interpolation per component (Minecraft's mix())
+                // Linear interpolation per component mix()
                 for (0..FRAME_SIZE) |p| {
                     const a: f32 = @floatFromInt(cur_pixels[p]);
                     const b: f32 = @floatFromInt(next_pixels[p]);

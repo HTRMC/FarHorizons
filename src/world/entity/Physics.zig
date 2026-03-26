@@ -15,14 +15,14 @@ const EPSILON: f32 = 1.0e-7;
 pub const PLAYER_HALF_W: f32 = 0.4;
 pub const PLAYER_HEIGHT: f32 = 1.8;
 
-// Water physics (matched to Minecraft constants)
+// Water physics
 const WATER_SPEED: f32 = 2.0; // terminal horizontal velocity in water
 const WATER_SWIM_SPEED: f32 = 3.0; // vertical swim speed
 const WATER_FRICTION: f32 = 12.0; // approach rate for velocity
 const WATER_XZ_DRAG: f32 = 0.86; // per-tick horizontal drag (MC 0.8 @20Hz → 0.86 @30Hz)
 const WATER_Y_DRAG: f32 = 0.86; // per-tick vertical drag
 
-// Ladder physics (matched to Minecraft)
+// Ladder physics
 pub const LADDER_CLIMB_SPEED: f32 = 3.0; // climb speed when holding jump
 const LADDER_MAX_FALL: f32 = -2.4; // max fall speed on ladder (MC: -0.15/tick @20Hz)
 

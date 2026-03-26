@@ -28,15 +28,15 @@ pub const EntityVertex = extern struct {
 const MAX_VERTICES = 4096;
 
 const EntityPushConstants = extern struct {
-    mvp: [16]f32,              // 0-63
-    ambient_light: [3]f32,     // 64-75
-    contrast: f32,             // 76-79  (ambientContrast.w)
-    sun_dir: [3]f32,           // 80-91
-    sky_level: f32,            // 92-95  (sunDirSky.w)
-    block_light: [3]f32,       // 96-107
-    model_yaw: f32 = 0,        // 108-111 (blockLightYaw.w)
-    _pad_leg_phase: f32 = 0,   // 112-115 (legPhase, unused by player)
-    hurt_tint: f32 = 0,        // 116-119
+    mvp: [16]f32, // 0-63
+    ambient_light: [3]f32, // 64-75
+    contrast: f32, // 76-79  (ambientContrast.w)
+    sun_dir: [3]f32, // 80-91
+    sky_level: f32, // 92-95  (sunDirSky.w)
+    block_light: [3]f32, // 96-107
+    model_yaw: f32 = 0, // 108-111 (blockLightYaw.w)
+    _pad_leg_phase: f32 = 0, // 112-115 (legPhase, unused by player)
+    hurt_tint: f32 = 0, // 116-119
 };
 
 pub const EntityRenderer = struct {
@@ -297,9 +297,18 @@ pub const EntityRenderer = struct {
         var min_y: f64 = std.math.inf(f64);
         var max_y: f64 = -std.math.inf(f64);
         for (parts) |pv| {
-            const p = switch (pv) { .object => |obj| obj, else => continue };
-            const min_arr = switch (p.get("min") orelse continue) { .array => |a| a.items, else => continue };
-            const size_arr = switch (p.get("size") orelse continue) { .array => |a| a.items, else => continue };
+            const p = switch (pv) {
+                .object => |obj| obj,
+                else => continue,
+            };
+            const min_arr = switch (p.get("min") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
+            const size_arr = switch (p.get("size") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
             if (min_arr.len < 3 or size_arr.len < 3) continue;
             min_y = @min(min_y, jf(min_arr[1]));
             max_y = @max(max_y, jf(min_arr[1]) + jf(size_arr[1]));
@@ -312,10 +321,22 @@ pub const EntityRenderer = struct {
         var count: u32 = 0;
 
         for (parts) |pv| {
-            const p = switch (pv) { .object => |obj| obj, else => continue };
-            const min_arr = switch (p.get("min") orelse continue) { .array => |a| a.items, else => continue };
-            const size_arr = switch (p.get("size") orelse continue) { .array => |a| a.items, else => continue };
-            const uv_arr = switch (p.get("uv") orelse continue) { .array => |a| a.items, else => continue };
+            const p = switch (pv) {
+                .object => |obj| obj,
+                else => continue,
+            };
+            const min_arr = switch (p.get("min") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
+            const size_arr = switch (p.get("size") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
+            const uv_arr = switch (p.get("uv") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
             if (min_arr.len < 3 or size_arr.len < 3 or uv_arr.len < 2) continue;
 
             const bx: f32 = @floatCast(jf(min_arr[0]) * scale);
@@ -341,7 +362,7 @@ pub const EntityRenderer = struct {
         std.log.info("Player model loaded: {} parts, {} vertices", .{ parts.len, count });
     }
 
-    /// Add a box with Minecraft-style UV layout.
+    /// Add a box with  UV layout.
     /// tu,tv = texture origin; pw,ph,pd = box pixel dimensions; tw,th = texture size.
     pub fn addTexturedBox(
         vertices: [*]EntityVertex,
@@ -368,7 +389,7 @@ pub const EntityRenderer = struct {
         const y1 = y + h;
         const z1 = z + d;
 
-        // Minecraft UV layout for a box at (tu,tv) with pixel size (pw,ph,pd):
+        // UV layout for a box at (tu,tv) with pixel size (pw,ph,pd):
         //          +------+------+
         //          | Top  | Bot  |
         //    +-----+------+-----+------+
@@ -401,12 +422,25 @@ pub const EntityRenderer = struct {
     pub fn addQuad(
         vertices: [*]EntityVertex,
         start: u32,
-        x0: f32, y0: f32, z0: f32,
-        x1: f32, y1: f32, z1: f32,
-        x2: f32, y2: f32, z2: f32,
-        x3: f32, y3: f32, z3: f32,
-        nx: f32, ny: f32, nz: f32,
-        uv_u0: f32, uv_v0: f32, uv_u1: f32, uv_v1: f32,
+        x0: f32,
+        y0: f32,
+        z0: f32,
+        x1: f32,
+        y1: f32,
+        z1: f32,
+        x2: f32,
+        y2: f32,
+        z2: f32,
+        x3: f32,
+        y3: f32,
+        z3: f32,
+        nx: f32,
+        ny: f32,
+        nz: f32,
+        uv_u0: f32,
+        uv_v0: f32,
+        uv_u1: f32,
+        uv_v1: f32,
     ) u32 {
         // Quad vertices: v0=bottom-left, v1=bottom-right, v2=top-right, v3=top-left
         // UV: (u0,v0)=bottom-left, (u1,v1)=top-right in texture
@@ -489,7 +523,8 @@ pub const EntityRenderer = struct {
 
         self.descriptor_set_layout = try vk.createDescriptorSetLayout(ctx.device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = null, .flags = 0,
+            .pNext = null,
+            .flags = 0,
             .bindingCount = 2,
             .pBindings = &bindings,
         }, null);
@@ -501,7 +536,8 @@ pub const EntityRenderer = struct {
 
         self.descriptor_pool = try vk.createDescriptorPool(ctx.device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .pNext = null, .flags = 0,
+            .pNext = null,
+            .flags = 0,
             .maxSets = 1,
             .poolSizeCount = 2,
             .pPoolSizes = &pool_sizes,
@@ -527,16 +563,28 @@ pub const EntityRenderer = struct {
 
         const writes = [_]vk.VkWriteDescriptorSet{
             .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .pNext = null,
-                .dstSet = self.descriptor_set, .dstBinding = 0, .dstArrayElement = 0,
-                .descriptorCount = 1, .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = null, .pBufferInfo = &buffer_info, .pTexelBufferView = null,
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &buffer_info,
+                .pTexelBufferView = null,
             },
             .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .pNext = null,
-                .dstSet = self.descriptor_set, .dstBinding = 1, .dstArrayElement = 0,
-                .descriptorCount = 1, .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &image_desc_info, .pBufferInfo = null, .pTexelBufferView = null,
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &image_desc_info,
+                .pBufferInfo = null,
+                .pTexelBufferView = null,
             },
         };
         vk.updateDescriptorSets(ctx.device, 2, &writes, 0, null);
@@ -577,16 +625,20 @@ pub const EntityRenderer = struct {
 
         // Create image
         self.skin_image = try vk.createImage(ctx.device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = null, .flags = 0,
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
             .imageType = vk.VK_IMAGE_TYPE_2D,
             .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
             .extent = .{ .width = aw, .height = ah, .depth = 1 },
-            .mipLevels = 1, .arrayLayers = 1,
+            .mipLevels = 1,
+            .arrayLayers = 1,
             .samples = vk.VK_SAMPLE_COUNT_1_BIT,
             .tiling = vk.VK_IMAGE_TILING_OPTIMAL,
             .usage = vk.VK_IMAGE_USAGE_TRANSFER_DST_BIT | vk.VK_IMAGE_USAGE_SAMPLED_BIT,
             .sharingMode = vk.VK_SHARING_MODE_EXCLUSIVE,
-            .queueFamilyIndexCount = 0, .pQueueFamilyIndices = null,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = null,
             .initialLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
         }, null);
 
@@ -594,38 +646,52 @@ pub const EntityRenderer = struct {
         vk.getImageMemoryRequirements(ctx.device, self.skin_image, &mem_req);
         const mem_type = try vk_utils.findMemoryType(ctx.physical_device, mem_req.memoryTypeBits, vk.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         self.skin_image_memory = try vk.allocateMemory(ctx.device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = null,
-            .allocationSize = mem_req.size, .memoryTypeIndex = mem_type,
+            .sType = vk.VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .pNext = null,
+            .allocationSize = mem_req.size,
+            .memoryTypeIndex = mem_type,
         }, null);
         try vk.bindImageMemory(ctx.device, self.skin_image, self.skin_image_memory, 0);
 
         // Upload via command buffer
         var cmd_bufs: [1]vk.VkCommandBuffer = undefined;
         try vk.allocateCommandBuffers(ctx.device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO, .pNext = null,
-            .commandPool = ctx.command_pool, .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1,
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .pNext = null,
+            .commandPool = ctx.command_pool,
+            .level = vk.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
         }, &cmd_bufs);
         const cmd = cmd_bufs[0];
 
         try vk.beginCommandBuffer(cmd, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .pNext = null,
-            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT, .pInheritanceInfo = null,
+            .sType = vk.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .pNext = null,
+            .flags = vk.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+            .pInheritanceInfo = null,
         });
 
         const subresource_range = vk.VkImageSubresourceRange{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 };
 
         // UNDEFINED → TRANSFER_DST
         vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_HOST_BIT, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{.{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .pNext = null,
-            .srcAccessMask = 0, .dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
-            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .image = self.skin_image, .subresourceRange = subresource_range,
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = 0,
+            .dstAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.skin_image,
+            .subresourceRange = subresource_range,
         }});
 
         // Copy buffer to image
         vk.cmdCopyBufferToImage(cmd, staging_buffer, self.skin_image, vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &[_]vk.VkBufferImageCopy{.{
-            .bufferOffset = 0, .bufferRowLength = 0, .bufferImageHeight = 0,
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
             .imageSubresource = .{ .aspectMask = vk.VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1 },
             .imageOffset = .{ .x = 0, .y = 0, .z = 0 },
             .imageExtent = .{ .width = aw, .height = ah, .depth = 1 },
@@ -633,27 +699,40 @@ pub const EntityRenderer = struct {
 
         // TRANSFER_DST → SHADER_READ_ONLY
         vk.cmdPipelineBarrier(cmd, vk.VK_PIPELINE_STAGE_TRANSFER_BIT, vk.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, null, 0, null, 1, &[_]vk.VkImageMemoryBarrier{.{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER, .pNext = null,
-            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
-            .oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, .newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
-            .image = self.skin_image, .subresourceRange = subresource_range,
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = vk.VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+            .oldLayout = vk.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .newLayout = vk.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .image = self.skin_image,
+            .subresourceRange = subresource_range,
         }});
 
         try vk.endCommandBuffer(cmd);
         try vk.queueSubmit(ctx.graphics_queue, 1, &[_]vk.VkSubmitInfo{.{
-            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO, .pNext = null,
-            .waitSemaphoreCount = 0, .pWaitSemaphores = null, .pWaitDstStageMask = null,
-            .commandBufferCount = 1, .pCommandBuffers = &cmd,
-            .signalSemaphoreCount = 0, .pSignalSemaphores = null,
+            .sType = vk.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+            .pNext = null,
+            .waitSemaphoreCount = 0,
+            .pWaitSemaphores = null,
+            .pWaitDstStageMask = null,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &cmd,
+            .signalSemaphoreCount = 0,
+            .pSignalSemaphores = null,
         }}, null);
         try vk.queueWaitIdle(ctx.graphics_queue);
         vk.freeCommandBuffers(ctx.device, ctx.command_pool, 1, &cmd_bufs);
 
         // Create image view
         self.skin_image_view = try vk.createImageView(ctx.device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .pNext = null, .flags = 0,
-            .image = self.skin_image, .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
+            .sType = vk.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .image = self.skin_image,
+            .viewType = vk.VK_IMAGE_VIEW_TYPE_2D,
             .format = vk.VK_FORMAT_R8G8B8A8_UNORM,
             .components = .{ .r = vk.VK_COMPONENT_SWIZZLE_IDENTITY, .g = vk.VK_COMPONENT_SWIZZLE_IDENTITY, .b = vk.VK_COMPONENT_SWIZZLE_IDENTITY, .a = vk.VK_COMPONENT_SWIZZLE_IDENTITY },
             .subresourceRange = subresource_range,
@@ -661,15 +740,22 @@ pub const EntityRenderer = struct {
 
         // Create sampler (nearest filtering for pixel art)
         self.skin_sampler = try vk.createSampler(ctx.device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO, .pNext = null, .flags = 0,
-            .magFilter = vk.VK_FILTER_NEAREST, .minFilter = vk.VK_FILTER_NEAREST,
+            .sType = vk.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .magFilter = vk.VK_FILTER_NEAREST,
+            .minFilter = vk.VK_FILTER_NEAREST,
             .mipmapMode = vk.VK_SAMPLER_MIPMAP_MODE_NEAREST,
             .addressModeU = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
             .addressModeV = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
             .addressModeW = vk.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .mipLodBias = 0, .anisotropyEnable = vk.VK_FALSE, .maxAnisotropy = 1,
-            .compareEnable = vk.VK_FALSE, .compareOp = 0,
-            .minLod = 0, .maxLod = 0,
+            .mipLodBias = 0,
+            .anisotropyEnable = vk.VK_FALSE,
+            .maxAnisotropy = 1,
+            .compareEnable = vk.VK_FALSE,
+            .compareOp = 0,
+            .minLod = 0,
+            .maxLod = 0,
             .borderColor = vk.VK_BORDER_COLOR_INT_OPAQUE_BLACK,
             .unnormalizedCoordinates = vk.VK_FALSE,
         }, null);
@@ -687,14 +773,20 @@ pub const EntityRenderer = struct {
         defer shader_compiler.allocator.free(frag_spirv);
 
         const vert_module = try vk.createShaderModule(device, &vk.VkShaderModuleCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .pNext = null, .flags = 0,
-            .codeSize = vert_spirv.len, .pCode = @ptrCast(@alignCast(vert_spirv.ptr)),
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = vert_spirv.len,
+            .pCode = @ptrCast(@alignCast(vert_spirv.ptr)),
         }, null);
         defer vk.destroyShaderModule(device, vert_module, null);
 
         const frag_module = try vk.createShaderModule(device, &vk.VkShaderModuleCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .pNext = null, .flags = 0,
-            .codeSize = frag_spirv.len, .pCode = @ptrCast(@alignCast(frag_spirv.ptr)),
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = frag_spirv.len,
+            .pCode = @ptrCast(@alignCast(frag_spirv.ptr)),
         }, null);
         defer vk.destroyShaderModule(device, frag_module, null);
 
@@ -721,9 +813,13 @@ pub const EntityRenderer = struct {
             .{ .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 64, .size = @sizeOf(EntityPushConstants) - 64 },
         };
         self.pipeline_layout = try vk.createPipelineLayout(device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .pNext = null, .flags = 0,
-            .setLayoutCount = 1, .pSetLayouts = &self.descriptor_set_layout,
-            .pushConstantRangeCount = 2, .pPushConstantRanges = &push_ranges,
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &self.descriptor_set_layout,
+            .pushConstantRangeCount = 2,
+            .pPushConstantRanges = &push_ranges,
         }, null);
 
         const color_fmt = [_]vk.VkFormat{swapchain_format};
@@ -733,15 +829,25 @@ pub const EntityRenderer = struct {
         const dyn_info = vk.VkPipelineDynamicStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .pNext = null, .flags = 0, .dynamicStateCount = 2, .pDynamicStates = &dyn_states };
 
         const base_info = vk.VkGraphicsPipelineCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &rendering_info, .flags = 0,
-            .stageCount = 2, .pStages = &shader_stages,
-            .pVertexInputState = &vertex_input_info, .pInputAssemblyState = &input_assembly,
-            .pTessellationState = null, .pViewportState = &viewport_state,
-            .pRasterizationState = &rasterizer, .pMultisampleState = &multisampling,
-            .pDepthStencilState = &depth_off, .pColorBlendState = &color_blending,
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &rendering_info,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_off,
+            .pColorBlendState = &color_blending,
             .pDynamicState = @ptrCast(&dyn_info),
-            .layout = self.pipeline_layout, .renderPass = null, .subpass = 0,
-            .basePipelineHandle = null, .basePipelineIndex = -1,
+            .layout = self.pipeline_layout,
+            .renderPass = null,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
         };
 
         var info_depth = base_info;

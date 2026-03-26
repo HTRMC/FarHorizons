@@ -520,6 +520,9 @@ fn captureMouse(input_state: *InputState) void {
     input_state.mouse_captured = true;
     input_state.first_mouse = true;
     glfw.setInputMode(input_state.window.handle, glfw.GLFW_CURSOR, glfw.GLFW_CURSOR_DISABLED);
+    if (glfw.rawMouseMotionSupported()) {
+        glfw.setInputMode(input_state.window.handle, glfw.GLFW_RAW_MOUSE_MOTION, glfw.GLFW_TRUE);
+    }
 }
 
 fn resetAttackState(input_state: *InputState) void {

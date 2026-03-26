@@ -3,7 +3,6 @@ const compression = @import("compression.zig");
 
 /// Binary Tag format — a compact, self-describing binary data format.
 ///
-/// Improvements over Minecraft's NBT:
 ///   - Little-endian (native on x86, no byte swaps)
 ///   - u8 name lengths (max 255, sufficient for field names)
 ///   - Native bool type

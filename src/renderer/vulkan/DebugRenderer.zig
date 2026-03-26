@@ -468,7 +468,7 @@ pub const DebugRenderer = struct {
                     }
                 }
 
-                // Edge detection using 2x2 neighborhood (like Minecraft's VoxelShape)
+                // Edge detection using 2x2 neighborhood
                 for (0..3) |axis| {
                     const b_ax = (axis + 1) % 3;
                     const c_ax = (axis + 2) % 3;

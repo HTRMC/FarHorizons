@@ -158,7 +158,7 @@ pub fn getOcclusionBitmap(state: StateId, face: usize) u16 {
     return 0;
 }
 
-/// Minecraft-style VoxelShape face culling: should this block's face be culled
+///  VoxelShape face culling: should this block's face be culled
 /// given the neighbor block on that side?
 /// Compares 4x4 bitmaps: cull if the neighbor covers every cell this block exposes.
 /// face: 0=+Z, 1=-Z, 2=-X, 3=+X, 4=+Y, 5=-Y
@@ -229,7 +229,6 @@ pub const ChunkKey = struct {
             self.cz * CHUNK_SIZE,
         };
     }
-
 };
 
 pub const ChunkMeshResult = struct {

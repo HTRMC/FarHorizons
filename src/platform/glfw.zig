@@ -64,6 +64,7 @@ pub const GLFW_MOUSE_BUTTON_RIGHT = c.GLFW_MOUSE_BUTTON_RIGHT;
 pub const GLFW_CURSOR = c.GLFW_CURSOR;
 pub const GLFW_CURSOR_DISABLED = c.GLFW_CURSOR_DISABLED;
 pub const GLFW_CURSOR_NORMAL = c.GLFW_CURSOR_NORMAL;
+pub const GLFW_RAW_MOUSE_MOTION = c.GLFW_RAW_MOUSE_MOTION;
 pub const GLFW_MOUSE_BUTTON_MIDDLE = c.GLFW_MOUSE_BUTTON_MIDDLE;
 
 pub const GLFW_KEY_TAB = c.GLFW_KEY_TAB;
@@ -177,6 +178,10 @@ pub fn setCursorPos(window: *Window, xpos: f64, ypos: f64) void {
 
 pub fn setInputMode(window: *Window, mode: c_int, value: c_int) void {
     c.glfwSetInputMode(window, mode, value);
+}
+
+pub fn rawMouseMotionSupported() bool {
+    return c.glfwRawMouseMotionSupported() == GLFW_TRUE;
 }
 
 pub fn getPrimaryMonitor() ?*Monitor {

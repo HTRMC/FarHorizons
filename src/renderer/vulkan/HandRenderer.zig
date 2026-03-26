@@ -731,9 +731,18 @@ pub const HandRenderer = struct {
         var min_y: f64 = std.math.inf(f64);
         var max_y: f64 = -std.math.inf(f64);
         for (parts) |pv| {
-            const p = switch (pv) { .object => |obj| obj, else => continue };
-            const min_arr = switch (p.get("min") orelse continue) { .array => |a| a.items, else => continue };
-            const size_arr = switch (p.get("size") orelse continue) { .array => |a| a.items, else => continue };
+            const p = switch (pv) {
+                .object => |obj| obj,
+                else => continue,
+            };
+            const min_arr = switch (p.get("min") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
+            const size_arr = switch (p.get("size") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
             if (min_arr.len < 3 or size_arr.len < 3) continue;
             min_y = @min(min_y, jf(min_arr[1]));
             max_y = @max(max_y, jf(min_arr[1]) + jf(size_arr[1]));
@@ -746,14 +755,29 @@ pub const HandRenderer = struct {
 
         // Only build the "right_arm" part
         for (parts) |pv| {
-            const p = switch (pv) { .object => |obj| obj, else => continue };
+            const p = switch (pv) {
+                .object => |obj| obj,
+                else => continue,
+            };
             const name_val = p.get("name") orelse continue;
-            const name = switch (name_val) { .string => |s| s, else => continue };
+            const name = switch (name_val) {
+                .string => |s| s,
+                else => continue,
+            };
             if (!std.mem.eql(u8, name, "right_arm")) continue;
 
-            const min_arr = switch (p.get("min") orelse continue) { .array => |a| a.items, else => continue };
-            const size_arr = switch (p.get("size") orelse continue) { .array => |a| a.items, else => continue };
-            const uv_arr = switch (p.get("uv") orelse continue) { .array => |a| a.items, else => continue };
+            const min_arr = switch (p.get("min") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
+            const size_arr = switch (p.get("size") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
+            const uv_arr = switch (p.get("uv") orelse continue) {
+                .array => |a| a.items,
+                else => continue,
+            };
             if (min_arr.len < 3 or size_arr.len < 3 or uv_arr.len < 2) continue;
 
             // Center the arm: x/z centered, shoulder at y=0, hand extends to -Y
@@ -821,7 +845,10 @@ pub const HandRenderer = struct {
                 const tl: i16 = if (fi < part_tex.len) @intCast(part_tex[fi]) else self.block_tex_side;
                 var found = false;
                 for (tex_layers[0..n_tex]) |existing| {
-                    if (existing == tl) { found = true; break; }
+                    if (existing == tl) {
+                        found = true;
+                        break;
+                    }
                 }
                 if (!found and n_tex < 8) {
                     tex_layers[n_tex] = tl;
@@ -887,15 +914,23 @@ pub const HandRenderer = struct {
         return count;
     }
 
-    // Copied from EntityRenderer — Minecraft-style UV box layout
+    // Copied from EntityRenderer —  UV box layout
     fn addTexturedBox(
         vertices: [*]EntityVertex,
         start: u32,
-        x: f32, y: f32, z: f32,
-        w: f32, h: f32, d: f32,
-        tu: f32, tv: f32,
-        pw: f32, ph: f32, pd: f32,
-        tw: f32, th: f32,
+        x: f32,
+        y: f32,
+        z: f32,
+        w: f32,
+        h: f32,
+        d: f32,
+        tu: f32,
+        tv: f32,
+        pw: f32,
+        ph: f32,
+        pd: f32,
+        tw: f32,
+        th: f32,
         reverse_winding: bool,
     ) u32 {
         var count = start;
@@ -925,24 +960,53 @@ pub const HandRenderer = struct {
     fn addQuad(
         vertices: [*]EntityVertex,
         start: u32,
-        x0: f32, y0: f32, z0: f32,
-        x1: f32, y1: f32, z1: f32,
-        x2: f32, y2: f32, z2: f32,
-        x3: f32, y3: f32, z3: f32,
-        nx: f32, ny: f32, nz: f32,
-        uv_u0: f32, uv_v0: f32, uv_u1: f32, uv_v1: f32,
+        x0: f32,
+        y0: f32,
+        z0: f32,
+        x1: f32,
+        y1: f32,
+        z1: f32,
+        x2: f32,
+        y2: f32,
+        z2: f32,
+        x3: f32,
+        y3: f32,
+        z3: f32,
+        nx: f32,
+        ny: f32,
+        nz: f32,
+        uv_u0: f32,
+        uv_v0: f32,
+        uv_u1: f32,
+        uv_v1: f32,
         reverse_winding: bool,
     ) u32 {
         const base = EntityVertex{ .px = 0, .py = 0, .pz = 0, .nx = nx, .ny = ny, .nz = nz, .u = 0, .v = 0 };
 
         var va = base;
-        va.px = x0; va.py = y0; va.pz = z0; va.u = uv_u0; va.v = uv_v0;
+        va.px = x0;
+        va.py = y0;
+        va.pz = z0;
+        va.u = uv_u0;
+        va.v = uv_v0;
         var vb = base;
-        vb.px = x1; vb.py = y1; vb.pz = z1; vb.u = uv_u1; vb.v = uv_v0;
+        vb.px = x1;
+        vb.py = y1;
+        vb.pz = z1;
+        vb.u = uv_u1;
+        vb.v = uv_v0;
         var vc = base;
-        vc.px = x2; vc.py = y2; vc.pz = z2; vc.u = uv_u1; vc.v = uv_v1;
+        vc.px = x2;
+        vc.py = y2;
+        vc.pz = z2;
+        vc.u = uv_u1;
+        vc.v = uv_v1;
         var vd = base;
-        vd.px = x3; vd.py = y3; vd.pz = z3; vd.u = uv_u0; vd.v = uv_v1;
+        vd.px = x3;
+        vd.py = y3;
+        vd.pz = z3;
+        vd.u = uv_u0;
+        vd.v = uv_v1;
 
         if (reverse_winding) {
             // Swap winding: CW instead of CCW (compensates for odd-axis matrix flip)
@@ -992,10 +1056,10 @@ pub const HandRenderer = struct {
         const c = @cos(angle);
         const s = @sin(angle);
         return zlm.Mat4{ .m = .{
-            c,  0, -s, 0,
-            0,  1,  0, 0,
-            s,  0,  c, 0,
-            0,  0,  0, 1,
+            c, 0, -s, 0,
+            0, 1, 0,  0,
+            s, 0, c,  0,
+            0, 0, 0,  1,
         } };
     }
 
@@ -1096,7 +1160,8 @@ pub const HandRenderer = struct {
 
         self.descriptor_set_layout = try vk.createDescriptorSetLayout(ctx.device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-            .pNext = null, .flags = 0,
+            .pNext = null,
+            .flags = 0,
             .bindingCount = 3,
             .pBindings = &bindings,
         }, null);
@@ -1108,7 +1173,8 @@ pub const HandRenderer = struct {
 
         self.descriptor_pool = try vk.createDescriptorPool(ctx.device, &.{
             .sType = vk.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-            .pNext = null, .flags = 0,
+            .pNext = null,
+            .flags = 0,
             .maxSets = 1,
             .poolSizeCount = 2,
             .pPoolSizes = &pool_sizes,
@@ -1139,22 +1205,40 @@ pub const HandRenderer = struct {
 
         const writes = [_]vk.VkWriteDescriptorSet{
             .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .pNext = null,
-                .dstSet = self.descriptor_set, .dstBinding = 0, .dstArrayElement = 0,
-                .descriptorCount = 1, .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                .pImageInfo = null, .pBufferInfo = &buffer_info, .pTexelBufferView = null,
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                .pImageInfo = null,
+                .pBufferInfo = &buffer_info,
+                .pTexelBufferView = null,
             },
             .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .pNext = null,
-                .dstSet = self.descriptor_set, .dstBinding = 1, .dstArrayElement = 0,
-                .descriptorCount = 1, .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &skin_desc_info, .pBufferInfo = null, .pTexelBufferView = null,
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 1,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &skin_desc_info,
+                .pBufferInfo = null,
+                .pTexelBufferView = null,
             },
             .{
-                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .pNext = null,
-                .dstSet = self.descriptor_set, .dstBinding = 2, .dstArrayElement = 0,
-                .descriptorCount = 1, .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = &block_desc_info, .pBufferInfo = null, .pTexelBufferView = null,
+                .sType = vk.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .pNext = null,
+                .dstSet = self.descriptor_set,
+                .dstBinding = 2,
+                .dstArrayElement = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = &block_desc_info,
+                .pBufferInfo = null,
+                .pTexelBufferView = null,
             },
         };
         vk.updateDescriptorSets(ctx.device, 3, &writes, 0, null);
@@ -1170,14 +1254,20 @@ pub const HandRenderer = struct {
         defer shader_compiler.allocator.free(frag_spirv);
 
         const vert_module = try vk.createShaderModule(device, &vk.VkShaderModuleCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .pNext = null, .flags = 0,
-            .codeSize = vert_spirv.len, .pCode = @ptrCast(@alignCast(vert_spirv.ptr)),
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = vert_spirv.len,
+            .pCode = @ptrCast(@alignCast(vert_spirv.ptr)),
         }, null);
         defer vk.destroyShaderModule(device, vert_module, null);
 
         const frag_module = try vk.createShaderModule(device, &vk.VkShaderModuleCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .pNext = null, .flags = 0,
-            .codeSize = frag_spirv.len, .pCode = @ptrCast(@alignCast(frag_spirv.ptr)),
+            .sType = vk.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .codeSize = frag_spirv.len,
+            .pCode = @ptrCast(@alignCast(frag_spirv.ptr)),
         }, null);
         defer vk.destroyShaderModule(device, frag_module, null);
 
@@ -1204,9 +1294,13 @@ pub const HandRenderer = struct {
             .{ .stageFlags = vk.VK_SHADER_STAGE_FRAGMENT_BIT, .offset = 64, .size = @sizeOf(PushConstants) - 64 },
         };
         self.pipeline_layout = try vk.createPipelineLayout(device, &.{
-            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .pNext = null, .flags = 0,
-            .setLayoutCount = 1, .pSetLayouts = &self.descriptor_set_layout,
-            .pushConstantRangeCount = 2, .pPushConstantRanges = &push_ranges,
+            .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .pNext = null,
+            .flags = 0,
+            .setLayoutCount = 1,
+            .pSetLayouts = &self.descriptor_set_layout,
+            .pushConstantRangeCount = 2,
+            .pPushConstantRanges = &push_ranges,
         }, null);
 
         const color_fmt = [_]vk.VkFormat{swapchain_format};
@@ -1216,15 +1310,25 @@ pub const HandRenderer = struct {
         const dyn_info = vk.VkPipelineDynamicStateCreateInfo{ .sType = vk.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .pNext = null, .flags = 0, .dynamicStateCount = 2, .pDynamicStates = &dyn_states };
 
         const pipeline_info = vk.VkGraphicsPipelineCreateInfo{
-            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &rendering_info, .flags = 0,
-            .stageCount = 2, .pStages = &shader_stages,
-            .pVertexInputState = &vertex_input_info, .pInputAssemblyState = &input_assembly,
-            .pTessellationState = null, .pViewportState = &viewport_state,
-            .pRasterizationState = &rasterizer, .pMultisampleState = &multisampling,
-            .pDepthStencilState = &depth_on, .pColorBlendState = &color_blending,
+            .sType = vk.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .pNext = &rendering_info,
+            .flags = 0,
+            .stageCount = 2,
+            .pStages = &shader_stages,
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pTessellationState = null,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &rasterizer,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_on,
+            .pColorBlendState = &color_blending,
             .pDynamicState = @ptrCast(&dyn_info),
-            .layout = self.pipeline_layout, .renderPass = null, .subpass = 0,
-            .basePipelineHandle = null, .basePipelineIndex = -1,
+            .layout = self.pipeline_layout,
+            .renderPass = null,
+            .subpass = 0,
+            .basePipelineHandle = null,
+            .basePipelineIndex = -1,
         };
 
         var pipelines: [1]vk.VkPipeline = undefined;
