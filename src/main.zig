@@ -888,8 +888,9 @@ pub fn main() !void {
                                     std.log.err("Failed to connect to server '{s}': {s}", .{ addr, @errorName(err) });
                                     break :blk null;
                                 };
-                                if (client_net != null) {
+                                if (client_net) |cn| {
                                     ClientNetState.setGameState(state);
+                                    cn.setClientSocket();
                                 }
                             }
 
@@ -946,8 +947,9 @@ pub fn main() !void {
                                 std.log.err("Failed to connect to server '{s}': {s}", .{ addr, @errorName(err) });
                                 break :blk null;
                             };
-                            if (client_net != null) {
+                            if (client_net) |cn| {
                                 ClientNetState.setGameState(state);
+                                cn.setClientSocket();
                             }
 
                             state.third_person_crosshair = options.third_person_crosshair;
@@ -1228,8 +1230,8 @@ pub fn main() !void {
                             const cam = state.camera;
                             cn.sendPosition(
                                 .{ cam.position.x, cam.position.y, cam.position.z },
-                                .{ 0, 0, 0 },
-                                .{ cam.pitch, cam.yaw, 0 },
+                                .{ cam.pitch, cam.yaw },
+                                state.entities.flags[0].on_ground,
                             );
                         }
 
@@ -1416,23 +1418,33 @@ const CliArgs = struct {
     connect: ?[]const u8 = null, // ip:port to connect to as client
 };
 
-fn parseCliArgs(_: std.mem.Allocator) CliArgs {
+fn parseCliArgs(allocator: std.mem.Allocator) CliArgs {
     var result = CliArgs{};
-    // Check environment variables for configuration.
-    // Server: $env:FH_HEADLESS="1"; $env:FH_WORLD="myworld"; $env:FH_PORT="7777"
-    // Client: $env:FH_CONNECT="127.0.0.1:7777"
+
+    // Check environment variables first.
     const c_getenv = std.c.getenv;
-    if (c_getenv("FH_HEADLESS")) |_| {
-        result.headless = true;
-    }
-    if (c_getenv("FH_WORLD")) |val| {
-        result.world_name = std.mem.span(val);
-    }
-    if (c_getenv("FH_PORT")) |val| {
-        result.port = std.fmt.parseInt(u16, std.mem.span(val), 10) catch result.port;
-    }
-    if (c_getenv("FH_CONNECT")) |val| {
-        result.connect = std.mem.span(val);
+    if (c_getenv("FH_HEADLESS")) |_| result.headless = true;
+    if (c_getenv("FH_WORLD")) |val| result.world_name = std.mem.span(val);
+    if (c_getenv("FH_PORT")) |val| result.port = std.fmt.parseInt(u16, std.mem.span(val), 10) catch result.port;
+    if (c_getenv("FH_CONNECT")) |val| result.connect = std.mem.span(val);
+
+    // CLI flags override env vars (cross-platform).
+    const args_vec: std.process.Args.Vector = switch (@import("builtin").os.tag) {
+        .windows => std.os.windows.peb().ProcessParameters.CommandLine.slice(),
+        else => if (@hasField(std.process.Args, "vector")) .{} else {},
+    };
+    var iter = std.process.Args.Iterator.initAllocator(.{ .vector = args_vec }, allocator) catch return result;
+    _ = iter.next(); // skip executable name
+    while (iter.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--headless") or std.mem.eql(u8, arg, "--server")) {
+            result.headless = true;
+        } else if (std.mem.eql(u8, arg, "--connect")) {
+            if (iter.next()) |val| result.connect = val;
+        } else if (std.mem.eql(u8, arg, "--world")) {
+            if (iter.next()) |val| result.world_name = val;
+        } else if (std.mem.eql(u8, arg, "--port")) {
+            if (iter.next()) |val| result.port = std.fmt.parseInt(u16, val, 10) catch result.port;
+        }
     }
     return result;
 }
@@ -1495,21 +1507,31 @@ const ClientNetState = struct {
         @import("network/protocols/chunk_transmission.zig").client_game_state = state;
         @import("network/protocols/block_update.zig").client_game_state = state;
         @import("network/protocols/player_position.zig").client_game_state = state;
+        @import("network/protocols/position_correction.zig").client_game_state = state;
     }
 
     fn clearGameState() void {
         @import("network/protocols/chunk_transmission.zig").client_game_state = null;
         @import("network/protocols/block_update.zig").client_game_state = null;
         @import("network/protocols/player_position.zig").client_game_state = null;
+        @import("network/protocols/position_correction.zig").client_game_state = null;
+        @import("network/protocols/position_correction.zig").client_socket_valid = false;
+        @import("network/protocols/player_position.zig").resetTracking();
     }
 
-    fn sendPosition(self: *ClientNetState, pos: [3]f64, vel: [3]f64, rotation: [3]f32) void {
-        @import("network/protocols/player_position.zig").sendPosition(
+    fn setClientSocket(self: *ClientNetState) void {
+        const pc = @import("network/protocols/position_correction.zig");
+        pc.client_socket = self.conn_manager.socket;
+        pc.client_socket_valid = true;
+    }
+
+    fn sendPosition(self: *ClientNetState, pos: [3]f64, rotation: [2]f32, on_ground: bool) void {
+        @import("network/protocols/player_position.zig").sendPositionSmart(
             self.conn,
             self.conn_manager.socket,
             pos,
-            vel,
             rotation,
+            on_ground,
         );
     }
 
