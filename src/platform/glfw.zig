@@ -51,6 +51,7 @@ pub const GLFW_KEY_F6 = c.GLFW_KEY_F6;
 pub const GLFW_KEY_F7 = c.GLFW_KEY_F7;
 pub const GLFW_KEY_F11 = c.GLFW_KEY_F11;
 pub const GLFW_KEY_C = c.GLFW_KEY_C;
+pub const GLFW_KEY_V = c.GLFW_KEY_V;
 pub const GLFW_KEY_E = c.GLFW_KEY_E;
 pub const GLFW_KEY_G = c.GLFW_KEY_G;
 pub const GLFW_KEY_Q = c.GLFW_KEY_Q;
@@ -212,6 +213,10 @@ pub fn getWindowSize(window: *Window, width: *c_int, height: *c_int) void {
 
 pub fn getTime() f64 {
     return c.glfwGetTime();
+}
+
+pub fn getClipboardString() ?[*:0]const u8 {
+    return c.glfwGetClipboardString(null);
 }
 
 pub fn getRequiredInstanceExtensions(count: *u32) ?[*]const [*:0]const u8 {

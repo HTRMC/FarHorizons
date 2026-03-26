@@ -222,6 +222,20 @@ pub fn dispatchKey(tree: *WidgetTree, key: c_int, action: c_int, mods: c_int, re
                 return true;
             }
 
+            if (ctrl and key == glfw.GLFW_KEY_V) {
+                if (glfw.getClipboardString()) |clip_ptr| {
+                    const clip = std.mem.span(clip_ptr);
+                    for (clip) |ch| {
+                        if (ch >= 32 and ch < 127) {
+                            ti.insertChar(ch);
+                        }
+                    }
+                    ti.cursor_blink_counter = 0;
+                    fireTextInputChange(ti, registry);
+                }
+                return true;
+            }
+
             if (key == glfw.GLFW_KEY_BACKSPACE) {
                 ti.deleteBack();
                 ti.cursor_blink_counter = 0;
