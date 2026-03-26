@@ -1,5 +1,5 @@
 const std = @import("std");
-const GameState = @import("../../GameState.zig");
+const GameState = @import("../GameState.zig");
 const Entity = GameState.Entity;
 const WorldState = @import("../WorldState.zig");
 const BlockState = WorldState.BlockState;

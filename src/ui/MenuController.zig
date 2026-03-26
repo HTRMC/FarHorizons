@@ -7,7 +7,7 @@ const WidgetTree = @import("WidgetTree.zig").WidgetTree;
 const ActionRegistry = @import("ActionRegistry.zig").ActionRegistry;
 const HudBinder = @import("HudBinder.zig").HudBinder;
 const UiRenderer = @import("../renderer/vulkan/UiRenderer.zig").UiRenderer;
-const GameState = @import("../GameState.zig");
+const GameState = @import("../world/GameState.zig");
 const BlockState = @import("../world/WorldState.zig").BlockState;
 const app_config = @import("../app_config.zig");
 const Options = @import("../Options.zig");
@@ -142,12 +142,12 @@ pub const MenuController = struct {
     world_type_label_id: WidgetId = NULL_WIDGET,
     selected_world_type: @import("../world/WorldState.zig").WorldType = .normal,
     game_mode_label_id: WidgetId = NULL_WIDGET,
-    selected_game_mode: @import("../GameState.zig").GameMode = .creative,
+    selected_game_mode: @import("../world/GameState.zig").GameMode = .creative,
 
     // Edit world screen state
     edit_world_name_input_id: WidgetId = NULL_WIDGET,
     edit_game_mode_label_id: WidgetId = NULL_WIDGET,
-    edit_game_mode: @import("../GameState.zig").GameMode = .creative,
+    edit_game_mode: @import("../world/GameState.zig").GameMode = .creative,
     edit_world_name: [MAX_NAME_LEN]u8 = .{0} ** MAX_NAME_LEN,
     edit_world_name_len: u8 = 0,
 

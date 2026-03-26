@@ -10,7 +10,7 @@ pub const id: u8 = protocol.CHUNK_TRANSMISSION;
 
 /// Pointer to client-side game state for inserting received chunks.
 /// Set by the client on connect, null when disconnected.
-pub var client_game_state: ?*@import("../../GameState.zig") = null;
+pub var client_game_state: ?*@import("../../world/GameState.zig") = null;
 
 /// Server → Client: send a chunk's block data (encoded with chunk_codec).
 pub fn sendChunk(

@@ -11,7 +11,7 @@ pub const id: u8 = protocol.BLOCK_UPDATE;
 pub var server_instance: ?*@import("../../server/Server.zig").Server = null;
 
 /// Pointer to client game state (set on client connect).
-pub var client_game_state: ?*@import("../../GameState.zig") = null;
+pub var client_game_state: ?*@import("../../world/GameState.zig") = null;
 
 pub const BlockChange = struct {
     wx: i32,

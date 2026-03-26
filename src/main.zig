@@ -2,7 +2,7 @@ const std = @import("std");
 const Window = @import("platform/Window.zig").Window;
 const Renderer = @import("renderer/Renderer.zig").Renderer;
 const VulkanRenderer = @import("renderer/vulkan/VulkanRenderer.zig").VulkanRenderer;
-const GameState = @import("GameState.zig");
+const GameState = @import("world/GameState.zig");
 const WorldState = @import("world/WorldState.zig");
 const MenuController = @import("ui/MenuController.zig").MenuController;
 const UiManager = @import("ui/UiManager.zig").UiManager;
@@ -1467,7 +1467,7 @@ const ClientNetState = struct {
         return self;
     }
 
-    fn setGameState(state: *@import("GameState.zig")) void {
+    fn setGameState(state: *@import("world/GameState.zig")) void {
         @import("network/protocols/chunk_transmission.zig").client_game_state = state;
         @import("network/protocols/block_update.zig").client_game_state = state;
         @import("network/protocols/player_position.zig").client_game_state = state;

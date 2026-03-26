@@ -1,5 +1,5 @@
 const std = @import("std");
-const GameState = @import("../GameState.zig");
+const GameState = @import("../world/GameState.zig");
 const ChunkStreamer = GameState.ChunkStreamer;
 const WorldState = @import("../world/WorldState.zig");
 const BlockState = WorldState.BlockState;

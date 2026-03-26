@@ -154,7 +154,7 @@ pub fn listWorlds(allocator: std.mem.Allocator, names: [][]const u8) !u8 {
     return count;
 }
 
-const GameMode = @import("GameState.zig").GameMode;
+const GameMode = @import("world/GameState.zig").GameMode;
 
 pub fn hasWorldGameMode(allocator: std.mem.Allocator, name: []const u8) bool {
     const worlds_dir = getWorldsDir(allocator) catch return false;

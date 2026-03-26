@@ -505,7 +505,7 @@ pub const PlayerData = struct {
     z: f32,
     yaw: f32,
     pitch: f32,
-    game_mode: @import("../../GameState.zig").GameMode = .creative,
+    game_mode: @import("../GameState.zig").GameMode = .creative,
     health: f32 = 20.0,
     air_supply: u16 = 300,
     inventory: ?*Entity.Inventory = null,
@@ -525,7 +525,7 @@ pub fn loadPlayerData(self: *const Storage, uuid: []const u8) ?PlayerData {
     defer self.allocator.free(data);
 
     const r = BinaryTag.Reader.init(data);
-    const GameMode = @import("../../GameState.zig").GameMode;
+    const GameMode = @import("../GameState.zig").GameMode;
     const gm_raw: u8 = @bitCast(r.getI8("game_mode") orelse 0);
 
     // Deserialize inventory if present

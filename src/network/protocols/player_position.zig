@@ -83,7 +83,7 @@ pub fn serverReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
 }
 
 /// Pointer to client game state (set on client connect).
-pub var client_game_state: ?*@import("../../GameState.zig") = null;
+pub var client_game_state: ?*@import("../../world/GameState.zig") = null;
 
 /// Client receives other players' positions.
 pub fn clientReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {

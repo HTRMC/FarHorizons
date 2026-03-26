@@ -3,7 +3,7 @@ const vk = @import("../../platform/volk.zig");
 const ShaderCompiler = @import("ShaderCompiler.zig");
 const VulkanContext = @import("VulkanContext.zig").VulkanContext;
 const zlm = @import("zlm");
-const GameState = @import("../../GameState.zig");
+const GameState = @import("../../world/GameState.zig");
 
 pub const BREAK_STAGE_COUNT = 10;
 pub const BREAK_TEX_BASE: u32 = 58; // first break texture index in array
