@@ -223,7 +223,7 @@ pub const EntityRenderer = struct {
 
         for (game_state.remote_players.items) |player| {
             const px = player.render_pos[0];
-            const py = player.render_pos[1];
+            const py = player.render_pos[1] - GameState.EYE_OFFSET;
             const pz = player.render_pos[2];
             const yaw = player.rotation[1];
 
