@@ -7,6 +7,7 @@ const BlockState = WorldState.BlockState;
 const Raycast = @import("Raycast.zig");
 const Entity = @import("entity/Entity.zig");
 const Physics = @import("entity/Physics.zig");
+const Degrees = @import("../math/Angle.zig").Degrees;
 
 pub fn breakBlockNoDrop(state: *GameState) void {
     breakBlockImpl(state, false);
@@ -366,11 +367,11 @@ fn slabCanBeReplaced(existing: BlockState.StateId, hit: Raycast.BlockHitResult) 
     };
 }
 
-fn resolveOrientation(block_state: BlockState.StateId, yaw: f32, hit: Raycast.BlockHitResult) BlockState.StateId {
+fn resolveOrientation(block_state: BlockState.StateId, yaw: Degrees, hit: Raycast.BlockHitResult) BlockState.StateId {
     const block = BlockState.getBlock(block_state);
+    const norm_yaw = yaw.normalize360().value;
     switch (block) {
         .oak_stairs => {
-            const norm_yaw = @mod(yaw, 360.0);
             const facing: BlockState.Facing = if (norm_yaw >= 45.0 and norm_yaw < 135.0)
                 .east
             else if (norm_yaw >= 135.0 and norm_yaw < 225.0)
@@ -416,13 +417,11 @@ fn resolveOrientation(block_state: BlockState.StateId, yaw: f32, hit: Raycast.Bl
             };
         },
         .oak_door => {
-            const pi = std.math.pi;
-            const norm_yaw = @mod(yaw, 2.0 * pi);
-            const facing: BlockState.Facing = if (norm_yaw >= 0.25 * pi and norm_yaw < 0.75 * pi)
+            const facing: BlockState.Facing = if (norm_yaw >= 45.0 and norm_yaw < 135.0)
                 .east
-            else if (norm_yaw >= 0.75 * pi and norm_yaw < 1.25 * pi)
+            else if (norm_yaw >= 135.0 and norm_yaw < 225.0)
                 .north
-            else if (norm_yaw >= 1.25 * pi and norm_yaw < 1.75 * pi)
+            else if (norm_yaw >= 225.0 and norm_yaw < 315.0)
                 .west
             else
                 .south;

@@ -5,6 +5,7 @@ const Entity = GameState.Entity;
 const Item = GameState.Item;
 const Physics = @import("Physics.zig");
 const BlockState = @import("../WorldState.zig").BlockState;
+const Radians = @import("../../math/Angle.zig").Radians;
 
 const TICK_INTERVAL = GameState.TICK_INTERVAL;
 
@@ -47,7 +48,7 @@ pub fn updateItemDrops(state: *GameState) void {
 
         // Physics
         state.entities.prev_pos[i] = state.entities.pos[i];
-        Physics.updateEntity(&state.entities, i, &state.chunk_map, .{ 0, 0, 0 }, 0, TICK_INTERVAL);
+        Physics.updateEntity(&state.entities, i, &state.chunk_map, .{ 0, 0, 0 }, Radians{ .value = 0 }, TICK_INTERVAL);
 
         // AABB-based pickup (1.0 block horizontal, 0.5 block vertical from player feet to head)
         if (state.entities.pickup_cooldown[i] == 0) {
@@ -147,17 +148,17 @@ pub fn updateMobs(state: *GameState) void {
         }
 
         // Smoothly rotate toward target yaw
-        const current_yaw = state.entities.rotation[i][0];
-        const target_yaw = state.entities.mob_target_yaw[i];
+        const current_yaw = state.entities.rotation[i][0].value;
+        const target_yaw = state.entities.mob_target_yaw[i].value;
         var diff = target_yaw - current_yaw;
         // Normalize to [-pi, pi]
         while (diff > std.math.pi) diff -= std.math.tau;
         while (diff < -std.math.pi) diff += std.math.tau;
         const turn_speed: f32 = 0.15;
         if (@abs(diff) < turn_speed) {
-            state.entities.rotation[i][0] = target_yaw;
+            state.entities.rotation[i][0] = state.entities.mob_target_yaw[i];
         } else {
-            state.entities.rotation[i][0] += if (diff > 0) turn_speed else -turn_speed;
+            state.entities.rotation[i][0] = state.entities.rotation[i][0].offset(if (diff > 0) turn_speed else -turn_speed);
         }
 
         // AI timer
@@ -170,7 +171,7 @@ pub fn updateMobs(state: *GameState) void {
                 // Pick random yaw using game_time + entity index as seed
                 const seed = @as(u32, @bitCast(@as(i32, @truncate(state.game_time)))) +% i *% 2654435761;
                 const angle_bits = seed *% 1103515245 +% 12345;
-                state.entities.mob_target_yaw[i] = @as(f32, @floatFromInt(@mod(@as(i32, @bitCast(angle_bits >> 16)), @as(i32, 628)))) / 100.0;
+                state.entities.mob_target_yaw[i] = .{ .value = @as(f32, @floatFromInt(@mod(@as(i32, @bitCast(angle_bits >> 16)), @as(i32, 628)))) / 100.0 };
                 // Walk for 60-150 ticks (2-5s)
                 const timer_bits = angle_bits *% 1103515245 +% 12345;
                 state.entities.mob_ai_timer[i] = @as(u16, @intCast(60 + (timer_bits >> 16) % 91));

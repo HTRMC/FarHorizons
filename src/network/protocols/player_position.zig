@@ -103,11 +103,11 @@ pub fn sendPositionImmediate(conn: *Connection, socket: Socket, state: *GameStat
     writer.writeFloat(f64, cam.position.x);
     writer.writeFloat(f64, cam.position.y);
     writer.writeFloat(f64, cam.position.z);
-    writer.writeFloat(f32, cam.pitch);
-    writer.writeFloat(f32, cam.yaw);
+    writer.writeFloat(f32, cam.pitch.value);
+    writer.writeFloat(f32, cam.yaw.value);
 
     last_pos = .{ cam.position.x, cam.position.y, cam.position.z };
-    last_rotation = .{ cam.pitch, cam.yaw };
+    last_rotation = .{ cam.pitch.value, cam.yaw.value };
     last_on_ground = entity_flags.on_ground;
     position_reminder = 0;
 

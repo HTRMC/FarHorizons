@@ -1,6 +1,8 @@
 const std = @import("std");
 const zlm = @import("zlm");
 const Camera = @import("../renderer/Camera.zig");
+const Angle = @import("../math/Angle.zig");
+const Degrees = Angle.Degrees;
 const WorldState = @import("WorldState.zig");
 const BlockState = WorldState.BlockState;
 const ChunkMap = @import("ChunkMap.zig").ChunkMap;
@@ -252,8 +254,8 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
 
     cam.position = zlm.Vec3.init(spawn_x, spawn_y + EYE_OFFSET, spawn_z);
     if (player_data) |pd| {
-        cam.yaw = pd.yaw;
-        cam.pitch = pd.pitch;
+        cam.yaw = Angle.deg(pd.yaw);
+        cam.pitch = Angle.deg(pd.pitch);
     }
 
     const spawn_key = WorldState.ChunkKey.fromWorldPos(@intFromFloat(spawn_x), @intFromFloat(spawn_y), @intFromFloat(spawn_z));
@@ -355,8 +357,8 @@ pub fn save(self: *GameState) void {
         .x = pos[0],
         .y = pos[1],
         .z = pos[2],
-        .yaw = self.camera.yaw,
-        .pitch = self.camera.pitch,
+        .yaw = self.camera.yaw.value,
+        .pitch = self.camera.pitch.value,
         .game_mode = self.game_mode,
         .health = self.combat.health,
         .air_supply = self.combat.air_supply,
@@ -467,8 +469,8 @@ pub fn applyPositionCorrection(
     const new_z: f64 = if (relatives.z) @as(f64, self.camera.position.z) + pos[2] else pos[2];
 
     // Rotation: apply as absolute or relative
-    const new_pitch: f32 = if (relatives.pitch) self.camera.pitch + rotation[0] else rotation[0];
-    const new_yaw: f32 = if (relatives.yaw) self.camera.yaw + rotation[1] else rotation[1];
+    const new_pitch: Degrees = if (relatives.pitch) Degrees.add(self.camera.pitch, Angle.deg(rotation[0])) else Angle.deg(rotation[0]);
+    const new_yaw: Degrees = if (relatives.yaw) Degrees.add(self.camera.yaw, Angle.deg(rotation[1])) else Angle.deg(rotation[1]);
 
     // Velocity: apply as absolute or relative
     const new_vel: [3]f32 = .{

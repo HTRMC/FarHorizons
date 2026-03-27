@@ -105,11 +105,9 @@ pub const MobRenderer = struct {
             if (game_state.entities.kind[i] != .pig) continue;
 
             const pos = game_state.entities.render_pos[i];
-            const yaw = game_state.entities.rotation[i][0];
-
-            const angle = yaw + std.math.pi;
-            const sin_y = @sin(angle);
-            const cos_y = @cos(angle);
+            const angle = game_state.entities.rotation[i][0].offset(std.math.pi);
+            const sin_y = angle.sin();
+            const cos_y = angle.cos();
             const model = zlm.Mat4{
                 .m = .{ cos_y, 0, -sin_y, 0, 0, 1, 0, 0, sin_y, 0, cos_y, 0, pos[0], pos[1], pos[2], 1 },
             };
@@ -128,7 +126,7 @@ pub const MobRenderer = struct {
                 .sun_dir = sun_dir,
                 .sky_level = sky_level,
                 .block_light = block_light,
-                .model_yaw = angle,
+                .model_yaw = angle.value,
                 .leg_phase = game_state.entities.render_walk_anim[i],
                 .hurt_tint = hurt_tint,
             };

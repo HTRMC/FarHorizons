@@ -69,7 +69,7 @@ pub fn updatePlayerMovement(state: *GameState, player: u32, move_speed: f32) voi
             }
             state.jump_requested = false;
 
-            Physics.updateEntity(&state.entities, player, &state.chunk_map, state.input_move, state.camera.yaw, GameState.TICK_INTERVAL);
+            Physics.updateEntity(&state.entities, player, &state.chunk_map, state.input_move, state.camera.yaw.toRadians(), GameState.TICK_INTERVAL);
 
             const epos = state.entities.pos[player];
             state.camera.position = zlm.Vec3.init(

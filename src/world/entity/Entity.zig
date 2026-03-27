@@ -2,6 +2,8 @@ const std = @import("std");
 const WorldState = @import("../WorldState.zig");
 const BlockState = WorldState.BlockState;
 pub const Item = @import("../item/Item.zig");
+const Angle = @import("../../math/Angle.zig");
+pub const Radians = Angle.Radians;
 
 pub const EntityId = u32;
 pub const PLAYER: EntityId = 0;
@@ -94,7 +96,7 @@ pub const EntityStore = struct {
     vel: [MAX_ENTITIES][3]f32 = .{.{ 0, 0, 0 }} ** MAX_ENTITIES,
     prev_pos: [MAX_ENTITIES][3]f32 = .{.{ 0, 0, 0 }} ** MAX_ENTITIES,
     render_pos: [MAX_ENTITIES][3]f32 = .{.{ 0, 0, 0 }} ** MAX_ENTITIES,
-    rotation: [MAX_ENTITIES][2]f32 = .{.{ 0, 0 }} ** MAX_ENTITIES,
+    rotation: [MAX_ENTITIES][2]Radians = .{[2]Radians{ .{ .value = 0 }, .{ .value = 0 } }} ** MAX_ENTITIES,
     flags: [MAX_ENTITIES]EntityFlags = .{@as(EntityFlags, .{})} ** MAX_ENTITIES,
     kind: [MAX_ENTITIES]EntityKind = .{.player} ** MAX_ENTITIES,
     water_vision_time: [MAX_ENTITIES]u16 = .{0} ** MAX_ENTITIES,
@@ -112,7 +114,7 @@ pub const EntityStore = struct {
     // Mob AI arrays
     mob_ai_state: [MAX_ENTITIES]MobAiState = .{.idle} ** MAX_ENTITIES,
     mob_ai_timer: [MAX_ENTITIES]u16 = .{0} ** MAX_ENTITIES,
-    mob_target_yaw: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
+    mob_target_yaw: [MAX_ENTITIES]Radians = .{Radians{ .value = 0 }} ** MAX_ENTITIES,
     walk_anim: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
     prev_walk_anim: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
     render_walk_anim: [MAX_ENTITIES]f32 = .{0} ** MAX_ENTITIES,
@@ -130,7 +132,7 @@ pub const EntityStore = struct {
         self.vel[id] = .{ 0, 0, 0 };
         self.prev_pos[id] = spawn_pos;
         self.render_pos[id] = spawn_pos;
-        self.rotation[id] = .{ 0, 0 };
+        self.rotation[id] = [2]Radians{ .{ .value = 0 }, .{ .value = 0 } };
         self.flags[id] = .{};
         self.kind[id] = entity_kind;
         self.water_vision_time[id] = 0;
@@ -144,7 +146,7 @@ pub const EntityStore = struct {
         self.bob_offset[id] = 0;
         self.mob_ai_state[id] = .idle;
         self.mob_ai_timer[id] = 0;
-        self.mob_target_yaw[id] = 0;
+        self.mob_target_yaw[id] = .{ .value = 0 };
         self.walk_anim[id] = 0;
         self.prev_walk_anim[id] = 0;
         self.render_walk_anim[id] = 0;

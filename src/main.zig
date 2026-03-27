@@ -19,6 +19,7 @@ const app_config = @import("app_config.zig");
 const Options = @import("Options.zig");
 const Gamepad = @import("platform/Gamepad.zig");
 const Item = @import("world/item/Item.zig");
+const Angle = @import("math/Angle.zig");
 
 var file_logger_instance: ?*Logger.FileLogger = null;
 
@@ -1116,7 +1117,7 @@ pub fn main() !void {
 
                         const ss: f32 = options.mouse_sensitivity * 0.6 + 0.2;
                         const sens: f32 = ss * ss * ss * 8.0;
-                        state.camera.look(-dx * sens * 0.15, -dy * sens * 0.15);
+                        state.camera.look(Angle.deg(-dx * sens * 0.15), Angle.deg(-dy * sens * 0.15));
                     }
                 }
 
@@ -1125,7 +1126,7 @@ pub fn main() !void {
                     const gpx = input_state.gamepad.right_x;
                     const gpy = input_state.gamepad.right_y;
                     if (gpx != 0 or gpy != 0) {
-                        state.camera.look(-gpx * Gamepad.LOOK_SPEED * delta_time, -gpy * Gamepad.LOOK_SPEED * delta_time);
+                        state.camera.look(Angle.deg(-gpx * Gamepad.LOOK_SPEED * delta_time), Angle.deg(-gpy * Gamepad.LOOK_SPEED * delta_time));
                     }
                 }
 
@@ -1230,7 +1231,7 @@ pub fn main() !void {
                             const cam = state.camera;
                             cn.sendPosition(
                                 .{ cam.position.x, cam.position.y, cam.position.z },
-                                .{ cam.pitch, cam.yaw },
+                                .{ cam.pitch.value, cam.yaw.value },
                                 state.entities.flags[0].on_ground,
                             );
                         }
@@ -1310,7 +1311,7 @@ pub fn main() !void {
         // Sync options → game state
         if (game_state) |*state| {
             state.third_person_crosshair = options.third_person_crosshair;
-            state.camera.fov = std.math.degreesToRadians(options.fov);
+            state.camera.fov = Angle.deg(options.fov).toRadians();
         }
 
         // Sync entity renderer with inventory viewport + third person
@@ -1322,7 +1323,7 @@ pub fn main() !void {
             er.viewport_y = menu_ctrl.entity_viewport[1];
             er.viewport_w = menu_ctrl.entity_viewport[2];
             er.viewport_h = menu_ctrl.entity_viewport[3];
-            er.rotation_y = menu_ctrl.player_rotation;
+            er.rotation_y = Angle.rad(menu_ctrl.player_rotation);
             if (game_state) |*state| {
                 er.world_visible = state.third_person;
                 er.world_pos = state.entities.render_pos[GameState.Entity.PLAYER];

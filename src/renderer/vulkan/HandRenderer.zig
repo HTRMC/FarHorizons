@@ -9,6 +9,8 @@ const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 const app_config = @import("../../app_config.zig");
 const EntityVertex = @import("EntityRenderer.zig").EntityVertex;
+const Angle = @import("../../math/Angle.zig");
+const Degrees = Angle.Degrees;
 const WorldState = @import("../../world/WorldState.zig");
 const BlockState = WorldState.BlockState;
 const Item = @import("../../world/item/Item.zig");
@@ -48,10 +50,10 @@ pub const HandRenderer = struct {
     visible: bool = true,
     walk_phase: f32 = 0.0,
     walk_smoother: f32 = 0.0,
-    bob_pitch: f32 = 0.0,
-    bob_yaw: f32 = 0.0,
-    cam_pitch: f32 = 0.0,
-    cam_yaw: f32 = 0.0,
+    bob_pitch: Degrees = .{ .value = 0.0 },
+    bob_yaw: Degrees = .{ .value = 0.0 },
+    cam_pitch: Degrees = .{ .value = 0.0 },
+    cam_yaw: Degrees = .{ .value = 0.0 },
     swing_progress: f32 = 0.0,
     swing_ticks: f32 = 0.0,
     is_swinging: bool = false,
@@ -130,8 +132,8 @@ pub const HandRenderer = struct {
         horizontal_speed: f32,
         vertical_speed: f32,
         on_ground: bool,
-        cam_pitch: f32,
-        cam_yaw: f32,
+        cam_pitch: Degrees,
+        cam_yaw: Degrees,
         on_ladder: bool,
         in_water: bool,
         is_sneaking: bool,
@@ -164,8 +166,8 @@ pub const HandRenderer = struct {
         self.cam_pitch = cam_pitch;
         self.cam_yaw = cam_yaw;
         const bob_rate = @min(1.0, 15.0 * dt);
-        self.bob_pitch += (cam_pitch - self.bob_pitch) * bob_rate;
-        self.bob_yaw += (cam_yaw - self.bob_yaw) * bob_rate;
+        self.bob_pitch = .{ .value = self.bob_pitch.value + (cam_pitch.value - self.bob_pitch.value) * bob_rate };
+        self.bob_yaw = .{ .value = self.bob_yaw.value + (cam_yaw.value - self.bob_yaw.value) * bob_rate };
 
         if (self.is_swinging) {
             self.swing_ticks += tdt;
@@ -276,11 +278,10 @@ pub const HandRenderer = struct {
         vk.cmdBindDescriptorSets(command_buffer, vk.VK_PIPELINE_BIND_POINT_GRAPHICS, self.pipeline_layout, 0, 1, &[_]vk.VkDescriptorSet{self.descriptor_set}, 0, null);
 
         const aspect = screen_width / @max(screen_height, 1.0);
-        const proj = zlm.Mat4.perspective(std.math.degreesToRadians(70.0), aspect, 0.05, 100.0);
+        const proj = zlm.Mat4.perspective(Angle.deg(70.0).toRadians().value, aspect, 0.05, 100.0);
 
-        const d2r: f32 = std.math.pi / 180.0;
-        const view_bob_x = mat4RotX((self.bob_pitch - self.cam_pitch) * d2r * 0.1);
-        const view_bob_y = mat4RotY((self.bob_yaw - self.cam_yaw) * d2r * 0.1);
+        const view_bob_x = mat4RotX(Degrees.sub(self.bob_pitch, self.cam_pitch).toRadians().value * 0.1);
+        const view_bob_y = mat4RotY(Degrees.sub(self.bob_yaw, self.cam_yaw).toRadians().value * 0.1);
         const view_bob_mat = zlm.Mat4.mul(view_bob_x, view_bob_y);
 
         const deg = std.math.degreesToRadians;

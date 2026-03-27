@@ -5,6 +5,7 @@ const WorldState = @import("../WorldState.zig");
 const BlockState = WorldState.BlockState;
 const ChunkMap = @import("../ChunkMap.zig").ChunkMap;
 const tracy = @import("../../platform/tracy.zig");
+const Radians = @import("../../math/Angle.zig").Radians;
 
 const GRAVITY: f32 = 32.0;
 const Y_DRAG: f32 = 0.9866;
@@ -31,7 +32,7 @@ pub fn updateEntity(
     id: Entity.EntityId,
     chunk_map: *const ChunkMap,
     input_move: [3]f32,
-    camera_yaw: f32,
+    camera_yaw: Radians,
     dt: f32,
 ) void {
     const tz = tracy.zone(@src(), "updateEntity");
@@ -40,9 +41,8 @@ pub fn updateEntity(
     const forward_input = input_move[0];
     const right_input = input_move[2];
 
-    const yaw_rad = camera_yaw * (std.math.pi / 180.0);
-    const sin_yaw = @sin(yaw_rad);
-    const cos_yaw = @cos(yaw_rad);
+    const sin_yaw = camera_yaw.sin();
+    const cos_yaw = camera_yaw.cos();
 
     var wish_x = -forward_input * sin_yaw + right_input * cos_yaw;
     var wish_z = -forward_input * cos_yaw - right_input * sin_yaw;

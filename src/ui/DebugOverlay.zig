@@ -65,9 +65,9 @@ fn drawF3(text: *TextRenderer, game_state: *GameState, start_y: f32) f32 {
     text.drawText(x, y, vel_text, yellow);
     y += LINE_HEIGHT;
 
-    const yaw_deg = game_state.camera.yaw;
-    const pitch_deg = game_state.camera.pitch;
-    const facing = yawFacing(game_state.camera.yaw);
+    const yaw_deg = game_state.camera.yaw.value;
+    const pitch_deg = game_state.camera.pitch.value;
+    const facing = yawFacing(game_state.camera.yaw.value);
     const ang_text = std.fmt.bufPrint(&buf, "Facing: {s}  Yaw: {d:.2}  Pitch: {d:.2}", .{ facing, yaw_deg, pitch_deg }) catch "Facing: ?";
     text.drawText(x, y, ang_text, yellow);
     y += LINE_HEIGHT;

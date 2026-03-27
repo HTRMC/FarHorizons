@@ -11,6 +11,9 @@ const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 const app_config = @import("../../app_config.zig");
 const GameState = @import("../../world/GameState.zig");
+const Angle = @import("../../math/Angle.zig");
+const Degrees = Angle.Degrees;
+const Radians = Angle.Radians;
 const Io = std.Io;
 const Dir = Io.Dir;
 
@@ -59,11 +62,11 @@ pub const EntityRenderer = struct {
     viewport_y: f32 = 0,
     viewport_w: f32 = 0,
     viewport_h: f32 = 0,
-    rotation_y: f32 = 0.4, // Model Y rotation (radians)
+    rotation_y: Radians = .{ .value = 0.4 },
     // Third person world rendering
     world_visible: bool = false,
     world_pos: [3]f32 = .{ 0, 0, 0 },
-    world_yaw: f32 = 0,
+    world_yaw: Degrees = .{ .value = 0 },
 
     pub fn init(allocator: std.mem.Allocator, shader_compiler: *ShaderCompiler, ctx: *const VulkanContext, swapchain_format: vk.VkFormat, gpu_alloc: *GpuAllocator) !EntityRenderer {
         const tz = tracy.zone(@src(), "EntityRenderer.init");
@@ -148,11 +151,11 @@ pub const EntityRenderer = struct {
         vk.cmdClearAttachments(command_buffer, 1, &[_]vk.VkClearAttachment{clear_attachment}, 1, &[_]vk.VkClearRect{clear_rect});
 
         const aspect = vp_w / @max(vp_h, 1.0);
-        const proj = zlm.Mat4.perspective(std.math.degreesToRadians(30.0), aspect, 0.1, 100.0);
+        const proj = zlm.Mat4.perspective(Angle.deg(30.0).toRadians().value, aspect, 0.1, 100.0);
         const eye = zlm.Vec3.init(
-            @sin(self.rotation_y) * 4.5,
+            self.rotation_y.sin() * 4.5,
             1.2,
-            @cos(self.rotation_y) * 4.5,
+            self.rotation_y.cos() * 4.5,
         );
         const view = zlm.Mat4.lookAt(eye, zlm.Vec3.init(0.0, 0.85, 0.0), zlm.Vec3.init(0.0, 1.0, 0.0));
         const mvp = zlm.Mat4.mul(proj, view);
@@ -183,9 +186,9 @@ pub const EntityRenderer = struct {
 
         if (!self.world_visible or self.vertex_count == 0) return;
 
-        const yaw_rad = self.world_yaw * (std.math.pi / 180.0) + std.math.pi;
-        const sin_y = @sin(yaw_rad);
-        const cos_y = @cos(yaw_rad);
+        const yaw_rad = self.world_yaw.toRadians().offset(std.math.pi);
+        const sin_y = yaw_rad.sin();
+        const cos_y = yaw_rad.cos();
         const model = zlm.Mat4{
             .m = .{ cos_y, 0, -sin_y, 0, 0, 1, 0, 0, sin_y, 0, cos_y, 0, self.world_pos[0], self.world_pos[1], self.world_pos[2], 1 },
         };
@@ -226,11 +229,9 @@ pub const EntityRenderer = struct {
             const px = player.render_pos[0];
             const py = player.render_pos[1] - GameState.EYE_OFFSET;
             const pz = player.render_pos[2];
-            const yaw = player.current_rotation[1] * (std.math.pi / 180.0);
-
-            const angle = yaw + std.math.pi;
-            const sin_y = @sin(angle);
-            const cos_y = @cos(angle);
+            const angle = Angle.deg(player.current_rotation[1]).toRadians().offset(std.math.pi);
+            const sin_y = angle.sin();
+            const cos_y = angle.cos();
             const model = zlm.Mat4{
                 .m = .{ cos_y, 0, -sin_y, 0, 0, 1, 0, 0, sin_y, 0, cos_y, 0, px, py, pz, 1 },
             };
@@ -245,7 +246,7 @@ pub const EntityRenderer = struct {
                 .sun_dir = sun_dir,
                 .sky_level = light[3],
                 .block_light = .{ light[0], light[1], light[2] },
-                .model_yaw = angle,
+                .model_yaw = angle.value,
             };
             vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));
             vk.cmdDraw(command_buffer, self.vertex_count, 1, 0, 0);

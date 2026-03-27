@@ -1,14 +1,15 @@
 const std = @import("std");
 const zlm = @import("zlm");
+const Angle = @import("../math/Angle.zig");
+const Degrees = Angle.Degrees;
+const Radians = Angle.Radians;
 
 const Camera = @This();
 
 position: zlm.Vec3,
-/// Yaw in degrees (0 = -Z/north, increases counterclockwise)
-yaw: f32,
-/// Pitch in degrees (clamped to ±90)
-pitch: f32,
-fov: f32,
+yaw: Degrees,
+pitch: Degrees,
+fov: Radians,
 aspect: f32,
 near: f32,
 far: f32,
@@ -16,18 +17,14 @@ far: f32,
 const MAX_PITCH: f32 = 90.0;
 const MIN_PITCH: f32 = -90.0;
 
-fn rad(deg: f32) f32 {
-    return deg * (std.math.pi / 180.0);
-}
-
 pub fn init(width: u32, height: u32) Camera {
     const aspect_ratio = @as(f32, @floatFromInt(width)) / @as(f32, @floatFromInt(height));
 
     return Camera{
         .position = zlm.Vec3.init(0.0, 40.0, 80.0),
-        .yaw = 0.0,
-        .pitch = 0.0,
-        .fov = 70.0 * std.math.pi / 180.0,
+        .yaw = Angle.deg(0.0),
+        .pitch = Angle.deg(0.0),
+        .fov = Angle.deg(70.0).toRadians(),
         .aspect = aspect_ratio,
         .near = 0.1,
         .far = 1000.0,
@@ -39,11 +36,13 @@ pub fn updateAspect(self: *Camera, width: u32, height: u32) void {
 }
 
 pub fn getForward(self: Camera) zlm.Vec3 {
-    const cos_pitch = @cos(rad(self.pitch));
+    const pitch_rad = self.pitch.toRadians();
+    const yaw_rad = self.yaw.toRadians();
+    const cos_pitch = pitch_rad.cos();
     return zlm.Vec3.init(
-        -@sin(rad(self.yaw)) * cos_pitch,
-        @sin(rad(self.pitch)),
-        -@cos(rad(self.yaw)) * cos_pitch,
+        -yaw_rad.sin() * cos_pitch,
+        pitch_rad.sin(),
+        -yaw_rad.cos() * cos_pitch,
     );
 }
 
@@ -60,7 +59,7 @@ pub fn getViewMatrix(self: Camera) zlm.Mat4 {
 }
 
 pub fn getProjectionMatrix(self: Camera) zlm.Mat4 {
-    return zlm.Mat4.perspective(self.fov, self.aspect, self.near, self.far);
+    return zlm.Mat4.perspective(self.fov.value, self.aspect, self.near, self.far);
 }
 
 pub fn getViewProjectionMatrix(self: Camera) zlm.Mat4 {
@@ -70,8 +69,9 @@ pub fn getViewProjectionMatrix(self: Camera) zlm.Mat4 {
 }
 
 pub fn move(self: *Camera, forward_amount: f32, right_amount: f32, up_amount: f32) void {
-    const sin_yaw = @sin(rad(self.yaw));
-    const cos_yaw = @cos(rad(self.yaw));
+    const yaw_rad = self.yaw.toRadians();
+    const sin_yaw = yaw_rad.sin();
+    const cos_yaw = yaw_rad.cos();
 
     self.position.x += -sin_yaw * forward_amount + cos_yaw * right_amount;
     self.position.y += up_amount;
@@ -79,8 +79,7 @@ pub fn move(self: *Camera, forward_amount: f32, right_amount: f32, up_amount: f3
 }
 
 /// Rotate camera by the given amounts in degrees.
-pub fn look(self: *Camera, delta_yaw: f32, delta_pitch: f32) void {
-    self.yaw += delta_yaw;
-    self.pitch += delta_pitch;
-    self.pitch = @max(MIN_PITCH, @min(MAX_PITCH, self.pitch));
+pub fn look(self: *Camera, delta_yaw: Degrees, delta_pitch: Degrees) void {
+    self.yaw = Degrees.add(self.yaw, delta_yaw);
+    self.pitch = Degrees.add(self.pitch, delta_pitch).clamp(MIN_PITCH, MAX_PITCH);
 }
