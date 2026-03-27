@@ -168,9 +168,7 @@ const PendingChunk = struct {
 const MAX_PENDING_BLOCKS: usize = 256;
 
 const PendingBlock = struct {
-    wx: i32,
-    wy: i32,
-    wz: i32,
+    pos: WorldState.WorldBlockPos,
     new_block: WorldState.StateId,
 };
 
@@ -258,7 +256,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         cam.pitch = Angle.deg(pd.pitch);
     }
 
-    const spawn_key = WorldState.ChunkKey.fromWorldPos(@intFromFloat(spawn_x), @intFromFloat(spawn_y), @intFromFloat(spawn_z));
+    const spawn_key = WorldState.WorldBlockPos.init(@intFromFloat(spawn_x), @intFromFloat(spawn_y), @intFromFloat(spawn_z)).toChunkKey();
 
     return .{
         .allocator = allocator,
@@ -676,11 +674,11 @@ pub fn drainNetworkChunks(self: *GameState) void {
 }
 
 /// Queue a block change from the network thread (thread-safe).
-pub fn queueNetworkBlockChange(self: *GameState, wx: i32, wy: i32, wz: i32, new_block: WorldState.StateId) void {
+pub fn queueNetworkBlockChange(self: *GameState, pos: WorldState.WorldBlockPos, new_block: WorldState.StateId) void {
     const write = self.pending_blocks_write.load(.acquire);
     const next = (write + 1) % MAX_PENDING_BLOCKS;
     if (next == self.pending_blocks_read) return; // full, drop
-    self.pending_blocks[write] = .{ .wx = wx, .wy = wy, .wz = wz, .new_block = new_block };
+    self.pending_blocks[write] = .{ .pos = pos, .new_block = new_block };
     self.pending_blocks_write.store(next, .release);
 }
 
@@ -690,13 +688,13 @@ fn drainNetworkBlockChanges(self: *GameState) void {
     while (self.pending_blocks_read != write) {
         const b = self.pending_blocks[self.pending_blocks_read];
         self.pending_blocks_read = (self.pending_blocks_read + 1) % MAX_PENDING_BLOCKS;
-        self.chunk_map.setBlock(b.wx, b.wy, b.wz, b.new_block);
-        self.markDirty(b.wx, b.wy, b.wz, false);
+        self.chunk_map.setBlock(b.pos, b.new_block);
+        self.markDirty(b.pos, false);
     }
 }
 
-pub fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void {
-    const affected = WorldState.affectedChunks(wx, wy, wz);
+pub fn markDirty(self: *GameState, pos: WorldState.WorldBlockPos, player: bool) void {
+    const affected = WorldState.affectedChunks(pos);
     const target = if (player) &self.streaming.player_dirty_chunks else &self.dirty_chunks;
     for (affected.keys[0..affected.count]) |key| {
         target.add(key);
@@ -707,7 +705,7 @@ pub fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void
     // Mark face-neighbor chunks for re-mesh (geometry + light border refresh).
     // Don't mark their LightMaps dirty — the MeshWorker will submit light-only
     // refreshes for neighbors when boundaries change.
-    const base_key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+    const base_key = pos.toChunkKey();
     const offsets = [6][3]i32{ .{ -1, 0, 0 }, .{ 1, 0, 0 }, .{ 0, -1, 0 }, .{ 0, 1, 0 }, .{ 0, 0, -1 }, .{ 0, 0, 1 } };
     for (offsets) |off| {
         const nk = WorldState.ChunkKey{
@@ -721,23 +719,22 @@ pub fn markDirty(self: *GameState, wx: i32, wy: i32, wz: i32, player: bool) void
 
 /// Try to use incremental light update for a single block change.
 /// Falls back to full markDirty if the light map isn't ready for incremental updates.
-pub fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_block: BlockState.StateId) void {
-    const base_key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+pub fn markDirtyIncremental(self: *GameState, pos: WorldState.WorldBlockPos, old_block: BlockState.StateId) void {
+    const base_key = pos.toChunkKey();
 
     // Try to set an incremental update on the center chunk's LightMap.
     if (self.light_maps.get(base_key)) |lm| {
         if (!lm.dirty and lm.incremental == null) {
+            const local = pos.toLocal();
             lm.incremental = .{
-                .lx = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE))),
-                .ly = @intCast(@mod(wy, @as(i32, WorldState.CHUNK_SIZE))),
-                .lz = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE))),
+                .local = local,
                 .old_block = old_block,
             };
 
             // Enqueue center chunk + geometry-affected neighbors for processing.
             // Don't mark any LightMaps dirty yet — the worker will cascade
             // to face-neighbors only if the incremental update changes boundary values.
-            const affected = WorldState.affectedChunks(wx, wy, wz);
+            const affected = WorldState.affectedChunks(pos);
             for (affected.keys[0..affected.count]) |key| {
                 self.streaming.player_dirty_chunks.add(key);
             }
@@ -746,7 +743,7 @@ pub fn markDirtyIncremental(self: *GameState, wx: i32, wy: i32, wz: i32, old_blo
     }
 
     // Fall back to full recompute.
-    self.markDirty(wx, wy, wz, true);
+    self.markDirty(pos, true);
 }
 
 /// Sample block light (RGB) and sky light at a world position with
@@ -771,12 +768,14 @@ pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
     for (0..2) |dz| {
         for (0..2) |dy| {
             for (0..2) |dx| {
-                const bx = x0 + @as(i32, @intCast(dx));
-                const by = y0 + @as(i32, @intCast(dy));
-                const bz = z0 + @as(i32, @intCast(dz));
+                const block_pos = WorldState.WorldBlockPos.init(
+                    x0 + @as(i32, @intCast(dx)),
+                    y0 + @as(i32, @intCast(dy)),
+                    z0 + @as(i32, @intCast(dz)),
+                );
 
                 // Skip opaque blocks — they have 0 light and would darken the result
-                if (BlockState.isOpaque(self.chunk_map.getBlock(bx, by, bz))) continue;
+                if (BlockState.isOpaque(self.chunk_map.getBlock(block_pos))) continue;
 
                 const wx_ = if (dx == 0) 1.0 - fx else fx;
                 const wy_ = if (dy == 0) 1.0 - fy else fy;
@@ -784,7 +783,7 @@ pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
                 const w = wx_ * wy_ * wz_;
                 total_w += w;
 
-                const sample = self.readLightRaw(bx, by, bz);
+                const sample = self.readLightRaw(block_pos);
                 result[0] += sample[0] * w;
                 result[1] += sample[1] * w;
                 result[2] += sample[2] * w;
@@ -803,13 +802,9 @@ pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
     return result;
 }
 
-fn readLightRaw(self: *const GameState, bx: i32, by: i32, bz: i32) [4]f32 {
-    const key = WorldState.ChunkKey.fromWorldPos(bx, by, bz);
-    const lm = self.light_maps.get(key) orelse return .{ 0, 0, 0, 0 };
-    const lx: usize = @intCast(@mod(bx, @as(i32, WorldState.CHUNK_SIZE)));
-    const ly: usize = @intCast(@mod(by, @as(i32, WorldState.CHUNK_SIZE)));
-    const lz: usize = @intCast(@mod(bz, @as(i32, WorldState.CHUNK_SIZE)));
-    const ci = WorldState.chunkIndex(lx, ly, lz);
+fn readLightRaw(self: *const GameState, pos: WorldState.WorldBlockPos) [4]f32 {
+    const lm = self.light_maps.get(pos.toChunkKey()) orelse return .{ 0, 0, 0, 0 };
+    const ci = pos.toLocal().toIndex();
 
     // Lock to prevent race with mesh worker recomputing light data
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -827,9 +822,9 @@ fn readLightRaw(self: *const GameState, bx: i32, by: i32, bz: i32) [4]f32 {
     };
 }
 
-pub fn queueChunkSave(self: *GameState, wx: i32, wy: i32, wz: i32) void {
+pub fn queueChunkSave(self: *GameState, pos: WorldState.WorldBlockPos) void {
     const s = self.streaming.storage orelse return;
-    const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
+    const key = pos.toChunkKey();
     const chunk = self.chunk_map.get(key) orelse return;
     s.markDirty(key.cx, key.cy, key.cz, chunk);
 }

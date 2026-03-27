@@ -93,15 +93,15 @@ pub fn updateWaterState(state: *GameState) void {
     const px = floori(pos_x);
     const pz = floori(pos_z);
 
-    const feet_block = state.chunk_map.getBlock(px, floori(pos_y), pz);
-    const eye_block = state.chunk_map.getBlock(px, floori(pos_y + GameState.EYE_OFFSET), pz);
+    const feet_block = state.chunk_map.getBlock(WorldState.WorldBlockPos.init(px, floori(pos_y), pz));
+    const eye_block = state.chunk_map.getBlock(WorldState.WorldBlockPos.init(px, floori(pos_y + GameState.EYE_OFFSET), pz));
 
     state.entities.flags[P].in_water = (BlockState.getBlock(feet_block) == .water);
     state.entities.flags[P].eyes_in_water = (BlockState.getBlock(eye_block) == .water);
 
     // Ladder detection: check feet and mid-body
     state.entities.flags[P].on_ladder = isLadder(feet_block) or
-        isLadder(state.chunk_map.getBlock(px, floori(pos_y + 0.9), pz));
+        isLadder(state.chunk_map.getBlock(WorldState.WorldBlockPos.init(px, floori(pos_y + 0.9), pz)));
 
     // Water vision time: MC 0-600 ticks @20Hz → 0-900 @30Hz
     if (state.entities.flags[P].eyes_in_water) {

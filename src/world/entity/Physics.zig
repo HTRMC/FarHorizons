@@ -168,7 +168,7 @@ fn collideAxis(chunk_map: *const ChunkMap, pos: [3]f32, movement: f32, axis: usi
         while (bz <= bz1) : (bz += 1) {
             var bx: i32 = bx0;
             while (bx <= bx1) : (bx += 1) {
-                const block = chunk_map.getBlock(bx, by, bz);
+                const block = chunk_map.getBlock(WorldState.WorldBlockPos.init(bx, by, bz));
                 if (!BlockState.isSolid(block)) continue;
 
                 const coords = [3]i32{ bx, by, bz };

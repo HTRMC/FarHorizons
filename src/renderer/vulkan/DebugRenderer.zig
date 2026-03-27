@@ -414,10 +414,10 @@ pub const DebugRenderer = struct {
             const Physics = @import("../../world/entity/Physics.zig");
             const WorldState = @import("../../world/WorldState.zig");
             const BlockState = WorldState.BlockState;
-            const block = game_state.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
-            const bx: f32 = @floatFromInt(hit.block_pos[0]);
-            const by: f32 = @floatFromInt(hit.block_pos[1]);
-            const bz: f32 = @floatFromInt(hit.block_pos[2]);
+            const block = game_state.chunk_map.getBlock(hit.block_pos);
+            const bx: f32 = @floatFromInt(hit.block_pos.x);
+            const by: f32 = @floatFromInt(hit.block_pos.y);
+            const bz: f32 = @floatFromInt(hit.block_pos.z);
             const outline_color = [4]f32{ 0.1, 0.1, 0.1, 1.0 };
 
             // For blocks with custom hitboxes, draw AABB edges directly

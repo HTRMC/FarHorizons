@@ -64,9 +64,9 @@ pub const BreakRenderer = struct {
         const tex_layer: i32 = @intCast(BREAK_TEX_BASE + stage);
 
         // Model matrix: translate to block position with slight expansion to avoid z-fighting
-        const bx: f32 = @floatFromInt(bp[0]);
-        const by: f32 = @floatFromInt(bp[1]);
-        const bz: f32 = @floatFromInt(bp[2]);
+        const bx: f32 = @floatFromInt(bp.x);
+        const by: f32 = @floatFromInt(bp.y);
+        const bz: f32 = @floatFromInt(bp.z);
         const e: f32 = 0.002; // expansion to prevent z-fighting
         const model = zlm.Mat4{ .m = .{
             1.0 + e * 2, 0,           0,           0,

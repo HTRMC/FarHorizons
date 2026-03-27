@@ -6,9 +6,7 @@ const Io = std.Io;
 
 /// Pending single-block incremental light update (set by game thread, processed by worker).
 pub const IncrementalUpdate = struct {
-    lx: u8,
-    ly: u8,
-    lz: u8,
+    local: WorldState.ChunkLocalPos,
     old_block: WorldState.StateId,
 };
 

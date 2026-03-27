@@ -22,10 +22,8 @@ pub fn breakBlock(state: *GameState) void {
 fn breakBlockImpl(state: *GameState, allow_drop: bool) void {
     state.swing_requested = true;
     const hit = state.hit_result orelse return;
-    const wx = hit.block_pos[0];
-    const wy = hit.block_pos[1];
-    const wz = hit.block_pos[2];
-    const old_block = state.chunk_map.getBlock(wx, wy, wz);
+    const pos = hit.block_pos;
+    const old_block = state.chunk_map.getBlock(pos);
 
     const air = BlockState.defaultState(.air);
 
@@ -35,79 +33,69 @@ fn breakBlockImpl(state: *GameState, allow_drop: bool) void {
 
     // Door breaking: remove both halves
     if (BlockState.isDoor(old_block)) {
-        state.chunk_map.setBlock(wx, wy, wz, air);
-        state.markDirtyIncremental(wx, wy, wz, old_block);
-        state.queueChunkSave(wx, wy, wz);
+        state.chunk_map.setBlock(pos, air);
+        state.markDirtyIncremental(pos, old_block);
+        state.queueChunkSave(pos);
 
         // Find and remove the other half
-        const other_y: i32 = if (BlockState.isDoorBottom(old_block)) wy + 1 else wy - 1;
-        const other_block = state.chunk_map.getBlock(wx, other_y, wz);
+        const other_pos = pos.offset(0, if (BlockState.isDoorBottom(old_block)) 1 else -1, 0);
+        const other_block = state.chunk_map.getBlock(other_pos);
         if (BlockState.isDoor(other_block)) {
-            state.chunk_map.setBlock(wx, other_y, wz, air);
-            state.markDirtyIncremental(wx, other_y, wz, other_block);
-            state.queueChunkSave(wx, other_y, wz);
-
-            const key2 = WorldState.ChunkKey.fromWorldPos(wx, other_y, wz);
-            const lx2: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
-            const lz2: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
-            state.surface_height_map.rebuildColumnAt(key2.cx, key2.cz, lx2, lz2, &state.chunk_map);
+            state.chunk_map.setBlock(other_pos, air);
+            state.markDirtyIncremental(other_pos, other_block);
+            state.queueChunkSave(other_pos);
+            rebuildSurfaceColumn(state, other_pos);
         }
 
-        const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
-        const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
-        const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
-        state.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &state.chunk_map);
-        updateFenceNeighbors(state, wx, wy, wz);
-        updateStairNeighbors(state, wx, wy, wz);
+        rebuildSurfaceColumn(state, pos);
+        updateFenceNeighbors(state, pos);
+        updateStairNeighbors(state, pos);
         state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
-        if (should_drop) {
-            const drop_pos = [3]f32{
-                @as(f32, @floatFromInt(wx)) + 0.5,
-                @as(f32, @floatFromInt(wy)) + 0.5,
-                @as(f32, @floatFromInt(wz)) + 0.5,
-            };
-            state.entities.spawnItemDrop(drop_pos, BlockState.getCanonicalState(BlockState.defaultState(drop_block)), 1);
-        }
+        if (should_drop) dropItem(state, pos, drop_block);
         return;
     }
 
-    state.chunk_map.setBlock(wx, wy, wz, air);
-    // Rebuild surface height for this column (broken block may have been the surface)
-    const key = WorldState.ChunkKey.fromWorldPos(wx, wy, wz);
-    const local_x: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
-    const local_z: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
-    state.surface_height_map.rebuildColumnAt(key.cx, key.cz, local_x, local_z, &state.chunk_map);
-    state.markDirtyIncremental(wx, wy, wz, old_block);
-    state.queueChunkSave(wx, wy, wz);
-    updateFenceNeighbors(state, wx, wy, wz);
-    updateStairNeighbors(state, wx, wy, wz);
+    state.chunk_map.setBlock(pos, air);
+    rebuildSurfaceColumn(state, pos);
+    state.markDirtyIncremental(pos, old_block);
+    state.queueChunkSave(pos);
+    updateFenceNeighbors(state, pos);
+    updateStairNeighbors(state, pos);
     state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
-    if (should_drop) {
-        const drop_pos = [3]f32{
-            @as(f32, @floatFromInt(wx)) + 0.5,
-            @as(f32, @floatFromInt(wy)) + 0.5,
-            @as(f32, @floatFromInt(wz)) + 0.5,
-        };
-        state.entities.spawnItemDrop(drop_pos, BlockState.getCanonicalState(BlockState.defaultState(drop_block)), 1);
-    }
+    if (should_drop) dropItem(state, pos, drop_block);
 }
 
-pub fn toggleDoor(state: *GameState, wx: i32, wy: i32, wz: i32, block: BlockState.StateId) void {
+fn rebuildSurfaceColumn(state: *GameState, pos: WorldState.WorldBlockPos) void {
+    const key = pos.toChunkKey();
+    const local = pos.toLocal();
+    state.surface_height_map.rebuildColumnAt(key.cx, key.cz, local.x, local.z, &state.chunk_map);
+}
+
+fn dropItem(state: *GameState, pos: WorldState.WorldBlockPos, drop_block: BlockState.Block) void {
+    const drop_pos = [3]f32{
+        @as(f32, @floatFromInt(pos.x)) + 0.5,
+        @as(f32, @floatFromInt(pos.y)) + 0.5,
+        @as(f32, @floatFromInt(pos.z)) + 0.5,
+    };
+    state.entities.spawnItemDrop(drop_pos, BlockState.getCanonicalState(BlockState.defaultState(drop_block)), 1);
+}
+
+pub fn toggleDoor(state: *GameState, pos: WorldState.WorldBlockPos, block: BlockState.StateId) void {
     // Toggle this half
     const new_block = BlockState.toggleDoor(block);
-    const old_block = state.chunk_map.getBlock(wx, wy, wz);
-    state.chunk_map.setBlock(wx, wy, wz, new_block);
-    state.markDirtyIncremental(wx, wy, wz, old_block);
-    state.queueChunkSave(wx, wy, wz);
+    const old_block = state.chunk_map.getBlock(pos);
+    state.chunk_map.setBlock(pos, new_block);
+    state.markDirtyIncremental(pos, old_block);
+    state.queueChunkSave(pos);
 
     // Toggle the other half
-    const other_y: i32 = if (BlockState.isDoorBottom(block)) wy + 1 else wy - 1;
-    const other_block = state.chunk_map.getBlock(wx, other_y, wz);
+    const other_pos = pos.offset(0, if (BlockState.isDoorBottom(block)) 1 else -1, 0);
+    const other_block = state.chunk_map.getBlock(other_pos);
     if (BlockState.isDoor(other_block)) {
         const new_other = BlockState.toggleDoor(other_block);
-        state.chunk_map.setBlock(wx, other_y, wz, new_other);
-        state.markDirtyIncremental(wx, other_y, wz, other_block);
-        state.queueChunkSave(wx, other_y, wz);
+        state.chunk_map.setBlock(other_pos, new_other);
+        state.markDirtyIncremental(other_pos, other_block);
+        state.queueChunkSave(other_pos);
     }
 
     state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
@@ -120,9 +108,9 @@ pub fn placeBlock(state: *GameState) void {
     state.swing_requested = true;
 
     // If clicking on a door, toggle it instead of placing
-    const clicked_block = state.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    const clicked_block = state.chunk_map.getBlock(hit.block_pos);
     if (BlockState.isDoor(clicked_block)) {
-        toggleDoor(state, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], clicked_block);
+        toggleDoor(state, hit.block_pos, clicked_block);
         return;
     }
 
@@ -141,20 +129,14 @@ pub fn placeBlock(state: *GameState) void {
     // Double slab: placing a slab on a compatible existing slab merges into a full block
     if (BlockState.getBlock(block_state) == .oak_slab) {
         if (slabCanBeReplaced(clicked_block, hit)) {
-            const bx = hit.block_pos[0];
-            const by = hit.block_pos[1];
-            const bz = hit.block_pos[2];
             const double_slab = BlockState.fromBlockProps(.oak_slab, @intFromEnum(BlockState.SlabType.double));
-            state.chunk_map.setBlock(bx, by, bz, double_slab);
+            state.chunk_map.setBlock(hit.block_pos, double_slab);
             if (BlockState.isOpaque(double_slab)) {
-                const skey = WorldState.ChunkKey.fromWorldPos(bx, by, bz);
-                const slx: usize = @intCast(@mod(bx, @as(i32, WorldState.CHUNK_SIZE)));
-                const slz: usize = @intCast(@mod(bz, @as(i32, WorldState.CHUNK_SIZE)));
-                state.surface_height_map.updateBlockPlaced(skey.cx, skey.cz, slx, slz, by);
+                updateSurfaceHeight(state, hit.block_pos);
             }
-            state.markDirtyIncremental(bx, by, bz, clicked_block);
-            state.queueChunkSave(bx, by, bz);
-            updateFenceNeighbors(state, bx, by, bz);
+            state.markDirtyIncremental(hit.block_pos, clicked_block);
+            state.queueChunkSave(hit.block_pos);
+            updateFenceNeighbors(state, hit.block_pos);
             state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
             InventoryOps.decrementSelectedStack(state);
             return;
@@ -162,11 +144,9 @@ pub fn placeBlock(state: *GameState) void {
     }
 
     const n = hit.direction.normal();
-    const px = hit.block_pos[0] + n[0];
-    const py = hit.block_pos[1] + n[1];
-    const pz = hit.block_pos[2] + n[2];
-    if (BlockState.isSolid(state.chunk_map.getBlock(px, py, pz))) return;
-    if (BlockState.isSolid(block_state) and blockOverlapsPlayer(px, py, pz, state.entities.pos[Entity.PLAYER])) return;
+    const place_pos = hit.block_pos.offset(n[0], n[1], n[2]);
+    if (BlockState.isSolid(state.chunk_map.getBlock(place_pos))) return;
+    if (BlockState.isSolid(block_state) and blockOverlapsPlayer(place_pos, state.entities.pos[Entity.PLAYER])) return;
 
     // Orient stairs based on player yaw, and slabs based on hit face/position
     block_state = resolveOrientation(block_state, state.camera.yaw, hit);
@@ -174,61 +154,65 @@ pub fn placeBlock(state: *GameState) void {
     // Fence placement: calculate connections from neighbors
     if (BlockState.isFence(block_state)) {
         block_state = BlockState.fenceFromConnections(
-            BlockState.connectsToFence(state.chunk_map.getBlock(px, py, pz - 1)),
-            BlockState.connectsToFence(state.chunk_map.getBlock(px, py, pz + 1)),
-            BlockState.connectsToFence(state.chunk_map.getBlock(px + 1, py, pz)),
-            BlockState.connectsToFence(state.chunk_map.getBlock(px - 1, py, pz)),
+            BlockState.connectsToFence(state.chunk_map.getBlock(place_pos.offset(0, 0, -1))),
+            BlockState.connectsToFence(state.chunk_map.getBlock(place_pos.offset(0, 0, 1))),
+            BlockState.connectsToFence(state.chunk_map.getBlock(place_pos.offset(1, 0, 0))),
+            BlockState.connectsToFence(state.chunk_map.getBlock(place_pos.offset(-1, 0, 0))),
         );
     }
 
     // Door placement: need space for both halves
     if (BlockState.isDoor(block_state)) {
         // Check that the block above is free
-        const above = state.chunk_map.getBlock(px, py + 1, pz);
+        const above_pos = place_pos.offset(0, 1, 0);
+        const above = state.chunk_map.getBlock(above_pos);
         if (BlockState.isSolid(above)) return;
         if (BlockState.getBlock(above) != .air and BlockState.getBlock(above) != .water) return;
 
         // Place bottom half
-        const old_bottom = state.chunk_map.getBlock(px, py, pz);
-        state.chunk_map.setBlock(px, py, pz, block_state);
-        state.markDirtyIncremental(px, py, pz, old_bottom);
-        state.queueChunkSave(px, py, pz);
+        const old_bottom = state.chunk_map.getBlock(place_pos);
+        state.chunk_map.setBlock(place_pos, block_state);
+        state.markDirtyIncremental(place_pos, old_bottom);
+        state.queueChunkSave(place_pos);
 
         // Place top half
         const top_type = BlockState.doorBottomToTop(block_state);
-        const old_top = state.chunk_map.getBlock(px, py + 1, pz);
-        state.chunk_map.setBlock(px, py + 1, pz, top_type);
-        state.markDirtyIncremental(px, py + 1, pz, old_top);
-        state.queueChunkSave(px, py + 1, pz);
+        const old_top = state.chunk_map.getBlock(above_pos);
+        state.chunk_map.setBlock(above_pos, top_type);
+        state.markDirtyIncremental(above_pos, old_top);
+        state.queueChunkSave(above_pos);
 
         state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
         InventoryOps.decrementSelectedStack(state);
         return;
     }
 
-    const old_block = state.chunk_map.getBlock(px, py, pz);
-    state.chunk_map.setBlock(px, py, pz, block_state);
+    const old_block = state.chunk_map.getBlock(place_pos);
+    state.chunk_map.setBlock(place_pos, block_state);
     // Update surface height if placing an opaque block
     if (BlockState.isOpaque(block_state)) {
-        const key = WorldState.ChunkKey.fromWorldPos(px, py, pz);
-        const local_x: usize = @intCast(@mod(px, @as(i32, WorldState.CHUNK_SIZE)));
-        const local_z: usize = @intCast(@mod(pz, @as(i32, WorldState.CHUNK_SIZE)));
-        state.surface_height_map.updateBlockPlaced(key.cx, key.cz, local_x, local_z, py);
+        updateSurfaceHeight(state, place_pos);
     }
-    state.markDirtyIncremental(px, py, pz, old_block);
-    state.queueChunkSave(px, py, pz);
+    state.markDirtyIncremental(place_pos, old_block);
+    state.queueChunkSave(place_pos);
 
     // Update neighboring fences and stairs when placing any block
-    updateFenceNeighbors(state, px, py, pz);
-    updateStairNeighbors(state, px, py, pz);
+    updateFenceNeighbors(state, place_pos);
+    updateStairNeighbors(state, place_pos);
 
     state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
     InventoryOps.decrementSelectedStack(state);
 }
 
+fn updateSurfaceHeight(state: *GameState, pos: WorldState.WorldBlockPos) void {
+    const key = pos.toChunkKey();
+    const local = pos.toLocal();
+    state.surface_height_map.updateBlockPlaced(key.cx, key.cz, local.x, local.z, pos.y);
+}
+
 pub fn pickBlock(state: *GameState) void {
     const hit = state.hit_result orelse return;
-    const raw_state = state.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+    const raw_state = state.chunk_map.getBlock(hit.block_pos);
     if (raw_state == BlockState.defaultState(.air)) return;
 
     // Normalize oriented variants to their canonical form for inventory
@@ -265,54 +249,53 @@ pub fn pickBlock(state: *GameState) void {
 // Block connection helpers
 // ============================================================
 
-fn updateFenceNeighbors(state: *GameState, wx: i32, wy: i32, wz: i32) void {
+fn updateFenceNeighbors(state: *GameState, pos: WorldState.WorldBlockPos) void {
     const deltas = [4][2]i32{ .{ 0, -1 }, .{ 0, 1 }, .{ 1, 0 }, .{ -1, 0 } };
     for (deltas) |d| {
-        const nx = wx + d[0];
-        const nz = wz + d[1];
-        const neighbor = state.chunk_map.getBlock(nx, wy, nz);
+        const neighbor_pos = pos.offset(d[0], 0, d[1]);
+        const neighbor = state.chunk_map.getBlock(neighbor_pos);
         if (!BlockState.isFence(neighbor)) continue;
 
         const new_variant = BlockState.fenceFromConnections(
-            BlockState.connectsToFence(state.chunk_map.getBlock(nx, wy, nz - 1)),
-            BlockState.connectsToFence(state.chunk_map.getBlock(nx, wy, nz + 1)),
-            BlockState.connectsToFence(state.chunk_map.getBlock(nx + 1, wy, nz)),
-            BlockState.connectsToFence(state.chunk_map.getBlock(nx - 1, wy, nz)),
+            BlockState.connectsToFence(state.chunk_map.getBlock(neighbor_pos.offset(0, 0, -1))),
+            BlockState.connectsToFence(state.chunk_map.getBlock(neighbor_pos.offset(0, 0, 1))),
+            BlockState.connectsToFence(state.chunk_map.getBlock(neighbor_pos.offset(1, 0, 0))),
+            BlockState.connectsToFence(state.chunk_map.getBlock(neighbor_pos.offset(-1, 0, 0))),
         );
         if (new_variant != neighbor) {
-            state.chunk_map.setBlock(nx, wy, nz, new_variant);
-            state.markDirtyIncremental(nx, wy, nz, neighbor);
-            state.queueChunkSave(nx, wy, nz);
+            state.chunk_map.setBlock(neighbor_pos, new_variant);
+            state.markDirtyIncremental(neighbor_pos, neighbor);
+            state.queueChunkSave(neighbor_pos);
         }
     }
 }
 
-fn updateStairNeighbors(state: *GameState, wx: i32, wy: i32, wz: i32) void {
-    updateSingleStairShape(state, wx, wy, wz);
+fn updateStairNeighbors(state: *GameState, pos: WorldState.WorldBlockPos) void {
+    updateSingleStairShape(state, pos);
     const deltas = [4][2]i32{ .{ 0, -1 }, .{ 0, 1 }, .{ 1, 0 }, .{ -1, 0 } };
     for (deltas) |d| {
-        updateSingleStairShape(state, wx + d[0], wy, wz + d[1]);
+        updateSingleStairShape(state, pos.offset(d[0], 0, d[1]));
     }
 }
 
-fn updateSingleStairShape(state: *GameState, wx: i32, wy: i32, wz: i32) void {
-    const st = state.chunk_map.getBlock(wx, wy, wz);
+fn updateSingleStairShape(state: *GameState, pos: WorldState.WorldBlockPos) void {
+    const st = state.chunk_map.getBlock(pos);
     if (!BlockState.isStairs(st)) return;
     const facing = BlockState.getFacing(st).?;
     const half = BlockState.getHalf(st).?;
-    const new_shape = computeStairShape(state, wx, wy, wz, facing, half);
+    const new_shape = computeStairShape(state, pos, facing, half);
     const old_shape = BlockState.getStairShape(st).?;
     if (new_shape != old_shape) {
         const new_state = BlockState.makeStairState(facing, half, new_shape);
-        state.chunk_map.setBlock(wx, wy, wz, new_state);
-        state.markDirtyIncremental(wx, wy, wz, st);
-        state.queueChunkSave(wx, wy, wz);
+        state.chunk_map.setBlock(pos, new_state);
+        state.markDirtyIncremental(pos, st);
+        state.queueChunkSave(pos);
     }
 }
 
-fn computeStairShape(state: *GameState, wx: i32, wy: i32, wz: i32, facing: BlockState.Facing, half: BlockState.Half) BlockState.StairShape {
+fn computeStairShape(state: *GameState, pos: WorldState.WorldBlockPos, facing: BlockState.Facing, half: BlockState.Half) BlockState.StairShape {
     const fd = facingDelta(facing);
-    const step_neighbor = state.chunk_map.getBlock(wx + fd[0], wy, wz + fd[1]);
+    const step_neighbor = state.chunk_map.getBlock(pos.offset(fd[0], 0, fd[1]));
     if (BlockState.isStairs(step_neighbor)) {
         const sf = BlockState.getFacing(step_neighbor).?;
         const sh = BlockState.getHalf(step_neighbor).?;
@@ -321,7 +304,7 @@ fn computeStairShape(state: *GameState, wx: i32, wy: i32, wz: i32, facing: Block
             return .inner_right;
         }
     }
-    const back_neighbor = state.chunk_map.getBlock(wx - fd[0], wy, wz - fd[1]);
+    const back_neighbor = state.chunk_map.getBlock(pos.offset(-fd[0], 0, -fd[1]));
     if (BlockState.isStairs(back_neighbor)) {
         const bf = BlockState.getFacing(back_neighbor).?;
         const bh = BlockState.getHalf(back_neighbor).?;
@@ -432,11 +415,11 @@ fn resolveOrientation(block_state: BlockState.StateId, yaw: Degrees, hit: Raycas
     }
 }
 
-pub fn blockOverlapsPlayer(bx: i32, by: i32, bz: i32, pos: [3]f32) bool {
-    const fbx: f32 = @floatFromInt(bx);
-    const fby: f32 = @floatFromInt(by);
-    const fbz: f32 = @floatFromInt(bz);
-    return fbx + 1.0 > pos[0] - Physics.PLAYER_HALF_W and fbx < pos[0] + Physics.PLAYER_HALF_W and
-        fby + 1.0 > pos[1] and fby < pos[1] + Physics.PLAYER_HEIGHT and
-        fbz + 1.0 > pos[2] - Physics.PLAYER_HALF_W and fbz < pos[2] + Physics.PLAYER_HALF_W;
+pub fn blockOverlapsPlayer(block_pos: WorldState.WorldBlockPos, player_pos: [3]f32) bool {
+    const fbx: f32 = @floatFromInt(block_pos.x);
+    const fby: f32 = @floatFromInt(block_pos.y);
+    const fbz: f32 = @floatFromInt(block_pos.z);
+    return fbx + 1.0 > player_pos[0] - Physics.PLAYER_HALF_W and fbx < player_pos[0] + Physics.PLAYER_HALF_W and
+        fby + 1.0 > player_pos[1] and fby < player_pos[1] + Physics.PLAYER_HEIGHT and
+        fbz + 1.0 > player_pos[2] - Physics.PLAYER_HALF_W and fbz < player_pos[2] + Physics.PLAYER_HALF_W;
 }

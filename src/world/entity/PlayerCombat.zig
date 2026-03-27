@@ -1,6 +1,8 @@
+const WorldState = @import("../../world/WorldState.zig");
+
 pub const PlayerCombat = struct {
     break_progress: f32 = 0,
-    breaking_pos: ?[3]i32 = null,
+    breaking_pos: ?WorldState.WorldBlockPos = null,
     attack_held: bool = false,
     attack_damage: f32 = 1.0,
     health: f32 = 20.0,

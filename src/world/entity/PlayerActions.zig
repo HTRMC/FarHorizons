@@ -139,13 +139,13 @@ pub fn updateBreakProgress(self: *GameState) void {
 
     // Reset if target changed
     if (self.combat.breaking_pos) |bp| {
-        if (bp[0] != target_pos[0] or bp[1] != target_pos[1] or bp[2] != target_pos[2]) {
+        if (bp.x != target_pos.x or bp.y != target_pos.y or bp.z != target_pos.z) {
             self.combat.break_progress = 0;
         }
     }
     self.combat.breaking_pos = target_pos;
 
-    const block_state = self.chunk_map.getBlock(target_pos[0], target_pos[1], target_pos[2]);
+    const block_state = self.chunk_map.getBlock(target_pos);
     const hardness = BlockState.getHardness(block_state);
 
     // Unbreakable
@@ -222,9 +222,9 @@ pub fn attackEntity(self: *GameState) bool {
     // Only attack if entity is closer than any block hit
     if (self.hit_result) |block_hit| {
         const cam = self.camera.position;
-        const bx = @as(f32, @floatFromInt(block_hit.block_pos[0])) + 0.5;
-        const by = @as(f32, @floatFromInt(block_hit.block_pos[1])) + 0.5;
-        const bz = @as(f32, @floatFromInt(block_hit.block_pos[2])) + 0.5;
+        const bx = @as(f32, @floatFromInt(block_hit.block_pos.x)) + 0.5;
+        const by = @as(f32, @floatFromInt(block_hit.block_pos.y)) + 0.5;
+        const bz = @as(f32, @floatFromInt(block_hit.block_pos.z)) + 0.5;
         const dx = bx - cam.x;
         const dy = by - cam.y;
         const dz = bz - cam.z;

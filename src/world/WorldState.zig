@@ -205,6 +205,53 @@ pub const Chunk = struct {
     ref_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 };
 
+pub const ChunkLocalPos = struct {
+    x: u5,
+    y: u5,
+    z: u5,
+
+    pub fn toIndex(self: ChunkLocalPos) usize {
+        const ux: usize = self.x;
+        const uy: usize = self.y;
+        const uz: usize = self.z;
+        return uy * CHUNK_SIZE * CHUNK_SIZE + uz * CHUNK_SIZE + ux;
+    }
+};
+
+pub const WorldBlockPos = struct {
+    x: i32,
+    y: i32,
+    z: i32,
+
+    pub fn init(x: i32, y: i32, z: i32) WorldBlockPos {
+        return .{ .x = x, .y = y, .z = z };
+    }
+
+    pub fn fromArray(a: [3]i32) WorldBlockPos {
+        return .{ .x = a[0], .y = a[1], .z = a[2] };
+    }
+
+    pub fn toChunkKey(self: WorldBlockPos) ChunkKey {
+        return .{
+            .cx = @divFloor(self.x, @as(i32, CHUNK_SIZE)),
+            .cy = @divFloor(self.y, @as(i32, CHUNK_SIZE)),
+            .cz = @divFloor(self.z, @as(i32, CHUNK_SIZE)),
+        };
+    }
+
+    pub fn toLocal(self: WorldBlockPos) ChunkLocalPos {
+        return .{
+            .x = @intCast(@mod(self.x, @as(i32, CHUNK_SIZE))),
+            .y = @intCast(@mod(self.y, @as(i32, CHUNK_SIZE))),
+            .z = @intCast(@mod(self.z, @as(i32, CHUNK_SIZE))),
+        };
+    }
+
+    pub fn offset(self: WorldBlockPos, dx: i32, dy: i32, dz: i32) WorldBlockPos {
+        return .{ .x = self.x + dx, .y = self.y + dy, .z = self.z + dz };
+    }
+};
+
 pub const ChunkKey = struct {
     cx: i32,
     cy: i32,
@@ -214,12 +261,8 @@ pub const ChunkKey = struct {
         return a.cx == b.cx and a.cy == b.cy and a.cz == b.cz;
     }
 
-    pub fn fromWorldPos(wx: i32, wy: i32, wz: i32) ChunkKey {
-        return .{
-            .cx = @divFloor(wx, @as(i32, CHUNK_SIZE)),
-            .cy = @divFloor(wy, @as(i32, CHUNK_SIZE)),
-            .cz = @divFloor(wz, @as(i32, CHUNK_SIZE)),
-        };
+    pub fn fromWorldPos(pos: WorldBlockPos) ChunkKey {
+        return pos.toChunkKey();
     }
 
     pub fn position(self: ChunkKey) [3]i32 {
@@ -1200,48 +1243,42 @@ pub fn generateChunkLightOnly(
 
 // --- Affected chunks ---
 
-pub fn affectedChunks(wx: i32, wy: i32, wz: i32) AffectedChunks {
-    const cs: i32 = CHUNK_SIZE;
-    const base_cx = @divFloor(wx, cs);
-    const base_cy = @divFloor(wy, cs);
-    const base_cz = @divFloor(wz, cs);
+pub fn affectedChunks(pos: WorldBlockPos) AffectedChunks {
+    const key = pos.toChunkKey();
+    const local = pos.toLocal();
 
     var result = AffectedChunks{
         .keys = std.mem.zeroes([7]ChunkKey),
         .count = 0,
     };
 
-    result.keys[0] = .{ .cx = base_cx, .cy = base_cy, .cz = base_cz };
+    result.keys[0] = key;
     result.count = 1;
 
-    const lx = @mod(wx, cs);
-    const ly = @mod(wy, cs);
-    const lz = @mod(wz, cs);
-
-    if (lx <= 1) {
-        result.keys[result.count] = .{ .cx = base_cx - 1, .cy = base_cy, .cz = base_cz };
+    if (local.x <= 1) {
+        result.keys[result.count] = .{ .cx = key.cx - 1, .cy = key.cy, .cz = key.cz };
         result.count += 1;
     }
-    if (lx >= cs - 2) {
-        result.keys[result.count] = .{ .cx = base_cx + 1, .cy = base_cy, .cz = base_cz };
+    if (local.x >= CHUNK_SIZE - 2) {
+        result.keys[result.count] = .{ .cx = key.cx + 1, .cy = key.cy, .cz = key.cz };
         result.count += 1;
     }
 
-    if (ly <= 1) {
-        result.keys[result.count] = .{ .cx = base_cx, .cy = base_cy - 1, .cz = base_cz };
+    if (local.y <= 1) {
+        result.keys[result.count] = .{ .cx = key.cx, .cy = key.cy - 1, .cz = key.cz };
         result.count += 1;
     }
-    if (ly >= cs - 2) {
-        result.keys[result.count] = .{ .cx = base_cx, .cy = base_cy + 1, .cz = base_cz };
+    if (local.y >= CHUNK_SIZE - 2) {
+        result.keys[result.count] = .{ .cx = key.cx, .cy = key.cy + 1, .cz = key.cz };
         result.count += 1;
     }
 
-    if (lz <= 1) {
-        result.keys[result.count] = .{ .cx = base_cx, .cy = base_cy, .cz = base_cz - 1 };
+    if (local.z <= 1) {
+        result.keys[result.count] = .{ .cx = key.cx, .cy = key.cy, .cz = key.cz - 1 };
         result.count += 1;
     }
-    if (lz >= cs - 2) {
-        result.keys[result.count] = .{ .cx = base_cx, .cy = base_cy, .cz = base_cz + 1 };
+    if (local.z >= CHUNK_SIZE - 2) {
+        result.keys[result.count] = .{ .cx = key.cx, .cy = key.cy, .cz = key.cz + 1 };
         result.count += 1;
     }
 
@@ -1453,17 +1490,17 @@ test "ChunkKey.position returns correct world-space origin" {
 }
 
 test "ChunkKey.fromWorldPos handles negative coords" {
-    const k0 = ChunkKey.fromWorldPos(0, 0, 0);
+    const k0 = WorldBlockPos.init(0, 0, 0).toChunkKey();
     try testing.expectEqual(@as(i32, 0), k0.cx);
     try testing.expectEqual(@as(i32, 0), k0.cy);
     try testing.expectEqual(@as(i32, 0), k0.cz);
 
-    const k1 = ChunkKey.fromWorldPos(-1, -1, -1);
+    const k1 = WorldBlockPos.init(-1, -1, -1).toChunkKey();
     try testing.expectEqual(@as(i32, -1), k1.cx);
     try testing.expectEqual(@as(i32, -1), k1.cy);
     try testing.expectEqual(@as(i32, -1), k1.cz);
 
-    const k2 = ChunkKey.fromWorldPos(31, 32, -32);
+    const k2 = WorldBlockPos.init(31, 32, -32).toChunkKey();
     try testing.expectEqual(@as(i32, 0), k2.cx);
     try testing.expectEqual(@as(i32, 1), k2.cy);
     try testing.expectEqual(@as(i32, -1), k2.cz);
@@ -1597,7 +1634,7 @@ test "AO: comptime offset table sanity" {
 }
 
 test "affectedChunks: center of chunk returns only self" {
-    const result = affectedChunks(16, 16, 16);
+    const result = affectedChunks(WorldBlockPos.init(16, 16, 16));
     try testing.expectEqual(@as(u8, 1), result.count);
     try testing.expectEqual(@as(i32, 0), result.keys[0].cx);
     try testing.expectEqual(@as(i32, 0), result.keys[0].cy);
@@ -1605,7 +1642,7 @@ test "affectedChunks: center of chunk returns only self" {
 }
 
 test "affectedChunks: edge of chunk returns neighbor" {
-    const result = affectedChunks(0, 16, 16);
+    const result = affectedChunks(WorldBlockPos.init(0, 16, 16));
     try testing.expect(result.count >= 2);
 }
 

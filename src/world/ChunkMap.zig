@@ -60,26 +60,18 @@ pub const ChunkMap = struct {
     }
 
     /// Get block state at world coordinates. Missing chunks return air.
-    pub fn getBlock(self: *const ChunkMap, wx: i32, wy: i32, wz: i32) BlockState.StateId {
-        const key = ChunkKey.fromWorldPos(wx, wy, wz);
-        const chunk = self.get(key) orelse return BlockState.defaultState(.air);
-        const lx: usize = @intCast(@mod(wx, @as(i32, CHUNK_SIZE)));
-        const ly: usize = @intCast(@mod(wy, @as(i32, CHUNK_SIZE)));
-        const lz: usize = @intCast(@mod(wz, @as(i32, CHUNK_SIZE)));
-        return chunk.blocks.get(WorldState.chunkIndex(lx, ly, lz));
+    pub fn getBlock(self: *const ChunkMap, pos: WorldState.WorldBlockPos) BlockState.StateId {
+        const chunk = self.get(pos.toChunkKey()) orelse return BlockState.defaultState(.air);
+        return chunk.blocks.get(pos.toLocal().toIndex());
     }
 
     /// Set block state at world coordinates. Does nothing if chunk is not loaded.
     /// Locks the chunk mutex to prevent IO threads from reading during modification.
-    pub fn setBlock(self: *const ChunkMap, wx: i32, wy: i32, wz: i32, block: BlockState.StateId) void {
-        const key = ChunkKey.fromWorldPos(wx, wy, wz);
-        const chunk = self.get(key) orelse return;
-        const lx: usize = @intCast(@mod(wx, @as(i32, CHUNK_SIZE)));
-        const ly: usize = @intCast(@mod(wy, @as(i32, CHUNK_SIZE)));
-        const lz: usize = @intCast(@mod(wz, @as(i32, CHUNK_SIZE)));
+    pub fn setBlock(self: *const ChunkMap, pos: WorldState.WorldBlockPos, block: BlockState.StateId) void {
+        const chunk = self.get(pos.toChunkKey()) orelse return;
         const io = std.Io.Threaded.global_single_threaded.io();
         chunk.mutex.lockUncancelable(io);
-        chunk.blocks.set(WorldState.chunkIndex(lx, ly, lz), block);
+        chunk.blocks.set(pos.toLocal().toIndex(), block);
         chunk.mutex.unlock(io);
     }
 
@@ -164,7 +156,7 @@ test "ChunkMap: getBlock returns air for missing chunk" {
     var map = ChunkMap.init(testing.allocator);
     defer map.deinit();
 
-    try testing.expectEqual(BlockState.defaultState(.air), map.getBlock(100, 200, 300));
+    try testing.expectEqual(BlockState.defaultState(.air), map.getBlock(WorldState.WorldBlockPos.init(100, 200, 300)));
 }
 
 test "ChunkMap: getBlock returns correct block from loaded chunk" {
@@ -175,8 +167,8 @@ test "ChunkMap: getBlock returns correct block from loaded chunk" {
     chunk.blocks.set(WorldState.chunkIndex(5, 10, 15), BlockState.defaultState(.stone));
     map.put(ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
-    try testing.expectEqual(BlockState.Block.stone, BlockState.getBlock(map.getBlock(5, 10, 15)));
-    try testing.expectEqual(BlockState.Block.air, BlockState.getBlock(map.getBlock(0, 0, 0)));
+    try testing.expectEqual(BlockState.Block.stone, BlockState.getBlock(map.getBlock(WorldState.WorldBlockPos.init(5, 10, 15))));
+    try testing.expectEqual(BlockState.Block.air, BlockState.getBlock(map.getBlock(WorldState.WorldBlockPos.init(0, 0, 0))));
 }
 
 test "ChunkMap: getBlock with negative world coordinates" {
@@ -189,8 +181,8 @@ test "ChunkMap: getBlock with negative world coordinates" {
     chunk.blocks.set(WorldState.chunkIndex(31, 31, 31), BlockState.defaultState(.dirt));
     map.put(ChunkKey{ .cx = -1, .cy = -1, .cz = -1 }, chunk);
 
-    try testing.expectEqual(BlockState.Block.dirt, BlockState.getBlock(map.getBlock(-1, -1, -1)));
-    try testing.expectEqual(BlockState.Block.air, BlockState.getBlock(map.getBlock(-32, -32, -32)));
+    try testing.expectEqual(BlockState.Block.dirt, BlockState.getBlock(map.getBlock(WorldState.WorldBlockPos.init(-1, -1, -1))));
+    try testing.expectEqual(BlockState.Block.air, BlockState.getBlock(map.getBlock(WorldState.WorldBlockPos.init(-32, -32, -32))));
 }
 
 test "ChunkMap: setBlock modifies loaded chunk" {
@@ -200,8 +192,8 @@ test "ChunkMap: setBlock modifies loaded chunk" {
     const chunk = try makeTestChunk(testing.allocator, .air);
     map.put(ChunkKey{ .cx = 0, .cy = 0, .cz = 0 }, chunk);
 
-    map.setBlock(5, 5, 5, BlockState.defaultState(.gold_block));
-    try testing.expectEqual(BlockState.Block.gold_block, BlockState.getBlock(map.getBlock(5, 5, 5)));
+    map.setBlock(WorldState.WorldBlockPos.init(5, 5, 5), BlockState.defaultState(.gold_block));
+    try testing.expectEqual(BlockState.Block.gold_block, BlockState.getBlock(map.getBlock(WorldState.WorldBlockPos.init(5, 5, 5))));
 }
 
 test "ChunkMap: setBlock on missing chunk does nothing" {
@@ -209,8 +201,8 @@ test "ChunkMap: setBlock on missing chunk does nothing" {
     defer map.deinit();
 
     // Should not crash
-    map.setBlock(100, 100, 100, BlockState.defaultState(.stone));
-    try testing.expectEqual(BlockState.defaultState(.air), map.getBlock(100, 100, 100));
+    map.setBlock(WorldState.WorldBlockPos.init(100, 100, 100), BlockState.defaultState(.stone));
+    try testing.expectEqual(BlockState.defaultState(.air), map.getBlock(WorldState.WorldBlockPos.init(100, 100, 100)));
 }
 
 test "ChunkMap: getNeighbors returns loaded neighbors" {

@@ -63,11 +63,11 @@ pub fn worldTick(self: *GameState) void {
 
     // Update player chunk from camera position
     const pos = self.camera.position;
-    const current_chunk = WorldState.ChunkKey.fromWorldPos(
+    const current_chunk = WorldState.WorldBlockPos.init(
         @intFromFloat(@floor(pos.x)),
         @intFromFloat(@floor(pos.y)),
         @intFromFloat(@floor(pos.z)),
-    );
+    ).toChunkKey();
 
     if (!current_chunk.eql(self.streaming.player_chunk) or !self.streaming.streaming_initialized) {
         self.streaming.player_chunk = current_chunk;

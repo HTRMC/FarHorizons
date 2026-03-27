@@ -106,7 +106,7 @@ pub fn clientReceive(_: *Connection, reader: *BinaryReader) anyerror!void {
         const new_block = try reader.readInt(u16);
 
         // Queue for main thread (thread-safe ring buffer)
-        state.queueNetworkBlockChange(wx, wy, wz, new_block);
+        state.queueNetworkBlockChange(WorldState.WorldBlockPos.init(wx, wy, wz), new_block);
     }
 }
 

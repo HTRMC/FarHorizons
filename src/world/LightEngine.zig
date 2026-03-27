@@ -947,13 +947,14 @@ fn faceBit(dir: usize) u3 {
 pub fn applyBlockChange(
     chunk: *const WorldState.Chunk,
     light_map: *LightMap,
-    lx: u8,
-    ly: u8,
-    lz: u8,
+    local: WorldState.ChunkLocalPos,
     old_block: StateId,
 ) u6 {
     const tz = tracy.zone(@src(), "applyBlockChange");
     defer tz.end();
+    const lx: u8 = local.x;
+    const ly: u8 = local.y;
+    const lz: u8 = local.z;
     const idx = chunkIndex(lx, ly, lz);
     const new_block = chunk.blocks.get(idx);
 
@@ -1752,7 +1753,7 @@ test "incremental: remove glowstone clears its light" {
     const old_block = chunk.blocks.get(chunkIndex(16, 16, 16));
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
 
-    _ = applyBlockChange(chunk, lm, 16, 16, 16, old_block);
+    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, old_block);
 
     // Emitter position should be dark
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
@@ -1780,7 +1781,7 @@ test "incremental: place opaque block blocks light" {
 
     // Place stone at (17, 16, 16) — blocks light from passing through
     chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm, 17, 16, 16, AIR);
+    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, AIR);
 
     // The stone block should have no light
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
@@ -1809,7 +1810,7 @@ test "incremental: break opaque block lets light through" {
 
     // Break the wall
     chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm, 17, 16, 16, BlockState.defaultState(.stone));
+    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone));
 
     // (17, 16, 16) should now have light from glowstone
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
@@ -1836,7 +1837,7 @@ test "incremental: two glowstones, remove one preserves other" {
 
     // Remove glowstone at (10, 16, 16)
     chunk.blocks.set(chunkIndex(10, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm, 10, 16, 16, BlockState.defaultState(.glowstone));
+    _ = applyBlockChange(chunk, lm, .{ .x = 10, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone));
 
     // (10, 16, 16) still gets light from glowstone at (20,16,16), distance 10: 255 - 80 = 175
     try testing.expectEqual(@as(u8, 255 - 10 * ATTENUATION), lm.block_light.get(chunkIndex(10, 16, 16))[0]);
@@ -1867,7 +1868,7 @@ test "incremental: place glowstone adds light" {
 
     // Place glowstone
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
-    _ = applyBlockChange(chunk, lm, 16, 16, 16, AIR);
+    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR);
 
     // Should now have light
     try testing.expectEqual(@as(u8, 255), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
@@ -1892,7 +1893,7 @@ test "incremental: matches full recompute for remove glowstone" {
 
     // Incremental remove
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, 16, 16, 16, BlockState.defaultState(.glowstone));
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone));
 
     // Full recompute of the same final state
     const lm_full = try allocLightMap();
@@ -1923,7 +1924,7 @@ test "incremental: matches full recompute for place wall" {
 
     // Place a stone wall
     chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm_inc, 17, 16, 16, AIR);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, AIR);
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -1954,7 +1955,7 @@ test "incremental: matches full recompute for break wall" {
 
     // Break the wall
     chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, 17, 16, 16, BlockState.defaultState(.stone));
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone));
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -1984,7 +1985,7 @@ test "incremental: place stone in sky light removes sky destructively" {
 
     // Place stone in a sky-lit area: should handle destructively (not null)
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
-    const result = applyBlockChange(chunk, lm, 16, 16, 16, AIR);
+    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR);
     try testing.expect(result != 0); // boundary reached
 
     // Stone block should have no sky light
@@ -2010,7 +2011,7 @@ test "incremental: sky light matches full recompute for place stone" {
 
     // Incremental place
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm_inc, 16, 16, 16, AIR);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, AIR);
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -2046,7 +2047,7 @@ test "incremental: break stone in sky column matches full recompute" {
 
     // Incremental break
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, 16, 16, 16, BlockState.defaultState(.stone));
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.stone));
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -2072,6 +2073,6 @@ test "incremental: no-op change in dark area" {
 
     // Place and break stone in a completely dark interior area
     chunk.blocks.set(chunkIndex(16, 10, 16), BlockState.defaultState(.stone));
-    const result = applyBlockChange(chunk, lm, 16, 10, 16, AIR);
+    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 10, .z = 16 }, AIR);
     try testing.expectEqual(@as(u6, 0), result);
 }

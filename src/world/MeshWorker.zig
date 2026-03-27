@@ -315,7 +315,7 @@ pub const MeshWorker = struct {
                 }
             } else if (lm.incremental) |update| {
                 lm.incremental = null;
-                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.lx, update.ly, update.lz, update.old_block);
+                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block);
                 if (boundary_mask != 0) {
                     var lo_keys: [6]ChunkKey = undefined;
                     var lo_count: usize = 0;

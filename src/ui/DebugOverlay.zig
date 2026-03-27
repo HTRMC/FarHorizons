@@ -84,11 +84,11 @@ fn drawF3(text: *TextRenderer, game_state: *GameState, start_y: f32) f32 {
     y += LINE_HEIGHT;
 
     if (game_state.hit_result) |hit| {
-        const block = game_state.chunk_map.getBlock(hit.block_pos[0], hit.block_pos[1], hit.block_pos[2]);
+        const block = game_state.chunk_map.getBlock(hit.block_pos);
         const block_name = GameState.blockName(block);
         const face_name = dirName(hit.direction);
         const target_text = std.fmt.bufPrint(&buf, "Target: {s} @ ({d}, {d}, {d}) [{s}]", .{
-            block_name, hit.block_pos[0], hit.block_pos[1], hit.block_pos[2], face_name,
+            block_name, hit.block_pos.x, hit.block_pos.y, hit.block_pos.z, face_name,
         }) catch "Target: ?";
         text.drawText(x, y, target_text, yellow);
     } else {
@@ -226,11 +226,11 @@ fn drawF5(text: *TextRenderer, game_state: *GameState) void {
     y += LINE_HEIGHT;
 
     const pos = game_state.camera.position;
-    const player_key = WorldState.ChunkKey.fromWorldPos(
+    const player_key = WorldState.WorldBlockPos.init(
         @intFromFloat(@floor(pos.x)),
         @intFromFloat(@floor(pos.y)),
         @intFromFloat(@floor(pos.z)),
-    );
+    ).toChunkKey();
     const ck_text = std.fmt.bufPrint(&buf, "Player Chunk: ({d}, {d}, {d})", .{
         player_key.cx, player_key.cy, player_key.cz,
     }) catch "Player Chunk: ?";

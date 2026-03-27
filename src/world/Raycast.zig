@@ -31,7 +31,7 @@ pub const Direction = enum {
 };
 
 pub const BlockHitResult = struct {
-    block_pos: [3]i32,
+    block_pos: WorldState.WorldBlockPos,
     direction: Direction,
     hit_pos: [3]f32, // exact world-space hit point
 };
@@ -43,8 +43,8 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
     var block_y: i32 = @intFromFloat(@floor(origin.y));
     var block_z: i32 = @intFromFloat(@floor(origin.z));
 
-    if (BlockState.isTargetable(chunk_map.getBlock(block_x, block_y, block_z))) {
-        if (testBlockHitbox(chunk_map, origin, dir, block_x, block_y, block_z)) |result| {
+    if (BlockState.isTargetable(chunk_map.getBlock(WorldState.WorldBlockPos.init(block_x, block_y, block_z)))) {
+        if (testBlockHitbox(chunk_map, origin, dir, WorldState.WorldBlockPos.init(block_x, block_y, block_z))) |result| {
             return result;
         }
     }
@@ -95,8 +95,9 @@ pub fn raycast(chunk_map: *const ChunkMap, origin: zlm.Vec3, dir: zlm.Vec3) ?Blo
             t_max_z += t_delta_z;
         }
 
-        if (BlockState.isTargetable(chunk_map.getBlock(block_x, block_y, block_z))) {
-            if (testBlockHitbox(chunk_map, origin, dir, block_x, block_y, block_z)) |result| {
+        const pos = WorldState.WorldBlockPos.init(block_x, block_y, block_z);
+        if (BlockState.isTargetable(chunk_map.getBlock(pos))) {
+            if (testBlockHitbox(chunk_map, origin, dir, pos)) |result| {
                 return result;
             }
         }
@@ -111,16 +112,14 @@ fn testBlockHitbox(
     chunk_map: *const ChunkMap,
     origin: zlm.Vec3,
     dir: zlm.Vec3,
-    bx: i32,
-    by: i32,
-    bz: i32,
+    pos: WorldState.WorldBlockPos,
 ) ?BlockHitResult {
-    const state = chunk_map.getBlock(bx, by, bz);
+    const state = chunk_map.getBlock(pos);
     const block_boxes = Physics.getBlockBoxes(state);
 
-    const fx: f32 = @floatFromInt(bx);
-    const fy: f32 = @floatFromInt(by);
-    const fz: f32 = @floatFromInt(bz);
+    const fx: f32 = @floatFromInt(pos.x);
+    const fy: f32 = @floatFromInt(pos.y);
+    const fz: f32 = @floatFromInt(pos.z);
     const o = [3]f32{ origin.x, origin.y, origin.z };
     const d = [3]f32{ dir.x, dir.y, dir.z };
 
@@ -186,7 +185,7 @@ fn testBlockHitbox(
     };
 
     return .{
-        .block_pos = .{ bx, by, bz },
+        .block_pos = pos,
         .direction = face,
         .hit_pos = .{
             origin.x + dir.x * best_t,
@@ -316,8 +315,8 @@ test "raycast: hit block directly ahead +x" {
 
     try testing.expect(result != null);
     const hit = result.?;
-    try testing.expectEqual(@as(i32, 10), hit.block_pos[0]);
-    try testing.expectEqual(@as(i32, 5), hit.block_pos[1]);
+    try testing.expectEqual(@as(i32, 10), hit.block_pos.x);
+    try testing.expectEqual(@as(i32, 5), hit.block_pos.y);
     try testing.expectEqual(@as(i32, 5), hit.block_pos[2]);
     try testing.expectEqual(Direction.west, hit.direction);
 }
@@ -334,7 +333,7 @@ test "raycast: hit block directly ahead -x" {
 
     try testing.expect(result != null);
     const hit = result.?;
-    try testing.expectEqual(@as(i32, 2), hit.block_pos[0]);
+    try testing.expectEqual(@as(i32, 2), hit.block_pos.x);
     try testing.expectEqual(Direction.east, hit.direction);
 }
 
@@ -349,7 +348,7 @@ test "raycast: hit block above (+y)" {
     const result = raycast(&state.map, origin, dir);
 
     try testing.expect(result != null);
-    try testing.expectEqual(@as(i32, 8), result.?.block_pos[1]);
+    try testing.expectEqual(@as(i32, 8), result.?.block_pos.y);
     try testing.expectEqual(Direction.down, result.?.direction);
 }
 
@@ -389,9 +388,9 @@ test "raycast: starting inside solid block returns it" {
     const result = raycast(&state.map, origin, dir);
 
     try testing.expect(result != null);
-    try testing.expectEqual(@as(i32, 5), result.?.block_pos[0]);
-    try testing.expectEqual(@as(i32, 5), result.?.block_pos[1]);
-    try testing.expectEqual(@as(i32, 5), result.?.block_pos[2]);
+    try testing.expectEqual(@as(i32, 5), result.?.block_pos.x);
+    try testing.expectEqual(@as(i32, 5), result.?.block_pos.y);
+    try testing.expectEqual(@as(i32, 5), result.?.block_pos.z);
     try testing.expectEqual(Direction.up, result.?.direction);
 }
 
@@ -425,7 +424,7 @@ test "raycast: axis-aligned ray with zero components" {
     const result = raycast(&state.map, origin, dir);
 
     try testing.expect(result != null);
-    try testing.expectEqual(@as(i32, 8), result.?.block_pos[2]);
+    try testing.expectEqual(@as(i32, 8), result.?.block_pos.z);
     try testing.expectEqual(Direction.north, result.?.direction);
 }
 
@@ -440,7 +439,7 @@ test "raycast: glass is solid and blocks ray" {
     const result = raycast(&state.map, origin, dir);
 
     try testing.expect(result != null);
-    try testing.expectEqual(@as(i32, 8), result.?.block_pos[0]);
+    try testing.expectEqual(@as(i32, 8), result.?.block_pos.x);
 }
 
 test "raycast: water is not solid and ray passes through" {
@@ -467,7 +466,7 @@ test "raycast: ray with negative direction -z" {
     const result = raycast(&state.map, origin, dir);
 
     try testing.expect(result != null);
-    try testing.expectEqual(@as(i32, 2), result.?.block_pos[2]);
+    try testing.expectEqual(@as(i32, 2), result.?.block_pos.z);
     try testing.expectEqual(Direction.south, result.?.direction);
 }
 
@@ -482,7 +481,7 @@ test "raycast: ray along -y hits block below" {
     const result = raycast(&state.map, origin, dir);
 
     try testing.expect(result != null);
-    try testing.expectEqual(@as(i32, 2), result.?.block_pos[1]);
+    try testing.expectEqual(@as(i32, 2), result.?.block_pos.y);
     try testing.expectEqual(Direction.up, result.?.direction);
 }
 
@@ -499,7 +498,7 @@ test "raycast: block at exact MAX_RANGE boundary" {
 
     // 10 - 5.5 = 4.5 blocks away, within range
     try testing.expect(result != null);
-    try testing.expectEqual(@as(i32, 10), result.?.block_pos[0]);
+    try testing.expectEqual(@as(i32, 10), result.?.block_pos.x);
 }
 
 test "raycast: origin on block boundary" {
@@ -514,5 +513,5 @@ test "raycast: origin on block boundary" {
     const result = raycast(&state.map, origin, dir);
 
     try testing.expect(result != null);
-    try testing.expectEqual(@as(i32, 8), result.?.block_pos[0]);
+    try testing.expectEqual(@as(i32, 8), result.?.block_pos.x);
 }
