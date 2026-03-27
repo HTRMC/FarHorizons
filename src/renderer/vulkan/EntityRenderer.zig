@@ -244,8 +244,8 @@ pub const EntityRenderer = struct {
                 .ambient_light = ambient_light,
                 .contrast = 0.25,
                 .sun_dir = sun_dir,
-                .sky_level = light[3],
-                .block_light = .{ light[0], light[1], light[2] },
+                .sky_level = light.sky,
+                .block_light = light.block,
                 .model_yaw = angle.value,
             };
             vk.cmdPushConstants(command_buffer, self.pipeline_layout, vk.VK_SHADER_STAGE_VERTEX_BIT | vk.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(EntityPushConstants), @ptrCast(&pc));

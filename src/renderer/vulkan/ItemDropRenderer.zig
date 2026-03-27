@@ -157,8 +157,8 @@ pub const ItemDropRenderer = struct {
 
             const center_y = pos[1] + bob + scale * 0.5;
             const light = game_state.sampleLightAt(pos[0], center_y, pos[2]);
-            const block_light = [3]f32{ light[0], light[1], light[2] };
-            const sky_level = light[3];
+            const block_light = light.block;
+            const sky_level = light.sky;
 
             const render_count: u32 = if (item_count <= 1) 1 else if (item_count <= 16) 2 else if (item_count <= 32) 3 else if (item_count <= 48) 4 else 5;
 
@@ -229,8 +229,8 @@ pub const ItemDropRenderer = struct {
             const sin_s = @sin(spin);
 
             const light = game_state.sampleLightAt(gx, gy, gz);
-            const block_light = [3]f32{ light[0], light[1], light[2] };
-            const sky_level = light[3];
+            const block_light = light.block;
+            const sky_level = light.sky;
 
             const model = zlm.Mat4{ .m = .{
                 cos_s * scale,  0,     sin_s * scale, 0,

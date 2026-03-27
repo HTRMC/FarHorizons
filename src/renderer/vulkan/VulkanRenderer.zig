@@ -15,6 +15,7 @@ const MeshWorker = @import("../../world/MeshWorker.zig").MeshWorker;
 const ThreadPool = @import("../../platform/ThreadPool.zig").ThreadPool;
 const TlsfAllocator = @import("../../allocators/TlsfAllocator.zig").TlsfAllocator;
 const GameState = @import("../../world/GameState.zig");
+const WorldState = @import("../../world/WorldState.zig");
 const PlayerMovement = @import("../../world/entity/PlayerMovement.zig");
 const ChunkManagement = @import("../../world/ChunkManagement.zig");
 const UiManager = @import("../../ui/UiManager.zig").UiManager;
@@ -293,7 +294,6 @@ pub const VulkanRenderer = struct {
 
         // 7. Request initial load batch if async loading (singleplayer only)
         if (!game_state.streaming.initial_load_ready and !game_state.multiplayer_client) {
-            const WorldState = @import("../../world/WorldState.zig");
             const rd: i32 = 3;
             const rd_sq = rd * rd;
             const pc = game_state.streaming.player_chunk;
@@ -912,10 +912,10 @@ pub const VulkanRenderer = struct {
         const sun_dir = [3]f32{ 0.0, @cos(sun_angle), @sin(sun_angle) };
 
         // Sample block/sky light at player eye position
-        const player_light: [4]f32 = if (self.game_state) |game_state|
+        const player_light: WorldState.NormalizedLight = if (self.game_state) |game_state|
             game_state.sampleLightAt(game_state.camera.position.x, game_state.camera.position.y, game_state.camera.position.z)
         else
-            .{ 0, 0, 0, 1 };
+            WorldState.NormalizedLight.full_sky;
 
         // Underwater fog parameters
         const eyes_in_water = if (self.game_state) |game_state| game_state.entities.flags[GameState.Entity.PLAYER].eyes_in_water else false;
@@ -1030,7 +1030,7 @@ pub const VulkanRenderer = struct {
 
             // Third-person player model (rendered with world depth)
             if (game_state.third_person and !overdraw) {
-                self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp, day_night.ambient_light, sun_dir, player_light[3], .{ player_light[0], player_light[1], player_light[2] });
+                self.render_state.entity_renderer.recordDrawWorld(command_buffer, mvp, day_night.ambient_light, sun_dir, player_light.sky, player_light.block);
             }
 
             // Remote players (multiplayer)
@@ -1079,7 +1079,7 @@ pub const VulkanRenderer = struct {
         if (self.game_state) |gs_| {
             const sw: f32 = @floatFromInt(self.surface_state.swapchain_extent.width);
             const sh: f32 = @floatFromInt(self.surface_state.swapchain_extent.height);
-            self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, gs_.third_person, day_night.ambient_light, sun_dir, player_light[3], .{ player_light[0], player_light[1], player_light[2] });
+            self.render_state.hand_renderer.recordDraw(command_buffer, sw, sh, gs_.third_person, day_night.ambient_light, sun_dir, player_light.sky, player_light.block);
         }
 
         {

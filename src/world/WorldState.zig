@@ -205,6 +205,27 @@ pub const Chunk = struct {
     ref_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 };
 
+/// Light sample normalized to [0, 1] range. Prevents mixing with raw u8 (0-255)
+/// light values from LightMap storage or emittedLight.
+pub const NormalizedLight = struct {
+    block: [3]f32,
+    sky: f32,
+
+    pub const dark: NormalizedLight = .{ .block = .{ 0, 0, 0 }, .sky = 0 };
+    pub const full_sky: NormalizedLight = .{ .block = .{ 0, 0, 0 }, .sky = 1 };
+
+    pub fn fromRaw(block_rgb: [3]u8, sky_u8: u8) NormalizedLight {
+        return .{
+            .block = .{
+                @as(f32, @floatFromInt(block_rgb[0])) / 255.0,
+                @as(f32, @floatFromInt(block_rgb[1])) / 255.0,
+                @as(f32, @floatFromInt(block_rgb[2])) / 255.0,
+            },
+            .sky = @as(f32, @floatFromInt(sky_u8)) / 255.0,
+        };
+    }
+};
+
 pub const ChunkLocalPos = struct {
     x: u5,
     y: u5,

@@ -748,8 +748,7 @@ pub fn markDirtyIncremental(self: *GameState, pos: WorldState.WorldBlockPos, old
 
 /// Sample block light (RGB) and sky light at a world position with
 /// trilinear interpolation across the 8 surrounding blocks.
-/// Returns { block_r, block_g, block_b, sky } as floats in [0,1].
-pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
+pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) WorldState.NormalizedLight {
     // Center sampling in the block: offset by -0.5 so interpolation
     // transitions at block centers rather than block edges
     const sx = wx - 0.5;
@@ -763,7 +762,8 @@ pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
     const fz = sz - @as(f32, @floatFromInt(z0));
 
     // Sample 8 corners, skipping opaque blocks
-    var result = [4]f32{ 0, 0, 0, 0 };
+    var block_accum = [3]f32{ 0, 0, 0 };
+    var sky_accum: f32 = 0;
     var total_w: f32 = 0;
     for (0..2) |dz| {
         for (0..2) |dy| {
@@ -784,26 +784,26 @@ pub fn sampleLightAt(self: *const GameState, wx: f32, wy: f32, wz: f32) [4]f32 {
                 total_w += w;
 
                 const sample = self.readLightRaw(block_pos);
-                result[0] += sample[0] * w;
-                result[1] += sample[1] * w;
-                result[2] += sample[2] * w;
-                result[3] += sample[3] * w;
+                block_accum[0] += sample.block[0] * w;
+                block_accum[1] += sample.block[1] * w;
+                block_accum[2] += sample.block[2] * w;
+                sky_accum += sample.sky * w;
             }
         }
     }
     // Normalize by actual weight sum (redistributes opaque block weight)
     if (total_w > 0.001) {
         const inv = 1.0 / total_w;
-        result[0] *= inv;
-        result[1] *= inv;
-        result[2] *= inv;
-        result[3] *= inv;
+        block_accum[0] *= inv;
+        block_accum[1] *= inv;
+        block_accum[2] *= inv;
+        sky_accum *= inv;
     }
-    return result;
+    return .{ .block = block_accum, .sky = sky_accum };
 }
 
-fn readLightRaw(self: *const GameState, pos: WorldState.WorldBlockPos) [4]f32 {
-    const lm = self.light_maps.get(pos.toChunkKey()) orelse return .{ 0, 0, 0, 0 };
+fn readLightRaw(self: *const GameState, pos: WorldState.WorldBlockPos) WorldState.NormalizedLight {
+    const lm = self.light_maps.get(pos.toChunkKey()) orelse return WorldState.NormalizedLight.dark;
     const ci = pos.toLocal().toIndex();
 
     // Lock to prevent race with mesh worker recomputing light data
@@ -812,14 +812,7 @@ fn readLightRaw(self: *const GameState, pos: WorldState.WorldBlockPos) [4]f32 {
     lm_mut.mutex.lockUncancelable(io);
     defer lm_mut.mutex.unlock(io);
 
-    const blk = lm.block_light.get(ci);
-    const sky = lm.sky_light.get(ci);
-    return .{
-        @as(f32, @floatFromInt(blk[0])) / 255.0,
-        @as(f32, @floatFromInt(blk[1])) / 255.0,
-        @as(f32, @floatFromInt(blk[2])) / 255.0,
-        @as(f32, @floatFromInt(sky)) / 255.0,
-    };
+    return WorldState.NormalizedLight.fromRaw(lm.block_light.get(ci), lm.sky_light.get(ci));
 }
 
 pub fn queueChunkSave(self: *GameState, pos: WorldState.WorldBlockPos) void {

@@ -114,8 +114,8 @@ pub const MobRenderer = struct {
             const mvp = zlm.Mat4.mul(view_proj, model);
 
             const light = game_state.sampleLightAt(pos[0], pos[1] + 0.45, pos[2]);
-            const block_light = [3]f32{ light[0], light[1], light[2] };
-            const sky_level = light[3];
+            const block_light = light.block;
+            const sky_level = light.sky;
 
             const hurt_tint: f32 = if (game_state.entities.hurt_time[i] > 0) 1.0 else 0.0;
 
