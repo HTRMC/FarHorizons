@@ -12,8 +12,8 @@ pub const id: u8 = protocol.PLAYER_POSITION;
 const MOVE_THRESHOLD_SQ: f64 = 4e-8; // ~2e-4 blocks
 /// Rotation threshold in degrees.
 const ROT_THRESHOLD: f32 = 0.01;
-/// Max ticks between forced position updates.
-const POSITION_REMINDER_TICKS: u16 = 20;
+/// Max ticks between forced position updates (~1 second).
+const POSITION_REMINDER_TICKS: u16 = 30;
 
 /// What changed since last send.
 const UpdateFlags = packed struct(u8) {

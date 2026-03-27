@@ -9,7 +9,8 @@ const player_input = @import("../network/protocols/player_input.zig");
 pub const User = @This();
 
 /// Max allowed speed in blocks/tick for validation (generous to avoid false positives).
-const MAX_SPEED_PER_TICK: f64 = 20.0;
+/// ~400 blocks/sec at 30Hz.
+const MAX_SPEED_PER_TICK: f64 = 13.3;
 
 conn: *Connection,
 allocator: std.mem.Allocator,
