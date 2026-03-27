@@ -80,7 +80,7 @@ const v1_to_v2: [V1_BLOCK_COUNT]StateId = blk: {
 
 fn migrateV1(old: u8) StateId {
     if (old < V1_BLOCK_COUNT) return v1_to_v2[old];
-    return 0; // unknown → air
+    return StateId.fromRaw(0); // unknown → air
 }
 
 
@@ -95,7 +95,7 @@ pub const EncodeResult = struct {
 
 pub fn encode(allocator: std.mem.Allocator, blocks: *const [BLOCKS_PER_CHUNK]StateId) !EncodeResult {
     // Count distinct u16 values using a hashmap
-    var seen = std.AutoHashMap(u16, void).init(allocator);
+    var seen = std.AutoHashMap(StateId, void).init(allocator);
     defer seen.deinit();
 
     for (blocks) |b| {
@@ -119,7 +119,7 @@ fn encodeSingleBlock(allocator: std.mem.Allocator, state: StateId) !EncodeResult
     data[2] = REGISTRY_VERSION;
     data[3] = 0;
     // Store u16 little-endian
-    std.mem.writeInt(u16, data[4..6], state, .little);
+    std.mem.writeInt(u16, data[4..6], state.toRaw(), .little);
     return .{ .data = data, .allocator = allocator };
 }
 
@@ -132,7 +132,7 @@ fn encodePalette16(
 
     // Build palette and reverse map
     var palette: [256]StateId = undefined;
-    var reverse_map = std.AutoHashMap(u16, u8).init(allocator);
+    var reverse_map = std.AutoHashMap(StateId, u8).init(allocator);
     defer reverse_map.deinit();
 
     var idx: u8 = 0;
@@ -155,7 +155,7 @@ fn encodePalette16(
 
     data[4] = palette_size;
     for (0..palette_size) |i| {
-        std.mem.writeInt(u16, data[5 + i * 2 ..][0..2], palette[i], .little);
+        std.mem.writeInt(u16, data[5 + i * 2 ..][0..2], palette[i].toRaw(), .little);
     }
 
     const indices_start = 5 + @as(usize, palette_size) * 2;
@@ -217,10 +217,10 @@ pub fn decodeToPalette(data: []const u8, blocks: *PaletteBlocks) DecodeError!voi
     switch (encoding) {
         .single_block => {
             if (data.len < CODEC_HEADER_SIZE + 2) {
-                blocks.fillUniform(0);
+                blocks.fillUniform(StateId.fromRaw(0));
                 return;
             }
-            blocks.fillUniform(std.mem.readInt(u16, data[4..6], .little));
+            blocks.fillUniform(StateId.fromRaw(std.mem.readInt(u16, data[4..6], .little)));
         },
         .palette16 => try decodePalette16Direct(data, blocks),
         .raw16 => {
@@ -247,7 +247,7 @@ fn decodePalette16Direct(data: []const u8, blocks: *PaletteBlocks) DecodeError!v
     // Load directly: pre-allocate exact palette, set raw indices (O(1) per block)
     blocks.initCapacity(palette_size);
     for (0..palette_size) |i| {
-        blocks.setPaletteEntry(@intCast(i), std.mem.readInt(u16, data[5 + i * 2 ..][0..2], .little));
+        blocks.setPaletteEntry(@intCast(i), StateId.fromRaw(std.mem.readInt(u16, data[5 + i * 2 ..][0..2], .little)));
     }
 
     for (0..BLOCKS_PER_CHUNK) |i| {
@@ -282,11 +282,10 @@ pub fn decode(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeEr
 
 fn decodeSingleBlock(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) void {
     if (data.len < CODEC_HEADER_SIZE + 2) {
-        @memset(out_blocks, 0); // air
+        @memset(out_blocks, StateId.fromRaw(0)); // air
         return;
     }
-    const state = std.mem.readInt(u16, data[4..6], .little);
-    @memset(out_blocks, state);
+    @memset(out_blocks, StateId.fromRaw(std.mem.readInt(u16, data[4..6], .little)));
 }
 
 fn decodePalette16(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeError!void {
@@ -303,7 +302,7 @@ fn decodePalette16(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) Dec
 
     var palette: [256]StateId = undefined;
     for (0..palette_size) |i| {
-        palette[i] = std.mem.readInt(u16, data[5 + i * 2 ..][0..2], .little);
+        palette[i] = StateId.fromRaw(std.mem.readInt(u16, data[5 + i * 2 ..][0..2], .little));
     }
 
     for (0..BLOCKS_PER_CHUNK) |i| {
@@ -339,7 +338,7 @@ fn decodeV1(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) DecodeErro
 
 fn decodeV1SingleBlock(data: []const u8, out_blocks: *[BLOCKS_PER_CHUNK]StateId) void {
     if (data.len < CODEC_HEADER_SIZE + 1) {
-        @memset(out_blocks, 0);
+        @memset(out_blocks, StateId.fromRaw(0));
         return;
     }
     @memset(out_blocks, migrateV1(data[4]));
@@ -434,7 +433,7 @@ test "air chunk encodes as single_block" {
 
     try std.testing.expectEqual(@as(usize, 6), result.data.len);
     try std.testing.expectEqual(@intFromEnum(Encoding.single_block), result.data[1]);
-    try std.testing.expectEqual(air, std.mem.readInt(u16, result.data[4..6], .little));
+    try std.testing.expectEqual(air, StateId.fromRaw(std.mem.readInt(u16, result.data[4..6], .little)));
 }
 
 test "v1 single_block migration" {

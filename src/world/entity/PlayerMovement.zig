@@ -37,8 +37,9 @@ pub fn toggleMode(state: *GameState) void {
     }
 }
 
-pub fn updatePlayerMovement(state: *GameState, player: u32, move_speed: f32) void {
+pub fn updatePlayerMovement(state: *GameState, player: Entity.EntityId, move_speed: f32) void {
     updateWaterState(state);
+    const player_raw = player;
 
     switch (state.mode) {
         .flying => {
@@ -51,27 +52,27 @@ pub fn updatePlayerMovement(state: *GameState, player: u32, move_speed: f32) voi
                 state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
             }
 
-            state.entities.pos[player] = .{
+            state.entities.pos[player_raw] = .{
                 state.camera.position.x,
                 state.camera.position.y - GameState.EYE_OFFSET,
                 state.camera.position.z,
             };
         },
         .walking => {
-            const flags = state.entities.flags[player];
+            const flags = state.entities.flags[player_raw];
 
             if (state.jump_cooldown > 0) {
                 state.jump_cooldown -= 1;
             } else if (state.jump_requested and flags.on_ladder) {
-                state.entities.vel[player][1] = Physics.LADDER_CLIMB_SPEED;
+                state.entities.vel[player_raw][1] = Physics.LADDER_CLIMB_SPEED;
             } else if (state.jump_requested and !flags.in_water and flags.on_ground) {
-                state.entities.vel[player][1] = GameState.PLAYER_JUMP_VELOCITY;
+                state.entities.vel[player_raw][1] = GameState.PLAYER_JUMP_VELOCITY;
             }
             state.jump_requested = false;
 
             Physics.updateEntity(&state.entities, player, &state.chunk_map, state.input_move, state.camera.yaw.toRadians(), GameState.TICK_INTERVAL);
 
-            const epos = state.entities.pos[player];
+            const epos = state.entities.pos[player_raw];
             state.camera.position = zlm.Vec3.init(
                 epos[0],
                 epos[1] + GameState.EYE_OFFSET,

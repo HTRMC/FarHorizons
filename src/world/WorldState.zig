@@ -135,23 +135,23 @@ pub fn totalModelCount() u32 {
 /// Get the face list for a shaped block by StateId.
 /// Returns slice of ShapeFace describing all quads to emit.
 pub fn getShapeFaces(state: BlockState.StateId) []const ShapeFace {
-    return getRegistry().state_shape_faces[state];
+    return getRegistry().state_shape_faces[state.toRaw()];
 }
 
 /// Get per-face texture indices for a shaped block by StateId.
 pub fn getShapedTexIndices(state: BlockState.StateId) []const u8 {
-    return getRegistry().state_face_tex_indices[state];
+    return getRegistry().state_face_tex_indices[state.toRaw()];
 }
 
 /// Get the 4x4 occlusion bitmap for a block on the given face.
 /// Full opaque blocks = 0xFFFF. Solid shaped blocks use registry bitmaps.
 /// Transparent/non-solid blocks = 0 (don't occlude).
 pub fn getOcclusionBitmap(state: StateId, face: usize) u16 {
-    if (state == 0) return 0; // air
+    if (state.toRaw() == 0) return 0; // air
     if (BlockState.isOpaque(state)) return 0xFFFF;
     if (BlockState.isSolidShaped(state)) {
         if (registry) |reg| {
-            return reg.state_face_bitmaps[state][face];
+            return reg.state_face_bitmaps[state.toRaw()][face];
         }
         return 0;
     }
@@ -386,7 +386,7 @@ pub fn generateDebugChunk(chunk: *Chunk, key: ChunkKey) void {
         const lz = wz - key.cz * CHUNK_SIZE;
 
         if (lx >= 0 and lx < CHUNK_SIZE and lz >= 0 and lz < CHUNK_SIZE) {
-            chunk.blocks.set(chunkIndex(@intCast(lx), 0, @intCast(lz)), @intCast(si));
+            chunk.blocks.set(chunkIndex(@intCast(lx), 0, @intCast(lz)), StateId.fromRaw(@intCast(si)));
         }
     }
 }
@@ -548,7 +548,7 @@ fn computeTrilinearLightSamples() [6][4][4]TrilinearSample {
 
 /// Build a 34^3 padded state array: center 32^3 from chunk, 1-block border from neighbors, air (0) elsewhere.
 fn buildPaddedStates(padded: *[PADDED_BLOCKS]StateId, chunk: *const Chunk, neighbors: [6]?*const Chunk) void {
-    @memset(padded, 0);
+    @memset(padded, StateId.fromRaw(0));
 
     for (0..CHUNK_SIZE) |y| {
         for (0..CHUNK_SIZE) |z| {
@@ -664,7 +664,7 @@ fn buildVisibilityMasks(padded: *const [PADDED_BLOCKS]StateId) VisibilityMasks {
             for (0..CHUNK_SIZE) |bx| {
                 const state = padded[paddedIndex(bx + 1, by + 1, bz + 1)];
                 const bit: u32 = @as(u32, 1) << @intCast(bx);
-                if (state != 0) {
+                if (state.toRaw() != 0) {
                     block_bits |= bit;
                     if (!BlockState.isShaped(state) and !BlockState.cullsSelf(state)) {
                         simple_bits |= bit;
@@ -1672,7 +1672,7 @@ test "generateFlatChunk: grass at wy=0" {
     defer chunk.blocks.deinit();
     generateFlatChunk(&chunk, .{ .cx = 0, .cy = 0, .cz = 0 });
     try testing.expectEqual(BlockState.defaultState(.grass_block), chunk.blocks.get(chunkIndex(0, 0, 0)));
-    try testing.expectEqual(@as(StateId, 0), chunk.blocks.get(chunkIndex(0, 1, 0)));
+    try testing.expectEqual(StateId.fromRaw(0), chunk.blocks.get(chunkIndex(0, 1, 0)));
 }
 
 test "oppositeFace: correct pairs" {
@@ -1692,7 +1692,7 @@ test "oppositeFace: double opposite is identity" {
 
 test "getOcclusionBitmap: air is zero" {
     for (0..6) |f| {
-        try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(0, f));
+        try testing.expectEqual(@as(u16, 0), getOcclusionBitmap(StateId.fromRaw(0), f));
     }
 }
 
@@ -1724,7 +1724,7 @@ test "getOcclusionBitmap: non-solid shaped blocks are zero" {
 }
 
 test "shouldCullFace: opaque next to air shows face" {
-    try testing.expect(!shouldCullFace(BlockState.defaultState(.stone), 0, 0));
+    try testing.expect(!shouldCullFace(BlockState.defaultState(.stone), 0, StateId.fromRaw(0)));
 }
 
 test "shouldCullFace: opaque next to opaque hides face" {
@@ -1753,7 +1753,7 @@ test "shouldCullFace: slab next to torch shows face" {
 }
 
 test "shouldCullFace: slab top face next to air shows" {
-    try testing.expect(!shouldCullFace(BlockState.defaultState(.oak_slab), 4, 0));
+    try testing.expect(!shouldCullFace(BlockState.defaultState(.oak_slab), 4, StateId.fromRaw(0)));
 }
 
 test "bitmap culling logic: slab-vs-slab covers shared area" {

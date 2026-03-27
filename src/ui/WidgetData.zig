@@ -1,5 +1,6 @@
 const Widget = @import("Widget.zig");
 const Color = Widget.Color;
+const BlockState = @import("../world/BlockState.zig");
 
 pub const MAX_TEXT_LEN = 128;
 pub const MAX_ACTION_LEN = 64;
@@ -24,7 +25,7 @@ pub const PanelData = struct {
     on_click_action_len: u8 = 0,
     hover_color: Color = Color.fromHex(0x00000000),
     draw_isometric: bool = false,
-    block_state: u16 = 0,
+    block_state: BlockState.StateId = BlockState.defaultState(.air),
 
     pub fn setAction(self: *PanelData, str: []const u8) void {
         const len: u8 = @intCast(@min(str.len, MAX_ACTION_LEN));

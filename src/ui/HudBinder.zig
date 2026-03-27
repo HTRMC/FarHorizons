@@ -38,7 +38,7 @@ pub const HudBinder = struct {
     right_act_ids: [MAX_RIGHT_HINTS]WidgetId = .{NULL_WIDGET} ** MAX_RIGHT_HINTS,
     block_name_timer: f32 = 0,
     prev_selected_slot: u8 = 0,
-    prev_selected_block: u16 = 0,
+    prev_selected_block: BlockState.StateId = BlockState.defaultState(.air),
 
     pub fn init(tree: *WidgetTree) HudBinder {
         var self = HudBinder{};

@@ -7,8 +7,10 @@ const Item = @import("Item.zig");
 
 pub const MAX_INGREDIENTS = 4;
 
+const StateId = BlockState.StateId;
+
 pub const Ingredient = struct {
-    item: u16,
+    item: StateId,
     count: u8,
 };
 
@@ -20,9 +22,9 @@ pub const Recipe = struct {
 };
 
 const B = BlockState.defaultState;
-const empty_input = Ingredient{ .item = 0, .count = 0 };
+const empty_input = Ingredient{ .item = StateId.fromRaw(0), .count = 0 };
 
-fn hand(output_item: u16, output_count: u8, in0: Ingredient, in1: Ingredient, in2: Ingredient, in3: Ingredient) Recipe {
+fn hand(output_item: StateId, output_count: u8, in0: Ingredient, in1: Ingredient, in2: Ingredient, in3: Ingredient) Recipe {
     var input_count: u8 = 0;
     const inputs = [4]Ingredient{ in0, in1, in2, in3 };
     for (inputs) |inp| {
@@ -36,7 +38,7 @@ fn hand(output_item: u16, output_count: u8, in0: Ingredient, in1: Ingredient, in
     };
 }
 
-fn bench(output_item: u16, output_count: u8, in0: Ingredient, in1: Ingredient, in2: Ingredient, in3: Ingredient) Recipe {
+fn bench(output_item: StateId, output_count: u8, in0: Ingredient, in1: Ingredient, in2: Ingredient, in3: Ingredient) Recipe {
     var input_count: u8 = 0;
     const inputs = [4]Ingredient{ in0, in1, in2, in3 };
     for (inputs) |inp| {
@@ -50,7 +52,7 @@ fn bench(output_item: u16, output_count: u8, in0: Ingredient, in1: Ingredient, i
     };
 }
 
-fn ing(item: u16, count: u8) Ingredient {
+fn ing(item: StateId, count: u8) Ingredient {
     return .{ .item = item, .count = count };
 }
 
@@ -58,7 +60,7 @@ fn toolIng(tool_type: Item.ToolType, tier: Item.ToolTier, count: u8) Ingredient 
     return .{ .item = Item.idFromTool(tool_type, tier), .count = count };
 }
 
-fn toolRecipe(tool_type: Item.ToolType, tier: Item.ToolTier, material: u16) Recipe {
+fn toolRecipe(tool_type: Item.ToolType, tier: Item.ToolTier, material: StateId) Recipe {
     return bench(
         Item.idFromTool(tool_type, tier),
         1,
@@ -164,7 +166,7 @@ pub const recipes: []const Recipe = &.{
 };
 
 /// Count how many of a given item the player has across hotbar + main inventory.
-pub fn countItem(game_state: *GameState, item_id: u16) u16 {
+pub fn countItem(game_state: *GameState, item_id: StateId) u16 {
     var total: u16 = 0;
     const inv = game_state.playerInv();
     for (&inv.hotbar) |*s| {
@@ -186,7 +188,7 @@ pub fn canCraft(game_state: *GameState, recipe: *const Recipe) bool {
 }
 
 /// Remove items from inventory (main first, then hotbar).
-fn removeItems(game_state: *GameState, item_id: u16, count: u8) void {
+fn removeItems(game_state: *GameState, item_id: StateId, count: u8) void {
     var remaining: u8 = count;
     const inv = game_state.playerInv();
 

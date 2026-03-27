@@ -35,7 +35,7 @@ pub fn sendBlockChangeRequest(
     writer.writeInt(i32, wx);
     writer.writeInt(i32, wy);
     writer.writeInt(i32, wz);
-    writer.writeInt(u16, new_block);
+    writer.writeInt(u16, new_block.toRaw());
     conn.send(socket, .reliable, id, writer.data.items);
 }
 
@@ -53,7 +53,7 @@ pub fn sendBlockUpdates(
         writer.writeInt(i32, change.wx);
         writer.writeInt(i32, change.wy);
         writer.writeInt(i32, change.wz);
-        writer.writeInt(u16, change.new_block);
+        writer.writeInt(u16, change.new_block.toRaw());
     }
     conn.send(socket, .reliable, id, writer.data.items);
 }
@@ -66,7 +66,7 @@ pub fn serverReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
     const wx = try reader.readInt(i32);
     const wy = try reader.readInt(i32);
     const wz = try reader.readInt(i32);
-    const new_block = try reader.readInt(u16);
+    const new_block = WorldState.StateId.fromRaw(try reader.readInt(u16));
 
     const srv = server_instance orelse return;
 
@@ -103,7 +103,7 @@ pub fn clientReceive(_: *Connection, reader: *BinaryReader) anyerror!void {
         const wx = try reader.readInt(i32);
         const wy = try reader.readInt(i32);
         const wz = try reader.readInt(i32);
-        const new_block = try reader.readInt(u16);
+        const new_block = WorldState.StateId.fromRaw(try reader.readInt(u16));
 
         // Queue for main thread (thread-safe ring buffer)
         state.queueNetworkBlockChange(WorldState.WorldBlockPos.init(wx, wy, wz), new_block);

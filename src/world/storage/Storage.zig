@@ -543,30 +543,30 @@ pub fn loadPlayerData(self: *const Storage, uuid: []const u8) ?PlayerData {
             if (inv) |inventory| {
                 var offset: usize = 0;
                 for (&inventory.hotbar) |*s| {
-                    s.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                    s.block = WorldState.StateId.fromRaw(std.mem.readInt(u16, bytes[offset..][0..2], .little));
                     s.count = bytes[offset + 2];
                     s.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
                     offset += 5;
                 }
                 for (&inventory.main) |*s| {
-                    s.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                    s.block = WorldState.StateId.fromRaw(std.mem.readInt(u16, bytes[offset..][0..2], .little));
                     s.count = bytes[offset + 2];
                     s.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
                     offset += 5;
                 }
                 for (&inventory.armor) |*s| {
-                    s.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                    s.block = WorldState.StateId.fromRaw(std.mem.readInt(u16, bytes[offset..][0..2], .little));
                     s.count = bytes[offset + 2];
                     s.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
                     offset += 5;
                 }
                 for (&inventory.equip) |*s| {
-                    s.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                    s.block = WorldState.StateId.fromRaw(std.mem.readInt(u16, bytes[offset..][0..2], .little));
                     s.count = bytes[offset + 2];
                     s.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
                     offset += 5;
                 }
-                inventory.offhand.block = std.mem.readInt(u16, bytes[offset..][0..2], .little);
+                inventory.offhand.block = WorldState.StateId.fromRaw(std.mem.readInt(u16, bytes[offset..][0..2], .little));
                 inventory.offhand.count = bytes[offset + 2];
                 inventory.offhand.durability = std.mem.readInt(u16, bytes[offset + 3 ..][0..2], .little);
                 inv_ptr = inventory;
@@ -612,7 +612,7 @@ pub fn savePlayerData(self: *const Storage, uuid: []const u8, data: PlayerData) 
         var offset: usize = 0;
         const slots = inv.hotbar ++ inv.main ++ inv.armor ++ inv.equip ++ [1]Entity.ItemStack{inv.offhand};
         for (slots) |stack| {
-            std.mem.writeInt(u16, inv_buf[offset..][0..2], stack.block, .little);
+            std.mem.writeInt(u16, inv_buf[offset..][0..2], stack.block.toRaw(), .little);
             inv_buf[offset + 2] = stack.count;
             std.mem.writeInt(u16, inv_buf[offset + 3 ..][0..2], stack.durability, .little);
             offset += 5;

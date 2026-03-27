@@ -189,12 +189,12 @@ pub fn blockColor(state: BlockState.StateId) [4]f32 {
     };
 }
 
-pub fn itemName(id: u16) []const u8 {
+pub fn itemName(id: BlockState.StateId) []const u8 {
     if (Item.isToolItem(id)) return Item.toolName(id);
     return blockName(id);
 }
 
-pub fn itemColor(id: u16) [4]f32 {
+pub fn itemColor(id: BlockState.StateId) [4]f32 {
     if (Item.isToolItem(id)) return Item.toolColor(id);
     return blockColor(id);
 }

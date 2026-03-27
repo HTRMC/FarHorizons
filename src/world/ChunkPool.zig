@@ -36,7 +36,7 @@ pub const ChunkPool = struct {
         self.mutex.unlock(io);
 
         if (result) |chunk| {
-            chunk.blocks.fillUniform(0);
+            chunk.blocks.fillUniform(BlockState.defaultState(.air));
             chunk.mutex = .init;
             chunk.ref_count = std.atomic.Value(u32).init(1);
             return chunk;

@@ -483,10 +483,11 @@ pub fn applyPositionCorrection(
     const new_yaw: Degrees = if (relatives.yaw) Degrees.add(self.camera.yaw, Angle.deg(rotation[1])) else Angle.deg(rotation[1]);
 
     // Velocity: apply as absolute or relative
+    const p = Entity.PLAYER;
     const new_vel: [3]f32 = .{
-        if (relatives.vel_x) self.entities.vel[0][0] + @as(f32, @floatCast(vel[0])) else @floatCast(vel[0]),
-        if (relatives.vel_y) self.entities.vel[0][1] + @as(f32, @floatCast(vel[1])) else @floatCast(vel[1]),
-        if (relatives.vel_z) self.entities.vel[0][2] + @as(f32, @floatCast(vel[2])) else @floatCast(vel[2]),
+        if (relatives.vel_x) self.entities.vel[p][0] + @as(f32, @floatCast(vel[0])) else @floatCast(vel[0]),
+        if (relatives.vel_y) self.entities.vel[p][1] + @as(f32, @floatCast(vel[1])) else @floatCast(vel[1]),
+        if (relatives.vel_z) self.entities.vel[p][2] + @as(f32, @floatCast(vel[2])) else @floatCast(vel[2]),
     };
 
     // Snap camera position
@@ -497,17 +498,17 @@ pub fn applyPositionCorrection(
     self.camera.yaw = new_yaw;
 
     // Snap entity position (entity pos is camera pos minus eye offset for walking mode)
-    self.entities.pos[0] = .{
+    self.entities.pos[p] = .{
         @floatCast(new_x),
         @floatCast(new_y - EYE_OFFSET),
         @floatCast(new_z),
     };
-    self.entities.vel[0] = new_vel;
+    self.entities.vel[p] = new_vel;
 
     // Sync interpolation state to prevent rubber-banding
     self.prev_camera_pos = self.camera.position;
     self.tick_camera_pos = self.camera.position;
-    self.entities.prev_pos[0] = self.entities.pos[0];
+    self.entities.prev_pos[p] = self.entities.pos[p];
 
     std.log.info("Position corrected to ({d:.2}, {d:.2}, {d:.2})", .{ new_x, new_y, new_z });
 }
@@ -574,8 +575,9 @@ pub fn toggleDebugCamera(self: *GameState) void {
 
 pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     const P = Entity.PLAYER;
+    const P_RAW = P;
     self.game_time +%= 1;
-    self.entities.prev_pos[P] = self.entities.pos[P];
+    self.entities.prev_pos[P_RAW] = self.entities.pos[P_RAW];
     self.prev_camera_pos = self.camera.position;
 
     self.drainNetworkBlockChanges();

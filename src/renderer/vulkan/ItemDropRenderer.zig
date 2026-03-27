@@ -146,7 +146,7 @@ pub const ItemDropRenderer = struct {
             const item_block = game_state.entities.item_block[i];
             const item_mesh_idx = getItemMeshIndex(item_block);
             const is_flat = item_mesh_idx != null;
-            const display_state = if (!is_flat) BlockState.getDisplayState(item_block) else 0;
+            const display_state = if (!is_flat) BlockState.getDisplayState(item_block) else BlockState.defaultState(.air);
             const is_shaped = if (!is_flat) BlockState.isShaped(display_state) else false;
             const item_count = game_state.entities.item_count[i];
 
@@ -219,7 +219,7 @@ pub const ItemDropRenderer = struct {
 
             const ghost_mesh_idx = getItemMeshIndex(ghost.block);
             const ghost_is_flat = ghost_mesh_idx != null;
-            const display_state = if (!ghost_is_flat) BlockState.getDisplayState(ghost.block) else 0;
+            const display_state = if (!ghost_is_flat) BlockState.getDisplayState(ghost.block) else BlockState.defaultState(.air);
             const is_shaped = if (!ghost_is_flat) BlockState.isShaped(display_state) else false;
             const scale: f32 = (if (ghost_is_flat) @as(f32, 0.35) else if (is_shaped) @as(f32, 0.35) else @as(f32, 0.25)) * (1.0 - eased * 0.5);
 

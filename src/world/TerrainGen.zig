@@ -71,7 +71,7 @@ pub fn generateChunk(chunk: *Chunk, key: ChunkKey, seed: u64) void {
     ng.selector.fillGrid3D(&selector, gx_start, gy_start, gz_start, SELECTOR_SCALE_XZ, SELECTOR_SCALE_Y, SELECTOR_SCALE_XZ);
 
     // --- Fill chunk ---
-    chunk.blocks.fillUniform(@as(StateId, 0));
+    chunk.blocks.fillUniform(StateId.fromRaw(0));
 
     const oy_i32 = origin[1];
 
@@ -239,7 +239,7 @@ fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u6
                     // First stone hit from air/water — determine surface materials
                     if (dirt_depth <= 0) {
                         // Exposed stone (Infdev: var102=0, var19=stone)
-                        top_block = if (wy < SEA_LEVEL) BlockState.defaultState(.water) else 0;
+                        top_block = if (wy < SEA_LEVEL) BlockState.defaultState(.water) else StateId.fromRaw(0);
                         fill_block = BlockState.defaultState(.stone);
                     } else if (wy >= -4 and wy <= 1) {
                         // Near-water zone (Infdev y=60..65): apply sand/gravel biome
@@ -247,7 +247,7 @@ fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u6
                         fill_block = BlockState.defaultState(.dirt);
                         // Gravel: top becomes air/water, fill becomes gravel
                         if (is_gravelly) {
-                            top_block = 0;
+                            top_block = StateId.fromRaw(0);
                             fill_block = BlockState.defaultState(.gravel);
                         }
                         // Sand overrides gravel for both top and fill
@@ -256,7 +256,7 @@ fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u6
                             fill_block = BlockState.defaultState(.sand);
                         }
                         // If top is air and below sea level, fill with water
-                        if (wy < SEA_LEVEL and top_block == 0) {
+                        if (wy < SEA_LEVEL and top_block.toRaw() == 0) {
                             top_block = BlockState.defaultState(.water);
                         }
                     } else {
@@ -267,7 +267,7 @@ fn surfacePass(chunk: *Chunk, key: ChunkKey, ng: *const Noise.NoiseGen, seed: u6
                     depth = dirt_depth;
                     if (wy >= -1) {
                         // At or above Infdev y=63: place top block
-                        if (top_block != 0) {
+                        if (top_block.toRaw() != 0) {
                             chunk.blocks.set(idx, top_block);
                         }
                     } else {

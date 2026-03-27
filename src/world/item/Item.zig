@@ -1,4 +1,5 @@
 const std = @import("std");
+const StateId = @import("../BlockState.zig").StateId;
 
 pub const ToolType = enum(u3) { pickaxe, axe, shovel, sword, hoe };
 pub const ToolTier = enum(u3) { wood, stone, iron, gold, diamond };
@@ -6,21 +7,22 @@ pub const ToolTier = enum(u3) { wood, stone, iron, gold, diamond };
 pub const TOOL_BASE: u16 = 256;
 pub const TOOL_COUNT: u16 = 25; // 5 tiers × 5 types
 
-pub fn isToolItem(id: u16) bool {
-    return id >= TOOL_BASE and id < TOOL_BASE + TOOL_COUNT;
+pub fn isToolItem(id: StateId) bool {
+    const raw = id.toRaw();
+    return raw >= TOOL_BASE and raw < TOOL_BASE + TOOL_COUNT;
 }
 
-pub fn toolFromId(id: u16) ?struct { tool_type: ToolType, tier: ToolTier } {
+pub fn toolFromId(id: StateId) ?struct { tool_type: ToolType, tier: ToolTier } {
     if (!isToolItem(id)) return null;
-    const offset = id - TOOL_BASE;
+    const offset = id.toRaw() - TOOL_BASE;
     return .{
         .tool_type = @enumFromInt(@as(u3, @intCast(offset % 5))),
         .tier = @enumFromInt(@as(u3, @intCast(offset / 5))),
     };
 }
 
-pub fn idFromTool(tool_type: ToolType, tier: ToolTier) u16 {
-    return TOOL_BASE + @as(u16, @intFromEnum(tier)) * 5 + @intFromEnum(tool_type);
+pub fn idFromTool(tool_type: ToolType, tier: ToolTier) StateId {
+    return StateId.fromRaw(TOOL_BASE + @as(u16, @intFromEnum(tier)) * 5 + @intFromEnum(tool_type));
 }
 
 pub const TierStats = struct {
@@ -49,9 +51,9 @@ pub fn baseAttackDamage(tool_type: ToolType) f32 {
     };
 }
 
-pub fn toolName(id: u16) []const u8 {
+pub fn toolName(id: StateId) []const u8 {
     if (!isToolItem(id)) return "Unknown";
-    return toolNameTable()[@as(usize, id - TOOL_BASE)];
+    return toolNameTable()[@as(usize, id.toRaw() - TOOL_BASE)];
 }
 
 fn toolNameTable() *const [TOOL_COUNT][]const u8 {
@@ -71,7 +73,7 @@ fn toolNameTable() *const [TOOL_COUNT][]const u8 {
     return &S.table;
 }
 
-pub fn toolColor(id: u16) [4]f32 {
+pub fn toolColor(id: StateId) [4]f32 {
     const info = toolFromId(id) orelse return .{ 1.0, 1.0, 1.0, 1.0 };
     return switch (info.tier) {
         .wood => .{ 0.6, 0.4, 0.2, 1.0 },

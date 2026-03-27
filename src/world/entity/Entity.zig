@@ -201,34 +201,35 @@ pub const EntityStore = struct {
 
     /// Remove an entity by swap-removing with the last entity.
     pub fn despawn(self: *EntityStore, id: EntityId) void {
+        const raw = id;
         std.debug.assert(id != PLAYER);
-        std.debug.assert(id < self.count);
+        std.debug.assert(raw < self.count);
         const last = self.count - 1;
-        if (id != last) {
-            self.pos[id] = self.pos[last];
-            self.vel[id] = self.vel[last];
-            self.prev_pos[id] = self.prev_pos[last];
-            self.render_pos[id] = self.render_pos[last];
-            self.rotation[id] = self.rotation[last];
-            self.flags[id] = self.flags[last];
-            self.kind[id] = self.kind[last];
-            self.water_vision_time[id] = self.water_vision_time[last];
-            self.physics[id] = self.physics[last];
-            self.inventory[id] = self.inventory[last];
-            self.item_block[id] = self.item_block[last];
-            self.item_count[id] = self.item_count[last];
-            self.item_durability[id] = self.item_durability[last];
-            self.age_ticks[id] = self.age_ticks[last];
-            self.pickup_cooldown[id] = self.pickup_cooldown[last];
-            self.bob_offset[id] = self.bob_offset[last];
-            self.mob_ai_state[id] = self.mob_ai_state[last];
-            self.mob_ai_timer[id] = self.mob_ai_timer[last];
-            self.mob_target_yaw[id] = self.mob_target_yaw[last];
-            self.walk_anim[id] = self.walk_anim[last];
-            self.prev_walk_anim[id] = self.prev_walk_anim[last];
-            self.render_walk_anim[id] = self.render_walk_anim[last];
-            self.mob_health[id] = self.mob_health[last];
-            self.hurt_time[id] = self.hurt_time[last];
+        if (raw != last) {
+            self.pos[raw] = self.pos[last];
+            self.vel[raw] = self.vel[last];
+            self.prev_pos[raw] = self.prev_pos[last];
+            self.render_pos[raw] = self.render_pos[last];
+            self.rotation[raw] = self.rotation[last];
+            self.flags[raw] = self.flags[last];
+            self.kind[raw] = self.kind[last];
+            self.water_vision_time[raw] = self.water_vision_time[last];
+            self.physics[raw] = self.physics[last];
+            self.inventory[raw] = self.inventory[last];
+            self.item_block[raw] = self.item_block[last];
+            self.item_count[raw] = self.item_count[last];
+            self.item_durability[raw] = self.item_durability[last];
+            self.age_ticks[raw] = self.age_ticks[last];
+            self.pickup_cooldown[raw] = self.pickup_cooldown[last];
+            self.bob_offset[raw] = self.bob_offset[last];
+            self.mob_ai_state[raw] = self.mob_ai_state[last];
+            self.mob_ai_timer[raw] = self.mob_ai_timer[last];
+            self.mob_target_yaw[raw] = self.mob_target_yaw[last];
+            self.walk_anim[raw] = self.walk_anim[last];
+            self.prev_walk_anim[raw] = self.prev_walk_anim[last];
+            self.render_walk_anim[raw] = self.render_walk_anim[last];
+            self.mob_health[raw] = self.mob_health[last];
+            self.hurt_time[raw] = self.hurt_time[last];
         }
         self.count -= 1;
     }

@@ -8,6 +8,7 @@ const types = @import("types.zig");
 const UiVertex = types.UiVertex;
 const tracy = @import("../../platform/tracy.zig");
 const app_config = @import("../../app_config.zig");
+const BlockState = @import("../../world/BlockState.zig");
 const gpu_alloc_mod = @import("../../allocators/GpuAllocator.zig");
 const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
@@ -402,11 +403,10 @@ pub const UiRenderer = struct {
 
     /// Draw an isometric block using the actual baked model quads from the block model registry.
     /// Projects 3D face quads through Rx(30°) * Ry(225°) with back-face culling and painter's sort.
-    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32, state: u16) void {
+    pub fn drawIsometricBlock(self: *UiRenderer, x: f32, y: f32, w: f32, h: f32, color: [4]f32, state: BlockState.StateId) void {
         if (color[3] < 0.01) return;
 
         const WorldState = @import("../../world/WorldState.zig");
-        const BlockState = WorldState.BlockState;
         const Item = @import("../../world/item/Item.zig");
         const TextureManager = @import("TextureManager.zig");
 

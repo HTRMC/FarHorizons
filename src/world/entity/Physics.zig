@@ -39,7 +39,8 @@ pub fn updateEntity(
 ) void {
     const tz = tracy.zone(@src(), "updateEntity");
     defer tz.end();
-    const params = entities.physics[id];
+    const raw = id;
+    const params = entities.physics[raw];
     const forward_input = input_move[0];
     const right_input = input_move[2];
 
@@ -55,22 +56,22 @@ pub fn updateEntity(
         wish_z *= inv_len;
     }
 
-    const flags = entities.flags[id];
+    const flags = entities.flags[raw];
 
     if (flags.in_water) {
         // Water horizontal movement
         const target_vx = wish_x * WATER_SPEED;
         const target_vz = wish_z * WATER_SPEED;
         const water_control = dt.scale(WATER_FRICTION);
-        entities.vel[id][0] = approach(entities.vel[id][0], target_vx, water_control);
-        entities.vel[id][2] = approach(entities.vel[id][2], target_vz, water_control);
+        entities.vel[raw][0] = approach(entities.vel[raw][0], target_vx, water_control);
+        entities.vel[raw][2] = approach(entities.vel[raw][2], target_vz, water_control);
 
         // Vertical swimming (input_move[1]: +1 jump, -1 sneak)
         // Only apply when input is active — otherwise let gravity/drag handle sinking
         const up_input = input_move[1];
         if (up_input != 0.0) {
             const target_vy = up_input * WATER_SWIM_SPEED;
-            entities.vel[id][1] = approach(entities.vel[id][1], target_vy, water_control);
+            entities.vel[raw][1] = approach(entities.vel[raw][1], target_vy, water_control);
         }
     } else {
         // Land horizontal movement
@@ -78,16 +79,16 @@ pub fn updateEntity(
         const target_vz = wish_z * params.walk_speed;
         const control = if (flags.on_ground) params.friction else params.friction * AIR_CONTROL;
         const max_delta = dt.scale(control);
-        entities.vel[id][0] = approach(entities.vel[id][0], target_vx, max_delta);
-        entities.vel[id][2] = approach(entities.vel[id][2], target_vz, max_delta);
+        entities.vel[raw][0] = approach(entities.vel[raw][0], target_vx, max_delta);
+        entities.vel[raw][2] = approach(entities.vel[raw][2], target_vz, max_delta);
     }
 
-    entities.flags[id].on_ground = false;
+    entities.flags[raw].on_ground = false;
 
     const movement = [3]f32{
-        dt.scale(entities.vel[id][0]),
-        dt.scale(entities.vel[id][1]),
-        dt.scale(entities.vel[id][2]),
+        dt.scale(entities.vel[raw][0]),
+        dt.scale(entities.vel[raw][1]),
+        dt.scale(entities.vel[raw][2]),
     };
 
     const abs_mov = [3]f32{
@@ -105,38 +106,38 @@ pub fn updateEntity(
         const desired = movement[axis];
         if (desired == 0.0) continue;
 
-        const result = collideAxis(chunk_map, entities.pos[id], desired, axis, params.half_width, params.height);
-        entities.pos[id][axis] += result.distance;
+        const result = collideAxis(chunk_map, entities.pos[raw], desired, axis, params.half_width, params.height);
+        entities.pos[raw][axis] += result.distance;
 
         if (result.hit) {
-            if (axis == 1 and entities.vel[id][1] < 0.0) {
-                entities.flags[id].on_ground = true;
+            if (axis == 1 and entities.vel[raw][1] < 0.0) {
+                entities.flags[raw].on_ground = true;
             }
-            entities.vel[id][axis] = 0.0;
+            entities.vel[raw][axis] = 0.0;
         }
     }
 
     const gravity = GRAVITY * params.gravity_scale;
 
     if (flags.in_water) {
-        entities.vel[id][1] -= dt.scale(gravity / 16.0);
-        entities.vel[id][0] *= WATER_XZ_DRAG;
-        entities.vel[id][1] *= WATER_Y_DRAG;
-        entities.vel[id][2] *= WATER_XZ_DRAG;
+        entities.vel[raw][1] -= dt.scale(gravity / 16.0);
+        entities.vel[raw][0] *= WATER_XZ_DRAG;
+        entities.vel[raw][1] *= WATER_Y_DRAG;
+        entities.vel[raw][2] *= WATER_XZ_DRAG;
     } else if (flags.on_ladder) {
-        entities.vel[id][1] -= dt.scale(gravity);
-        entities.vel[id][1] *= Y_DRAG;
+        entities.vel[raw][1] -= dt.scale(gravity);
+        entities.vel[raw][1] *= Y_DRAG;
         // Cap fall speed on ladder
-        if (entities.vel[id][1] < LADDER_MAX_FALL) {
-            entities.vel[id][1] = LADDER_MAX_FALL;
+        if (entities.vel[raw][1] < LADDER_MAX_FALL) {
+            entities.vel[raw][1] = LADDER_MAX_FALL;
         }
         // Sneak to hold position on ladder
-        if (input_move[1] < 0.0 and entities.vel[id][1] < 0.0) {
-            entities.vel[id][1] = 0.0;
+        if (input_move[1] < 0.0 and entities.vel[raw][1] < 0.0) {
+            entities.vel[raw][1] = 0.0;
         }
     } else {
-        entities.vel[id][1] -= dt.scale(gravity);
-        entities.vel[id][1] *= Y_DRAG;
+        entities.vel[raw][1] -= dt.scale(gravity);
+        entities.vel[raw][1] *= Y_DRAG;
     }
 }
 

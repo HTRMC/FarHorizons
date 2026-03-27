@@ -88,7 +88,17 @@ pub const NUM_BLOCKS = @typeInfo(Block).@"enum".fields.len;
 
 // ==== State ID ====
 
-pub const StateId = u16;
+pub const StateId = enum(u16) {
+    _,
+
+    pub fn toRaw(self: StateId) u16 {
+        return @intFromEnum(self);
+    }
+
+    pub fn fromRaw(raw: u16) StateId {
+        return @enumFromInt(raw);
+    }
+};
 pub const AABB = struct { min: [3]f32, max: [3]f32 };
 pub const Transform = enum { none, flip_y, rotate_90, rotate_180, rotate_270, flip_y_rotate_90, flip_y_rotate_180, flip_y_rotate_270 };
 pub const BlockBox = struct { min: [3]f32, max: [3]f32 };
@@ -156,19 +166,19 @@ const block_offset_table: [NUM_BLOCKS]u16 = blk: {
 // ==== Lookup Functions ====
 
 pub inline fn getBlock(state: StateId) Block {
-    return state_to_block_table[state];
+    return state_to_block_table[state.toRaw()];
 }
 
 pub inline fn getProps(state: StateId) u8 {
-    return state_to_props_table[state];
+    return state_to_props_table[state.toRaw()];
 }
 
 pub inline fn fromBlockProps(block: Block, props: u8) StateId {
-    return block_offset_table[@intFromEnum(block)] + props;
+    return StateId.fromRaw(block_offset_table[@intFromEnum(block)] + props);
 }
 
 pub inline fn defaultState(block: Block) StateId {
-    return block_offset_table[@intFromEnum(block)];
+    return StateId.fromRaw(block_offset_table[@intFromEnum(block)]);
 }
 
 pub fn stateCountOf(block: Block) u16 {
@@ -482,42 +492,42 @@ const state_props: [TOTAL_STATES]StateProps = blk: {
 // ==== Property Query Functions ====
 
 pub inline fn isOpaque(state: StateId) bool {
-    return state_props[state].is_opaque;
+    return state_props[state.toRaw()].is_opaque;
 }
 pub inline fn isSolid(state: StateId) bool {
-    return state_props[state].is_solid;
+    return state_props[state.toRaw()].is_solid;
 }
 pub inline fn isSolidShaped(state: StateId) bool {
-    return state_props[state].is_solid_shaped;
+    return state_props[state.toRaw()].is_solid_shaped;
 }
 pub inline fn cullsSelf(state: StateId) bool {
-    return state_props[state].culls_self;
+    return state_props[state.toRaw()].culls_self;
 }
 pub inline fn isTargetable(state: StateId) bool {
-    return state_props[state].is_targetable;
+    return state_props[state.toRaw()].is_targetable;
 }
 pub inline fn isShaped(state: StateId) bool {
-    return state_props[state].is_shaped;
+    return state_props[state.toRaw()].is_shaped;
 }
 pub inline fn renderLayer(state: StateId) RenderLayer {
-    return state_props[state].render_layer;
+    return state_props[state.toRaw()].render_layer;
 }
 pub inline fn emittedLight(state: StateId) [3]u8 {
-    return state_props[state].emitted_light;
+    return state_props[state.toRaw()].emitted_light;
 }
 pub inline fn getHitbox(state: StateId) ?AABB {
-    return state_props[state].hitbox;
+    return state_props[state.toRaw()].hitbox;
 }
 pub inline fn getHardness(state: StateId) f32 {
-    return state_props[state].hardness;
+    return state_props[state.toRaw()].hardness;
 }
 pub inline fn getPreferredTool(state: StateId) ?Item.ToolType {
-    const pt = state_props[state].preferred_tool;
+    const pt = state_props[state.toRaw()].preferred_tool;
     if (pt == 0) return null;
     return @enumFromInt(@as(u3, @intCast(pt - 1)));
 }
 pub inline fn requiresTool(state: StateId) bool {
-    return state_props[state].requires_tool;
+    return state_props[state.toRaw()].requires_tool;
 }
 
 // ==== Collision ====
@@ -634,7 +644,7 @@ const collision_table: [TOTAL_STATES]BlockBoxes = blk: {
 };
 
 pub inline fn getCollisionBoxes(state: StateId) BlockBoxes {
-    return collision_table[state];
+    return collision_table[state.toRaw()];
 }
 
 pub const TexIndices = struct { top: i16, side: i16 };
@@ -643,7 +653,7 @@ pub const TexIndices = struct { top: i16, side: i16 };
 /// For non-shaped full-cube blocks this is the primary texture lookup.
 /// Shaped blocks use getShapedTexIndices from the model registry instead.
 pub inline fn blockTexIndices(state: StateId) TexIndices {
-    return tex_indices_table[state];
+    return tex_indices_table[state.toRaw()];
 }
 
 const tex_indices_table: [TOTAL_STATES]TexIndices = blk: {
@@ -1026,31 +1036,31 @@ test "fence connections" {
 test "model info" {
     // Stairs south/bottom/straight = no rotation
     const stairs_s = makeStairState(.south, .bottom, .straight);
-    const info = model_info_table[stairs_s].?;
+    const info = model_info_table[stairs_s.toRaw()].?;
     try std.testing.expect(std.mem.eql(u8, info.json_file, "oak_stairs.json"));
     try std.testing.expectEqual(Transform.none, info.transform);
 
     // Stairs north/bottom/straight = 180
     const stairs_n = makeStairState(.north, .bottom, .straight);
-    try std.testing.expectEqual(Transform.rotate_180, model_info_table[stairs_n].?.transform);
+    try std.testing.expectEqual(Transform.rotate_180, model_info_table[stairs_n.toRaw()].?.transform);
 
     // Stairs south/top/straight = flip_y
     const stairs_top = makeStairState(.south, .top, .straight);
-    try std.testing.expectEqual(Transform.flip_y, model_info_table[stairs_top].?.transform);
+    try std.testing.expectEqual(Transform.flip_y, model_info_table[stairs_top.toRaw()].?.transform);
 
     // Stairs inner corner
     const stairs_inner = makeStairState(.south, .bottom, .inner_right);
-    try std.testing.expect(std.mem.eql(u8, model_info_table[stairs_inner].?.json_file, "oak_stairs_inner.json"));
+    try std.testing.expect(std.mem.eql(u8, model_info_table[stairs_inner.toRaw()].?.json_file, "oak_stairs_inner.json"));
 
     // Stairs outer corner
     const stairs_outer = makeStairState(.south, .bottom, .outer_left);
-    try std.testing.expect(std.mem.eql(u8, model_info_table[stairs_outer].?.json_file, "oak_stairs_outer.json"));
+    try std.testing.expect(std.mem.eql(u8, model_info_table[stairs_outer.toRaw()].?.json_file, "oak_stairs_outer.json"));
 
     // Simple block = no model info
-    try std.testing.expectEqual(@as(?ModelInfo, null), model_info_table[defaultState(.stone)]);
+    try std.testing.expectEqual(@as(?ModelInfo, null), model_info_table[defaultState(.stone).toRaw()]);
 
     // Double slab = no model info (rendered as full cube)
-    try std.testing.expectEqual(@as(?ModelInfo, null), model_info_table[fromBlockProps(.oak_slab, @intFromEnum(SlabType.double))]);
+    try std.testing.expectEqual(@as(?ModelInfo, null), model_info_table[fromBlockProps(.oak_slab, @intFromEnum(SlabType.double)).toRaw()]);
 }
 
 test "hitbox consistency" {

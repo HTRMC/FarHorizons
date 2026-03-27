@@ -133,8 +133,8 @@ pub const BlockModelRegistry = struct {
 
         var loaded_count: u32 = 0;
         for (0..BlockState.TOTAL_STATES) |state_idx| {
-            const state: BlockState.StateId = @intCast(state_idx);
-            const model_info = BlockState.model_info_table[state] orelse continue;
+            const state: BlockState.StateId = BlockState.StateId.fromRaw(@intCast(state_idx));
+            const model_info = BlockState.model_info_table[state_idx] orelse continue;
 
             // Load JSON file (cached)
             const json_data = if (model_cache.get(model_info.json_file)) |cached|
@@ -372,11 +372,11 @@ fn loadModel(
         }
     }
 
-    registry.state_shape_faces[state] = try allocator.dupe(ShapeFace, shape_faces.items);
-    registry.state_face_tex_indices[state] = try allocator.dupe(u8, tex_indices.items);
+    registry.state_shape_faces[state.toRaw()] = try allocator.dupe(ShapeFace, shape_faces.items);
+    registry.state_face_tex_indices[state.toRaw()] = try allocator.dupe(u8, tex_indices.items);
 
     // Store accumulated bitmaps (already in transformed space)
-    registry.state_face_bitmaps[state] = face_bitmaps;
+    registry.state_face_bitmaps[state.toRaw()] = face_bitmaps;
 }
 
 /// Compute a 4×4 bitmap of which cells this element covers on the given block boundary face.
