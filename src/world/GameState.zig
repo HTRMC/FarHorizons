@@ -51,7 +51,19 @@ pub const GameMode = enum(u8) { creative = 0, survival = 1 };
 pub const MovementMode = enum { flying, walking };
 pub const EYE_OFFSET: f32 = 1.62;
 pub const TICK_RATE: f32 = 30.0;
-pub const TICK_INTERVAL: f32 = 1.0 / TICK_RATE;
+
+/// Duration in seconds. Prevents mixing with tick counts or raw frame deltas.
+pub const DeltaSeconds = struct {
+    value: f32,
+
+    pub const zero: DeltaSeconds = .{ .value = 0 };
+
+    pub fn scale(self: DeltaSeconds, factor: f32) f32 {
+        return factor * self.value;
+    }
+};
+
+pub const TICK_INTERVAL: DeltaSeconds = .{ .value = 1.0 / TICK_RATE };
 pub const HOTBAR_SIZE = Entity.HOTBAR_SIZE;
 pub const INV_ROWS = Entity.INV_ROWS;
 pub const INV_COLS = Entity.INV_COLS;
@@ -113,7 +125,7 @@ debug_screens: u8 = 0,
 show_chunk_borders: bool = false,
 show_hitbox: bool = false,
 show_ui: bool = true,
-delta_time: f32 = 0,
+delta_time: DeltaSeconds = DeltaSeconds.zero,
 frame_timing: FrameTiming = .{},
 
 prev_camera_pos: zlm.Vec3,
@@ -183,11 +195,11 @@ pub const FrameTiming = struct {
 
     const alpha: f32 = 0.05;
 
-    pub fn smooth(self: *FrameTiming, dt: f32) void {
+    pub fn smooth(self: *FrameTiming, dt: DeltaSeconds) void {
         self.smooth_update_ms += alpha * (self.update_ms - self.smooth_update_ms);
         self.smooth_render_ms += alpha * (self.render_ms - self.smooth_render_ms);
         self.smooth_frame_ms += alpha * (self.frame_ms - self.smooth_frame_ms);
-        const fps: f32 = if (dt > 0) 1.0 / dt else 0;
+        const fps: f32 = if (dt.value > 0) 1.0 / dt.value else 0;
         self.smooth_fps += alpha * (fps - self.smooth_fps);
     }
 };

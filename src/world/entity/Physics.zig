@@ -27,13 +27,15 @@ const WATER_Y_DRAG: f32 = 0.86; // per-tick vertical drag
 pub const LADDER_CLIMB_SPEED: f32 = 3.0; // climb speed when holding jump
 const LADDER_MAX_FALL: f32 = -2.4; // max fall speed on ladder (MC: -0.15/tick @20Hz)
 
+const DeltaSeconds = GameState.DeltaSeconds;
+
 pub fn updateEntity(
     entities: *Entity.EntityStore,
     id: Entity.EntityId,
     chunk_map: *const ChunkMap,
     input_move: [3]f32,
     camera_yaw: Radians,
-    dt: f32,
+    dt: DeltaSeconds,
 ) void {
     const tz = tracy.zone(@src(), "updateEntity");
     defer tz.end();
@@ -59,7 +61,7 @@ pub fn updateEntity(
         // Water horizontal movement
         const target_vx = wish_x * WATER_SPEED;
         const target_vz = wish_z * WATER_SPEED;
-        const water_control = WATER_FRICTION * dt;
+        const water_control = dt.scale(WATER_FRICTION);
         entities.vel[id][0] = approach(entities.vel[id][0], target_vx, water_control);
         entities.vel[id][2] = approach(entities.vel[id][2], target_vz, water_control);
 
@@ -75,7 +77,7 @@ pub fn updateEntity(
         const target_vx = wish_x * params.walk_speed;
         const target_vz = wish_z * params.walk_speed;
         const control = if (flags.on_ground) params.friction else params.friction * AIR_CONTROL;
-        const max_delta = control * dt;
+        const max_delta = dt.scale(control);
         entities.vel[id][0] = approach(entities.vel[id][0], target_vx, max_delta);
         entities.vel[id][2] = approach(entities.vel[id][2], target_vz, max_delta);
     }
@@ -83,9 +85,9 @@ pub fn updateEntity(
     entities.flags[id].on_ground = false;
 
     const movement = [3]f32{
-        entities.vel[id][0] * dt,
-        entities.vel[id][1] * dt,
-        entities.vel[id][2] * dt,
+        dt.scale(entities.vel[id][0]),
+        dt.scale(entities.vel[id][1]),
+        dt.scale(entities.vel[id][2]),
     };
 
     const abs_mov = [3]f32{
@@ -117,12 +119,12 @@ pub fn updateEntity(
     const gravity = GRAVITY * params.gravity_scale;
 
     if (flags.in_water) {
-        entities.vel[id][1] -= (gravity / 16.0) * dt;
+        entities.vel[id][1] -= dt.scale(gravity / 16.0);
         entities.vel[id][0] *= WATER_XZ_DRAG;
         entities.vel[id][1] *= WATER_Y_DRAG;
         entities.vel[id][2] *= WATER_XZ_DRAG;
     } else if (flags.on_ladder) {
-        entities.vel[id][1] -= gravity * dt;
+        entities.vel[id][1] -= dt.scale(gravity);
         entities.vel[id][1] *= Y_DRAG;
         // Cap fall speed on ladder
         if (entities.vel[id][1] < LADDER_MAX_FALL) {
@@ -133,7 +135,7 @@ pub fn updateEntity(
             entities.vel[id][1] = 0.0;
         }
     } else {
-        entities.vel[id][1] -= gravity * dt;
+        entities.vel[id][1] -= dt.scale(gravity);
         entities.vel[id][1] *= Y_DRAG;
     }
 }

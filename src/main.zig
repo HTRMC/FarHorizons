@@ -845,7 +845,7 @@ pub fn main() !void {
         processGamepadInput(&input_state);
 
         const current_time = glfw.getTime();
-        const delta_time: f32 = @floatCast(current_time - last_time);
+        const delta_time: GameState.DeltaSeconds = .{ .value = @floatCast(current_time - last_time) };
         last_time = current_time;
 
         if (menu_ctrl.action) |action| {
@@ -1126,7 +1126,7 @@ pub fn main() !void {
                     const gpx = input_state.gamepad.right_x;
                     const gpy = input_state.gamepad.right_y;
                     if (gpx != 0 or gpy != 0) {
-                        state.camera.look(Angle.deg(-gpx * Gamepad.LOOK_SPEED * delta_time), Angle.deg(-gpy * Gamepad.LOOK_SPEED * delta_time));
+                        state.camera.look(Angle.deg(delta_time.scale(-gpx * Gamepad.LOOK_SPEED)), Angle.deg(delta_time.scale(-gpy * Gamepad.LOOK_SPEED)));
                     }
                 }
 
@@ -1199,7 +1199,7 @@ pub fn main() !void {
                 }
 
                 if (state.debug_camera_active) {
-                    const speed = input_state.move_speed * delta_time;
+                    const speed = delta_time.scale(input_state.move_speed);
                     state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
                 } else {
                     if (input_state.mode_toggle_requested) {
@@ -1213,10 +1213,10 @@ pub fn main() !void {
                     state.jump_requested = space_held;
                     input_state.space_was_held = space_held;
 
-                    tick_accumulator += delta_time;
+                    tick_accumulator += delta_time.value;
                     if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
 
-                    while (tick_accumulator >= GameState.TICK_INTERVAL) {
+                    while (tick_accumulator >= GameState.TICK_INTERVAL.value) {
                         // Poll drop key with cooldown (~50ms: every other tick at 30Hz)
                         if (input_state.drop_cooldown > 0) {
                             input_state.drop_cooldown -= 1;
@@ -1236,10 +1236,10 @@ pub fn main() !void {
                             );
                         }
 
-                        tick_accumulator -= GameState.TICK_INTERVAL;
+                        tick_accumulator -= GameState.TICK_INTERVAL.value;
                     }
 
-                    const alpha = tick_accumulator / GameState.TICK_INTERVAL;
+                    const alpha = tick_accumulator / GameState.TICK_INTERVAL.value;
                     state.interpolateForRender(alpha);
                 }
 
@@ -1253,9 +1253,9 @@ pub fn main() !void {
                 // Keep the world ticking while inventory is open
                 state.input_move = .{ 0, 0, 0 };
                 state.jump_requested = false;
-                tick_accumulator += delta_time;
+                tick_accumulator += delta_time.value;
                 if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
-                while (tick_accumulator >= GameState.TICK_INTERVAL) {
+                while (tick_accumulator >= GameState.TICK_INTERVAL.value) {
                     // Poll drop key with cooldown (~50ms: every other tick at 30Hz)
                     if (input_state.drop_cooldown > 0) {
                         input_state.drop_cooldown -= 1;
@@ -1266,9 +1266,9 @@ pub fn main() !void {
                         }
                     }
                     state.fixedUpdate(input_state.move_speed);
-                    tick_accumulator -= GameState.TICK_INTERVAL;
+                    tick_accumulator -= GameState.TICK_INTERVAL.value;
                 }
-                const alpha = tick_accumulator / GameState.TICK_INTERVAL;
+                const alpha = tick_accumulator / GameState.TICK_INTERVAL.value;
                 state.interpolateForRender(alpha);
 
                 menu_ctrl.updateInventory(state);
@@ -1282,13 +1282,13 @@ pub fn main() !void {
                 // Keep the world ticking while crafting is open
                 state.input_move = .{ 0, 0, 0 };
                 state.jump_requested = false;
-                tick_accumulator += delta_time;
+                tick_accumulator += delta_time.value;
                 if (tick_accumulator > MAX_ACCUMULATOR) tick_accumulator = MAX_ACCUMULATOR;
-                while (tick_accumulator >= GameState.TICK_INTERVAL) {
+                while (tick_accumulator >= GameState.TICK_INTERVAL.value) {
                     state.fixedUpdate(input_state.move_speed);
-                    tick_accumulator -= GameState.TICK_INTERVAL;
+                    tick_accumulator -= GameState.TICK_INTERVAL.value;
                 }
-                const alpha = tick_accumulator / GameState.TICK_INTERVAL;
+                const alpha = tick_accumulator / GameState.TICK_INTERVAL.value;
                 state.interpolateForRender(alpha);
 
                 menu_ctrl.updateCrafting(state);
@@ -1391,7 +1391,7 @@ pub fn main() !void {
         if (menu_ctrl.app_state == .playing) {
             if (game_state) |*state| {
                 state.frame_timing.render_ms = @floatCast((glfw.getTime() - render_start) * 1000.0);
-                state.frame_timing.frame_ms = delta_time * 1000.0;
+                state.frame_timing.frame_ms = delta_time.value * 1000.0;
                 state.frame_timing.smooth(delta_time);
                 if (!state.debug_camera_active) {
                     state.restoreAfterRender();

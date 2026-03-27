@@ -184,7 +184,7 @@ pub const HudBinder = struct {
 
             // Tick down the timer
             if (self.block_name_timer > 0) {
-                self.block_name_timer -= game_state.delta_time;
+                self.block_name_timer -= game_state.delta_time.value;
                 if (self.block_name_timer < 0) self.block_name_timer = 0;
             }
 

@@ -9,6 +9,7 @@ const GpuAllocator = gpu_alloc_mod.GpuAllocator;
 const BufferAllocation = gpu_alloc_mod.BufferAllocation;
 const app_config = @import("../../app_config.zig");
 const EntityVertex = @import("EntityRenderer.zig").EntityVertex;
+const GameState = @import("../../world/GameState.zig");
 const Angle = @import("../../math/Angle.zig");
 const Degrees = Angle.Degrees;
 const WorldState = @import("../../world/WorldState.zig");
@@ -128,7 +129,7 @@ pub const HandRenderer = struct {
 
     pub fn updateAnimations(
         self: *HandRenderer,
-        dt: f32,
+        dt: GameState.DeltaSeconds,
         horizontal_speed: f32,
         vertical_speed: f32,
         on_ground: bool,
@@ -141,7 +142,7 @@ pub const HandRenderer = struct {
         tool_tier: ?Item.ToolTier,
         selected_slot: u8,
     ) void {
-        const tdt = dt * 30.0;
+        const tdt = dt.scale(30.0);
         self.idle_tick += tdt;
         self.held_tool_type = tool_type;
         self.held_tool_tier = tool_tier;
@@ -157,15 +158,15 @@ pub const HandRenderer = struct {
         const walking = horizontal_speed > speed_threshold and @abs(vertical_speed) < vert_threshold and on_ground;
 
         if (walking) {
-            self.walk_phase += horizontal_speed * dt * 1.5;
-            self.walk_smoother = @min(1.0, self.walk_smoother + smooth_rate * dt);
+            self.walk_phase += dt.scale(horizontal_speed * 1.5);
+            self.walk_smoother = @min(1.0, self.walk_smoother + dt.scale(smooth_rate));
         } else {
-            self.walk_smoother = @max(0.0, self.walk_smoother - smooth_rate * dt);
+            self.walk_smoother = @max(0.0, self.walk_smoother - dt.scale(smooth_rate));
         }
 
         self.cam_pitch = cam_pitch;
         self.cam_yaw = cam_yaw;
-        const bob_rate = @min(1.0, 15.0 * dt);
+        const bob_rate = @min(1.0, dt.scale(15.0));
         self.bob_pitch = .{ .value = self.bob_pitch.value + (cam_pitch.value - self.bob_pitch.value) * bob_rate };
         self.bob_yaw = .{ .value = self.bob_yaw.value + (cam_yaw.value - self.bob_yaw.value) * bob_rate };
 
@@ -180,7 +181,7 @@ pub const HandRenderer = struct {
             }
         }
 
-        const equip_rate: f32 = 8.0 * dt;
+        const equip_rate: f32 = dt.scale(8.0);
         if (self.pending_block != self.held_block) {
             self.equip_progress = @max(0.0, self.equip_progress - equip_rate);
             if (self.equip_progress < 0.05) {

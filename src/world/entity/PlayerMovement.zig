@@ -47,7 +47,7 @@ pub fn updatePlayerMovement(state: *GameState, player: u32, move_speed: f32) voi
             const up_input = state.input_move[1];
 
             if (forward_input != 0.0 or right_input != 0.0 or up_input != 0.0) {
-                const speed = move_speed * GameState.TICK_INTERVAL;
+                const speed = GameState.TICK_INTERVAL.scale(move_speed);
                 state.camera.move(forward_input * speed, right_input * speed, up_input * speed);
             }
 

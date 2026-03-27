@@ -131,8 +131,8 @@ pub const TextureManager = struct {
     }
 
     /// Advance animation timers. Call once per frame with frame delta time.
-    pub fn tickAnimations(self: *TextureManager, dt: f32) void {
-        self.tick_accumulator += dt;
+    pub fn tickAnimations(self: *TextureManager, dt: @import("../../world/GameState.zig").DeltaSeconds) void {
+        self.tick_accumulator += dt.value;
 
         // Process accumulated ticks at 20Hz (tick rate)
         while (self.tick_accumulator >= TICK_INTERVAL) {

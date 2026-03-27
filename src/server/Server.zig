@@ -24,7 +24,7 @@ pub fn getGlobalInstance() ?*Server {
     return global_instance;
 }
 
-pub const TICK_RATE: u32 = 20;
+pub const TICK_RATE: u32 = 30;
 pub const TICK_INTERVAL_NS: u64 = 1_000_000_000 / TICK_RATE;
 pub const DEFAULT_PORT: u16 = 7777;
 

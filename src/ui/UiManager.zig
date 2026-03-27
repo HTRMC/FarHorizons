@@ -315,8 +315,8 @@ pub const UiManager = struct {
         self.tickFade();
     }
 
-    pub fn tickCursorBlink(self: *UiManager, dt: f32) void {
-        self.tick(dt);
+    pub fn tickCursorBlink(self: *UiManager, dt: @import("../world/GameState.zig").DeltaSeconds) void {
+        self.tick(dt.value);
     }
 
 
