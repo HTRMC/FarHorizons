@@ -477,18 +477,20 @@ pub const VulkanRenderer = struct {
             self.render_state.text_renderer.beginFrame(self.ctx.device, cf);
         }
 
-        if (self.game_state) |game_state| {
-            const tz2 = tracy.zone(@src(), "debugOverlay");
-            defer tz2.end();
-            const DebugOverlay = @import("../../ui/DebugOverlay.zig");
-            DebugOverlay.draw(&self.render_state.text_renderer, game_state, &self.render_state.world_renderer, self.gpu_allocator);
-        }
-
         if (self.ui_manager) |um| {
             const tz2 = tracy.zone(@src(), "uiLayout");
             defer tz2.end();
             um.layout(&self.render_state.text_renderer);
             um.draw(&self.render_state.ui_renderer, &self.render_state.text_renderer);
+        }
+
+        // Debug overlay is drawn after UI so its vertices are unstratified
+        // and rendered on top by recordDrawUnstratified.
+        if (self.game_state) |game_state| {
+            const tz2 = tracy.zone(@src(), "debugOverlay");
+            defer tz2.end();
+            const DebugOverlay = @import("../../ui/DebugOverlay.zig");
+            DebugOverlay.draw(&self.render_state.text_renderer, game_state, &self.render_state.world_renderer, self.gpu_allocator);
         }
     }
 
