@@ -683,13 +683,6 @@ fn carveEllipsoid(
     chunk_max_y: f32,
     chunk_max_z: f32,
 ) void {
-    _ = chunk_min_x;
-    _ = chunk_min_y;
-    _ = chunk_min_z;
-    _ = chunk_max_x;
-    _ = chunk_max_y;
-    _ = chunk_max_z;
-
     const r_ceil_xz: i32 = @intFromFloat(@ceil(xz_radius));
     const r_ceil_y: i32 = @intFromFloat(@ceil(y_radius));
 
@@ -697,38 +690,36 @@ fn carveEllipsoid(
     const oy: f32 = @floatFromInt(origin[1]);
     const oz: f32 = @floatFromInt(origin[2]);
 
-    var dy: i32 = -r_ceil_y;
-    while (dy <= r_ceil_y) : (dy += 1) {
+    // Clamp iteration ranges to chunk bounds to skip out-of-chunk blocks
+    const dy_min = @max(-r_ceil_y, @as(i32, @intFromFloat(@ceil(chunk_min_y - cy))));
+    const dy_max = @min(r_ceil_y, @as(i32, @intFromFloat(@ceil(chunk_max_y - cy))) - 1);
+    const dz_min = @max(-r_ceil_xz, @as(i32, @intFromFloat(@ceil(chunk_min_z - cz))));
+    const dz_max = @min(r_ceil_xz, @as(i32, @intFromFloat(@ceil(chunk_max_z - cz))) - 1);
+    const dx_min = @max(-r_ceil_xz, @as(i32, @intFromFloat(@ceil(chunk_min_x - cx))));
+    const dx_max = @min(r_ceil_xz, @as(i32, @intFromFloat(@ceil(chunk_max_x - cx))) - 1);
+
+    var dy: i32 = dy_min;
+    while (dy <= dy_max) : (dy += 1) {
         const wy_f = cy + @as(f32, @floatFromInt(dy));
         // Infdev: don't carve below y=10 (our y=-54) — would be lava
         if (wy_f < @as(f32, @floatFromInt(CAVE_LAVA_Y))) continue;
         // Infdev line 408: y_dist > -0.7 (skip bottom of ellipsoid)
-        const y_dist = @as(f32, @floatFromInt(dy)) / y_radius;
-        if (y_dist <= -0.7) continue;
-        const by_f = wy_f - oy;
-        if (by_f < 0 or by_f >= CS) continue;
-        const by: usize = @intFromFloat(by_f);
+        const fdy = @as(f32, @floatFromInt(dy)) / y_radius;
+        if (fdy <= -0.7) continue;
+        const by: usize = @intFromFloat(wy_f - oy);
 
-        var dz: i32 = -r_ceil_xz;
-        while (dz <= r_ceil_xz) : (dz += 1) {
-            const wz_f = cz + @as(f32, @floatFromInt(dz));
-            const bz_f = wz_f - oz;
-            if (bz_f < 0 or bz_f >= CS) continue;
-            const bz: usize = @intFromFloat(bz_f);
+        var dz: i32 = dz_min;
+        while (dz <= dz_max) : (dz += 1) {
+            const bz: usize = @intFromFloat(cz + @as(f32, @floatFromInt(dz)) - oz);
 
-            var dx: i32 = -r_ceil_xz;
-            while (dx <= r_ceil_xz) : (dx += 1) {
-                const wx_f = cx + @as(f32, @floatFromInt(dx));
-                const bx_f = wx_f - ox;
-                if (bx_f < 0 or bx_f >= CS) continue;
-                const bx: usize = @intFromFloat(bx_f);
-
+            var dx: i32 = dx_min;
+            while (dx <= dx_max) : (dx += 1) {
                 // Infdev: ellipsoid test (x/xz_r)^2 + (y/y_r)^2 + (z/xz_r)^2 < 1
                 const fdx = @as(f32, @floatFromInt(dx)) / xz_radius;
-                const fdy = @as(f32, @floatFromInt(dy)) / y_radius;
                 const fdz = @as(f32, @floatFromInt(dz)) / xz_radius;
                 if (fdx * fdx + fdy * fdy + fdz * fdz >= 1.0) continue;
 
+                const bx: usize = @intFromFloat(cx + @as(f32, @floatFromInt(dx)) - ox);
                 const idx = WorldState.chunkIndex(bx, by, bz);
                 const cave_blk = BlockState.getBlock(chunk.blocks.get(idx));
                 if (cave_blk != .air and cave_blk != .water and cave_blk != .bedrock) {
