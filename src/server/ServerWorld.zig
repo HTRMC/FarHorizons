@@ -104,17 +104,11 @@ pub fn save(self: *ServerWorld) void {
 }
 
 /// Set a block at world coordinates (authoritative). Returns true if the block changed.
-pub fn setBlock(self: *ServerWorld, wx: i32, wy: i32, wz: i32, new_block: WorldState.StateId) bool {
-    const cx = @divFloor(wx, @as(i32, WorldState.CHUNK_SIZE));
-    const cy = @divFloor(wy, @as(i32, WorldState.CHUNK_SIZE));
-    const cz = @divFloor(wz, @as(i32, WorldState.CHUNK_SIZE));
-    const key = WorldState.ChunkKey{ .cx = cx, .cy = cy, .cz = cz };
-
+pub fn setBlock(self: *ServerWorld, pos: WorldState.WorldBlockPos, new_block: WorldState.StateId) bool {
+    const key = pos.toChunkKey();
     const chunk = self.chunk_map.get(key) orelse return false;
-    const lx: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
-    const ly: usize = @intCast(@mod(wy, @as(i32, WorldState.CHUNK_SIZE)));
-    const lz: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
-    const idx = ly * WorldState.CHUNK_SIZE * WorldState.CHUNK_SIZE + lz * WorldState.CHUNK_SIZE + lx;
+    const local = pos.toLocal();
+    const idx = local.toIndex();
 
     const old_block = chunk.blocks.get(idx);
     if (old_block == new_block) return false;
@@ -122,24 +116,17 @@ pub fn setBlock(self: *ServerWorld, wx: i32, wy: i32, wz: i32, new_block: WorldS
     chunk.blocks.set(idx, new_block);
 
     // Mark dirty for save
-    if (self.storage) |s| s.markDirty(key.cx, key.cy, key.cz, chunk);
+    if (self.storage) |s| s.markDirty(key, chunk);
 
     return true;
 }
 
 /// Get a block at world coordinates.
-pub fn getBlock(self: *ServerWorld, wx: i32, wy: i32, wz: i32) WorldState.StateId {
-    const cx = @divFloor(wx, @as(i32, WorldState.CHUNK_SIZE));
-    const cy = @divFloor(wy, @as(i32, WorldState.CHUNK_SIZE));
-    const cz = @divFloor(wz, @as(i32, WorldState.CHUNK_SIZE));
-    const key = WorldState.ChunkKey{ .cx = cx, .cy = cy, .cz = cz };
-
+pub fn getBlock(self: *ServerWorld, pos: WorldState.WorldBlockPos) WorldState.StateId {
+    const key = pos.toChunkKey();
     const chunk = self.chunk_map.get(key) orelse return WorldState.BlockState.defaultState(.air);
-    const lx: usize = @intCast(@mod(wx, @as(i32, WorldState.CHUNK_SIZE)));
-    const ly: usize = @intCast(@mod(wy, @as(i32, WorldState.CHUNK_SIZE)));
-    const lz: usize = @intCast(@mod(wz, @as(i32, WorldState.CHUNK_SIZE)));
-    const idx = ly * WorldState.CHUNK_SIZE * WorldState.CHUNK_SIZE + lz * WorldState.CHUNK_SIZE + lx;
-    return chunk.blocks.get(idx);
+    const local = pos.toLocal();
+    return chunk.blocks.get(local.toIndex());
 }
 
 /// Drain loaded chunks from the streamer into the chunk map.

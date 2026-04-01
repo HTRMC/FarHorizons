@@ -212,7 +212,7 @@ fn updateUser(self: *Server, user: *User) void {
                     const new_chunk = self.world.chunk_pool.acquire();
                     var loaded = false;
                     if (self.world.storage) |s| {
-                        if (s.loadChunkInto(key.cx, key.cy, key.cz, new_chunk)) {
+                        if (s.loadChunkInto(key, new_chunk)) {
                             loaded = true;
                         }
                     }
@@ -222,7 +222,7 @@ fn updateUser(self: *Server, user: *User) void {
                             .debug => WorldState.generateDebugChunk(new_chunk, key),
                         }
                         if (self.world.storage) |s| {
-                            s.markDirty(key.cx, key.cy, key.cz, new_chunk);
+                            s.markDirty(key, new_chunk);
                         }
                     }
                     self.world.chunk_map.put(key, new_chunk);

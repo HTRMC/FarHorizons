@@ -159,10 +159,10 @@ pub fn flush(self: *Storage) void {
 }
 
 
-pub fn markDirty(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *Chunk) void {
+pub fn markDirty(self: *Storage, world_key: WorldState.ChunkKey, chunk: *Chunk) void {
     const pool = self.game_chunk_pool orelse return;
     const io = Io.Threaded.global_single_threaded.io();
-    const key = ChunkKey.init(cx, cy, cz);
+    const key = ChunkKey.init(world_key.cx, world_key.cy, world_key.cz);
     self.dirty_mutex.lockUncancelable(io);
     defer self.dirty_mutex.unlock(io);
     self.dirty_set.markDirty(key, chunk, pool);
@@ -292,18 +292,18 @@ pub fn saveAllDirty(self: *Storage, pool: *GameChunkPool) void {
 
 /// Load chunk directly into the caller's Chunk. Returns true if found on disk.
 /// Decodes directly into PaletteStorage — no flat array intermediate, no cache copies.
-pub fn loadChunkInto(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *Chunk) bool {
+pub fn loadChunkInto(self: *Storage, world_key: WorldState.ChunkKey, chunk: *Chunk) bool {
     const tz = tracy.zone(@src(), "storage.loadChunkInto");
     defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
-    const key = ChunkKey.init(cx, cy, cz);
+    const key = ChunkKey.init(world_key.cx, world_key.cy, world_key.cz);
 
     _ = self.stats_load_count.fetchAdd(1, .monotonic);
 
     const coord = key.regionCoord();
     const t0 = Io.Clock.now(.awake, io);
     const region = self.region_cache.getOrOpen(coord) catch |err| {
-        log.err("loadChunk({d},{d},{d}): open failed: {}", .{ cx, cy, cz, err });
+        log.err("loadChunk({d},{d},{d}): open failed: {}", .{ world_key.cx, world_key.cy, world_key.cz, err });
         return false;
     };
     defer self.region_cache.releaseRegion(region);
@@ -311,7 +311,7 @@ pub fn loadChunkInto(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *Chunk) b
 
     const chunk_index = key.localIndex();
     const found = region.readChunkPalette(chunk_index, &chunk.blocks) catch |err| {
-        log.err("loadChunk({d},{d},{d}): read failed: {}", .{ cx, cy, cz, err });
+        log.err("loadChunk({d},{d},{d}): read failed: {}", .{ world_key.cx, world_key.cy, world_key.cz, err });
         return false;
     };
     const t2 = Io.Clock.now(.awake, io);
@@ -322,8 +322,8 @@ pub fn loadChunkInto(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *Chunk) b
     return found;
 }
 
-pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *const Chunk) !void {
-    const key = ChunkKey.init(cx, cy, cz);
+pub fn saveChunk(self: *Storage, world_key: WorldState.ChunkKey, chunk: *const Chunk) !void {
+    const key = ChunkKey.init(world_key.cx, world_key.cy, world_key.cz);
     const coord = key.regionCoord();
 
     const region = try self.region_cache.getOrOpen(coord);
@@ -337,8 +337,8 @@ pub fn saveChunk(self: *Storage, cx: i32, cy: i32, cz: i32, chunk: *const Chunk)
     self.chunk_cache.put(key, chunk);
 }
 
-pub fn chunkExists(self: *Storage, cx: i32, cy: i32, cz: i32) bool {
-    const key = ChunkKey.init(cx, cy, cz);
+pub fn chunkExists(self: *Storage, world_key: WorldState.ChunkKey) bool {
+    const key = ChunkKey.init(world_key.cx, world_key.cy, world_key.cz);
     const coord = key.regionCoord();
 
     const region = self.region_cache.getOrOpen(coord) catch return false;
@@ -350,12 +350,10 @@ pub fn chunkExists(self: *Storage, cx: i32, cy: i32, cz: i32) bool {
 
 pub fn requestLoadAsync(
     self: *Storage,
-    cx: i32,
-    cy: i32,
-    cz: i32,
+    world_key: WorldState.ChunkKey,
     priority: Priority,
 ) AsyncHandle {
-    const key = ChunkKey.init(cx, cy, cz);
+    const key = ChunkKey.init(world_key.cx, world_key.cy, world_key.cz);
 
     if (self.chunk_cache.get(key) != null) {
         return AsyncHandle.invalid;
@@ -392,13 +390,13 @@ pub fn loadRegion(
 }
 
 
-pub fn getCached(self: *Storage, cx: i32, cy: i32, cz: i32) ?*const Chunk {
-    const key = ChunkKey.init(cx, cy, cz);
+pub fn getCached(self: *Storage, world_key: WorldState.ChunkKey) ?*const Chunk {
+    const key = ChunkKey.init(world_key.cx, world_key.cy, world_key.cz);
     return self.chunk_cache.get(key);
 }
 
-pub fn invalidateCache(self: *Storage, cx: i32, cy: i32, cz: i32) void {
-    const key = ChunkKey.init(cx, cy, cz);
+pub fn invalidateCache(self: *Storage, world_key: WorldState.ChunkKey) void {
+    const key = ChunkKey.init(world_key.cx, world_key.cy, world_key.cz);
     self.chunk_cache.invalidate(key);
 }
 

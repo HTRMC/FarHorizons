@@ -833,7 +833,7 @@ pub fn queueChunkSave(self: *GameState, pos: WorldState.WorldBlockPos) void {
     const s = self.streaming.storage orelse return;
     const key = pos.toChunkKey();
     const chunk = self.chunk_map.get(key) orelse return;
-    s.markDirty(key.cx, key.cy, key.cz, chunk);
+    s.markDirty(key, chunk);
 }
 
 /// Spiral search from (0,0) outward to find a valid spawn on dry land.

@@ -71,7 +71,7 @@ pub fn serverReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
     const srv = server_instance orelse return;
 
     // Apply to server world (may fail if chunk not loaded, but still broadcast)
-    _ = srv.world.setBlock(wx, wy, wz, new_block);
+    _ = srv.world.setBlock(WorldState.WorldBlockPos.init(wx, wy, wz), new_block);
 
     // Broadcast to all connected clients
     const change = [1]BlockChange{.{ .wx = wx, .wy = wy, .wz = wz, .new_block = new_block }};

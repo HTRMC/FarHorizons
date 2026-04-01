@@ -131,7 +131,7 @@ pub const ChunkStreamer = struct {
         const chunk = self.chunk_pool.acquire();
         var loaded = false;
         if (self.storage) |s| {
-            if (s.loadChunkInto(key.cx, key.cy, key.cz, chunk)) {
+            if (s.loadChunkInto(key, chunk)) {
                 loaded = true;
                 _ = self.stats_loaded.fetchAdd(1, .monotonic);
             }
@@ -144,7 +144,7 @@ pub const ChunkStreamer = struct {
             _ = self.stats_generated.fetchAdd(1, .monotonic);
             // Save to disk immediately so next join loads from cache
             if (self.storage) |s| {
-                s.markDirty(key.cx, key.cy, key.cz, chunk);
+                s.markDirty(key, chunk);
             }
         }
 
