@@ -24,6 +24,7 @@ fn breakBlockImpl(state: *GameState, allow_drop: bool) void {
     const hit = state.hit_result orelse return;
     const pos = hit.block_pos;
     const old_block = state.chunk_map.getBlock(pos);
+    if (!state.multiplayer_client) state.stats.blocks_mined += 1;
 
     const air = BlockState.defaultState(.air);
 
@@ -138,6 +139,7 @@ pub fn placeBlock(state: *GameState) void {
             state.queueChunkSave(hit.block_pos);
             updateFenceNeighbors(state, hit.block_pos);
             state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
+            if (!state.multiplayer_client) state.stats.blocks_placed += 1;
             InventoryOps.decrementSelectedStack(state);
             return;
         }
@@ -183,6 +185,7 @@ pub fn placeBlock(state: *GameState) void {
         state.queueChunkSave(above_pos);
 
         state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
+        if (!state.multiplayer_client) state.stats.blocks_placed += 1;
         InventoryOps.decrementSelectedStack(state);
         return;
     }
@@ -201,6 +204,7 @@ pub fn placeBlock(state: *GameState) void {
     updateStairNeighbors(state, place_pos);
 
     state.hit_result = Raycast.raycast(&state.chunk_map, state.camera.position, state.camera.getForward());
+    if (!state.multiplayer_client) state.stats.blocks_placed += 1;
     InventoryOps.decrementSelectedStack(state);
 }
 

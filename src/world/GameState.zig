@@ -32,6 +32,7 @@ const ChunkManagement = @import("ChunkManagement.zig");
 const MobSim = @import("entity/MobSim.zig");
 const PlayerActions = @import("entity/PlayerActions.zig");
 const PlayerMovement = @import("entity/PlayerMovement.zig");
+pub const Stats = @import("Stats.zig");
 
 pub const PlayerCombat = @import("entity/PlayerCombat.zig").PlayerCombat;
 const WorldStreamingMod = @import("WorldStreaming.zig");
@@ -119,6 +120,7 @@ game_mode: GameMode = .creative,
 combat: PlayerCombat = .{},
 streaming: WorldStreamingState,
 multiplayer_client: bool = false,
+stats: Stats = .{},
 
 game_time: i64 = 0,
 debug_screens: u8 = 0,
@@ -351,6 +353,7 @@ pub fn init(allocator: std.mem.Allocator, width: u32, height: u32, world_name: [
         .prev_camera_pos = cam.position,
         .tick_camera_pos = cam.position,
         .multiplayer_client = skip_storage,
+        .stats = if (!skip_storage) Stats.init() else .{},
     };
 }
 
@@ -593,6 +596,7 @@ pub fn fixedUpdate(self: *GameState, move_speed: f32) void {
     ChunkManagement.worldTick(self);
     self.streaming.world_tick_pending = true;
     ChunkManagement.reportPipelineStats(self);
+    if (!self.multiplayer_client) self.stats.tick();
 }
 
 pub fn interpolateForRender(self: *GameState, alpha: f32) void {

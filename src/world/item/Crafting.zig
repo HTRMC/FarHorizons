@@ -236,5 +236,6 @@ pub fn craft(game_state: *GameState, recipe: *const Recipe) bool {
         game_state.entities.spawnItemDrop(pos, stack.block, stack.count);
     }
 
+    if (!game_state.multiplayer_client) game_state.stats.items_crafted += 1;
     return true;
 }

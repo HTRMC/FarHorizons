@@ -799,6 +799,7 @@ pub fn main() !void {
             save_thread = null;
         }
         if (game_state) |*state| {
+            state.stats.flush();
             if (save_done.load(.acquire)) {
                 // Save thread already ran — skip redundant save
             } else {
@@ -1007,6 +1008,7 @@ pub fn main() !void {
                             defer stz.end();
                             renderer.setGameState(null);
                         }
+                        state.stats.flush();
                         save_done.store(false, .release);
                         save_thread = std.Thread.spawn(.{}, saveWorkerFn, .{ state, &save_done }) catch null;
                         if (save_thread != null) {
@@ -1019,6 +1021,7 @@ pub fn main() !void {
                             menu_ctrl.app_state = .saving;
                         } else {
                             // Fallback: synchronous save
+                            state.stats.flush();
                             state.save();
                             renderer.setGameState(null);
                             input_state.game_state = null;

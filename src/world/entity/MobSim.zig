@@ -198,6 +198,7 @@ pub fn updateMobCombat(state: *GameState) void {
         }
 
         if (state.entities.mob_health[i] <= 0) {
+            if (!state.multiplayer_client) state.stats.entities_killed += 1;
             state.entities.despawn(i);
         }
     }

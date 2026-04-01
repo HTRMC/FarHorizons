@@ -30,6 +30,8 @@ extern fn SteamAPI_ISteamUserStats_ClearAchievement(self: *ISteamUserStats, name
 extern fn SteamAPI_ISteamUserStats_StoreStats(self: *ISteamUserStats) callconv(.c) bool;
 extern fn SteamAPI_ISteamUserStats_IndicateAchievementProgress(self: *ISteamUserStats, name: [*:0]const u8, cur: u32, max: u32) callconv(.c) bool;
 extern fn SteamAPI_ISteamUserStats_GetNumAchievements(self: *ISteamUserStats) callconv(.c) u32;
+extern fn SteamAPI_ISteamUserStats_SetStatInt32(self: *ISteamUserStats, name: [*:0]const u8, data: i32) callconv(.c) bool;
+extern fn SteamAPI_ISteamUserStats_GetStatInt32(self: *ISteamUserStats, name: [*:0]const u8, data: *i32) callconv(.c) bool;
 
 const APP_ID: u32 = 3268420;
 
@@ -115,4 +117,24 @@ pub fn clearAchievement(name: [*:0]const u8) bool {
 pub fn indicateProgress(name: [*:0]const u8, current: u32, max: u32) bool {
     const stats = user_stats orelse return false;
     return SteamAPI_ISteamUserStats_IndicateAchievementProgress(stats, name, current, max);
+}
+
+pub fn setStatInt(name: [*:0]const u8, value: i32) bool {
+    if (!enabled) return false;
+    const stats = user_stats orelse return false;
+    return SteamAPI_ISteamUserStats_SetStatInt32(stats, name, value);
+}
+
+pub fn getStatInt(name: [*:0]const u8) ?i32 {
+    if (!enabled) return null;
+    const stats = user_stats orelse return null;
+    var value: i32 = 0;
+    if (!SteamAPI_ISteamUserStats_GetStatInt32(stats, name, &value)) return null;
+    return value;
+}
+
+pub fn storeStats() bool {
+    if (!enabled) return false;
+    const stats = user_stats orelse return false;
+    return SteamAPI_ISteamUserStats_StoreStats(stats);
 }
