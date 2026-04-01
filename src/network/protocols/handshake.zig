@@ -64,7 +64,12 @@ pub fn serverReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
             }
 
             conn.state.store(.connected, .release);
-            // TODO: Send server_hello back with world info
+
+            // Send server_hello back with world info
+            const Server = @import("../../server/Server.zig");
+            const srv = Server.getGlobalInstance() orelse return;
+            const spawn = srv.world.spawn_pos;
+            sendServerHello(conn, srv.conn_manager.socket, srv.world.seed, spawn[0], spawn[1], spawn[2]);
         },
         else => {},
     }

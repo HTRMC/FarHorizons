@@ -8,6 +8,7 @@ const LightMap = @import("../world/LightMap.zig").LightMap;
 const LightMapPool = @import("../world/LightMap.zig").LightMapPool;
 const LightEngine = @import("../world/LightEngine.zig");
 const SurfaceHeightMap = @import("../world/SurfaceHeightMap.zig").SurfaceHeightMap;
+const GameState = @import("../world/GameState.zig");
 const ThreadPool = @import("../platform/ThreadPool.zig").ThreadPool;
 
 pub const ServerWorld = @This();
@@ -31,6 +32,9 @@ world_type: WorldState.WorldType,
 streamer: ChunkStreamer,
 pool: ?*ThreadPool = null,
 
+// Spawn
+spawn_pos: [3]f32,
+
 // Game time
 game_time: i64 = 0,
 
@@ -52,6 +56,8 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8, world_type_ove
 
     const saved_game_time: i64 = if (storage_inst) |s| s.loadGameTime() else 0;
 
+    const spawn_pos = GameState.findSpawn(world_seed);
+
     self.* = .{
         .allocator = allocator,
         .chunk_map = ChunkMap.init(allocator),
@@ -63,6 +69,7 @@ pub fn init(allocator: std.mem.Allocator, world_name: []const u8, world_type_ove
         .world_name = world_name,
         .seed = world_seed,
         .world_type = world_type,
+        .spawn_pos = spawn_pos,
         .streamer = undefined,
         .game_time = saved_game_time,
     };
