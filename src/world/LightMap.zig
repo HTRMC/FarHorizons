@@ -19,13 +19,19 @@ pub const LightMap = struct {
     dirty: bool,
     incremental: ?IncrementalUpdate = null,
     mutex: Io.Mutex = .init,
+    ref_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
 
     /// 27-chunk synchronization bitmask (3x3x3 cube).
     /// Each bit corresponds to a neighbor at offset (dx,dy,dz) in {-1,0,1}³
     /// using index (dx+1)*9 + (dy+1)*3 + (dz+1).
     /// A set bit means that neighbor has finished its lighting computation.
-    /// Mesh is triggered when all 27 bits are set (0x7FFFFFF).
+    /// Mesh is triggered when lit_neighbors == required_mask.
     lit_neighbors: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+
+    /// Dynamic bitmask of which neighbors are loaded. Replaces the hardcoded
+    /// ALL_LIT = 0x7FFFFFF. Updated when neighbors load/unload so world-edge
+    /// chunks can reach their gate threshold with fewer than 27 neighbors.
+    required_mask: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 
     pub fn init(allocator: std.mem.Allocator) LightMap {
         return .{
@@ -34,7 +40,9 @@ pub const LightMap = struct {
             .dirty = true,
             .incremental = null,
             .mutex = .init,
+            .ref_count = std.atomic.Value(u32).init(1),
             .lit_neighbors = std.atomic.Value(u32).init(0),
+            .required_mask = std.atomic.Value(u32).init(0),
         };
     }
 
@@ -48,7 +56,20 @@ pub const LightMap = struct {
         self.sky_light.fillUniform(0);
         self.dirty = true;
         self.incremental = null;
-        self.lit_neighbors.store(0, .monotonic);
+        self.lit_neighbors.store(0, .release);
+        self.required_mask.store(0, .release);
+        self.ref_count = std.atomic.Value(u32).init(1);
+    }
+
+    /// Atomically increment ref_count. Returns self for chaining.
+    pub fn acquire(self: *LightMap) *LightMap {
+        _ = self.ref_count.fetchAdd(1, .acq_rel);
+        return self;
+    }
+
+    /// Returns true if this LightMap has exactly one reference.
+    pub fn isUnique(self: *const LightMap) bool {
+        return self.ref_count.load(.acquire) == 1;
     }
 };
 
@@ -87,15 +108,13 @@ pub const LightBorderSnapshot = struct {
 ///   2 (-X): neighbor's x=31     3 (+X): neighbor's x=0
 ///   4 (+Y): neighbor's y=0      5 (-Y): neighbor's y=31
 pub fn snapshotNeighborBorders(
-    neighbor_lights: [6]?*const LightMap,
+    neighbor_lights: [6]?*LightMap,
 ) [6]LightBorderSnapshot {
     const io = Io.Threaded.global_single_threaded.io();
     var borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
     for (0..6) |face| {
-        const lm_const = neighbor_lights[face] orelse continue;
-        // Cast away const to access the mutex (mutex is logically separate from data)
-        const lm: *LightMap = @constCast(lm_const);
+        const lm = neighbor_lights[face] orelse continue;
 
         lm.mutex.lockUncancelable(io);
         defer lm.mutex.unlock(io);
@@ -212,6 +231,9 @@ pub const LightMapPool = struct {
         return lm;
     }
 
+    /// Release a LightMap back to the pool. Called from main thread only.
+    /// LightMap lifetime is protected by main-thread-only mutation of light_maps
+    /// hashmap — workers only read via .get() which is safe.
     pub fn release(self: *LightMapPool, lm: *LightMap) void {
         // Shrink to minimal footprint while pooled
         lm.clear();

@@ -252,7 +252,7 @@ pub const VulkanRenderer = struct {
             std.log.err("Failed to allocate MeshWorker: {}", .{err});
             return;
         };
-        mw.initInPlace(self.allocator, &game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map);
+        mw.initInPlace(self.allocator, &game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map, &game_state.chunk_pool, &game_state.light_map_pool);
         self.mesh_worker = mw;
 
         // 2. Init ChunkStreamer + wire up Storage's game chunk pool reference
@@ -443,9 +443,6 @@ pub const VulkanRenderer = struct {
                         &self.deferred_light_free_counts[cf],
                     );
 
-                    if (self.mesh_worker) |mw| {
-                        mw.syncChunkMap(&game_state.chunk_map, &game_state.light_maps, &game_state.surface_height_map);
-                    }
                     if (self.thread_pool) |pool| {
                         pool.syncPlayerChunk(game_state.streaming.player_chunk);
                         if (game_state.dirty_chunks.count() > 0) {

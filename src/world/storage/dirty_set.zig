@@ -164,14 +164,14 @@ pub const DirtySet = struct {
             if (existing.chunk != chunk) {
                 // Chunk was unloaded and reloaded at same position — swap refs
                 chunk_pool.release(existing.chunk);
-                _ = chunk.ref_count.fetchAdd(1, .monotonic);
+                _ = chunk.ref_count.fetchAdd(1, .acq_rel);
                 existing.chunk = chunk;
             }
             return;
         }
 
         // Acquire a reference for the dirty set
-        _ = chunk.ref_count.fetchAdd(1, .monotonic);
+        _ = chunk.ref_count.fetchAdd(1, .acq_rel);
 
         self.map.put(k, .{
             .key = key,

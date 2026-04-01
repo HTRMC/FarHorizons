@@ -1137,7 +1137,7 @@ test "bench: full pipeline (terrain + mesh)" {
     var face_count: u32 = 0;
     const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
     const LightMap = @import("LightMap.zig").LightMap;
-    const no_neighbor_lights: [6]?*const LightMap = .{ null, null, null, null, null, null };
+    const no_neighbor_lights: [6]?*LightMap = .{ null, null, null, null, null, null };
 
     for (&samples, 0..) |*sample, i| {
         const start = std.Io.Clock.now(.awake, io);

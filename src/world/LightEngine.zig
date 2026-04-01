@@ -1368,7 +1368,7 @@ const testing = std.testing;
 const Chunk = WorldState.Chunk;
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
-const no_light_neighbors: [6]?*const LightMap = .{ null, null, null, null, null, null };
+const no_light_neighbors: [6]?*LightMap = .{ null, null, null, null, null, null };
 const no_borders: [6]LightBorderSnapshot = .{LightBorderSnapshot.empty} ** 6;
 
 fn allocChunk() !*Chunk {

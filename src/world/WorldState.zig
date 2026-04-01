@@ -203,6 +203,17 @@ pub const Chunk = struct {
     blocks: PaletteBlocks,
     mutex: std.Io.Mutex = .init,
     ref_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(1),
+
+    /// Atomically increment ref_count. Returns self for chaining.
+    pub fn acquire(self: *Chunk) *Chunk {
+        _ = self.ref_count.fetchAdd(1, .acq_rel);
+        return self;
+    }
+
+    /// Returns true if this chunk has exactly one reference (no other thread holds it).
+    pub fn isUnique(self: *const Chunk) bool {
+        return self.ref_count.load(.acquire) == 1;
+    }
 };
 
 /// Light sample normalized to [0, 1] range. Prevents mixing with raw u8 (0-255)
@@ -789,8 +800,8 @@ inline fn getLightAt(
     px: i32,
     py: i32,
     pz: i32,
-    light_map: ?*const LightMap,
-    neighbor_lights: [6]?*const LightMap,
+    light_map: ?*LightMap,
+    neighbor_lights: [6]?*LightMap,
 ) LightVector {
     const S = @as(i32, CHUNK_SIZE);
     const cx = px - 1;
@@ -843,8 +854,8 @@ fn sampleTrilinearLight(
     face: usize,
     corner: usize,
     padded: *const [PADDED_BLOCKS]StateId,
-    light_map: ?*const LightMap,
-    neighbor_lights: [6]?*const LightMap,
+    light_map: ?*LightMap,
+    neighbor_lights: [6]?*LightMap,
 ) LightVector {
     const samples = trilinear_light_samples[face][corner];
     const face_normal = face_neighbor_offsets[face];
@@ -948,8 +959,8 @@ pub fn generateChunkMesh(
     allocator: std.mem.Allocator,
     chunk: *const Chunk,
     neighbors: [6]?*const Chunk,
-    light_map: ?*const LightMap,
-    neighbor_lights: [6]?*const LightMap,
+    light_map: ?*LightMap,
+    neighbor_lights: [6]?*LightMap,
 ) !ChunkMeshResult {
     const tz = tracy.zone(@src(), "generateChunkMesh");
     defer tz.end();
@@ -1147,8 +1158,8 @@ pub fn generateChunkLightOnly(
     allocator: std.mem.Allocator,
     chunk: *const Chunk,
     neighbors: [6]?*const Chunk,
-    light_map: ?*const LightMap,
-    neighbor_lights: [6]?*const LightMap,
+    light_map: ?*LightMap,
+    neighbor_lights: [6]?*LightMap,
 ) !ChunkLightResult {
     const tz = tracy.zone(@src(), "generateChunkLightOnly");
     defer tz.end();
@@ -1326,8 +1337,8 @@ fn makeEmptyChunk() Chunk {
 }
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
-const no_neighbor_lights: [6]?*const LightMap = .{ null, null, null, null, null, null };
-const no_light_neighbors: [6]?*const LightMap = .{ null, null, null, null, null, null };
+const no_neighbor_lights: [6]?*LightMap = .{ null, null, null, null, null, null };
+const no_light_neighbors: [6]?*LightMap = .{ null, null, null, null, null, null };
 
 test "single block in air produces 6 faces" {
     var chunk = makeEmptyChunk();

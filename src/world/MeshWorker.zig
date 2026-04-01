@@ -2,8 +2,10 @@ const std = @import("std");
 const WorldState = @import("WorldState.zig");
 const ChunkMap = @import("ChunkMap.zig").ChunkMap;
 const ChunkStreamer = @import("ChunkStreamer.zig").ChunkStreamer;
+const ChunkPool = @import("ChunkPool.zig").ChunkPool;
 const LightMapMod = @import("LightMap.zig");
 const LightMap = LightMapMod.LightMap;
+const LightMapPool = LightMapMod.LightMapPool;
 const LightEngine = @import("LightEngine.zig");
 const SurfaceHeightMapMod = @import("SurfaceHeightMap.zig");
 const SurfaceHeightMap = SurfaceHeightMapMod.SurfaceHeightMap;
@@ -18,7 +20,7 @@ const BlockState = WorldState.BlockState;
 const LightMaps = std.AutoHashMap(WorldState.ChunkKey, *LightMap);
 
 pub const MeshWorker = struct {
-    pub const MAX_OUTPUT = 64;
+    pub const MAX_OUTPUT = 128;
 
     const ChunkKey = WorldState.ChunkKey;
 
@@ -28,12 +30,16 @@ pub const MeshWorker = struct {
     output_mutex: Io.Mutex,
     output_cond: Io.Condition,
 
-    // State (updated by syncChunkMap under mutex)
+    // State — these point to embedded GameState fields with stable addresses.
+    // No mutex needed: ChunkMap/LightMaps are only mutated on the main thread,
+    // and workers only read via .get() which is safe against concurrent reads
+    // when no rehash occurs (guaranteed by pre-allocated capacity).
     allocator: std.mem.Allocator,
     chunk_map: *const ChunkMap,
     light_maps: *const LightMaps,
     surface_height_map: *const SurfaceHeightMap,
-    state_mutex: Io.Mutex,
+    chunk_pool: *ChunkPool,
+    light_map_pool: *LightMapPool,
     pool: ?*ThreadPool,
 
     // Pipeline stats (atomically updated by workers)
@@ -66,6 +72,8 @@ pub const MeshWorker = struct {
         chunk_map: *const ChunkMap,
         light_maps: *const LightMaps,
         surface_height_map: *const SurfaceHeightMap,
+        chunk_pool: *ChunkPool,
+        light_map_pool: *LightMapPool,
     ) void {
         self.* = .{
             .output_queue = undefined,
@@ -76,7 +84,8 @@ pub const MeshWorker = struct {
             .chunk_map = chunk_map,
             .light_maps = light_maps,
             .surface_height_map = surface_height_map,
-            .state_mutex = .init,
+            .chunk_pool = chunk_pool,
+            .light_map_pool = light_map_pool,
             .pool = null,
             .stats_meshed = std.atomic.Value(u64).init(0),
             .stats_light_only = std.atomic.Value(u64).init(0),
@@ -95,27 +104,11 @@ pub const MeshWorker = struct {
         self.output_len = 0;
     }
 
-    pub fn syncChunkMap(self: *MeshWorker, chunk_map: *const ChunkMap, light_maps: *const LightMaps, surface_height_map: *const SurfaceHeightMap) void {
-        const io = Io.Threaded.global_single_threaded.io();
-        self.state_mutex.lockUncancelable(io);
-        self.chunk_map = chunk_map;
-        self.light_maps = light_maps;
-        self.surface_height_map = surface_height_map;
-        self.state_mutex.unlock(io);
-    }
-
     /// Compute lighting for a chunk and update the 27-chunk bitmask.
     /// When all existing neighbors of a chunk are lit, submits a mesh task for it.
     /// Returns true if processed, false if should be re-enqueued.
     pub fn processLightTask(self: *MeshWorker, key: ChunkKey) bool {
         const io = Io.Threaded.global_single_threaded.io();
-
-        // Snapshot state pointers
-        self.state_mutex.lockUncancelable(io);
-        const local_chunk_map = self.chunk_map;
-        const local_light_maps: *const LightMaps = self.light_maps;
-        const local_shm: *const SurfaceHeightMap = self.surface_height_map;
-        self.state_mutex.unlock(io);
 
         // Skip stale chunks
         const player_snapshot = if (self.pool) |p| p.player_chunk else ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
@@ -125,18 +118,26 @@ pub const MeshWorker = struct {
             return true;
         }
 
-        const chunk = local_chunk_map.get(key) orelse return true;
-        const neighbors = local_chunk_map.getNeighbors(key);
+        // Acquire center chunk reference (prevents free during our read)
+        const chunk = self.chunk_map.get(key) orelse return true;
+        _ = chunk.acquire();
+        defer self.chunk_pool.release(chunk);
+
+        const neighbors = self.chunk_map.getNeighbors(key);
         const face_offsets = WorldState.face_neighbor_offsets;
-        const light_map: ?*LightMap = local_light_maps.get(key);
-        var neighbor_lights: [6]?*const LightMap = .{null} ** 6;
+
+        // LightMap pointers are stable: light_maps hashmap is only mutated on
+        // the main thread, and workers only read via .get(). Write access to
+        // LightMap data is serialized by the per-LightMap mutex below.
+        const light_map: ?*LightMap = self.light_maps.get(key);
+        var neighbor_lights: [6]?*LightMap = .{null} ** 6;
         for (0..6) |i| {
             const nk = ChunkKey{
                 .cx = key.cx + face_offsets[i][0],
                 .cy = key.cy + face_offsets[i][1],
                 .cz = key.cz + face_offsets[i][2],
             };
-            neighbor_lights[i] = local_light_maps.get(nk);
+            neighbor_lights[i] = self.light_maps.get(nk);
         }
 
         const neighbor_borders = LightMapMod.snapshotNeighborBorders(neighbor_lights);
@@ -148,7 +149,7 @@ pub const MeshWorker = struct {
 
             if (lm.dirty) {
                 lm.incremental = null;
-                const surface_heights = local_shm.getHeights(key.cx, key.cz);
+                const surface_heights = self.surface_height_map.getHeights(key.cx, key.cz);
                 const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
 
                 // Cascade: submit light tasks for neighbors with changed borders
@@ -175,7 +176,7 @@ pub const MeshWorker = struct {
         }
 
         // Bitmask iteration with own mutex RELEASED — safe to lock neighbors.
-        self.updateLitNeighborMasks(key, local_light_maps);
+        self.updateLitNeighborMasks(key, self.light_maps);
 
         return true;
     }
@@ -185,6 +186,10 @@ pub const MeshWorker = struct {
     ///   1. Set OUR bit in the NEIGHBOR's mask → may trigger neighbor's mesh
     ///   2. If the neighbor has finished lighting, set NEIGHBOR's bit in OUR mask → may trigger our mesh
     /// Missing neighbors are skipped — their bit stays 0.
+    ///
+    /// Uses ALL_LIT (0x7FFFFFF) as the primary trigger for interior chunks.
+    /// After the loop, a fallback check handles world-edge chunks by computing
+    /// the actual required mask from currently loaded neighbors.
     fn updateLitNeighborMasks(self: *MeshWorker, key: ChunkKey, light_maps: *const LightMaps) void {
         const ALL_LIT: u32 = (1 << 27) - 1; // 0x7FFFFFF
         const offsets_27 = WorldState.neighbor_offsets_27;
@@ -204,7 +209,7 @@ pub const MeshWorker = struct {
             const neighbor_bit: u32 = @as(u32, 1) << WorldState.neighborBitIndex(off[0], off[1], off[2]);
 
             // 1. Set our bit in the neighbor's mask
-            const neighbor_old = neighbor_lm.lit_neighbors.fetchOr(self_bit, .monotonic);
+            const neighbor_old = neighbor_lm.lit_neighbors.fetchOr(self_bit, .acq_rel);
             if ((neighbor_old | self_bit) == ALL_LIT and neighbor_old != ALL_LIT) {
                 if (self.pool) |p| p.submitMesh(nk);
             }
@@ -215,8 +220,34 @@ pub const MeshWorker = struct {
             neighbor_lm.mutex.unlock(io);
 
             if (neighbor_lit) {
-                const self_old = self_lm.lit_neighbors.fetchOr(neighbor_bit, .monotonic);
+                const self_old = self_lm.lit_neighbors.fetchOr(neighbor_bit, .acq_rel);
                 if ((self_old | neighbor_bit) == ALL_LIT and self_old != ALL_LIT) {
+                    if (self.pool) |p| p.submitMesh(key);
+                }
+            }
+        }
+
+        // Fallback for world-edge chunks: if lit_neighbors didn't reach ALL_LIT,
+        // compute the actual required mask from currently loaded neighbors and
+        // check if all loaded neighbors have contributed their bits.
+        const current_lit = self_lm.lit_neighbors.load(.acquire);
+        if (current_lit != ALL_LIT) {
+            var required: u32 = 0;
+            for (offsets_27) |off| {
+                const nk = ChunkKey{
+                    .cx = key.cx + off[0],
+                    .cy = key.cy + off[1],
+                    .cz = key.cz + off[2],
+                };
+                if (light_maps.get(nk) != null) {
+                    required |= @as(u32, 1) << WorldState.neighborBitIndex(off[0], off[1], off[2]);
+                }
+            }
+            if (required != 0 and required != ALL_LIT and (current_lit & required) == required) {
+                // All loaded neighbors are lit — submit mesh for this edge chunk.
+                // Use required_mask as a one-shot gate to avoid duplicate submissions.
+                const prev = self_lm.required_mask.swap(required, .acq_rel);
+                if (prev != required) {
                     if (self.pool) |p| p.submitMesh(key);
                 }
             }
@@ -234,13 +265,6 @@ pub const MeshWorker = struct {
         self.output_mutex.unlock(io);
         if (output_full) return false;
 
-        // Snapshot state pointers
-        self.state_mutex.lockUncancelable(io);
-        const local_chunk_map = self.chunk_map;
-        const local_light_maps: *const LightMaps = self.light_maps;
-        const local_shm: *const SurfaceHeightMap = self.surface_height_map;
-        self.state_mutex.unlock(io);
-
         // Skip stale chunks
         const player_snapshot = if (self.pool) |p| p.player_chunk else ChunkKey{ .cx = 0, .cy = 0, .cz = 0 };
         const ud: i64 = ChunkStreamer.UNLOAD_DISTANCE;
@@ -249,8 +273,10 @@ pub const MeshWorker = struct {
             return true;
         }
 
-        // Look up chunk and neighbors from the ChunkMap
-        const chunk = local_chunk_map.get(key) orelse return true;
+        // Acquire center chunk reference
+        const chunk = self.chunk_map.get(key) orelse return true;
+        _ = chunk.acquire();
+        defer self.chunk_pool.release(chunk);
 
         // Skip all-air chunks immediately (no geometry possible)
         if (!light_only and chunk.blocks.get(0) == BlockState.defaultState(.air)) blk: {
@@ -259,7 +285,7 @@ pub const MeshWorker = struct {
             return true;
         }
 
-        const neighbors = local_chunk_map.getNeighbors(key);
+        const neighbors = self.chunk_map.getNeighbors(key);
 
         // Skip fully hidden chunks (all opaque + all neighbor boundaries opaque)
         if (!light_only and WorldState.isFullyHidden(chunk, neighbors)) {
@@ -267,17 +293,18 @@ pub const MeshWorker = struct {
             return true;
         }
 
-        // Compute light for this chunk
+        // LightMap pointers: stable (main-thread-only mutation, worker read-only via .get()).
+        // Write access serialized by per-LightMap mutex below.
         const offsets = WorldState.face_neighbor_offsets;
-        const light_map: ?*LightMap = local_light_maps.get(key);
-        var neighbor_lights: [6]?*const LightMap = .{null} ** 6;
+        const light_map: ?*LightMap = self.light_maps.get(key);
+        var neighbor_lights: [6]?*LightMap = .{null} ** 6;
         for (0..6) |i| {
             const nk = ChunkKey{
                 .cx = key.cx + offsets[i][0],
                 .cy = key.cy + offsets[i][1],
                 .cz = key.cz + offsets[i][2],
             };
-            neighbor_lights[i] = local_light_maps.get(nk);
+            neighbor_lights[i] = self.light_maps.get(nk);
         }
 
         const neighbor_borders = LightMapMod.snapshotNeighborBorders(neighbor_lights);
@@ -290,7 +317,7 @@ pub const MeshWorker = struct {
         if (light_map) |lm| {
             if (lm.dirty) {
                 lm.incremental = null;
-                const surface_heights = local_shm.getHeights(key.cx, key.cz);
+                const surface_heights = self.surface_height_map.getHeights(key.cx, key.cz);
                 const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
 
                 // Light-only refresh for neighbors whose borders changed.

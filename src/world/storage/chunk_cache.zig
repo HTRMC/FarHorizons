@@ -91,19 +91,23 @@ pub const ChunkCache = struct {
         }
         self.slots[empty].valid = false;
 
-        var p: u32 = 0;
-        while (p < CACHE_SLOTS) : (p += 1) {
-            const idx = (start + p) % CACHE_SLOTS;
-            if (!self.slots[idx].valid) {
-                self.slots[idx] = .{
-                    .key = key,
-                    .chunk = chunk.*,
-                    .valid = true,
-                    .referenced = true,
-                };
-                return;
+        // Insert directly at `empty` — after backward shift it must be reachable
+        // from hashSlot(key) via contiguous occupied slots (linear probing invariant).
+        if (std.debug.runtime_safety) {
+            // Verify probe-chain reachability in debug builds
+            var v: u32 = 0;
+            while (v < CACHE_SLOTS) : (v += 1) {
+                const idx = (start + v) % CACHE_SLOTS;
+                if (idx == empty) break;
+                std.debug.assert(self.slots[idx].valid);
             }
         }
+        self.slots[empty] = .{
+            .key = key,
+            .chunk = chunk.*,
+            .valid = true,
+            .referenced = true,
+        };
     }
 
     pub fn invalidate(self: *ChunkCache, key: ChunkKey) void {

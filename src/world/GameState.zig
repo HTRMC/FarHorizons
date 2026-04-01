@@ -824,7 +824,8 @@ fn readLightRaw(self: *const GameState, pos: WorldState.WorldBlockPos) WorldStat
     const lm = self.light_maps.get(pos.toChunkKey()) orelse return WorldState.NormalizedLight.dark;
     const ci = pos.toLocal().toIndex();
 
-    // Lock to prevent race with mesh worker recomputing light data
+    // Lock to prevent race with mesh worker recomputing light data.
+    // @constCast is safe: mutex is interior-mutable (logically separate from data).
     const io = std.Io.Threaded.global_single_threaded.io();
     const lm_mut: *LightMapMod.LightMap = @constCast(lm);
     lm_mut.mutex.lockUncancelable(io);

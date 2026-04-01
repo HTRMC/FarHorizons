@@ -54,7 +54,8 @@ pub const WorldRenderer = struct {
     chunk_light_alloc: [TOTAL_RENDER_CHUNKS]?TlsfAllocator.Allocation,
     chunk_data: [TOTAL_RENDER_CHUNKS]ChunkData,
 
-    // Slot pool: maps ChunkKey → GPU slot index
+    // Slot pool: maps ChunkKey → GPU slot index (main-thread-only)
+    main_thread_id: std.Thread.Id,
     allocator: std.mem.Allocator,
     chunk_slot_map: std.AutoHashMap(WorldState.ChunkKey, u16),
     free_slots: [TOTAL_RENDER_CHUNKS]u16,
@@ -86,6 +87,7 @@ pub const WorldRenderer = struct {
 
         self.texture_manager = texture_manager;
         self.gpu_alloc = gpu_alloc;
+        self.main_thread_id = std.Thread.getCurrentId();
         self.pipeline_layout = null;
         self.graphics_pipeline = null;
         self.translucent_pipeline = null;
@@ -181,6 +183,7 @@ pub const WorldRenderer = struct {
 
     /// Get or allocate a GPU slot for a chunk key. Returns null if no slots available.
     pub fn getOrAllocateSlot(self: *WorldRenderer, key: WorldState.ChunkKey) ?u16 {
+        std.debug.assert(std.Thread.getCurrentId() == self.main_thread_id);
         // Already has a slot?
         if (self.chunk_slot_map.get(key)) |slot| return slot;
 
@@ -202,6 +205,7 @@ pub const WorldRenderer = struct {
 
     /// Release all GPU slots and reset TLSF allocators. Call after stopping the worker pipeline.
     pub fn clearAllSlots(self: *WorldRenderer) void {
+        std.debug.assert(std.Thread.getCurrentId() == self.main_thread_id);
         const empty_chunk = ChunkData{
             .position = .{ 0, 0, 0 },
             .light_start = 0,
@@ -236,6 +240,7 @@ pub const WorldRenderer = struct {
 
     /// Release a GPU slot for a chunk key. TLSF allocs must be freed separately.
     pub fn releaseSlot(self: *WorldRenderer, key: WorldState.ChunkKey) void {
+        std.debug.assert(std.Thread.getCurrentId() == self.main_thread_id);
         const slot = self.chunk_slot_map.get(key) orelse return;
         // Clear chunk data
         self.chunk_data[slot] = .{
@@ -293,6 +298,34 @@ pub const WorldRenderer = struct {
         defer tz.end();
 
         if (self.active_slot_counts[cf] == 0) return;
+
+        // Barrier: host writes to chunk_data -> compute shader reads (Bug #10 fix).
+        // updateActiveSlots writes chunk_data to a HOST_COHERENT mapped buffer;
+        // ensure those writes are visible to the compute shader before dispatch.
+        const VK_ACCESS_HOST_WRITE_BIT: u32 = 0x00004000;
+        const cd_barrier = vk.VkBufferMemoryBarrier{
+            .sType = vk.VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            .pNext = null,
+            .srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
+            .dstAccessMask = vk.VK_ACCESS_SHADER_READ_BIT,
+            .srcQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = vk.VK_QUEUE_FAMILY_IGNORED,
+            .buffer = self.chunk_data_allocs[cf].buffer,
+            .offset = 0,
+            .size = vk.VK_WHOLE_SIZE,
+        };
+        vk.cmdPipelineBarrier(
+            command_buffer,
+            vk.VK_PIPELINE_STAGE_HOST_BIT,
+            vk.VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            0,
+            0,
+            null,
+            1,
+            &[_]vk.VkBufferMemoryBarrier{cd_barrier},
+            0,
+            null,
+        );
 
         // Zero the indirect count buffer
         const count_size: vk.VkDeviceSize = @as(u64, LAYER_COUNT) * @sizeOf(u32);

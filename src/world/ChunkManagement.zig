@@ -92,8 +92,8 @@ pub fn worldTick(self: *GameState) void {
             continue;
         };
         // Submit a light task — mesh will be triggered automatically by the
-        // 27-chunk bitmask when all 27 neighbors have finished lighting.
-        // Missing neighbors (outside render distance) are skipped, never blocking.
+        // 27-chunk bitmask when all 27 neighbors have finished lighting (ALL_LIT).
+        // World-edge chunks use a fallback check in updateLitNeighborMasks.
         if (self.streaming.pool) |pool| pool.submitLight(result.key);
     }
 
@@ -118,6 +118,10 @@ pub fn worldTick(self: *GameState) void {
 }
 
 pub fn scanUnloads(self: *GameState) void {
+    // Main-thread-only: chunk_map mutations only happen here and in worldTick.
+    // Workers only call chunk_map.get() (read-only), so iteration is safe.
+    std.debug.assert(std.Thread.getCurrentId() == self.chunk_map.main_thread_id);
+
     // Only scan when previous unloads have been applied
     if (self.streaming.pending_unload_count > 0) return;
 

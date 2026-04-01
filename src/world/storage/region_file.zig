@@ -173,7 +173,7 @@ pub const RegionFile = struct {
     }
 
     pub fn ref(self: *RegionFile) void {
-        _ = self.ref_count.fetchAdd(1, .monotonic);
+        _ = self.ref_count.fetchAdd(1, .acq_rel);
     }
 
     pub fn unref(self: *RegionFile) bool {

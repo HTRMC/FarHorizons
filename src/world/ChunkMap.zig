@@ -12,6 +12,7 @@ pub const PREALLOCATED_CAPACITY: u32 = 50_000;
 pub const ChunkMap = struct {
     allocator: std.mem.Allocator,
     chunks: std.AutoHashMap(ChunkKey, *Chunk),
+    main_thread_id: std.Thread.Id,
 
     pub fn init(allocator: std.mem.Allocator) ChunkMap {
         var chunks = std.AutoHashMap(ChunkKey, *Chunk).init(allocator);
@@ -19,6 +20,7 @@ pub const ChunkMap = struct {
         return .{
             .allocator = allocator,
             .chunks = chunks,
+            .main_thread_id = std.Thread.getCurrentId(),
         };
     }
 
@@ -41,10 +43,12 @@ pub const ChunkMap = struct {
     }
 
     pub fn put(self: *ChunkMap, key: ChunkKey, chunk: *Chunk) void {
+        std.debug.assert(std.Thread.getCurrentId() == self.main_thread_id);
         self.chunks.put(key, chunk) catch {};
     }
 
     pub fn remove(self: *ChunkMap, key: ChunkKey) ?*Chunk {
+        std.debug.assert(std.Thread.getCurrentId() == self.main_thread_id);
         if (self.chunks.fetchRemove(key)) |kv| {
             return kv.value;
         }
@@ -68,6 +72,7 @@ pub const ChunkMap = struct {
     /// Set block state at world coordinates. Does nothing if chunk is not loaded.
     /// Locks the chunk mutex to prevent IO threads from reading during modification.
     pub fn setBlock(self: *const ChunkMap, pos: WorldState.WorldBlockPos, block: BlockState.StateId) void {
+        std.debug.assert(std.Thread.getCurrentId() == self.main_thread_id);
         const chunk = self.get(pos.toChunkKey()) orelse return;
         const io = std.Io.Threaded.global_single_threaded.io();
         chunk.mutex.lockUncancelable(io);
