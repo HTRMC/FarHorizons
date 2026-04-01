@@ -223,69 +223,176 @@ pub fn saveAllDirty(self: *Storage, pool: *GameChunkPool) void {
     defer tz.end();
     const io = Io.Threaded.global_single_threaded.io();
 
-    var total_saved: u32 = 0;
+    // Step 1: Drain ALL dirty entries into a flat list.
+    const DirtyEntry = dirty_set_mod.DirtyEntry;
+    var entries = std.ArrayList(DirtyEntry).empty;
+    defer entries.deinit(self.allocator);
 
-    // drainBatch caps at MAX_BATCH_SIZE entries per call, so loop until
-    // the dirty set is fully drained to avoid silently losing chunks.
-    while (true) {
+    {
         self.dirty_mutex.lockUncancelable(io);
+        defer self.dirty_mutex.unlock(io);
+
         const dirty_count = self.dirty_set.count();
-        if (dirty_count == 0) {
-            self.dirty_mutex.unlock(io);
-            break;
+        if (dirty_count == 0) return;
+
+        log.info("Saving {d} dirty chunks...", .{dirty_count});
+
+        entries.ensureTotalCapacity(self.allocator, dirty_count) catch {
+            log.err("Failed to allocate save entry list", .{});
+            return;
+        };
+
+        var it = self.dirty_set.map.iterator();
+        while (it.next()) |kv| {
+            entries.append(self.allocator, kv.value_ptr.*) catch continue;
         }
+        // Clear the map without releasing chunk refs (we hold them in entries)
+        self.dirty_set.map.clearRetainingCapacity();
+    }
 
-        if (total_saved == 0) {
-            log.info("Saving {d} dirty chunks...", .{dirty_count});
+    const total_count: u32 = @intCast(entries.items.len);
+    if (total_count == 0) return;
+
+    // Step 2: Sort by region coordinate to group entries for the same region.
+    std.mem.sort(DirtyEntry, entries.items, {}, struct {
+        fn lessThan(_: void, a: DirtyEntry, b: DirtyEntry) bool {
+            const ah = a.region_coord.hash();
+            const bh = b.region_coord.hash();
+            return ah < bh;
         }
+    }.lessThan);
 
-        const drain_result = self.dirty_set.drainBatch(dirty_count);
-        self.dirty_mutex.unlock(io);
+    // Step 3: Build region group boundaries (start index + count for each region).
+    const MAX_REGIONS = 512;
+    var group_starts: [MAX_REGIONS]u32 = undefined;
+    var group_counts: [MAX_REGIONS]u32 = undefined;
+    var num_groups: u32 = 0;
 
-        const result = drain_result orelse break;
-
-        for (0..result.batch_count) |bi| {
-            const batch = &result.batches[bi];
-            const coord = batch.region_coord;
-            const region = self.region_cache.getOrOpen(coord) catch {
-                log.err("Failed to open region for shutdown save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
-                for (batch.chunks[0..batch.count]) |chunk_ptr| {
-                    pool.release(chunk_ptr);
-                }
-                continue;
-            };
-            defer self.region_cache.releaseRegion(region);
-
-            var indices: [dirty_set_mod.MAX_BATCH_SIZE]u9 = undefined;
-            var temp_blocks_batch: [dirty_set_mod.MAX_BATCH_SIZE][WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
-            var block_ptrs: [dirty_set_mod.MAX_BATCH_SIZE]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
-            for (0..batch.count) |i| {
-                indices[i] = batch.indices[i];
-                // Lock chunk to snapshot data safely
-                const cio = Io.Threaded.global_single_threaded.io();
-                batch.chunks[i].mutex.lockUncancelable(cio);
-                batch.chunks[i].blocks.getRange(&temp_blocks_batch[i], 0);
-                batch.chunks[i].mutex.unlock(cio);
-                block_ptrs[i] = &temp_blocks_batch[i];
+    {
+        var i: u32 = 0;
+        while (i < total_count) {
+            if (num_groups >= MAX_REGIONS) break;
+            const region = entries.items[i].region_coord;
+            const start = i;
+            while (i < total_count and entries.items[i].region_coord.hash() == region.hash()) {
+                i += 1;
             }
-
-            region.writeChunkBatch(
-                indices[0..batch.count],
-                block_ptrs[0..batch.count],
-                self.default_compression,
-            ) catch |err| {
-                log.err("Shutdown batch save failed: {}", .{err});
-            };
-
-            for (batch.chunks[0..batch.count]) |chunk_ptr| {
-                pool.release(chunk_ptr);
-            }
-            total_saved += batch.count;
+            group_starts[num_groups] = start;
+            group_counts[num_groups] = i - start;
+            num_groups += 1;
         }
     }
 
-    if (total_saved > 0) {
-        log.info("All {d} dirty chunks saved", .{total_saved});
+    // Step 4: Process region groups in parallel.
+    const WorkerContext = struct {
+        storage: *Storage,
+        entries_ptr: [*]DirtyEntry,
+        group_starts_ptr: [*]const u32,
+        group_counts_ptr: [*]const u32,
+        num_groups: u32,
+        work_index: std.atomic.Value(u32),
+        saved_count: std.atomic.Value(u32),
+        failed_count: std.atomic.Value(u32),
+
+        fn workerFn(ctx: *@This()) void {
+            const wio = Io.Threaded.global_single_threaded.io();
+            while (true) {
+                const gi = ctx.work_index.fetchAdd(1, .acq_rel);
+                if (gi >= ctx.num_groups) break;
+
+                const start = ctx.group_starts_ptr[gi];
+                const count = ctx.group_counts_ptr[gi];
+                const group = ctx.entries_ptr[start .. start + count];
+                const coord = group[0].region_coord;
+
+                const region = ctx.storage.region_cache.getOrOpen(coord) catch {
+                    log.err("Failed to open region for parallel save ({d},{d},{d})", .{ coord.rx, coord.ry, coord.rz });
+                    _ = ctx.failed_count.fetchAdd(count, .monotonic);
+                    continue;
+                };
+                defer ctx.storage.region_cache.releaseRegion(region);
+
+                // Process in sub-batches of MAX_BATCH_SIZE
+                const BATCH = dirty_set_mod.MAX_BATCH_SIZE;
+                var offset: u32 = 0;
+                while (offset < count) {
+                    const batch_count = @min(BATCH, count - offset);
+                    const batch = group[offset .. offset + batch_count];
+
+                    var indices: [BATCH]u9 = undefined;
+                    var temp_blocks: [BATCH][WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+                    var block_ptrs: [BATCH]*const [WorldState.BLOCKS_PER_CHUNK]WorldState.StateId = undefined;
+
+                    for (batch, 0..) |entry, bi| {
+                        indices[bi] = entry.key.localIndex();
+                        entry.chunk.mutex.lockUncancelable(wio);
+                        entry.chunk.blocks.getRange(&temp_blocks[bi], 0);
+                        entry.chunk.mutex.unlock(wio);
+                        block_ptrs[bi] = &temp_blocks[bi];
+                    }
+
+                    region.writeChunkBatch(
+                        indices[0..batch_count],
+                        block_ptrs[0..batch_count],
+                        ctx.storage.default_compression,
+                    ) catch |err| {
+                        log.err("Parallel batch save failed: {}", .{err});
+                        _ = ctx.failed_count.fetchAdd(batch_count, .monotonic);
+                        offset += batch_count;
+                        continue;
+                    };
+
+                    _ = ctx.saved_count.fetchAdd(batch_count, .monotonic);
+                    offset += batch_count;
+                }
+            }
+        }
+    };
+
+    var ctx = WorkerContext{
+        .storage = self,
+        .entries_ptr = entries.items.ptr,
+        .group_starts_ptr = &group_starts,
+        .group_counts_ptr = &group_counts,
+        .num_groups = num_groups,
+        .work_index = std.atomic.Value(u32).init(0),
+        .saved_count = std.atomic.Value(u32).init(0),
+        .failed_count = std.atomic.Value(u32).init(0),
+    };
+
+    // Spawn worker threads (cap at CPU count or 16, whichever is smaller)
+    const MAX_SAVE_THREADS = 16;
+    const cpu_count = std.Thread.getCpuCount() catch 4;
+    const thread_count: u32 = @intCast(@min(MAX_SAVE_THREADS, @max(1, @min(num_groups, cpu_count))));
+
+    var threads: [MAX_SAVE_THREADS]?std.Thread = .{null} ** MAX_SAVE_THREADS;
+    for (0..thread_count) |i| {
+        threads[i] = std.Thread.spawn(
+            .{ .stack_size = 2 * 1024 * 1024 },
+            WorkerContext.workerFn,
+            .{&ctx},
+        ) catch null;
+    }
+
+    // Wait for all threads
+    for (0..thread_count) |i| {
+        if (threads[i]) |t| t.join();
+    }
+
+    // Release all chunk refs (safe — all workers finished)
+    for (entries.items) |entry| {
+        pool.release(entry.chunk);
+    }
+
+    const saved = ctx.saved_count.load(.monotonic);
+    const failed = ctx.failed_count.load(.monotonic);
+    if (saved > 0 or failed > 0) {
+        log.info("All {d} dirty chunks saved ({d} threads, {d} regions{s})", .{
+            saved,
+            thread_count,
+            num_groups,
+            if (failed > 0) ", some failures" else "",
+        });
     }
 }
 
