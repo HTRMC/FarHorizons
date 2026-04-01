@@ -40,15 +40,22 @@ pub fn serverReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
     const render_distance = try reader.readInt(u16);
     const count = try reader.readInt(u32);
 
-    if (conn.user_data) |ud| {
-        const User = @import("../../server/User.zig");
-        const user: *User = @ptrCast(@alignCast(ud));
-        user.render_distance = render_distance;
-        user.last_chunk_pos = .{ .cx = base_cx, .cy = base_cy, .cz = base_cz };
-    }
+    const User = @import("../../server/User.zig");
+    const user: *User = if (conn.user_data) |ud| @ptrCast(@alignCast(ud)) else return;
+    user.render_distance = render_distance;
+    user.last_chunk_pos = .{ .cx = base_cx, .cy = base_cy, .cz = base_cz };
 
-    // TODO: Queue requested chunks for transmission
-    _ = count;
+    // Parse and queue requested chunks for priority transmission
+    var keys: [User.MAX_REQUESTED_CHUNKS]WorldState.ChunkKey = undefined;
+    const to_read = @min(count, User.MAX_REQUESTED_CHUNKS);
+    for (0..to_read) |i| {
+        keys[i] = .{
+            .cx = try reader.readInt(i32),
+            .cy = try reader.readInt(i32),
+            .cz = try reader.readInt(i32),
+        };
+    }
+    user.queueChunkRequests(keys[0..to_read]);
 }
 
 pub fn register() void {

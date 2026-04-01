@@ -12,6 +12,8 @@ pub const User = @This();
 /// ~400 blocks/sec at 30Hz.
 const MAX_SPEED_PER_TICK: f64 = 13.3;
 
+pub const MAX_REQUESTED_CHUNKS = 64;
+
 conn: *Connection,
 allocator: std.mem.Allocator,
 
@@ -37,6 +39,11 @@ has_received_position: bool = false,
 render_distance: u16 = 8,
 last_chunk_pos: WorldState.ChunkKey = .{ .cx = 0, .cy = 0, .cz = 0 },
 loaded_chunks: std.AutoHashMap(WorldState.ChunkKey, void),
+
+// Priority chunk requests from client
+requested_chunks: [MAX_REQUESTED_CHUNKS]WorldState.ChunkKey = undefined,
+requested_count: u32 = 0,
+request_mutex: std.Io.Mutex = .init,
 
 // Connection state
 connected: Atomic(bool) = Atomic(bool).init(true),
@@ -170,4 +177,30 @@ pub fn markChunkLoaded(self: *User, key: WorldState.ChunkKey) void {
 /// Check if this user already has a chunk.
 pub fn hasChunk(self: *const User, key: WorldState.ChunkKey) bool {
     return self.loaded_chunks.contains(key);
+}
+
+/// Queue chunk requests from the client for priority transmission.
+pub fn queueChunkRequests(self: *User, keys: []const WorldState.ChunkKey) void {
+    const lock_io = std.Io.Threaded.global_single_threaded.io();
+    self.request_mutex.lockUncancelable(lock_io);
+    defer self.request_mutex.unlock(lock_io);
+    for (keys) |key| {
+        if (self.requested_count >= MAX_REQUESTED_CHUNKS) break;
+        if (self.loaded_chunks.contains(key)) continue;
+        self.requested_chunks[self.requested_count] = key;
+        self.requested_count += 1;
+    }
+}
+
+/// Drain requested chunks, returning the count and filling the output buffer.
+pub fn drainRequestedChunks(self: *User, out: *[MAX_REQUESTED_CHUNKS]WorldState.ChunkKey) u32 {
+    const lock_io = std.Io.Threaded.global_single_threaded.io();
+    self.request_mutex.lockUncancelable(lock_io);
+    defer self.request_mutex.unlock(lock_io);
+    const count = self.requested_count;
+    if (count > 0) {
+        @memcpy(out[0..count], self.requested_chunks[0..count]);
+        self.requested_count = 0;
+    }
+    return count;
 }
