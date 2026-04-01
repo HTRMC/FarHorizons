@@ -19,6 +19,7 @@ allocator: std.mem.Allocator,
 
 // Identity
 name: []const u8 = "Player",
+name_owned: bool = false,
 id: u32 = 0,
 
 // Player state (server-authoritative position)
@@ -55,6 +56,7 @@ pub fn init(allocator: std.mem.Allocator, conn: *Connection, id: u32) !*User {
         .conn = conn,
         .allocator = allocator,
         .id = id,
+        .name = "Player",
         .loaded_chunks = std.AutoHashMap(WorldState.ChunkKey, void).init(allocator),
     };
     conn.user_data = self;
@@ -62,6 +64,7 @@ pub fn init(allocator: std.mem.Allocator, conn: *Connection, id: u32) !*User {
 }
 
 pub fn deinit(self: *User) void {
+    if (self.name_owned) self.allocator.free(self.name);
     self.loaded_chunks.deinit();
     self.allocator.destroy(self);
 }

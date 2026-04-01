@@ -60,7 +60,11 @@ pub fn serverReceive(conn: *Connection, reader: *BinaryReader) anyerror!void {
             if (conn.user_data) |ud| {
                 const User = @import("../../server/User.zig");
                 const user: *User = @ptrCast(@alignCast(ud));
-                user.name = name;
+                if (user.allocator.dupe(u8, name)) |duped| {
+                    if (user.name_owned) user.allocator.free(user.name);
+                    user.name = duped;
+                    user.name_owned = true;
+                } else |_| {}
             }
 
             conn.state.store(.connected, .release);

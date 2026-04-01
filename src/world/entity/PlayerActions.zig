@@ -234,8 +234,8 @@ pub fn attackEntity(self: *GameState) bool {
     self.swing_requested = true;
     self.combat.entity_attack_cooldown = GameState.ATTACK_COOLDOWN_TICKS;
 
-    // Apply damage
-    self.entities.mob_health[id] -= self.combat.attack_damage;
+    // Apply damage (clamp to zero)
+    self.entities.mob_health[id] = @max(self.entities.mob_health[id] - self.combat.attack_damage, 0.0);
     self.entities.hurt_time[id] = 10;
 
     // Knockback: push away from player

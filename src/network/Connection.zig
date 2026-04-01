@@ -212,8 +212,12 @@ pub fn onReceive(self: *Connection, socket: Socket, data: []const u8) ?struct { 
                     .protocol_id = protocol_id,
                     .payload = payload,
                 };
+            } else if (seq > expected and seq -% expected > 256) {
+                // Too far ahead — reject to prevent unbounded buffer growth
+                std.log.warn("Dropped packet seq {} (expected {}, window exceeded)", .{ seq, expected });
+                return null;
             } else if (seq > expected) {
-                // Future packet — buffer it
+                // Future packet within window — buffer it
                 self.recv_mutex.lockUncancelable(io());
                 defer self.recv_mutex.unlock(io());
                 const copy = self.allocator.dupe(u8, data) catch return null;
