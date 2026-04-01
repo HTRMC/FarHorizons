@@ -227,31 +227,11 @@ pub const MeshWorker = struct {
             }
         }
 
-        // Fallback for world-edge chunks: if lit_neighbors didn't reach ALL_LIT,
-        // compute the actual required mask from currently loaded neighbors and
-        // check if all loaded neighbors have contributed their bits.
-        const current_lit = self_lm.lit_neighbors.load(.acquire);
-        if (current_lit != ALL_LIT) {
-            var required: u32 = 0;
-            for (offsets_27) |off| {
-                const nk = ChunkKey{
-                    .cx = key.cx + off[0],
-                    .cy = key.cy + off[1],
-                    .cz = key.cz + off[2],
-                };
-                if (light_maps.get(nk) != null) {
-                    required |= @as(u32, 1) << WorldState.neighborBitIndex(off[0], off[1], off[2]);
-                }
-            }
-            if (required != 0 and required != ALL_LIT and (current_lit & required) == required) {
-                // All loaded neighbors are lit — submit mesh for this edge chunk.
-                // Use required_mask as a one-shot gate to avoid duplicate submissions.
-                const prev = self_lm.required_mask.swap(required, .acq_rel);
-                if (prev != required) {
-                    if (self.pool) |p| p.submitMesh(key);
-                }
-            }
-        }
+        // No fallback for edge chunks: the outermost ring of loaded chunks
+        // (at RENDER_DISTANCE boundary) intentionally never reaches ALL_LIT
+        // because their outward neighbors aren't loaded. This ring serves as
+        // a "data ring" providing real neighbor lighting data to interior chunks.
+        // Only chunks with all 27 neighbors loaded get meshed — no dark borders.
     }
 
     /// Process one mesh task. Called by ThreadPool workers.
