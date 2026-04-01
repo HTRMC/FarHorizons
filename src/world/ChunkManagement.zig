@@ -3,6 +3,7 @@ const GameState = @import("GameState.zig");
 const WorldState = @import("WorldState.zig");
 const ChunkStreamer = @import("ChunkStreamer.zig").ChunkStreamer;
 const WorldStreamingMod = @import("WorldStreaming.zig");
+const LightMap = @import("LightMap.zig").LightMap;
 const SurfaceHeightMap = @import("SurfaceHeightMap.zig").SurfaceHeightMap;
 const WorldRenderer = @import("../renderer/vulkan/WorldRenderer.zig").WorldRenderer;
 const TlsfAllocator = @import("../allocators/TlsfAllocator.zig").TlsfAllocator;
@@ -107,6 +108,10 @@ pub fn worldTick(self: *GameState) void {
     }
 
 
+    // Re-submit light tasks for chunks that are still dirty (dropped from heap overflow).
+    // Scan a budget of chunks per tick using the same incremental cursor as unloads.
+    retryDirtyLights(self);
+
     // Track initial load readiness
     if (!self.streaming.initial_load_ready) {
         const chunk_count = self.chunk_map.count();
@@ -164,6 +169,24 @@ pub fn scanUnloads(self: *GameState) void {
                 self.streaming.pending_unload_keys[self.streaming.pending_unload_count] = key;
                 self.streaming.pending_unload_count += 1;
             }
+        }
+    }
+}
+
+/// Re-submit light tasks for chunks whose LightMaps are still dirty.
+/// This recovers from dropped tasks when the ThreadPool heap overflows.
+/// Scans a small budget per tick using light_maps iterator.
+fn retryDirtyLights(self: *GameState) void {
+    const pool = self.streaming.pool orelse return;
+    const RETRY_BUDGET: u32 = 128;
+
+    var it = self.light_maps.iterator();
+    var checked: u32 = 0;
+    while (checked < RETRY_BUDGET) : (checked += 1) {
+        const entry = it.next() orelse break;
+        const lm: *LightMap = entry.value_ptr.*;
+        if (lm.dirty) {
+            pool.submitLight(entry.key_ptr.*);
         }
     }
 }

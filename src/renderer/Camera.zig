@@ -47,14 +47,17 @@ pub fn getForward(self: Camera) zlm.Vec3 {
 }
 
 pub fn getRight(self: Camera) zlm.Vec3 {
-    const world_up = zlm.Vec3.init(0.0, 1.0, 0.0);
-    return zlm.Vec3.cross(self.getForward(), world_up).normalize();
+    // Derive from yaw only — always horizontal, never degenerates at ±90° pitch.
+    const yaw_rad = self.yaw.toRadians();
+    return zlm.Vec3.init(yaw_rad.cos(), 0.0, -yaw_rad.sin());
 }
 
 pub fn getViewMatrix(self: Camera) zlm.Mat4 {
     const forward = self.getForward();
     const target = zlm.Vec3.add(self.position, forward);
-    const up = zlm.Vec3.init(0.0, 1.0, 0.0);
+    // Derive up from right × forward to avoid degenerate lookAt at ±90° pitch.
+    const right = self.getRight();
+    const up = zlm.Vec3.cross(right, forward);
     return zlm.Mat4.lookAt(self.position, target, up);
 }
 

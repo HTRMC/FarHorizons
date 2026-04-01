@@ -4,7 +4,7 @@ const Io = std.Io;
 
 pub const ThreadPool = struct {
     const MAX_THREADS = 32;
-    const HEAP_CAPACITY = 20000;
+    const HEAP_CAPACITY = 40000;
 
     const ChunkKey = WorldState.ChunkKey;
 
