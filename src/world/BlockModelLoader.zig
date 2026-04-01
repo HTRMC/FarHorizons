@@ -571,38 +571,30 @@ fn buildBoxFaceQuad(from: [3]f32, to: [3]f32, face: u3, uv: [4]f32) ExtraQuadMod
 
 /// Build a cross-shaped quad (for torches and similar)
 fn buildCrossQuad(face_name: []const u8, uv: [4]f32, transform: Transform) ?ExtraQuadModel {
-    _ = transform;
     const uv0 = uv[0];
     const uv1 = uv[1];
     const uv2 = uv[2];
     const uv3 = uv[3];
 
-    if (std.mem.eql(u8, face_name, "__cross_nwse_front")) {
-        return .{
-            .corners = .{ .{ 0, 0, 0 }, .{ 1, 0, 1 }, .{ 1, 1, 1 }, .{ 0, 1, 0 } },
-            .uvs = .{ .{ uv0, uv3 }, .{ uv2, uv3 }, .{ uv2, uv1 }, .{ uv0, uv1 } },
-            .normal = .{ 0.707, 0, -0.707 },
-        };
-    } else if (std.mem.eql(u8, face_name, "__cross_nwse_back")) {
-        return .{
-            .corners = .{ .{ 1, 0, 1 }, .{ 0, 0, 0 }, .{ 0, 1, 0 }, .{ 1, 1, 1 } },
-            .uvs = .{ .{ uv0, uv3 }, .{ uv2, uv3 }, .{ uv2, uv1 }, .{ uv0, uv1 } },
-            .normal = .{ -0.707, 0, 0.707 },
-        };
-    } else if (std.mem.eql(u8, face_name, "__cross_nesw_front")) {
-        return .{
-            .corners = .{ .{ 1, 0, 0 }, .{ 0, 0, 1 }, .{ 0, 1, 1 }, .{ 1, 1, 0 } },
-            .uvs = .{ .{ uv0, uv3 }, .{ uv2, uv3 }, .{ uv2, uv1 }, .{ uv0, uv1 } },
-            .normal = .{ 0.707, 0, 0.707 },
-        };
-    } else if (std.mem.eql(u8, face_name, "__cross_nesw_back")) {
-        return .{
-            .corners = .{ .{ 0, 0, 1 }, .{ 1, 0, 0 }, .{ 1, 1, 0 }, .{ 0, 1, 1 } },
-            .uvs = .{ .{ uv0, uv3 }, .{ uv2, uv3 }, .{ uv2, uv1 }, .{ uv0, uv1 } },
-            .normal = .{ -0.707, 0, -0.707 },
-        };
-    }
-    return null;
+    const base: ExtraQuadModel = if (std.mem.eql(u8, face_name, "__cross_nwse_front")) .{
+        .corners = .{ .{ 0, 0, 0 }, .{ 1, 0, 1 }, .{ 1, 1, 1 }, .{ 0, 1, 0 } },
+        .uvs = .{ .{ uv0, uv3 }, .{ uv2, uv3 }, .{ uv2, uv1 }, .{ uv0, uv1 } },
+        .normal = .{ 0.707, 0, -0.707 },
+    } else if (std.mem.eql(u8, face_name, "__cross_nwse_back")) .{
+        .corners = .{ .{ 1, 0, 1 }, .{ 0, 0, 0 }, .{ 0, 1, 0 }, .{ 1, 1, 1 } },
+        .uvs = .{ .{ uv0, uv3 }, .{ uv2, uv3 }, .{ uv2, uv1 }, .{ uv0, uv1 } },
+        .normal = .{ -0.707, 0, 0.707 },
+    } else if (std.mem.eql(u8, face_name, "__cross_nesw_front")) .{
+        .corners = .{ .{ 1, 0, 0 }, .{ 0, 0, 1 }, .{ 0, 1, 1 }, .{ 1, 1, 0 } },
+        .uvs = .{ .{ uv0, uv3 }, .{ uv2, uv3 }, .{ uv2, uv1 }, .{ uv0, uv1 } },
+        .normal = .{ 0.707, 0, 0.707 },
+    } else if (std.mem.eql(u8, face_name, "__cross_nesw_back")) .{
+        .corners = .{ .{ 0, 0, 1 }, .{ 1, 0, 0 }, .{ 1, 1, 0 }, .{ 0, 1, 1 } },
+        .uvs = .{ .{ uv0, uv3 }, .{ uv2, uv3 }, .{ uv2, uv1 }, .{ uv0, uv1 } },
+        .normal = .{ -0.707, 0, -0.707 },
+    } else return null;
+
+    return applyTransform(base, transform, 0);
 }
 
 fn getCrossFaceBucket(face_name: []const u8) u3 {
