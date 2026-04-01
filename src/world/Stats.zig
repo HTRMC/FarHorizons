@@ -31,7 +31,10 @@ pub fn flush(self: *Self) void {
     _ = steam.setStatInt("blocks_placed", self.blocks_placed);
     _ = steam.setStatInt("entities_killed", self.entities_killed);
     _ = steam.setStatInt("items_crafted", self.items_crafted);
-    _ = steam.storeStats();
+    if (!steam.storeStats()) {
+        log.warn("Failed to store stats to Steam", .{});
+    }
+    self.flush_timer = 0;
 }
 
 pub fn tick(self: *Self) void {
