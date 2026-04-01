@@ -68,12 +68,14 @@ pub fn build(b: *std.Build) void {
 
     const tracy_enabled = b.option(bool, "tracy", "Enable Tracy profiling") orelse false;
     const zstd_enabled = b.option(bool, "zstd", "Enable ZSTD compression") orelse true;
+    const steam_enabled = b.option(bool, "steam", "Enable Steam integration") orelse true;
     const console_enabled = b.option(bool, "console", "Show console window on Windows") orelse false;
     const gamepad_type = b.option([]const u8, "gamepad_type", "Force gamepad HUD type: xbox, playstation, nintendo") orelse null;
 
     const options = b.addOptions();
     options.addOption(bool, "tracy_enabled", tracy_enabled);
     options.addOption(bool, "zstd_enabled", zstd_enabled);
+    options.addOption(bool, "steam_enabled", steam_enabled);
     options.addOption(?[]const u8, "gamepad_type", gamepad_type);
     exe.root_module.addOptions("build_options", options);
 
@@ -88,11 +90,24 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    const os_tag = exe.root_module.resolved_target.?.result.os.tag;
+
+    // Steam: link import library and install runtime DLL/SO
+    if (steam_enabled) {
+        if (os_tag == .windows) {
+            exe.root_module.addObjectFile(b.path("lib/steam/win64/steam_api64.lib"));
+        } else if (os_tag == .linux) {
+            exe.root_module.addLibraryPath(b.path("lib/steam/linux64"));
+            exe.root_module.addRPath(.{ .src_path = .{ .owner = b, .sub_path = "lib/steam/linux64" } });
+            exe.root_module.linkSystemLibrary("steam_api", .{});
+        }
+    }
+
     // Embed the application icon on Windows
     exe.root_module.addWin32ResourceFile(.{ .file = b.path("assets/icon.rc") });
 
     // Hide the console window on Windows unless -Dconsole=true
-    if (exe.root_module.resolved_target.?.result.os.tag == .windows and !console_enabled) {
+    if (os_tag == .windows and !console_enabled) {
         exe.subsystem = .windows;
     }
 
@@ -104,6 +119,16 @@ pub fn build(b: *std.Build) void {
         .install_dir = .{ .custom = "bin/assets/farhorizons" },
         .install_subdir = "",
     });
+
+    // Install Steam runtime library next to the executable
+    if (steam_enabled) {
+        if (os_tag == .windows) {
+            b.installFile("lib/steam/win64/steam_api64.dll", "bin/steam_api64.dll");
+        } else if (os_tag == .linux) {
+            b.installFile("lib/steam/linux64/libsteam_api.so", "bin/libsteam_api.so");
+        }
+        b.installFile("steam_appid.txt", "bin/steam_appid.txt");
+    }
 
     const run_step = b.step("run", "Run the app");
     const run_cmd = b.addRunArtifact(exe);

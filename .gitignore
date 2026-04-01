@@ -14,8 +14,13 @@ zig-out/
 build/
 steam/output/
 
+# Steam SDK binaries (redistributable, not committed)
+lib/steam/
+steam_appid.txt
+
 # OS
 .DS_Store
 Thumbs.db
 /zig-pkg
 /.claude
+/.omc

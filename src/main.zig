@@ -14,6 +14,7 @@ const UiManager = @import("ui/UiManager.zig").UiManager;
 const Focus = @import("ui/Focus.zig");
 const glfw = @import("platform/glfw.zig");
 const tracy = @import("platform/tracy.zig");
+const steam = @import("platform/steam.zig");
 const Logger = @import("platform/Logger.zig");
 const app_config = @import("app_config.zig");
 const Options = @import("Options.zig");
@@ -756,6 +757,10 @@ pub fn main() !void {
         }
     }
 
+    // Initialize Steam (may call std.process.exit if relaunching through Steam client)
+    _ = steam.init();
+    defer steam.shutdown();
+
     var window = try Window.init(.{
         .width = 1280,
         .height = 720,
@@ -841,6 +846,7 @@ pub fn main() !void {
 
     while (!window.shouldClose()) {
         window.pollEvents();
+        steam.runCallbacks();
         input_state.gamepad.poll();
         processGamepadInput(&input_state);
 
