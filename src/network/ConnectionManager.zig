@@ -155,6 +155,13 @@ fn handlePacket(self: *ConnectionManager, conn: *Connection, data: []const u8) v
         protocol.dispatch(conn, result.protocol_id, result.payload) catch |err| {
             std.log.warn("Protocol dispatch error: {s}", .{@errorName(err)});
         };
+        // Drain consecutive buffered packets that are now in order
+        while (conn.popNextBuffered()) |buffered| {
+            defer conn.allocator.free(buffered.raw_data);
+            protocol.dispatch(conn, buffered.protocol_id, buffered.payload) catch |err| {
+                std.log.warn("Protocol dispatch error: {s}", .{@errorName(err)});
+            };
+        }
     }
 }
 

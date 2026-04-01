@@ -208,7 +208,6 @@ pub fn onReceive(self: *Connection, socket: Socket, data: []const u8) ?struct { 
             const expected = self.next_recv_seq.load(.monotonic);
             if (seq == expected) {
                 _ = self.next_recv_seq.fetchAdd(1, .monotonic);
-                // TODO: drain recv_buffer for consecutive sequences
                 return .{
                     .protocol_id = protocol_id,
                     .payload = payload,
@@ -263,4 +262,31 @@ pub fn retransmitTimedOut(self: *Connection, socket: Socket, timeout_ms: i64) vo
 /// Check if connection has timed out (no packets received for timeout_ms).
 pub fn hasTimedOut(self: *const Connection, timeout_ms: i64) bool {
     return milliTimestamp() - self.last_receive_time > timeout_ms;
+}
+
+pub const BufferedPacket = struct {
+    protocol_id: u8,
+    payload: []const u8,
+    raw_data: []const u8,
+};
+
+/// Pop the next consecutive buffered packet, if available.
+/// Caller must free `raw_data` after processing.
+pub fn popNextBuffered(self: *Connection) ?BufferedPacket {
+    const expected = self.next_recv_seq.load(.monotonic);
+    self.recv_mutex.lockUncancelable(io());
+    const entry = self.recv_buffer.fetchRemove(expected);
+    self.recv_mutex.unlock(io());
+
+    const raw_data = (entry orelse return null).value;
+    if (raw_data.len < RELIABLE_HEADER_SIZE) {
+        self.allocator.free(raw_data);
+        return null;
+    }
+    _ = self.next_recv_seq.fetchAdd(1, .monotonic);
+    return .{
+        .protocol_id = raw_data[5],
+        .payload = raw_data[RELIABLE_HEADER_SIZE..],
+        .raw_data = raw_data,
+    };
 }
