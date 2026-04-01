@@ -101,7 +101,10 @@ pub const SurfaceState = struct {
             .queueFamilyIndexCount = 0,
             .pQueueFamilyIndices = null,
             .preTransform = capabilities.currentTransform,
-            .compositeAlpha = vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+            .compositeAlpha = if (capabilities.supportedCompositeAlpha & vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR != 0)
+                vk.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+            else
+                vk.VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
             .presentMode = vk.VK_PRESENT_MODE_FIFO_KHR,
             .clipped = vk.VK_TRUE,
             .oldSwapchain = null,
