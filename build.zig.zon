@@ -6,26 +6,26 @@
     .dependencies = .{
         // Headers (shared across all platforms)
         .farhorizons_deps_headers = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_headers.tar.gz",
-            .hash = "N-V-__8AAJB4UwFG0_wjFSNmLfUo2cVNJj91d8TyHUWQCW8m",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.25/farhorizons_deps_headers.tar.gz",
+            .hash = "N-V-__8AAIWyVgEaDriS3fSWsfiN6NOjF15DGUrnuE4_tyuk",
             .lazy = true,
         },
         // Windows x86_64
         .@"farhorizons_deps_x86_64-windows-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_x86_64-windows-gnu.tar.gz",
-            .hash = "N-V-__8AAOxA5AFLG0urXy71WqFbnvdIC9jgpHK5IrDTmBlx",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.25/farhorizons_deps_x86_64-windows-gnu.tar.gz",
+            .hash = "N-V-__8AALLRKwJ9lc7KMk26jlmT1oVyfUFIE4q_cJiIs-cW",
             .lazy = true,
         },
         // Linux x86_64
         .@"farhorizons_deps_x86_64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_x86_64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AAFDrSwLBQHcB2xmJINCsseZ_W_8gxaS68pEXSXA2",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.25/farhorizons_deps_x86_64-linux-gnu.tar.gz",
+            .hash = "N-V-__8AADqWqgL194WX4WYpbNgJqcCnNjxk6kIM3SjQFA4-",
             .lazy = true,
         },
         // Linux aarch64
         .@"farhorizons_deps_aarch64-linux-gnu" = .{
-            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.22/farhorizons_deps_aarch64-linux-gnu.tar.gz",
-            .hash = "N-V-__8AAEIdEQJys7RIzSOgZvGI4gxm1JRYCcJbLyu_7RyP",
+            .url = "https://github.com/HTRMC/FarHorizons-Libs/releases/download/v0.0.25/farhorizons_deps_aarch64-linux-gnu.tar.gz",
+            .hash = "N-V-__8AACoSbAJlv2ZjwlP7U8rahrxPjNUpWNPd18CEAiKY",
             .lazy = true,
         },
         .zlm = .{
