@@ -5,7 +5,12 @@ const LightMap = LightMapMod.LightMap;
 const LightBorderSnapshot = LightMapMod.LightBorderSnapshot;
 const BlockState = WorldState.BlockState;
 const StateId = WorldState.StateId;
+const ChunkMap = @import("ChunkMap.zig").ChunkMap;
 const tracy = @import("../platform/tracy.zig");
+const Io = std.Io;
+
+const ChunkKey = WorldState.ChunkKey;
+const LightMaps = std.AutoHashMap(ChunkKey, *LightMap);
 
 const CHUNK_SIZE = WorldState.CHUNK_SIZE;
 const BLOCKS_PER_CHUNK = WorldState.BLOCKS_PER_CHUNK;
@@ -943,6 +948,86 @@ pub const ReseedBuffer = struct {
     positions: [MAX_RESEEDS]ReseedPos = undefined,
     count: u32 = 0,
 };
+
+/// Process border spill into neighbor chunks (Cubyz-style propagateLightsDestructive).
+/// Handles recursive cross-chunk destructive BFS + deferred batch reconstruction.
+/// Called after applyBlockChange has processed the source chunk and collected spill.
+///
+/// Returns the number of affected neighbor chunk keys written to `affected_keys_out`.
+/// The caller should submit mesh tasks for each affected key.
+pub fn processNeighborSpill(
+    initial_spill: *const BorderSpill,
+    source_key: ChunkKey,
+    light_maps: *const LightMaps,
+    chunk_map: *const ChunkMap,
+    affected_keys_out: []ChunkKey,
+) u32 {
+    const io = Io.Threaded.global_single_threaded.io();
+    const face_offsets = WorldState.face_neighbor_offsets;
+
+    const MAX_AFFECTED = 24;
+    var affected_lms: [MAX_AFFECTED]*LightMap = undefined;
+    var affected_chunks: [MAX_AFFECTED]*const WorldState.Chunk = undefined;
+    var affected_reseeds: [MAX_AFFECTED]ReseedBuffer = undefined;
+    var affected_count: u32 = 0;
+    var key_count: u32 = 0;
+
+    // Recursive cross-chunk destructive BFS (max 4 hops)
+    var current_spill = initial_spill.*;
+    const MAX_HOPS = 4;
+    var hop: u32 = 0;
+    while (hop < MAX_HOPS) : (hop += 1) {
+        var next_spill = BorderSpill{};
+        var any_work = false;
+
+        for (0..6) |face| {
+            if (current_spill.counts[face] == 0) continue;
+            const nk = ChunkKey{
+                .cx = source_key.cx + face_offsets[face][0],
+                .cy = source_key.cy + face_offsets[face][1],
+                .cz = source_key.cz + face_offsets[face][2],
+            };
+            const nlm = light_maps.get(nk) orelse continue;
+            const nchunk = chunk_map.get(nk) orelse continue;
+
+            var reseeds = ReseedBuffer{};
+            nlm.mutex.lockUncancelable(io);
+            _ = propagateDestructive(nlm, nchunk, current_spill.entries[face][0..current_spill.counts[face]], &next_spill, &reseeds);
+            nlm.mutex.unlock(io);
+
+            if (affected_count < MAX_AFFECTED) {
+                affected_lms[affected_count] = nlm;
+                affected_chunks[affected_count] = nchunk;
+                affected_reseeds[affected_count] = reseeds;
+                affected_count += 1;
+            }
+
+            if (key_count < affected_keys_out.len) {
+                affected_keys_out[key_count] = nk;
+                key_count += 1;
+            }
+
+            any_work = true;
+        }
+
+        if (!any_work) break;
+        var has_next = false;
+        for (next_spill.counts) |c| {
+            if (c > 0) { has_next = true; break; }
+        }
+        if (!has_next) break;
+        current_spill = next_spill;
+    }
+
+    // Batch reconstruction — all stale values cleared, reseeds safe
+    for (0..affected_count) |ai| {
+        affected_lms[ai].mutex.lockUncancelable(io);
+        _ = reseedBlockLight(affected_lms[ai], affected_chunks[ai], affected_reseeds[ai].positions[0..affected_reseeds[ai].count]);
+        affected_lms[ai].mutex.unlock(io);
+    }
+
+    return key_count;
+}
 
 /// Maps a BFS direction to the entry position in the neighbor chunk.
 fn borderEntryPos(dir: usize, x: i8, y: i8, z: i8) struct { x: i8, y: i8, z: i8 } {
