@@ -331,26 +331,48 @@ pub const MeshWorker = struct {
                 // AB/BA deadlock (neighbor border snapshot locks our mutex).
                 lm.mutex.unlock(io);
 
-                // Process border spill in each affected face neighbor
-                for (0..6) |face| {
-                    if (spill.counts[face] == 0) continue;
-                    const nk = ChunkKey{
-                        .cx = key.cx + offsets[face][0],
-                        .cy = key.cy + offsets[face][1],
-                        .cz = key.cz + offsets[face][2],
-                    };
-                    const nlm = self.light_maps.get(nk) orelse continue;
-                    const nchunk = self.chunk_map.get(nk) orelse continue;
+                // Recursive cross-chunk destructive BFS: process border spill
+                // in each affected face neighbor. Each neighbor can produce
+                // its own spill for further neighbors (multi-hop, max 4 deep).
+                const MAX_HOPS = 4;
+                var current_spill = spill;
+                var hop: u32 = 0;
+                var base_key = key;
 
-                    // Surgical destructive BFS in neighbor — only clears
-                    // values that came from the removed/changed source.
-                    // Much faster than full recompute.
-                    nlm.mutex.lockUncancelable(io);
-                    _ = LightEngine.destructiveBlockLightFromBorder(nlm, nchunk, spill.entries[face][0..spill.counts[face]]);
-                    nlm.mutex.unlock(io);
+                while (hop < MAX_HOPS) : (hop += 1) {
+                    var next_spill = LightEngine.BorderSpill{};
+                    var any_work = false;
 
-                    // Submit mesh task to update GPU light data
-                    if (self.pool) |p| p.submitMesh(nk);
+                    for (0..6) |face| {
+                        if (current_spill.counts[face] == 0) continue;
+                        const nk = ChunkKey{
+                            .cx = base_key.cx + offsets[face][0],
+                            .cy = base_key.cy + offsets[face][1],
+                            .cz = base_key.cz + offsets[face][2],
+                        };
+                        const nlm = self.light_maps.get(nk) orelse continue;
+                        const nchunk = self.chunk_map.get(nk) orelse continue;
+
+                        nlm.mutex.lockUncancelable(io);
+                        _ = LightEngine.destructiveBlockLightFromBorder(nlm, nchunk, current_spill.entries[face][0..current_spill.counts[face]], &next_spill);
+                        nlm.mutex.unlock(io);
+
+                        if (self.pool) |p| p.submitMesh(nk);
+                        any_work = true;
+                    }
+
+                    if (!any_work) break;
+
+                    // Check if next hop has any spill
+                    var has_next = false;
+                    for (next_spill.counts) |c| {
+                        if (c > 0) { has_next = true; break; }
+                    }
+                    if (!has_next) break;
+
+                    current_spill = next_spill;
+                    // Note: base_key stays the same for multi-face spill.
+                    // Each face's entries already encode neighbor-relative coords.
                 }
 
                 // Re-lock so the defer unlock at outer scope is balanced

@@ -1274,6 +1274,7 @@ pub fn destructiveBlockLightFromBorder(
     light_map: *LightMap,
     chunk: *const WorldState.Chunk,
     border_entries: []const DestructiveEntry,
+    next_spill: ?*BorderSpill,
 ) u6 {
     var queue: [BLOCKS_PER_CHUNK]DestructiveEntry = undefined;
     var head: u32 = 0;
@@ -1355,7 +1356,32 @@ pub fn destructiveBlockLightFromBorder(
             const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
 
             if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
-                if (active != 0) boundary_mask |= @as(u6, 1) << faceBit(dir);
+                if (active != 0) {
+                    boundary_mask |= @as(u6, 1) << faceBit(dir);
+                    // Collect for recursive multi-hop
+                    if (next_spill) |spill| {
+                        const face = faceBit(dir);
+                        if (spill.counts[face] < BorderSpill.MAX_PER_FACE) {
+                            const nr = e.r -| ATTENUATION;
+                            const ng = e.g -| ATTENUATION;
+                            const nb = e.b -| ATTENUATION;
+                            if (nr > 0 or ng > 0 or nb > 0) {
+                                const pos = borderEntryPos(dir, e.x, e.y, e.z);
+                                spill.entries[face][spill.counts[face]] = .{
+                                    .x = pos.x,
+                                    .y = pos.y,
+                                    .z = pos.z,
+                                    .dir = @intCast(dir),
+                                    .r = nr,
+                                    .g = ng,
+                                    .b = nb,
+                                    .active = active,
+                                };
+                                spill.counts[face] += 1;
+                            }
+                        }
+                    }
+                }
                 continue;
             }
 
