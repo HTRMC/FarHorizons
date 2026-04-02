@@ -331,13 +331,25 @@ pub const MeshWorker = struct {
                 // AB/BA deadlock (neighbor border snapshot locks our mutex).
                 lm.mutex.unlock(io);
 
-                // Recursive cross-chunk destructive BFS: process border spill
-                // in each affected face neighbor. Each neighbor can produce
-                // its own spill for further neighbors (multi-hop, max 4 deep).
+                // Cubyz-style deferred batch reconstruction:
+                // Phase 1: Run ALL destructive BFS across chunks, collecting
+                // reseed positions. No reconstruction yet.
+                // Phase 2: After all destruction, batch-reconstruct from
+                // remaining sources in each affected chunk.
+                const MAX_AFFECTED = 8; // source + up to 6 face + 1 hop
+                var affected_lms: [MAX_AFFECTED]*LightMap = undefined;
+                var affected_chunks: [MAX_AFFECTED]*const WorldState.Chunk = undefined;
+                var affected_reseeds: [MAX_AFFECTED]LightEngine.ReseedBuffer = undefined;
+                var affected_keys: [MAX_AFFECTED]ChunkKey = undefined;
+                var affected_count: u32 = 0;
+
+                // Source chunk reseeds (from applyBlockChange's destructiveBlockLight)
+                // were already applied inline (null deferred_reseeds in applyBlockChange).
+                // For neighbors, we defer.
+
                 const MAX_HOPS = 4;
                 var current_spill = spill;
                 var hop: u32 = 0;
-                var base_key = key;
 
                 while (hop < MAX_HOPS) : (hop += 1) {
                     var next_spill = LightEngine.BorderSpill{};
@@ -346,33 +358,47 @@ pub const MeshWorker = struct {
                     for (0..6) |face| {
                         if (current_spill.counts[face] == 0) continue;
                         const nk = ChunkKey{
-                            .cx = base_key.cx + offsets[face][0],
-                            .cy = base_key.cy + offsets[face][1],
-                            .cz = base_key.cz + offsets[face][2],
+                            .cx = key.cx + offsets[face][0],
+                            .cy = key.cy + offsets[face][1],
+                            .cz = key.cz + offsets[face][2],
                         };
                         const nlm = self.light_maps.get(nk) orelse continue;
                         const nchunk = self.chunk_map.get(nk) orelse continue;
 
+                        // Destructive-only pass (reseeds deferred)
+                        var reseeds = LightEngine.ReseedBuffer{};
                         nlm.mutex.lockUncancelable(io);
-                        _ = LightEngine.destructiveBlockLightFromBorder(nlm, nchunk, current_spill.entries[face][0..current_spill.counts[face]], &next_spill);
+                        _ = LightEngine.destructiveBlockLightFromBorder(nlm, nchunk, current_spill.entries[face][0..current_spill.counts[face]], &next_spill, &reseeds);
                         nlm.mutex.unlock(io);
+
+                        // Track for batch reconstruction
+                        if (affected_count < MAX_AFFECTED and reseeds.count > 0) {
+                            affected_lms[affected_count] = nlm;
+                            affected_chunks[affected_count] = nchunk;
+                            affected_reseeds[affected_count] = reseeds;
+                            affected_keys[affected_count] = nk;
+                            affected_count += 1;
+                        }
 
                         if (self.pool) |p| p.submitMesh(nk);
                         any_work = true;
                     }
 
                     if (!any_work) break;
-
-                    // Check if next hop has any spill
                     var has_next = false;
                     for (next_spill.counts) |c| {
                         if (c > 0) { has_next = true; break; }
                     }
                     if (!has_next) break;
-
                     current_spill = next_spill;
-                    // Note: base_key stays the same for multi-face spill.
-                    // Each face's entries already encode neighbor-relative coords.
+                }
+
+                // Phase 2: Batch reconstruction — all stale values are now
+                // cleared across all chunks, so reseeds read correct values.
+                for (0..affected_count) |ai| {
+                    affected_lms[ai].mutex.lockUncancelable(io);
+                    _ = LightEngine.reseedBlockLight(affected_lms[ai], affected_chunks[ai], affected_reseeds[ai].positions[0..affected_reseeds[ai].count]);
+                    affected_lms[ai].mutex.unlock(io);
                 }
 
                 // Re-lock so the defer unlock at outer scope is balanced

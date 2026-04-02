@@ -935,6 +935,15 @@ pub const BorderSpill = struct {
     counts: [6]u32 = .{0} ** 6,
 };
 
+/// Collected reseed positions from destructive BFS (Cubyz-style deferred reconstruction).
+/// Instead of reseeding immediately per-chunk, all reseeds are collected across chunks
+/// and batch-reconstructed after ALL destructive passes complete.
+pub const ReseedBuffer = struct {
+    pub const MAX_RESEEDS = BLOCKS_PER_CHUNK;
+    positions: [MAX_RESEEDS]ReseedPos = undefined,
+    count: u32 = 0,
+};
+
 /// Maps a BFS direction to the entry position in the neighbor chunk.
 fn borderEntryPos(dir: usize, x: i8, y: i8, z: i8) struct { x: i8, y: i8, z: i8 } {
     const S: i8 = CHUNK_SIZE - 1;
@@ -997,7 +1006,7 @@ pub fn applyBlockChange(
 
     // STEP 1: Remove block light if the position is becoming opaque or losing an emitter.
     if (has_current_light and (new_opaque or had_emission)) {
-        boundary_mask |= destructiveBlockLight(light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), current_light, border_spill);
+        boundary_mask |= destructiveBlockLight(light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), current_light, border_spill, null);
     }
 
     // STEP 2: Set the position's own light value.
@@ -1075,6 +1084,7 @@ fn destructiveBlockLight(
     sz: i8,
     start_light: [3]u8,
     border_spill: ?*BorderSpill,
+    deferred_reseeds: ?*ReseedBuffer,
 ) u6 {
     var queue: [BLOCKS_PER_CHUNK]DestructiveEntry = undefined;
     var head: u32 = 0;
@@ -1220,15 +1230,26 @@ fn destructiveBlockLight(
     }
 
     // Phase 2: Re-propagate from reseed positions (where we found light from other sources).
+    // If deferred_reseeds is provided, collect positions for batch reconstruction later.
+    // Otherwise, reseed immediately (non-cross-chunk path).
     if (reseed_count > 0) {
-        boundary_mask |= reseedBlockLight(light_map, chunk, reseed[0..reseed_count]);
+        if (deferred_reseeds) |buf| {
+            for (reseed[0..reseed_count]) |rs| {
+                if (buf.count < ReseedBuffer.MAX_RESEEDS) {
+                    buf.positions[buf.count] = rs;
+                    buf.count += 1;
+                }
+            }
+        } else {
+            boundary_mask |= reseedBlockLight(light_map, chunk, reseed[0..reseed_count]);
+        }
     }
 
     return boundary_mask;
 }
 
 /// Re-propagates block light from a list of reseed positions using additive BFS.
-fn reseedBlockLight(
+pub fn reseedBlockLight(
     light_map: *LightMap,
     chunk: *const WorldState.Chunk,
     reseeds: []const ReseedPos,
@@ -1275,6 +1296,7 @@ pub fn destructiveBlockLightFromBorder(
     chunk: *const WorldState.Chunk,
     border_entries: []const DestructiveEntry,
     next_spill: ?*BorderSpill,
+    deferred_reseeds: ?*ReseedBuffer,
 ) u6 {
     var queue: [BLOCKS_PER_CHUNK]DestructiveEntry = undefined;
     var head: u32 = 0;
@@ -1407,9 +1429,18 @@ pub fn destructiveBlockLightFromBorder(
         }
     }
 
-    // Phase 2: Re-propagate from reseed positions
+    // Phase 2: Defer reseeds or run immediately
     if (reseed_count > 0) {
-        boundary_mask |= reseedBlockLight(light_map, chunk, reseed[0..reseed_count]);
+        if (deferred_reseeds) |buf| {
+            for (reseed[0..reseed_count]) |rs| {
+                if (buf.count < ReseedBuffer.MAX_RESEEDS) {
+                    buf.positions[buf.count] = rs;
+                    buf.count += 1;
+                }
+            }
+        } else {
+            boundary_mask |= reseedBlockLight(light_map, chunk, reseed[0..reseed_count]);
+        }
     }
 
     return boundary_mask;
