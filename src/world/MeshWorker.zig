@@ -320,46 +320,37 @@ pub const MeshWorker = struct {
                 }
             } else if (lm.incremental) |update| {
                 lm.incremental = null;
-                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block);
 
-                // UNLOCK source mutex before neighbor recompute to avoid
-                // deadlock: neighbor's snapshotNeighborBorders would try to
-                // lock our mutex back (AB/BA deadlock).
+                // Cross-chunk destructive BFS: collect border spill entries
+                // during source chunk's destructive pass, then surgically
+                // clear only the affected values in each neighbor (Cubyz-style).
+                var spill = LightEngine.BorderSpill{};
+                _ = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block, &spill);
+
+                // UNLOCK source mutex before neighbor processing to avoid
+                // AB/BA deadlock (neighbor border snapshot locks our mutex).
                 lm.mutex.unlock(io);
 
-                // Cross-chunk light propagation: synchronously recompute each
-                // affected face neighbor RIGHT HERE (same worker thread).
-                if (boundary_mask != 0) {
-                    for (0..6) |i| {
-                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                            const nk = ChunkKey{
-                                .cx = key.cx + offsets[i][0],
-                                .cy = key.cy + offsets[i][1],
-                                .cz = key.cz + offsets[i][2],
-                            };
-                            const nlm = self.light_maps.get(nk) orelse continue;
-                            const nchunk = self.chunk_map.get(nk) orelse continue;
+                // Process border spill in each affected face neighbor
+                for (0..6) |face| {
+                    if (spill.counts[face] == 0) continue;
+                    const nk = ChunkKey{
+                        .cx = key.cx + offsets[face][0],
+                        .cy = key.cy + offsets[face][1],
+                        .cz = key.cz + offsets[face][2],
+                    };
+                    const nlm = self.light_maps.get(nk) orelse continue;
+                    const nchunk = self.chunk_map.get(nk) orelse continue;
 
-                            var n_neighbor_lights: [6]?*LightMap = .{null} ** 6;
-                            for (0..6) |j| {
-                                const nnk = ChunkKey{
-                                    .cx = nk.cx + offsets[j][0],
-                                    .cy = nk.cy + offsets[j][1],
-                                    .cz = nk.cz + offsets[j][2],
-                                };
-                                n_neighbor_lights[j] = self.light_maps.get(nnk);
-                            }
-                            const n_borders = LightMapMod.snapshotNeighborBorders(n_neighbor_lights);
-                            const n_neighbors = self.chunk_map.getNeighbors(nk);
-                            const n_surface = self.surface_height_map.getHeights(nk.cx, nk.cz);
+                    // Surgical destructive BFS in neighbor — only clears
+                    // values that came from the removed/changed source.
+                    // Much faster than full recompute.
+                    nlm.mutex.lockUncancelable(io);
+                    _ = LightEngine.destructiveBlockLightFromBorder(nlm, nchunk, spill.entries[face][0..spill.counts[face]]);
+                    nlm.mutex.unlock(io);
 
-                            nlm.mutex.lockUncancelable(io);
-                            _ = LightEngine.computeChunkLight(nchunk, n_neighbors, n_borders, nlm, nk.cy, n_surface);
-                            nlm.mutex.unlock(io);
-
-                            if (self.pool) |p| p.submitMesh(nk);
-                        }
-                    }
+                    // Submit mesh task to update GPU light data
+                    if (self.pool) |p| p.submitMesh(nk);
                 }
 
                 // Re-lock so the defer unlock at outer scope is balanced
