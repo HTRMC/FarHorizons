@@ -987,8 +987,11 @@ pub fn applyBlockChange(
         // New emitter placed — propagate its light.
         light_map.block_light.set(idx, new_emit);
         boundary_mask |= additiveBlockLight(light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), new_emit);
-    } else if (old_opaque and !new_opaque) {
-        // Opened up (was opaque, now transparent) — seed from neighbors' block light.
+    } else if (old_opaque and !new_opaque and !had_emission) {
+        // Opened up (was opaque, now transparent, NOT an emitter) — seed from
+        // neighbors' block light. Skip this for emitter removal because
+        // neighbors still have stale light values from the removed source,
+        // which would immediately re-fill the cleared position.
         var seed_val: [3]u8 = .{ 0, 0, 0 };
         for (0..6) |dir| {
             const nx = @as(i32, lx) + BFS_OFFSETS[dir][0];

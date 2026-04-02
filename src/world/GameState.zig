@@ -736,7 +736,9 @@ pub fn markDirty(self: *GameState, pos: WorldState.WorldBlockPos, player: bool) 
 }
 
 /// Try to use incremental light update for a single block change.
-/// Falls back to full markDirty if the light map isn't ready for incremental updates.
+/// Falls back to full markDirty if the light map isn't ready for incremental updates,
+/// or if the old block was a light emitter (incremental removal can't clear stale
+/// propagated values from neighbors — needs full recompute from scratch).
 pub fn markDirtyIncremental(self: *GameState, pos: WorldState.WorldBlockPos, old_block: BlockState.StateId) void {
     const base_key = pos.toChunkKey();
 

@@ -300,9 +300,7 @@ pub const MeshWorker = struct {
                 const surface_heights = self.surface_height_map.getHeights(key.cx, key.cz);
                 const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
 
-                // Light-only refresh for neighbors whose borders changed.
-                // Neighbors recompute their lighting with updated border values,
-                // propagating light inward via BFS (e.g. torches near chunk borders).
+                // Initial load / full recompute: light-only refresh for neighbors.
                 if (boundary_mask != 0) {
                     var lo_keys: [6]ChunkKey = undefined;
                     var lo_count: usize = 0;
@@ -323,36 +321,63 @@ pub const MeshWorker = struct {
             } else if (lm.incremental) |update| {
                 lm.incremental = null;
                 const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block);
+
+                // UNLOCK source mutex before neighbor recompute to avoid
+                // deadlock: neighbor's snapshotNeighborBorders would try to
+                // lock our mutex back (AB/BA deadlock).
+                lm.mutex.unlock(io);
+
+                // Cross-chunk light propagation: synchronously recompute each
+                // affected face neighbor RIGHT HERE (same worker thread).
                 if (boundary_mask != 0) {
-                    var lo_keys: [6]ChunkKey = undefined;
-                    var lo_count: usize = 0;
                     for (0..6) |i| {
                         if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                            lo_keys[lo_count] = .{
+                            const nk = ChunkKey{
                                 .cx = key.cx + offsets[i][0],
                                 .cy = key.cy + offsets[i][1],
                                 .cz = key.cz + offsets[i][2],
                             };
-                            lo_count += 1;
+                            const nlm = self.light_maps.get(nk) orelse continue;
+                            const nchunk = self.chunk_map.get(nk) orelse continue;
+
+                            var n_neighbor_lights: [6]?*LightMap = .{null} ** 6;
+                            for (0..6) |j| {
+                                const nnk = ChunkKey{
+                                    .cx = nk.cx + offsets[j][0],
+                                    .cy = nk.cy + offsets[j][1],
+                                    .cz = nk.cz + offsets[j][2],
+                                };
+                                n_neighbor_lights[j] = self.light_maps.get(nnk);
+                            }
+                            const n_borders = LightMapMod.snapshotNeighborBorders(n_neighbor_lights);
+                            const n_neighbors = self.chunk_map.getNeighbors(nk);
+                            const n_surface = self.surface_height_map.getHeights(nk.cx, nk.cz);
+
+                            nlm.mutex.lockUncancelable(io);
+                            _ = LightEngine.computeChunkLight(nchunk, n_neighbors, n_borders, nlm, nk.cy, n_surface);
+                            nlm.mutex.unlock(io);
+
+                            if (self.pool) |p| p.submitMesh(nk);
                         }
                     }
-                    if (lo_count > 0) {
-                        if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
-                    }
                 }
+
+                // Re-lock so the defer unlock at outer scope is balanced
+                lm.mutex.lockUncancelable(io);
             }
         }
 
         if (light_only) {
-            // Only run the expensive border BFS if neighbor light would actually
-            // change values in this chunk's light map. During initial world load
-            // most cascading light-only refreshes have no new light to propagate.
+            // Propagate neighbor border light into this chunk's light map.
+            // Only for light-only tasks — full mesh tasks already handle border
+            // propagation via computeChunkLight's BFS seeding (dirty path) or
+            // applyBlockChange (incremental path). Running this after a dirty
+            // recompute would re-add stale neighbor values that were just cleared.
             if (light_map) |lm| {
                 if (LightEngine.needsPropagation(chunk, neighbor_borders, lm)) {
                     LightEngine.propagateFromNeighbor(chunk, neighbor_borders, lm);
                 }
             }
-
             const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
                 std.log.err("Chunk light-only generation failed ({},{},{}): {}", .{ key.cx, key.cy, key.cz, err });
                 return true;
