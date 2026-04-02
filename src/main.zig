@@ -1441,7 +1441,7 @@ fn parseCliArgs(allocator: std.mem.Allocator) CliArgs {
     // CLI flags override env vars (cross-platform).
     const args_vec: std.process.Args.Vector = switch (@import("builtin").os.tag) {
         .windows => std.os.windows.peb().ProcessParameters.CommandLine.slice(),
-        else => if (@hasField(std.process.Args, "vector")) .{} else {},
+        else => if (@hasField(std.process.Args, "vector")) &.{} else {},
     };
     var iter = std.process.Args.Iterator.initAllocator(.{ .vector = args_vec }, allocator) catch return result;
     _ = iter.next(); // skip executable name

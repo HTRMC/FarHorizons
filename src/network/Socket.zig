@@ -83,7 +83,9 @@ pub fn init(local_port: u16) !Socket {
                 }
                 break :blk sock;
             } else {
-                break :blk try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
+                const fd = std.c.socket(std.c.AF.INET, std.c.SOCK.DGRAM, std.c.IPPROTO.UDP);
+                if (fd == -1) return error.SocketCreateFailed;
+                break :blk fd;
             }
         },
     };
@@ -98,7 +100,8 @@ pub fn init(local_port: u16) !Socket {
             try windowsError(ws2.WSAGetLastError());
         }
     } else {
-        try posix.bind(self.socket_id, @ptrCast(&binding_addr), @sizeOf(posix.sockaddr.in));
+        if (std.c.bind(self.socket_id, @ptrCast(&binding_addr), @sizeOf(posix.sockaddr.in)) == -1)
+            return error.BindFailed;
     }
     return self;
 }
@@ -107,7 +110,7 @@ pub fn deinit(self: Socket) void {
     if (builtin.os.tag == .windows) {
         _ = ws2.closesocket(self.socket_id);
     } else {
-        posix.close(self.socket_id);
+        _ = std.c.close(self.socket_id);
     }
 }
 
@@ -123,9 +126,10 @@ pub fn send(self: Socket, data: []const u8, destination: Address) void {
             std.log.warn("Send error to {}: {s}", .{ destination, @errorName(err) });
         }
     } else {
-        _ = posix.sendto(self.socket_id, data, 0, @ptrCast(&addr), @sizeOf(posix.sockaddr.in)) catch |err| {
-            std.log.warn("Send error to {}: {s}", .{ destination, @errorName(err) });
-        };
+        const result = std.c.sendto(self.socket_id, data.ptr, data.len, 0, @ptrCast(&addr), @sizeOf(posix.sockaddr.in));
+        if (result == -1) {
+            std.log.warn("Send error to {}", .{destination});
+        }
     }
 }
 
@@ -141,10 +145,11 @@ pub fn receive(self: Socket, buffer: []u8, result_address: *Address) ![]u8 {
             return error.Timeout;
         }
     } else {
-        var pfd = [1]posix.pollfd{
-            .{ .fd = self.socket_id, .events = posix.POLL.IN, .revents = undefined },
+        var pfd = [1]std.c.pollfd{
+            .{ .fd = self.socket_id, .events = std.c.POLL.IN, .revents = undefined },
         };
-        const length = try posix.poll(&pfd, 1);
+        const length = std.c.poll(&pfd, 1, 1);
+        if (length == -1) return error.PollFailed;
         if (length == 0) return error.Timeout;
     }
 
@@ -159,8 +164,10 @@ pub fn receive(self: Socket, buffer: []u8, result_address: *Address) ![]u8 {
             }
             break :blk @intCast(result);
         } else {
-            var addr_len: posix.socklen_t = @sizeOf(posix.sockaddr.in);
-            break :blk try posix.recvfrom(self.socket_id, buffer, 0, @ptrCast(&addr), &addr_len);
+            var addr_len: std.c.socklen_t = @sizeOf(posix.sockaddr.in);
+            const result = std.c.recvfrom(self.socket_id, buffer.ptr, buffer.len, 0, @ptrCast(&addr), &addr_len);
+            if (result == -1) return error.RecvFailed;
+            break :blk @intCast(result);
         }
     };
     result_address.ip = addr.addr;
@@ -176,8 +183,9 @@ pub fn getPort(self: Socket) !u16 {
             try windowsError(ws2.WSAGetLastError());
         }
     } else {
-        var addr_len: posix.socklen_t = @sizeOf(posix.sockaddr.in);
-        try posix.getsockname(self.socket_id, @ptrCast(&addr), &addr_len);
+        var addr_len: std.c.socklen_t = @sizeOf(posix.sockaddr.in);
+        if (std.c.getsockname(self.socket_id, @ptrCast(&addr), &addr_len) == -1)
+            return error.GetSockNameFailed;
     }
     return @byteSwap(addr.port);
 }

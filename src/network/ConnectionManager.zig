@@ -123,7 +123,6 @@ fn receiveLoop(self: *ConnectionManager) void {
         const data = self.socket.receive(&self.receive_buffer, &source_addr) catch |err| {
             switch (err) {
                 error.Timeout => {},
-                error.ConnectionReset => {}, // ICMP port unreachable on Windows
                 else => std.log.warn("Socket receive error: {s}", .{@errorName(err)}),
             }
             // Periodic maintenance even when no packets
