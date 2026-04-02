@@ -368,7 +368,7 @@ pub const MeshWorker = struct {
                         // Destructive-only pass (reseeds deferred)
                         var reseeds = LightEngine.ReseedBuffer{};
                         nlm.mutex.lockUncancelable(io);
-                        _ = LightEngine.destructiveBlockLightFromBorder(nlm, nchunk, current_spill.entries[face][0..current_spill.counts[face]], &next_spill, &reseeds);
+                        _ = LightEngine.propagateDestructive(nlm, nchunk, current_spill.entries[face][0..current_spill.counts[face]], &next_spill, &reseeds);
                         nlm.mutex.unlock(io);
 
                         // Track for batch reconstruction
