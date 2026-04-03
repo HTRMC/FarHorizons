@@ -638,7 +638,7 @@ const ReseedPos = struct {
 /// Each face has its own buffer of entries that need to be processed in the
 /// neighbor chunk (Cubyz-style propagateDestructiveFromNeighbor).
 pub const BorderSpill = struct {
-    pub const MAX_PER_FACE = 256;
+    pub const MAX_PER_FACE = 1024;
     entries: [6][MAX_PER_FACE]DestructiveEntry = undefined,
     counts: [6]u32 = .{0} ** 6,
 };
@@ -650,6 +650,28 @@ pub const ReseedBuffer = struct {
     pub const MAX_RESEEDS = BLOCKS_PER_CHUNK;
     positions: [MAX_RESEEDS]ReseedPos = undefined,
     count: u32 = 0,
+};
+
+/// Collected results from recursive cross-chunk destructive BFS.
+const SpillContext = struct {
+    const MAX_AFFECTED = 32;
+    affected_lms: [MAX_AFFECTED]*LightMap = undefined,
+    affected_chunks: [MAX_AFFECTED]*const WorldState.Chunk = undefined,
+    affected_reseeds: [MAX_AFFECTED]ReseedBuffer = undefined,
+    affected_keys: [MAX_AFFECTED]ChunkKey = undefined,
+    affected_count: u32 = 0,
+
+    light_maps: *const LightMaps,
+    chunk_map: *const ChunkMap,
+
+    fn record(self: *SpillContext, nk: ChunkKey, nlm: *LightMap, nchunk: *const WorldState.Chunk, reseeds: ReseedBuffer) void {
+        if (self.affected_count >= MAX_AFFECTED) return;
+        self.affected_lms[self.affected_count] = nlm;
+        self.affected_chunks[self.affected_count] = nchunk;
+        self.affected_reseeds[self.affected_count] = reseeds;
+        self.affected_keys[self.affected_count] = nk;
+        self.affected_count += 1;
+    }
 };
 
 /// Process border spill into neighbor chunks (Cubyz-style propagateLightsDestructive).
@@ -665,71 +687,72 @@ pub fn processNeighborSpill(
     chunk_map: *const ChunkMap,
     affected_keys_out: []ChunkKey,
 ) u32 {
+    var ctx = SpillContext{
+        .light_maps = light_maps,
+        .chunk_map = chunk_map,
+    };
+
+    processSpillRecursive(initial_spill, source_key, &ctx, 0);
+
+    // Batch reconstruction — all stale values cleared, reseeds safe
+    const io = Io.Threaded.global_single_threaded.io();
+    for (0..ctx.affected_count) |ai| {
+        ctx.affected_lms[ai].mutex.lockUncancelable(io);
+        _ = reseedLight(false, ctx.affected_lms[ai], ctx.affected_chunks[ai], ctx.affected_reseeds[ai].positions[0..ctx.affected_reseeds[ai].count]);
+        ctx.affected_lms[ai].mutex.unlock(io);
+    }
+
+    // Copy keys to output
+    var key_count: u32 = 0;
+    for (0..ctx.affected_count) |ai| {
+        if (key_count >= affected_keys_out.len) break;
+        affected_keys_out[key_count] = ctx.affected_keys[ai];
+        key_count += 1;
+    }
+    return key_count;
+}
+
+/// Recursive cross-chunk destructive BFS. Each call correctly uses `from_key`
+/// (the chunk that produced the spill) to compute neighbor keys.
+fn processSpillRecursive(
+    spill: *const BorderSpill,
+    from_key: ChunkKey,
+    ctx: *SpillContext,
+    depth: u32,
+) void {
+    const MAX_DEPTH = 4;
+    if (depth >= MAX_DEPTH) return;
+
     const io = Io.Threaded.global_single_threaded.io();
     const face_offsets = WorldState.face_neighbor_offsets;
 
-    const MAX_AFFECTED = 24;
-    var affected_lms: [MAX_AFFECTED]*LightMap = undefined;
-    var affected_chunks: [MAX_AFFECTED]*const WorldState.Chunk = undefined;
-    var affected_reseeds: [MAX_AFFECTED]ReseedBuffer = undefined;
-    var affected_count: u32 = 0;
-    var key_count: u32 = 0;
+    for (0..6) |face| {
+        if (spill.counts[face] == 0) continue;
+        const nk = ChunkKey{
+            .cx = from_key.cx + face_offsets[face][0],
+            .cy = from_key.cy + face_offsets[face][1],
+            .cz = from_key.cz + face_offsets[face][2],
+        };
+        const nlm = ctx.light_maps.get(nk) orelse continue;
+        const nchunk = ctx.chunk_map.get(nk) orelse continue;
 
-    // Recursive cross-chunk destructive BFS (max 4 hops)
-    var current_spill = initial_spill.*;
-    const MAX_HOPS = 4;
-    var hop: u32 = 0;
-    while (hop < MAX_HOPS) : (hop += 1) {
-        var next_spill = BorderSpill{};
-        var any_work = false;
+        var new_spill = BorderSpill{};
+        var reseeds = ReseedBuffer{};
+        nlm.mutex.lockUncancelable(io);
+        _ = propagateDestructive(nlm, nchunk, spill.entries[face][0..spill.counts[face]], &new_spill, &reseeds);
+        nlm.mutex.unlock(io);
 
-        for (0..6) |face| {
-            if (current_spill.counts[face] == 0) continue;
-            const nk = ChunkKey{
-                .cx = source_key.cx + face_offsets[face][0],
-                .cy = source_key.cy + face_offsets[face][1],
-                .cz = source_key.cz + face_offsets[face][2],
-            };
-            const nlm = light_maps.get(nk) orelse continue;
-            const nchunk = chunk_map.get(nk) orelse continue;
+        ctx.record(nk, nlm, nchunk, reseeds);
 
-            var reseeds = ReseedBuffer{};
-            nlm.mutex.lockUncancelable(io);
-            _ = propagateDestructive(nlm, nchunk, current_spill.entries[face][0..current_spill.counts[face]], &next_spill, &reseeds);
-            nlm.mutex.unlock(io);
-
-            if (affected_count < MAX_AFFECTED) {
-                affected_lms[affected_count] = nlm;
-                affected_chunks[affected_count] = nchunk;
-                affected_reseeds[affected_count] = reseeds;
-                affected_count += 1;
-            }
-
-            if (key_count < affected_keys_out.len) {
-                affected_keys_out[key_count] = nk;
-                key_count += 1;
-            }
-
-            any_work = true;
-        }
-
-        if (!any_work) break;
+        // Recurse: new_spill is relative to nk (the chunk we just processed)
         var has_next = false;
-        for (next_spill.counts) |c| {
+        for (new_spill.counts) |c| {
             if (c > 0) { has_next = true; break; }
         }
-        if (!has_next) break;
-        current_spill = next_spill;
+        if (has_next) {
+            processSpillRecursive(&new_spill, nk, ctx, depth + 1);
+        }
     }
-
-    // Batch reconstruction — all stale values cleared, reseeds safe
-    for (0..affected_count) |ai| {
-        affected_lms[ai].mutex.lockUncancelable(io);
-        _ = reseedLight(false, affected_lms[ai], affected_chunks[ai], affected_reseeds[ai].positions[0..affected_reseeds[ai].count]);
-        affected_lms[ai].mutex.unlock(io);
-    }
-
-    return key_count;
 }
 
 /// Maps a BFS direction to the entry position in the neighbor chunk.
@@ -793,9 +816,9 @@ pub fn applyBlockChange(
     const had_emission = old_emit[0] > 0 or old_emit[1] > 0 or old_emit[2] > 0;
 
     // STEP 1: Remove block light if the position is becoming opaque or losing an emitter.
+    // Seed the destructive BFS with the current light value. Do NOT pre-zero —
+    // propagateDestructive reads and zeros the value during iteration (Cubyz pattern).
     if (has_current_light and (new_opaque or had_emission)) {
-        // Source chunk destructive: zero the emitter position, seed with one entry
-        light_map.block_light.set(chunkIndex(@intCast(lx), @intCast(ly), @intCast(lz)), .{ 0, 0, 0 });
         const seed = [1]DestructiveEntry{.{
             .x = @intCast(lx), .y = @intCast(ly), .z = @intCast(lz),
             .dir = 6, .r = current_light[0], .g = current_light[1], .b = current_light[2],
@@ -909,7 +932,10 @@ pub fn propagateDestructive(
         const uz: usize = @intCast(e.z);
         const idx = chunkIndex(ux, uy, uz);
 
-        if (BlockState.isOpaque(chunk.blocks.get(idx))) continue;
+        // No opaque check here (matches Cubyz). The per-channel matching
+        // naturally handles opaque blocks: stored value is 0 or mismatched,
+        // causing all channels to deactivate. This also allows the BFS to
+        // process the initial seed when a block just became opaque.
 
         const actual = light_map.block_light.get(idx);
 
@@ -1534,11 +1560,52 @@ fn makeUndergroundChunk() !*Chunk {
     return chunk;
 }
 
-// Tests removed: "incremental: remove glowstone clears its light" and
-// "incremental: place opaque block blocks light" — pre-existing bug where
-// applyBlockChange zeros the emitter position before propagateDestructive
-// reads it, causing the destructive BFS to skip immediately.
-// Will be re-added when the destructive BFS integration is fixed.
+test "incremental: remove glowstone clears its light" {
+    const chunk = try makeUndergroundChunk();
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
+
+    const lm = try allocLightMap();
+    defer freeLightMap(lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, &underground_surface);
+
+    try testing.expectEqual(@as(u8, 255), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
+    try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
+
+    const old_block = chunk.blocks.get(chunkIndex(16, 16, 16));
+    chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
+    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, old_block, null);
+
+    try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
+    try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
+    try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(15, 16, 16))[0]);
+    try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(16, 16, 20))[0]);
+}
+
+test "incremental: place opaque block blocks light" {
+    const chunk = try makeUndergroundChunk();
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
+
+    const lm = try allocLightMap();
+    defer freeLightMap(lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, &underground_surface);
+
+    try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), lm.block_light.get(chunkIndex(18, 16, 16))[0]);
+
+    chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
+    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, AIR, null);
+
+    try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
+    const behind = lm.block_light.get(chunkIndex(18, 16, 16));
+    try testing.expect(behind[0] < 255 - 2 * ATTENUATION);
+}
 
 test "incremental: break opaque block lets light through" {
     const chunk = try makeUndergroundChunk();
@@ -1567,8 +1634,30 @@ test "incremental: break opaque block lets light through" {
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), lm.block_light.get(chunkIndex(18, 16, 16))[0]);
 }
 
-// Test removed: "incremental: two glowstones, remove one preserves other"
-// Same pre-existing destructive BFS bug as above.
+test "incremental: two glowstones, remove one preserves other" {
+    const chunk = try makeUndergroundChunk();
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(10, 16, 16), BlockState.defaultState(.glowstone));
+    chunk.blocks.set(chunkIndex(20, 16, 16), BlockState.defaultState(.glowstone));
+
+    const lm = try allocLightMap();
+    defer freeLightMap(lm);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm, 0, &underground_surface);
+
+    const mid_before = lm.block_light.get(chunkIndex(15, 16, 16));
+    try testing.expect(mid_before[0] > 0);
+
+    chunk.blocks.set(chunkIndex(10, 16, 16), AIR);
+    _ = applyBlockChange(chunk, lm, .{ .x = 10, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null);
+
+    try testing.expectEqual(@as(u8, 255 - 10 * ATTENUATION), lm.block_light.get(chunkIndex(10, 16, 16))[0]);
+    try testing.expectEqual(@as(u8, 255), lm.block_light.get(chunkIndex(20, 16, 16))[0]);
+    try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(19, 16, 16))[0]);
+    try testing.expectEqual(@as(u8, 255 - 5 * ATTENUATION), lm.block_light.get(chunkIndex(15, 16, 16))[0]);
+}
 
 test "incremental: place glowstone adds light" {
     const chunk = try makeUndergroundChunk();
@@ -1597,9 +1686,38 @@ test "incremental: place glowstone adds light" {
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
 }
 
-// Tests removed: "incremental: matches full recompute for remove glowstone"
-// and "incremental: matches full recompute for place wall"
-// Same pre-existing destructive BFS bug as above.
+// test "incremental: matches full recompute for remove glowstone"
+// Skipped: fixed-size destructive BFS queue overflows when the light sphere
+// covers most of the chunk, leaving fringe residuals (off by ≤7 at cone edges).
+// Will pass after Phase B switches to dynamic queues (Cubyz CircularBufferQueue).
+
+test "incremental: matches full recompute for place wall" {
+    const chunk = try makeUndergroundChunk();
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
+
+    const lm_inc = try allocLightMap();
+    defer freeLightMap(lm_inc);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
+
+    chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, AIR, null);
+
+    const lm_full = try allocLightMap();
+    defer freeLightMap(lm_full);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_full, 0, &underground_surface);
+
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        const inc = lm_inc.block_light.get(i);
+        const full = lm_full.block_light.get(i);
+        try testing.expectEqual(full[0], inc[0]);
+        try testing.expectEqual(full[1], inc[1]);
+        try testing.expectEqual(full[2], inc[2]);
+    }
+}
 
 test "incremental: matches full recompute for break wall" {
     const chunk = try makeUndergroundChunk();
