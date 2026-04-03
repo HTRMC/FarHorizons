@@ -40,9 +40,8 @@ void unpackLight(uint packed, out vec3 sky, out vec3 block) {
 }
 
 void main() {
-    // Smoothstep UV for C1 gradient continuity at face boundaries:
-    // derivative goes to zero at edges, so adjacent faces meet smoothly
-    vec2 st = smoothstep(0.0, 1.0, fragUV);
+    // Cubyz: linear interpolation (GPU rasterizer-equivalent)
+    vec2 st = fragUV;
 
     // Bilinear interpolation of light across the quad
     // fragLightPacked: [0]=UV(0,0), [1]=UV(1,0), [2]=UV(0,1), [3]=UV(1,1)
@@ -55,9 +54,10 @@ void main() {
     vec3 skyLight = mix(mix(sky00, sky10, st.x), mix(sky01, sky11, st.x), st.y);
     vec3 blockLight = mix(mix(blk00, blk10, st.x), mix(blk01, blk11, st.x), st.y);
 
-    // Directional shading only on sky light (sun has direction, torches don't)
-    vec3 sky = skyLight * lightVariation(fragNormal) * pc.ambientLight;
+    // Cubyz: combine sun and block via Pythagorean, then apply directional shading
+    vec3 sky = skyLight * pc.ambientLight;
     vec3 light = min(vec3(1.0), sqrt(sky * sky + blockLight * blockLight));
+    light *= lightVariation(fragNormal);
 
     // Bilinear interpolation of AO across the quad
     // UV-to-corner mapping: (0,0)=corner3, (1,0)=corner2, (0,1)=corner0, (1,1)=corner1
