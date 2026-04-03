@@ -323,7 +323,7 @@ pub const MeshWorker = struct {
 
                 // Source chunk: incremental update with border spill collection
                 var spill = LightEngine.BorderSpill{};
-                _ = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block, &spill);
+                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block, &spill);
 
                 // UNLOCK source mutex before cross-chunk processing
                 lm.mutex.unlock(io);
@@ -336,6 +336,28 @@ pub const MeshWorker = struct {
                 );
                 for (affected_keys[0..n_count]) |nk| {
                     if (self.pool) |p| p.submitMesh(nk);
+                }
+
+                // Additive cross-chunk: if BFS reached chunk boundaries (e.g.
+                // placing a light emitter), submit light-only refresh for
+                // affected neighbor faces so they pull in the new light via
+                // propagateFromNeighbor.
+                if (boundary_mask != 0) {
+                    var lo_keys: [6]ChunkKey = undefined;
+                    var lo_count: usize = 0;
+                    for (0..6) |i| {
+                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
+                            lo_keys[lo_count] = .{
+                                .cx = key.cx + offsets[i][0],
+                                .cy = key.cy + offsets[i][1],
+                                .cz = key.cz + offsets[i][2],
+                            };
+                            lo_count += 1;
+                        }
+                    }
+                    if (lo_count > 0) {
+                        if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
+                    }
                 }
 
                 // Re-lock so the defer unlock at outer scope is balanced
