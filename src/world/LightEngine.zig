@@ -76,6 +76,9 @@ fn getNeighborLight(comptime is_sun: bool, neighbor_borders: [6]LightBorderSnaps
     }
 }
 
+/// Unified BFS queue entry for both constructive and destructive propagation
+/// (matches Cubyz's single Entry type). For constructive BFS, active is unused.
+/// For destructive BFS, active tracks which RGB channels are still being cleared.
 const LightQueueEntry = struct {
     x: i8,
     y: i8,
@@ -84,6 +87,7 @@ const LightQueueEntry = struct {
     r: u8,
     g: u8,
     b: u8,
+    active: u3 = 0,
 };
 
 /// Comptime helper: read light value from the appropriate storage channel.
@@ -617,17 +621,6 @@ pub fn propagateFromNeighbor(
 
 // ─── Incremental updates ───
 
-const DestructiveEntry = struct {
-    x: i8,
-    y: i8,
-    z: i8,
-    dir: u3,
-    r: u8,
-    g: u8,
-    b: u8,
-    active: u3,
-};
-
 const ReseedPos = struct {
     x: i8,
     y: i8,
@@ -639,7 +632,7 @@ const ReseedPos = struct {
 /// neighbor chunk (Cubyz-style propagateDestructiveFromNeighbor).
 pub const BorderSpill = struct {
     pub const MAX_PER_FACE = 1024;
-    entries: [6][MAX_PER_FACE]DestructiveEntry = undefined,
+    entries: [6][MAX_PER_FACE]LightQueueEntry = undefined,
     counts: [6]u32 = .{0} ** 6,
 };
 
@@ -739,7 +732,7 @@ fn processSpillRecursive(
         var new_spill = BorderSpill{};
         var reseeds = ReseedBuffer{};
         nlm.mutex.lockUncancelable(io);
-        _ = propagateDestructive(nlm, nchunk, spill.entries[face][0..spill.counts[face]], &new_spill, &reseeds);
+        _ = propagateDestructive(false, nlm, nchunk, spill.entries[face][0..spill.counts[face]], &new_spill, &reseeds);
         nlm.mutex.unlock(io);
 
         ctx.record(nk, nlm, nchunk, reseeds);
@@ -819,12 +812,12 @@ pub fn applyBlockChange(
     // Seed the destructive BFS with the current light value. Do NOT pre-zero —
     // propagateDestructive reads and zeros the value during iteration (Cubyz pattern).
     if (has_current_light and (new_opaque or had_emission)) {
-        const seed = [1]DestructiveEntry{.{
+        const seed = [1]LightQueueEntry{.{
             .x = @intCast(lx), .y = @intCast(ly), .z = @intCast(lz),
             .dir = 6, .r = current_light[0], .g = current_light[1], .b = current_light[2],
             .active = 0b111,
         }};
-        boundary_mask |= propagateDestructive(light_map, chunk, &seed, border_spill, null);
+        boundary_mask |= propagateDestructive(false, light_map, chunk, &seed, border_spill, null);
     }
 
     // STEP 2: Set the position's own light value.
@@ -867,7 +860,12 @@ pub fn applyBlockChange(
         if (new_opaque) {
             // Placing opaque block — destructively remove sky light flowing through here.
             if (current_sky > 0) {
-                boundary_mask |= destructiveSkyLight(light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), current_sky);
+                const sky_seed = [1]LightQueueEntry{.{
+                    .x = @intCast(lx), .y = @intCast(ly), .z = @intCast(lz),
+                    .dir = 6, .r = current_sky, .g = 0, .b = 0,
+                    .active = 0b001, // only R channel for sky
+                }};
+                boundary_mask |= propagateDestructive(true, light_map, chunk, &sky_seed, null, null);
             }
         } else {
             // Breaking opaque block — seed sky light from neighbors.
@@ -900,14 +898,20 @@ pub fn applyBlockChange(
 /// Used for both source chunk (seed from removed emitter position) and
 /// neighbor chunks (seed from border spill entries). The only difference
 /// is how `initial_entries` is populated.
+/// Unified destructive light BFS (ChannelChunk pattern, Cubyz-style propagateDestructive).
+/// Works for both block light and sky light via comptime is_sun.
+/// Walks the light cone from seed entries, zeroing values that match the
+/// expected propagation pattern (per-channel). Collects reseed positions
+/// for reconstruction and border spill entries for cross-chunk propagation.
 pub fn propagateDestructive(
+    comptime is_sun: bool,
     light_map: *LightMap,
     chunk: *const WorldState.Chunk,
-    initial_entries: []const DestructiveEntry,
+    initial_entries: []const LightQueueEntry,
     border_spill: ?*BorderSpill,
     deferred_reseeds: ?*ReseedBuffer,
 ) u6 {
-    var queue: [BLOCKS_PER_CHUNK]DestructiveEntry = undefined;
+    var queue: [BLOCKS_PER_CHUNK]LightQueueEntry = undefined;
     var head: u32 = 0;
     var tail: u32 = 0;
 
@@ -934,10 +938,9 @@ pub fn propagateDestructive(
 
         // No opaque check here (matches Cubyz). The per-channel matching
         // naturally handles opaque blocks: stored value is 0 or mismatched,
-        // causing all channels to deactivate. This also allows the BFS to
-        // process the initial seed when a block just became opaque.
+        // causing all channels to deactivate.
 
-        const actual = light_map.block_light.get(idx);
+        const actual = getStoredLight(is_sun, light_map, idx);
 
         // Per-channel: if actual matches expected, it came from our source → clear.
         // If it doesn't match but is non-zero, another source contributes → reseed.
@@ -966,10 +969,12 @@ pub fn propagateDestructive(
             }
         }
 
-        // Block emitters need re-seeding
-        const emit = BlockState.emittedLight(chunk.blocks.get(idx));
-        if ((active & 1 != 0 and emit[0] > 0) or (active & 2 != 0 and emit[1] > 0) or (active & 4 != 0 and emit[2] > 0)) {
-            need_reseed = true;
+        // Block emitters need re-seeding (sun channel has no block emission)
+        if (!is_sun) {
+            const emit = BlockState.emittedLight(chunk.blocks.get(idx));
+            if ((active & 1 != 0 and emit[0] > 0) or (active & 2 != 0 and emit[1] > 0) or (active & 4 != 0 and emit[2] > 0)) {
+                need_reseed = true;
+            }
         }
 
         if (need_reseed and reseed_count < BLOCKS_PER_CHUNK) {
@@ -984,7 +989,7 @@ pub fn propagateDestructive(
         if (active & 1 != 0) new_val[0] = 0;
         if (active & 2 != 0) new_val[1] = 0;
         if (active & 4 != 0) new_val[2] = 0;
-        light_map.block_light.set(idx, new_val);
+        setStoredLight(is_sun, light_map, idx, new_val);
 
         for (0..6) |dir| {
             if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
@@ -999,7 +1004,8 @@ pub fn propagateDestructive(
                     if (border_spill) |spill| {
                         const face = faceBit(dir);
                         if (spill.counts[face] < BorderSpill.MAX_PER_FACE) {
-                            const exp_r = e.r -| ATTENUATION;
+                            // Column rule: no attenuation going downward at max brightness (sky only)
+                            const exp_r = if (is_sun and dir == 3 and e.r == 255) @as(u8, 255) else e.r -| ATTENUATION;
                             const exp_g = e.g -| ATTENUATION;
                             const exp_b = e.b -| ATTENUATION;
                             if (exp_r > 0 or exp_g > 0 or exp_b > 0) {
@@ -1018,7 +1024,8 @@ pub fn propagateDestructive(
                 continue;
             }
 
-            const exp_r = e.r -| ATTENUATION;
+            // Column rule: no attenuation going downward at max brightness (sky only)
+            const exp_r = if (is_sun and dir == 3 and e.r == 255) @as(u8, 255) else e.r -| ATTENUATION;
             const exp_g = e.g -| ATTENUATION;
             const exp_b = e.b -| ATTENUATION;
 
@@ -1046,7 +1053,7 @@ pub fn propagateDestructive(
                 }
             }
         } else {
-            boundary_mask |= reseedLight(false, light_map, chunk, reseed[0..reseed_count]);
+            boundary_mask |= reseedLight(is_sun, light_map, chunk, reseed[0..reseed_count]);
         }
     }
 
@@ -1106,85 +1113,6 @@ fn additiveLight(
     tail = 1;
 
     return propagateLightBFS(is_sun, &queue, &head, &tail, chunk, light_map, true);
-}
-
-/// Destructive sky light BFS: removes sky light from the cone of a blocked position,
-/// then re-propagates from any other sources found during removal.
-/// Handles the column rule: downward propagation at max brightness (255) has no attenuation.
-fn destructiveSkyLight(
-    light_map: *LightMap,
-    chunk: *const WorldState.Chunk,
-    sx: i8,
-    sy: i8,
-    sz: i8,
-    start_level: u8,
-) u6 {
-    var queue: [BLOCKS_PER_CHUNK]LightQueueEntry = undefined;
-    var head: u32 = 0;
-    var tail: u32 = 0;
-
-    var reseed: [BLOCKS_PER_CHUNK]ReseedPos = undefined;
-    var reseed_count: u32 = 0;
-    var boundary_mask: u6 = 0;
-
-    // Zero the starting position and seed the queue.
-    light_map.sky_light.set(chunkIndex(@intCast(sx), @intCast(sy), @intCast(sz)), 0);
-    queue[tail] = .{ .x = sx, .y = sy, .z = sz, .dir = 6, .r = start_level, .g = 0, .b = 0 };
-    tail += 1;
-
-    // Phase 1: Destructive BFS — walk the sky light cone, zeroing values from our source.
-    while (head < tail) {
-        const e = queue[head];
-        head += 1;
-
-        for (0..6) |dir| {
-            if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
-
-            const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
-            const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
-            const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
-
-            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
-                boundary_mask |= @as(u6, 1) << faceBit(dir);
-                continue;
-            }
-
-            const ux: usize = @intCast(nx);
-            const uy: usize = @intCast(ny);
-            const uz: usize = @intCast(nz);
-
-            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
-
-            // Column rule: no attenuation going downward at max brightness.
-            const expected: u8 = if (dir == 3 and e.r == 255) 255 else e.r -| ATTENUATION;
-            if (expected == 0) continue;
-
-            const n_idx = chunkIndex(ux, uy, uz);
-            const actual = light_map.sky_light.get(n_idx);
-
-            if (actual == expected) {
-                // Came from our source — zero it and continue propagating.
-                light_map.sky_light.set(n_idx, 0);
-                if (tail < BLOCKS_PER_CHUNK) {
-                    queue[tail] = .{ .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz), .dir = @intCast(dir), .r = expected, .g = 0, .b = 0 };
-                    tail += 1;
-                }
-            } else if (actual > 0) {
-                // Different source — mark for reseed.
-                if (reseed_count < BLOCKS_PER_CHUNK) {
-                    reseed[reseed_count] = .{ .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz) };
-                    reseed_count += 1;
-                }
-            }
-        }
-    }
-
-    // Phase 2: Re-propagate from reseed positions.
-    if (reseed_count > 0) {
-        boundary_mask |= reseedLight(true, light_map, chunk, reseed[0..reseed_count]);
-    }
-
-    return boundary_mask;
 }
 
 // ─── Tests ───
