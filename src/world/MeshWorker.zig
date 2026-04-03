@@ -324,7 +324,7 @@ pub const MeshWorker = struct {
                 // Source chunk: incremental update with border spill collection
                 var spill = LightEngine.BorderSpill{};
                 var sky_spill = LightEngine.BorderSpill{};
-                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block, &spill, &sky_spill);
+                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block, &spill, &sky_spill, neighbor_borders);
 
                 // UNLOCK source mutex before cross-chunk processing
                 lm.mutex.unlock(io);

@@ -755,6 +755,17 @@ fn processSpillRecursive(
 }
 
 /// Maps a BFS direction to the entry position in the neighbor chunk.
+/// Maps a local position + BFS direction to the 2D border index for reading
+/// from LightBorderSnapshot. The index layout matches snapshotNeighborBorders.
+fn borderIndex(dir: usize, lx: u8, ly: u8, lz: u8) usize {
+    return switch (faceBit(dir)) {
+        0, 1 => @as(usize, ly) * CHUNK_SIZE + @as(usize, lx), // +Z/-Z face: y*CS+x
+        2, 3 => @as(usize, ly) * CHUNK_SIZE + @as(usize, lz), // -X/+X face: y*CS+z
+        4, 5 => @as(usize, lz) * CHUNK_SIZE + @as(usize, lx), // +Y/-Y face: z*CS+x
+        else => unreachable,
+    };
+}
+
 fn borderEntryPos(dir: usize, x: i8, y: i8, z: i8) struct { x: i8, y: i8, z: i8 } {
     const S: i8 = CHUNK_SIZE - 1;
     return switch (dir) {
@@ -793,6 +804,7 @@ pub fn applyBlockChange(
     old_block: StateId,
     border_spill: ?*BorderSpill,
     sky_border_spill: ?*BorderSpill,
+    neighbor_borders: [6]LightBorderSnapshot,
 ) u6 {
     const tz = tracy.zone(@src(), "applyBlockChange");
     defer tz.end();
@@ -838,14 +850,18 @@ pub fn applyBlockChange(
         light_map.block_light.set(idx, new_emit);
         boundary_mask |= additiveLight(false, light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), new_emit);
     } else if (old_opaque and !new_opaque and !had_emission) {
-        // Opened up (was opaque, now transparent, NOT an emitter) — seed from neighbors.
+        // Opened up (was opaque, now transparent, NOT an emitter) — seed from
+        // neighbors' block light, including cross-chunk via border snapshots.
         var seed_val: [3]u8 = .{ 0, 0, 0 };
         for (0..6) |dir| {
             const nx = @as(i32, lx) + BFS_OFFSETS[dir][0];
             const ny = @as(i32, ly) + BFS_OFFSETS[dir][1];
             const nz = @as(i32, lz) + BFS_OFFSETS[dir][2];
-            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) continue;
-            const n_light = light_map.block_light.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz)));
+            const n_light = if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE)
+                // Cross-chunk: read from border snapshot
+                getNeighborLight(false, neighbor_borders, faceBit(dir), borderIndex(dir, lx, ly, lz))
+            else
+                light_map.block_light.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz)));
             seed_val[0] = @max(seed_val[0], n_light[0] -| ATTENUATION);
             seed_val[1] = @max(seed_val[1], n_light[1] -| ATTENUATION);
             seed_val[2] = @max(seed_val[2], n_light[2] -| ATTENUATION);
@@ -877,14 +893,16 @@ pub fn applyBlockChange(
                 }
             }
         } else {
-            // Breaking opaque block — seed sky light from neighbors.
+            // Breaking opaque block — seed sky light from neighbors (including cross-chunk).
             var seed_sky: u8 = 0;
             for (0..6) |dir| {
                 const nx = @as(i32, lx) + BFS_OFFSETS[dir][0];
                 const ny = @as(i32, ly) + BFS_OFFSETS[dir][1];
                 const nz = @as(i32, lz) + BFS_OFFSETS[dir][2];
-                if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) continue;
-                const n_sky = light_map.sky_light.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz)));
+                const n_sky = if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE)
+                    getNeighborLight(true, neighbor_borders, faceBit(dir), borderIndex(dir, lx, ly, lz))[0]
+                else
+                    light_map.sky_light.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz)));
                 // Column rule: if neighbor above has 255, light comes down with no attenuation.
                 const attenuated: u8 = if (dir == 2 and n_sky == 255) 255 else n_sky -| ATTENUATION;
                 seed_sky = @max(seed_sky, attenuated);
@@ -1520,7 +1538,7 @@ test "incremental: remove glowstone clears its light" {
 
     const old_block = chunk.blocks.get(chunkIndex(16, 16, 16));
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, old_block, null, null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, old_block, null, null, no_borders);
 
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
@@ -1543,7 +1561,7 @@ test "incremental: place opaque block blocks light" {
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), lm.block_light.get(chunkIndex(18, 16, 16))[0]);
 
     chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, AIR, null, null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, AIR, null, null, no_borders);
 
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
     const behind = lm.block_light.get(chunkIndex(18, 16, 16));
@@ -1569,7 +1587,7 @@ test "incremental: break opaque block lets light through" {
 
     // Break the wall
     chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null, no_borders);
 
     // (17, 16, 16) should now have light from glowstone
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
@@ -1594,7 +1612,7 @@ test "incremental: two glowstones, remove one preserves other" {
     try testing.expect(mid_before[0] > 0);
 
     chunk.blocks.set(chunkIndex(10, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm, .{ .x = 10, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null, null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 10, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null, null, no_borders);
 
     try testing.expectEqual(@as(u8, 255 - 10 * ATTENUATION), lm.block_light.get(chunkIndex(10, 16, 16))[0]);
     try testing.expectEqual(@as(u8, 255), lm.block_light.get(chunkIndex(20, 16, 16))[0]);
@@ -1618,7 +1636,7 @@ test "incremental: place glowstone adds light" {
 
     // Place glowstone
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
-    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null, no_borders);
 
     // Should now have light
     try testing.expectEqual(@as(u8, 255), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
@@ -1642,7 +1660,7 @@ test "incremental: matches full recompute for remove glowstone" {
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
 
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null, null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null, null, no_borders);
 
     const lm_full = try allocLightMap();
     defer freeLightMap(lm_full);
@@ -1670,7 +1688,7 @@ test "incremental: matches full recompute for place wall" {
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
 
     chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, AIR, null, null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, AIR, null, null, no_borders);
 
     const lm_full = try allocLightMap();
     defer freeLightMap(lm_full);
@@ -1700,7 +1718,7 @@ test "incremental: matches full recompute for break wall" {
 
     // Break the wall
     chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null, no_borders);
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -1730,7 +1748,7 @@ test "incremental: place stone in sky light removes sky destructively" {
 
     // Place stone in a sky-lit area: should handle destructively (not null)
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
-    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null);
+    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null, no_borders);
     try testing.expect(result != 0); // boundary reached
 
     // Stone block should have no sky light
@@ -1756,7 +1774,7 @@ test "incremental: sky light matches full recompute for place stone" {
 
     // Incremental place
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null, no_borders);
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -1792,7 +1810,7 @@ test "incremental: break stone in sky column matches full recompute" {
 
     // Incremental break
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null, no_borders);
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -1818,6 +1836,6 @@ test "incremental: no-op change in dark area" {
 
     // Place and break stone in a completely dark interior area
     chunk.blocks.set(chunkIndex(16, 10, 16), BlockState.defaultState(.stone));
-    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 10, .z = 16 }, AIR, null, null);
+    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 10, .z = 16 }, AIR, null, null, no_borders);
     try testing.expectEqual(@as(u6, 0), result);
 }
