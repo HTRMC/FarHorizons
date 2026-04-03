@@ -377,15 +377,23 @@ fn seedBoundaryLight(
     const uz: usize = @intCast(z);
     const idx = chunkIndex(ux, uy, uz);
 
-    if (BlockState.isOpaque(chunk.blocks.get(idx))) return;
+    const target_block = chunk.blocks.get(idx);
+    if (BlockState.isOpaque(target_block)) return;
+
+    // Apply absorption of target block (Cubyz incoming occlusion)
+    const absorb = BlockState.absorption(target_block);
+    const ar = nr -| absorb[0];
+    const ag = ng -| absorb[1];
+    const ab = nb -| absorb[2];
+    if (ar == 0 and ag == 0 and ab == 0) return;
 
     const existing = getStoredLight(is_sun, light_map, idx);
-    if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) return;
+    if (ar <= existing[0] and ag <= existing[1] and ab <= existing[2]) return;
 
     const updated = [3]u8{
-        @max(existing[0], nr),
-        @max(existing[1], ng),
-        @max(existing[2], nb),
+        @max(existing[0], ar),
+        @max(existing[1], ag),
+        @max(existing[2], ab),
     };
     setStoredLight(is_sun, light_map, idx, updated);
 
@@ -486,18 +494,21 @@ fn propagateLightBFS(
             const uy: usize = @intCast(ny);
             const uz: usize = @intCast(nz);
 
-            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
+            const nidx = chunkIndex(ux, uy, uz);
+            const neighbor_block = chunk.blocks.get(nidx);
+            if (BlockState.isOpaque(neighbor_block)) continue;
 
             // Column rule: no attenuation going downward (-Y, dir=3) at max brightness (sky only).
             const sun_col = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
-            const nr = if (sun_col) @as(u8, 255) else e.r -| ATTENUATION;
-            const ng = if (sun_col) @as(u8, 255) else e.g -| ATTENUATION;
-            const nb = if (sun_col) @as(u8, 255) else e.b -| ATTENUATION;
+            // Attenuation + absorption (Cubyz occlusion model)
+            const absorb = BlockState.absorption(neighbor_block);
+            const nr = if (sun_col) @as(u8, 255) -| absorb[0] else e.r -| ATTENUATION -| absorb[0];
+            const ng = if (sun_col) @as(u8, 255) -| absorb[1] else e.g -| ATTENUATION -| absorb[1];
+            const nb = if (sun_col) @as(u8, 255) -| absorb[2] else e.b -| ATTENUATION -| absorb[2];
 
             if (nr == 0 and ng == 0 and nb == 0) continue;
 
-            const idx = chunkIndex(ux, uy, uz);
-            const existing = getStoredLight(is_sun, light_map, idx);
+            const existing = getStoredLight(is_sun, light_map, nidx);
             if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
 
             const updated = [3]u8{
@@ -505,7 +516,7 @@ fn propagateLightBFS(
                 @max(existing[1], ng),
                 @max(existing[2], nb),
             };
-            setStoredLight(is_sun, light_map, idx, updated);
+            setStoredLight(is_sun, light_map, nidx, updated);
 
             if (tail.* < queue.len) {
                 queue[tail.*] = .{
@@ -590,9 +601,15 @@ fn checkBorderExceeds(
     const ng = if (sun_col) @as(u8, 255) else nl[1] -| ATTENUATION;
     const nb = if (sun_col) @as(u8, 255) else nl[2] -| ATTENUATION;
     if (nr == 0 and ng == 0 and nb == 0) return false;
-    if (BlockState.isOpaque(chunk.blocks.get(idx))) return false;
+    const target_block = chunk.blocks.get(idx);
+    if (BlockState.isOpaque(target_block)) return false;
+    const absorb = BlockState.absorption(target_block);
+    const ar = nr -| absorb[0];
+    const ag = ng -| absorb[1];
+    const ab = nb -| absorb[2];
+    if (ar == 0 and ag == 0 and ab == 0) return false;
     const ex = getStoredLight(is_sun, light_map, idx);
-    return nr > ex[0] or ng > ex[1] or nb > ex[2];
+    return ar > ex[0] or ag > ex[1] or ab > ex[2];
 }
 
 /// Additively propagate light from neighbor borders into an already-computed
@@ -1068,11 +1085,12 @@ pub fn propagateDestructive(
                 continue;
             }
 
-            // Column rule: no attenuation going downward at max brightness (sky only)
+            // Column rule + absorption (must match additive BFS formula)
             const sc2 = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
-            const exp_r = if (sc2) @as(u8, 255) else e.r -| ATTENUATION;
-            const exp_g = if (sc2) @as(u8, 255) else e.g -| ATTENUATION;
-            const exp_b = if (sc2) @as(u8, 255) else e.b -| ATTENUATION;
+            const d_absorb = BlockState.absorption(chunk.blocks.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))));
+            const exp_r = if (sc2) @as(u8, 255) -| d_absorb[0] else e.r -| ATTENUATION -| d_absorb[0];
+            const exp_g = if (sc2) @as(u8, 255) -| d_absorb[1] else e.g -| ATTENUATION -| d_absorb[1];
+            const exp_b = if (sc2) @as(u8, 255) -| d_absorb[2] else e.b -| ATTENUATION -| d_absorb[2];
 
             if (exp_r == 0 and exp_g == 0 and exp_b == 0) continue;
 
@@ -1176,12 +1194,14 @@ pub fn reseedLight(
             const uy: usize = @intCast(ny);
             const uz: usize = @intCast(nz);
 
-            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
+            const n_block = chunk.blocks.get(chunkIndex(ux, uy, uz));
+            if (BlockState.isOpaque(n_block)) continue;
 
             const sun_col = is_sun and dir == 3 and val2[0] == 255 and val2[1] == 255 and val2[2] == 255;
-            const nr = if (sun_col) @as(u8, 255) else val2[0] -| ATTENUATION;
-            const ng = if (sun_col) @as(u8, 255) else val2[1] -| ATTENUATION;
-            const nb = if (sun_col) @as(u8, 255) else val2[2] -| ATTENUATION;
+            const absorb = BlockState.absorption(n_block);
+            const nr = if (sun_col) @as(u8, 255) -| absorb[0] else val2[0] -| ATTENUATION -| absorb[0];
+            const ng = if (sun_col) @as(u8, 255) -| absorb[1] else val2[1] -| ATTENUATION -| absorb[1];
+            const nb = if (sun_col) @as(u8, 255) -| absorb[2] else val2[2] -| ATTENUATION -| absorb[2];
 
             if (nr == 0 and ng == 0 and nb == 0) continue;
 

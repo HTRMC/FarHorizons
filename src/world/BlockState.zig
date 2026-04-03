@@ -261,6 +261,9 @@ const StateProps = struct {
     is_shaped: bool,
     render_layer: RenderLayer,
     emitted_light: [3]u8,
+    /// Per-block RGB light absorption (Cubyz occlusion model).
+    /// Applied when light enters this block, reducing each channel.
+    absorption: [3]u8,
     hitbox: ?AABB,
     hardness: f32,
     preferred_tool: u4,
@@ -335,6 +338,11 @@ fn computeProps(block: Block, props: u8) StateProps {
             .tan_glowstone => .{ 200, 170, 110 },
             .black_glowstone => .{ 40, 35, 50 },
             .torch => .{ 200, 160, 80 },
+            else => .{ 0, 0, 0 },
+        },
+        .absorption = switch (block) {
+            .water => .{ 4, 2, 0 }, // absorbs red > green, passes blue
+            .oak_leaves => .{ 3, 2, 3 }, // general canopy absorption
             else => .{ 0, 0, 0 },
         },
         .hitbox = computeHitbox(block, props),
@@ -514,6 +522,9 @@ pub inline fn renderLayer(state: StateId) RenderLayer {
 }
 pub inline fn emittedLight(state: StateId) [3]u8 {
     return state_props[state.toRaw()].emitted_light;
+}
+pub inline fn absorption(state: StateId) [3]u8 {
+    return state_props[state.toRaw()].absorption;
 }
 pub inline fn getHitbox(state: StateId) ?AABB {
     return state_props[state.toRaw()].hitbox;
