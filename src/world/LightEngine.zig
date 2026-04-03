@@ -124,6 +124,18 @@ fn calculateOutgoingOcclusion(result: *[3]u8, source_block: StateId, dir: usize)
     result[2] -|= absorb[2];
 }
 
+/// Cubyz-style incoming occlusion: absorption applied when light ENTERS a block.
+/// Only applies when the incoming face is occluded (Cubyz line 86).
+/// `face` is the face of `target_block` that light enters through.
+fn calculateIncomingOcclusion(result: *[3]u8, target_block: StateId, face: u3) void {
+    if (target_block == AIR) return;
+    if (!BlockState.isNeighborOccluded(target_block, face)) return;
+    const absorb = BlockState.absorption(target_block);
+    result[0] -|= absorb[0];
+    result[1] -|= absorb[1];
+    result[2] -|= absorb[2];
+}
+
 const MAX_QUEUE = BLOCKS_PER_CHUNK * 2;
 const DESTRUCTIVE_QUEUE_SIZE = BLOCKS_PER_CHUNK * 6;
 
@@ -394,10 +406,11 @@ fn seedBoundaryLight(
     if (BlockState.isOpaque(target_block)) return;
 
     // Apply absorption of target block (Cubyz incoming occlusion)
-    const absorb = BlockState.absorption(target_block);
-    const ar = nr -| absorb[0];
-    const ag = ng -| absorb[1];
-    const ab = nb -| absorb[2];
+    var occ = [3]u8{ nr, ng, nb };
+    calculateIncomingOcclusion(&occ, target_block, OPPOSITE_DIR[dir]);
+    const ar = occ[0];
+    const ag = occ[1];
+    const ab = occ[2];
     if (ar == 0 and ag == 0 and ab == 0) return;
 
     const existing = getStoredLight(is_sun, light_map, idx);
@@ -524,20 +537,17 @@ fn propagateLightBFS(
             calculateOutgoingOcclusion(&val, source_block, dir);
             if (val[0] == 0 and val[1] == 0 and val[2] == 0) continue;
             // Step 3: Incoming occlusion from target block (Cubyz line 145)
-            const absorb = BlockState.absorption(neighbor_block);
-            const nr = val[0] -| absorb[0];
-            const ng = val[1] -| absorb[1];
-            const nb = val[2] -| absorb[2];
+            calculateIncomingOcclusion(&val, neighbor_block, OPPOSITE_DIR[@intCast(dir)]);
 
-            if (nr == 0 and ng == 0 and nb == 0) continue;
+            if (val[0] == 0 and val[1] == 0 and val[2] == 0) continue;
 
             const existing = getStoredLight(is_sun, light_map, nidx);
-            if (nr <= existing[0] and ng <= existing[1] and nb <= existing[2]) continue;
+            if (val[0] <= existing[0] and val[1] <= existing[1] and val[2] <= existing[2]) continue;
 
             const updated = [3]u8{
-                @max(existing[0], nr),
-                @max(existing[1], ng),
-                @max(existing[2], nb),
+                @max(existing[0], val[0]),
+                @max(existing[1], val[1]),
+                @max(existing[2], val[2]),
             };
             setStoredLight(is_sun, light_map, nidx, updated);
 
@@ -1133,18 +1143,15 @@ pub fn propagateDestructive(
             }
 
             // Incoming occlusion from target block (Cubyz line 234)
-            const d_absorb = BlockState.absorption(chunk.blocks.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))));
-            const exp_r = d_val[0] -| d_absorb[0];
-            const exp_g = d_val[1] -| d_absorb[1];
-            const exp_b = d_val[2] -| d_absorb[2];
+            calculateIncomingOcclusion(&d_val, chunk.blocks.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))), OPPOSITE_DIR[@intCast(dir)]);
 
-            if (exp_r == 0 and exp_g == 0 and exp_b == 0) continue;
+            if (d_val[0] == 0 and d_val[1] == 0 and d_val[2] == 0) continue;
 
             if (tail < DESTRUCTIVE_QUEUE_SIZE) {
                 queue[tail] = .{
                     .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz),
                     .dir = @intCast(dir),
-                    .r = exp_r, .g = exp_g, .b = exp_b,
+                    .r = d_val[0], .g = d_val[1], .b = d_val[2],
                     .active = active,
                 };
                 tail += 1;
@@ -1253,12 +1260,9 @@ pub fn reseedLight(
             const rs_source = chunk.blocks.get(chunkIndex(@intCast(e.x), @intCast(e.y), @intCast(e.z)));
             calculateOutgoingOcclusion(&rv, rs_source, dir);
             if (rv[0] == 0 and rv[1] == 0 and rv[2] == 0) continue;
-            const absorb = BlockState.absorption(n_block);
-            const nr = rv[0] -| absorb[0];
-            const ng = rv[1] -| absorb[1];
-            const nb = rv[2] -| absorb[2];
+            calculateIncomingOcclusion(&rv, n_block, OPPOSITE_DIR[@intCast(dir)]);
 
-            if (nr == 0 and ng == 0 and nb == 0) continue;
+            if (rv[0] == 0 and rv[1] == 0 and rv[2] == 0) continue;
 
             if (tail < queue.len) {
                 queue[tail] = .{
@@ -1266,9 +1270,9 @@ pub fn reseedLight(
                     .y = @intCast(ny),
                     .z = @intCast(nz),
                     .dir = @intCast(dir),
-                    .r = nr,
-                    .g = ng,
-                    .b = nb,
+                    .r = rv[0],
+                    .g = rv[1],
+                    .b = rv[2],
                 };
                 tail += 1;
             }
