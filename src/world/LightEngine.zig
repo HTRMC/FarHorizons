@@ -681,7 +681,8 @@ const SpillContext = struct {
 /// Called after applyBlockChange has processed the source chunk and collected spill.
 ///
 /// Returns the number of affected neighbor chunk keys written to `affected_keys_out`.
-/// The caller should submit mesh tasks for each affected key.
+/// The caller should submit mesh tasks for each affected key and light-only refreshes
+/// for faces indicated by `affected_masks_out` (reseed boundary propagation).
 pub fn processNeighborSpill(
     comptime is_sun: bool,
     initial_spill: *const BorderSpill,
@@ -689,6 +690,7 @@ pub fn processNeighborSpill(
     light_maps: *const LightMaps,
     chunk_map: *const ChunkMap,
     affected_keys_out: []ChunkKey,
+    affected_masks_out: []u6,
 ) u32 {
     var ctx = SpillContext{
         .light_maps = light_maps,
@@ -697,12 +699,17 @@ pub fn processNeighborSpill(
 
     processSpillRecursive(is_sun, initial_spill, source_key, &ctx, 0);
 
-    // Batch reconstruction — all stale values cleared, reseeds safe
+    // Batch reconstruction — all stale values cleared, reseeds safe.
+    // Track reseed boundary masks (Cubyz: propagateDirect crosses chunks;
+    // we propagate via light-only refresh for faces the reseed reached).
     const io = Io.Threaded.global_single_threaded.io();
     for (0..ctx.affected_count) |ai| {
         ctx.affected_lms[ai].mutex.lockUncancelable(io);
-        _ = reseedLight(is_sun, ctx.affected_lms[ai], ctx.affected_chunks[ai], ctx.affected_reseeds[ai].positions[0..ctx.affected_reseeds[ai].count]);
+        const mask = reseedLight(is_sun, ctx.affected_lms[ai], ctx.affected_chunks[ai], ctx.affected_reseeds[ai].positions[0..ctx.affected_reseeds[ai].count]);
         ctx.affected_lms[ai].mutex.unlock(io);
+        if (ai < affected_masks_out.len) {
+            affected_masks_out[ai] = mask;
+        }
     }
 
     // Copy keys to output

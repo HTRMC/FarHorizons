@@ -332,20 +332,59 @@ pub const MeshWorker = struct {
                 // Cubyz-style: LightEngine handles recursive cross-chunk
                 // destructive BFS + deferred batch reconstruction for both channels.
                 var affected_keys: [24]ChunkKey = undefined;
+                var affected_masks: [24]u6 = .{0} ** 24;
                 const n_count = LightEngine.processNeighborSpill(
-                    false, &spill, key, self.light_maps, self.chunk_map, &affected_keys,
+                    false, &spill, key, self.light_maps, self.chunk_map, &affected_keys, &affected_masks,
                 );
-                for (affected_keys[0..n_count]) |nk| {
-                    if (self.pool) |p| p.submitMesh(nk);
+                for (0..n_count) |ni| {
+                    if (self.pool) |p| p.submitMesh(affected_keys[ni]);
+                    // Reseed in neighbor chunk reached its own boundary —
+                    // submit light-only refresh for that chunk's neighbors
+                    // (Cubyz: propagateDirect would cross chunks recursively)
+                    if (affected_masks[ni] != 0) {
+                        var lo_keys2: [6]ChunkKey = undefined;
+                        var lo_count2: usize = 0;
+                        for (0..6) |i| {
+                            if (affected_masks[ni] & (@as(u6, 1) << @intCast(i)) != 0) {
+                                lo_keys2[lo_count2] = .{
+                                    .cx = affected_keys[ni].cx + offsets[i][0],
+                                    .cy = affected_keys[ni].cy + offsets[i][1],
+                                    .cz = affected_keys[ni].cz + offsets[i][2],
+                                };
+                                lo_count2 += 1;
+                            }
+                        }
+                        if (lo_count2 > 0) {
+                            if (self.pool) |p2| p2.submitMeshLightOnlyBatch(lo_keys2[0..lo_count2]);
+                        }
+                    }
                 }
 
                 // Sky light cross-chunk destructive
                 var sky_affected_keys: [24]ChunkKey = undefined;
+                var sky_affected_masks: [24]u6 = .{0} ** 24;
                 const sky_n_count = LightEngine.processNeighborSpill(
-                    true, &sky_spill, key, self.light_maps, self.chunk_map, &sky_affected_keys,
+                    true, &sky_spill, key, self.light_maps, self.chunk_map, &sky_affected_keys, &sky_affected_masks,
                 );
-                for (sky_affected_keys[0..sky_n_count]) |nk| {
-                    if (self.pool) |p| p.submitMesh(nk);
+                for (0..sky_n_count) |ni| {
+                    if (self.pool) |p| p.submitMesh(sky_affected_keys[ni]);
+                    if (sky_affected_masks[ni] != 0) {
+                        var lo_keys2: [6]ChunkKey = undefined;
+                        var lo_count2: usize = 0;
+                        for (0..6) |i| {
+                            if (sky_affected_masks[ni] & (@as(u6, 1) << @intCast(i)) != 0) {
+                                lo_keys2[lo_count2] = .{
+                                    .cx = sky_affected_keys[ni].cx + offsets[i][0],
+                                    .cy = sky_affected_keys[ni].cy + offsets[i][1],
+                                    .cz = sky_affected_keys[ni].cz + offsets[i][2],
+                                };
+                                lo_count2 += 1;
+                            }
+                        }
+                        if (lo_count2 > 0) {
+                            if (self.pool) |p2| p2.submitMeshLightOnlyBatch(lo_keys2[0..lo_count2]);
+                        }
+                    }
                 }
 
                 // Additive cross-chunk: if BFS reached chunk boundaries (e.g.
