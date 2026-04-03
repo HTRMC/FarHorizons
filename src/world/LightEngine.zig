@@ -110,6 +110,7 @@ fn setStoredLight(comptime is_sun: bool, light_map: *LightMap, idx: usize, val: 
 }
 
 const MAX_QUEUE = BLOCKS_PER_CHUNK * 2;
+const DESTRUCTIVE_QUEUE_SIZE = BLOCKS_PER_CHUNK * 6;
 
 /// Scan boundary faces and return a 6-bit mask of faces that have light > ATTENUATION.
 /// Can be called on an existing light map (before clearing) to get the "old" mask.
@@ -911,17 +912,17 @@ pub fn propagateDestructive(
     border_spill: ?*BorderSpill,
     deferred_reseeds: ?*ReseedBuffer,
 ) u6 {
-    var queue: [BLOCKS_PER_CHUNK]LightQueueEntry = undefined;
+    var queue: [DESTRUCTIVE_QUEUE_SIZE]LightQueueEntry = undefined;
     var head: u32 = 0;
     var tail: u32 = 0;
 
-    var reseed: [BLOCKS_PER_CHUNK]ReseedPos = undefined;
+    var reseed: [DESTRUCTIVE_QUEUE_SIZE]ReseedPos = undefined;
     var reseed_count: u32 = 0;
     var boundary_mask: u6 = 0;
 
     // Seed the queue from initial entries
     for (initial_entries) |entry| {
-        if (tail >= BLOCKS_PER_CHUNK) break;
+        if (tail >= DESTRUCTIVE_QUEUE_SIZE) break;
         queue[tail] = entry;
         tail += 1;
     }
@@ -977,7 +978,7 @@ pub fn propagateDestructive(
             }
         }
 
-        if (need_reseed and reseed_count < BLOCKS_PER_CHUNK) {
+        if (need_reseed and reseed_count < DESTRUCTIVE_QUEUE_SIZE) {
             reseed[reseed_count] = .{ .x = e.x, .y = e.y, .z = e.z };
             reseed_count += 1;
         }
@@ -1031,7 +1032,7 @@ pub fn propagateDestructive(
 
             if (exp_r == 0 and exp_g == 0 and exp_b == 0) continue;
 
-            if (tail < BLOCKS_PER_CHUNK) {
+            if (tail < DESTRUCTIVE_QUEUE_SIZE) {
                 queue[tail] = .{
                     .x = @intCast(nx), .y = @intCast(ny), .z = @intCast(nz),
                     .dir = @intCast(dir),
@@ -1614,10 +1615,33 @@ test "incremental: place glowstone adds light" {
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
 }
 
-// test "incremental: matches full recompute for remove glowstone"
-// Skipped: fixed-size destructive BFS queue overflows when the light sphere
-// covers most of the chunk, leaving fringe residuals (off by ≤7 at cone edges).
-// Will pass after Phase B switches to dynamic queues (Cubyz CircularBufferQueue).
+test "incremental: matches full recompute for remove glowstone" {
+    const chunk = try makeUndergroundChunk();
+    defer {
+        chunk.blocks.deinit();
+        testing.allocator.destroy(chunk);
+    }
+    chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
+
+    const lm_inc = try allocLightMap();
+    defer freeLightMap(lm_inc);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
+
+    chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null);
+
+    const lm_full = try allocLightMap();
+    defer freeLightMap(lm_full);
+    _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_full, 0, &underground_surface);
+
+    for (0..BLOCKS_PER_CHUNK) |i| {
+        const inc = lm_inc.block_light.get(i);
+        const full = lm_full.block_light.get(i);
+        try testing.expectEqual(full[0], inc[0]);
+        try testing.expectEqual(full[1], inc[1]);
+        try testing.expectEqual(full[2], inc[2]);
+    }
+}
 
 test "incremental: matches full recompute for place wall" {
     const chunk = try makeUndergroundChunk();
