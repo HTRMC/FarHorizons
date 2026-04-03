@@ -368,21 +368,41 @@ pub const MeshWorker = struct {
                 );
                 for (0..n_count) |ni| {
                     if (self.pool) |p| p.submitMesh(affected_keys[ni]);
-                    // Reseed in neighbor chunk reached its own boundary —
-                    // submit light-only refresh for that chunk's neighbors
-                    // (Cubyz: propagateDirect would cross chunks recursively)
+                    // Synchronous cross-chunk propagation for reseed boundaries
+                    // (Cubyz: propagateDirect crosses chunks recursively during
+                    // reconstruction; we replicate by propagating immediately).
                     if (affected_masks[ni] != 0) {
                         var lo_keys2: [6]ChunkKey = undefined;
                         var lo_count2: usize = 0;
                         for (0..6) |i| {
-                            if (affected_masks[ni] & (@as(u6, 1) << @intCast(i)) != 0) {
-                                lo_keys2[lo_count2] = .{
-                                    .cx = affected_keys[ni].cx + offsets[i][0],
-                                    .cy = affected_keys[ni].cy + offsets[i][1],
-                                    .cz = affected_keys[ni].cz + offsets[i][2],
-                                };
-                                lo_count2 += 1;
+                            if (affected_masks[ni] & (@as(u6, 1) << @intCast(i)) == 0) continue;
+                            const rnk = ChunkKey{
+                                .cx = affected_keys[ni].cx + offsets[i][0],
+                                .cy = affected_keys[ni].cy + offsets[i][1],
+                                .cz = affected_keys[ni].cz + offsets[i][2],
+                            };
+                            const rnlm = self.light_maps.get(rnk) orelse continue;
+                            if (rnlm.dirty) continue;
+                            const rnchunk = self.chunk_map.get(rnk) orelse continue;
+
+                            var rn_neighbor_lights: [6]?*LightMap = .{null} ** 6;
+                            for (0..6) |j| {
+                                rn_neighbor_lights[j] = self.light_maps.get(.{
+                                    .cx = rnk.cx + offsets[j][0],
+                                    .cy = rnk.cy + offsets[j][1],
+                                    .cz = rnk.cz + offsets[j][2],
+                                });
                             }
+                            const rn_borders = LightMapMod.snapshotNeighborBorders(rn_neighbor_lights);
+
+                            rnlm.mutex.lockUncancelable(io);
+                            if (LightEngine.needsPropagation(rnchunk, rn_borders, rnlm)) {
+                                LightEngine.propagateFromNeighbor(rnchunk, rn_borders, rnlm);
+                            }
+                            rnlm.mutex.unlock(io);
+
+                            lo_keys2[lo_count2] = rnk;
+                            lo_count2 += 1;
                         }
                         if (lo_count2 > 0) {
                             if (self.pool) |p2| p2.submitMeshLightOnlyBatch(lo_keys2[0..lo_count2]);
@@ -398,18 +418,39 @@ pub const MeshWorker = struct {
                 );
                 for (0..sky_n_count) |ni| {
                     if (self.pool) |p| p.submitMesh(sky_affected_keys[ni]);
+                    // Synchronous cross-chunk propagation for sky reseed boundaries
                     if (sky_affected_masks[ni] != 0) {
                         var lo_keys2: [6]ChunkKey = undefined;
                         var lo_count2: usize = 0;
                         for (0..6) |i| {
-                            if (sky_affected_masks[ni] & (@as(u6, 1) << @intCast(i)) != 0) {
-                                lo_keys2[lo_count2] = .{
-                                    .cx = sky_affected_keys[ni].cx + offsets[i][0],
-                                    .cy = sky_affected_keys[ni].cy + offsets[i][1],
-                                    .cz = sky_affected_keys[ni].cz + offsets[i][2],
-                                };
-                                lo_count2 += 1;
+                            if (sky_affected_masks[ni] & (@as(u6, 1) << @intCast(i)) == 0) continue;
+                            const snk = ChunkKey{
+                                .cx = sky_affected_keys[ni].cx + offsets[i][0],
+                                .cy = sky_affected_keys[ni].cy + offsets[i][1],
+                                .cz = sky_affected_keys[ni].cz + offsets[i][2],
+                            };
+                            const snlm = self.light_maps.get(snk) orelse continue;
+                            if (snlm.dirty) continue;
+                            const snchunk = self.chunk_map.get(snk) orelse continue;
+
+                            var sn_neighbor_lights: [6]?*LightMap = .{null} ** 6;
+                            for (0..6) |j| {
+                                sn_neighbor_lights[j] = self.light_maps.get(.{
+                                    .cx = snk.cx + offsets[j][0],
+                                    .cy = snk.cy + offsets[j][1],
+                                    .cz = snk.cz + offsets[j][2],
+                                });
                             }
+                            const sn_borders = LightMapMod.snapshotNeighborBorders(sn_neighbor_lights);
+
+                            snlm.mutex.lockUncancelable(io);
+                            if (LightEngine.needsPropagation(snchunk, sn_borders, snlm)) {
+                                LightEngine.propagateFromNeighbor(snchunk, sn_borders, snlm);
+                            }
+                            snlm.mutex.unlock(io);
+
+                            lo_keys2[lo_count2] = snk;
+                            lo_count2 += 1;
                         }
                         if (lo_count2 > 0) {
                             if (self.pool) |p2| p2.submitMeshLightOnlyBatch(lo_keys2[0..lo_count2]);

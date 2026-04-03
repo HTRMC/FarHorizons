@@ -111,6 +111,19 @@ fn setStoredLight(comptime is_sun: bool, light_map: *LightMap, idx: usize, val: 
     }
 }
 
+/// Cubyz-style outgoing occlusion: absorption applied when light EXITS a block.
+/// Only applies when the outgoing face is occluded but the reverse face is not
+/// (avoids double-counting with incoming occlusion — Cubyz line 100).
+fn calculateOutgoingOcclusion(result: *[3]u8, source_block: StateId, dir: usize) void {
+    if (source_block == AIR) return;
+    if (!BlockState.isNeighborOccluded(source_block, @intCast(dir))) return;
+    if (BlockState.isNeighborOccluded(source_block, OPPOSITE_DIR[@intCast(dir)])) return;
+    const absorb = BlockState.absorption(source_block);
+    result[0] -|= absorb[0];
+    result[1] -|= absorb[1];
+    result[2] -|= absorb[2];
+}
+
 const MAX_QUEUE = BLOCKS_PER_CHUNK * 2;
 const DESTRUCTIVE_QUEUE_SIZE = BLOCKS_PER_CHUNK * 6;
 
@@ -498,13 +511,23 @@ fn propagateLightBFS(
             const neighbor_block = chunk.blocks.get(nidx);
             if (BlockState.isOpaque(neighbor_block)) continue;
 
-            // Column rule: no attenuation going downward (-Y, dir=3) at max brightness (sky only).
+            // Cubyz order: attenuation → outgoing occlusion → incoming occlusion
             const sun_col = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
-            // Attenuation + absorption (Cubyz occlusion model)
+            // Step 1: Attenuation (column rule: skip for sunlight downward at max)
+            var val = [3]u8{
+                if (sun_col) 255 else e.r -| ATTENUATION,
+                if (sun_col) 255 else e.g -| ATTENUATION,
+                if (sun_col) 255 else e.b -| ATTENUATION,
+            };
+            // Step 2: Outgoing occlusion from source block (Cubyz line 139)
+            const source_block = chunk.blocks.get(chunkIndex(@intCast(e.x), @intCast(e.y), @intCast(e.z)));
+            calculateOutgoingOcclusion(&val, source_block, dir);
+            if (val[0] == 0 and val[1] == 0 and val[2] == 0) continue;
+            // Step 3: Incoming occlusion from target block (Cubyz line 145)
             const absorb = BlockState.absorption(neighbor_block);
-            const nr = if (sun_col) @as(u8, 255) -| absorb[0] else e.r -| ATTENUATION -| absorb[0];
-            const ng = if (sun_col) @as(u8, 255) -| absorb[1] else e.g -| ATTENUATION -| absorb[1];
-            const nb = if (sun_col) @as(u8, 255) -| absorb[2] else e.b -| ATTENUATION -| absorb[2];
+            const nr = val[0] -| absorb[0];
+            const ng = val[1] -| absorb[1];
+            const nb = val[2] -| absorb[2];
 
             if (nr == 0 and ng == 0 and nb == 0) continue;
 
@@ -764,10 +787,28 @@ fn processSpillRecursive(
         const nlm = ctx.light_maps.get(nk) orelse continue;
         const nchunk = ctx.chunk_map.get(nk) orelse continue;
 
+        // Apply incoming absorption to spill entries before destructive BFS
+        // (Cubyz: propagateDestructiveFromNeighbor applies calculateIncomingOcclusion).
+        // Without this, expected values won't match stored values for absorbing
+        // blocks (water, leaves) at chunk boundaries, causing stale light.
+        var adjusted: [BorderSpill.MAX_PER_FACE]LightQueueEntry = undefined;
+        const count = spill.counts[face];
+        for (spill.entries[face][0..count], 0..) |entry, ei| {
+            adjusted[ei] = entry;
+            const pos_idx = chunkIndex(@intCast(entry.x), @intCast(entry.y), @intCast(entry.z));
+            const target_block = nchunk.blocks.get(pos_idx);
+            if (!BlockState.isOpaque(target_block)) {
+                const absorb = BlockState.absorption(target_block);
+                adjusted[ei].r -|= absorb[0];
+                adjusted[ei].g -|= absorb[1];
+                adjusted[ei].b -|= absorb[2];
+            }
+        }
+
         var new_spill = BorderSpill{};
         var reseeds = ReseedBuffer{};
         nlm.mutex.lockUncancelable(io);
-        _ = propagateDestructive(is_sun, nlm, nchunk, spill.entries[face][0..spill.counts[face]], &new_spill, &reseeds);
+        _ = propagateDestructive(is_sun, nlm, nchunk, adjusted[0..count], &new_spill, &reseeds);
         nlm.mutex.unlock(io);
 
         ctx.record(nk, nlm, nchunk, reseeds);
@@ -1058,23 +1099,29 @@ pub fn propagateDestructive(
             const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
             const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
 
+            // Cubyz order: attenuation → outgoing occlusion → (incoming for intra-chunk)
+            const sc = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
+            var d_val = [3]u8{
+                if (sc) 255 else e.r -| ATTENUATION,
+                if (sc) 255 else e.g -| ATTENUATION,
+                if (sc) 255 else e.b -| ATTENUATION,
+            };
+            // Outgoing occlusion from source block (Cubyz line 229)
+            const source_block = chunk.blocks.get(chunkIndex(@intCast(e.x), @intCast(e.y), @intCast(e.z)));
+            calculateOutgoingOcclusion(&d_val, source_block, dir);
+
             if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
                 if (active != 0) {
                     boundary_mask |= @as(u6, 1) << faceBit(dir);
                     if (border_spill) |spill| {
                         const face = faceBit(dir);
                         if (spill.counts[face] < BorderSpill.MAX_PER_FACE) {
-                            // Column rule: no attenuation going downward at max brightness (sky only)
-                            const sc = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
-                            const exp_r = if (sc) @as(u8, 255) else e.r -| ATTENUATION;
-                            const exp_g = if (sc) @as(u8, 255) else e.g -| ATTENUATION;
-                            const exp_b = if (sc) @as(u8, 255) else e.b -| ATTENUATION;
-                            if (exp_r > 0 or exp_g > 0 or exp_b > 0) {
+                            if (d_val[0] > 0 or d_val[1] > 0 or d_val[2] > 0) {
                                 const pos = borderEntryPos(dir, e.x, e.y, e.z);
                                 spill.entries[face][spill.counts[face]] = .{
                                     .x = pos.x, .y = pos.y, .z = pos.z,
                                     .dir = @intCast(dir),
-                                    .r = exp_r, .g = exp_g, .b = exp_b,
+                                    .r = d_val[0], .g = d_val[1], .b = d_val[2],
                                     .active = active,
                                 };
                                 spill.counts[face] += 1;
@@ -1085,12 +1132,11 @@ pub fn propagateDestructive(
                 continue;
             }
 
-            // Column rule + absorption (must match additive BFS formula)
-            const sc2 = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
+            // Incoming occlusion from target block (Cubyz line 234)
             const d_absorb = BlockState.absorption(chunk.blocks.get(chunkIndex(@intCast(nx), @intCast(ny), @intCast(nz))));
-            const exp_r = if (sc2) @as(u8, 255) -| d_absorb[0] else e.r -| ATTENUATION -| d_absorb[0];
-            const exp_g = if (sc2) @as(u8, 255) -| d_absorb[1] else e.g -| ATTENUATION -| d_absorb[1];
-            const exp_b = if (sc2) @as(u8, 255) -| d_absorb[2] else e.b -| ATTENUATION -| d_absorb[2];
+            const exp_r = d_val[0] -| d_absorb[0];
+            const exp_g = d_val[1] -| d_absorb[1];
+            const exp_b = d_val[2] -| d_absorb[2];
 
             if (exp_r == 0 and exp_g == 0 and exp_b == 0) continue;
 
@@ -1197,11 +1243,20 @@ pub fn reseedLight(
             const n_block = chunk.blocks.get(chunkIndex(ux, uy, uz));
             if (BlockState.isOpaque(n_block)) continue;
 
+            // Cubyz order: attenuation → outgoing occlusion → incoming occlusion
             const sun_col = is_sun and dir == 3 and val2[0] == 255 and val2[1] == 255 and val2[2] == 255;
+            var rv = [3]u8{
+                if (sun_col) 255 else val2[0] -| ATTENUATION,
+                if (sun_col) 255 else val2[1] -| ATTENUATION,
+                if (sun_col) 255 else val2[2] -| ATTENUATION,
+            };
+            const rs_source = chunk.blocks.get(chunkIndex(@intCast(e.x), @intCast(e.y), @intCast(e.z)));
+            calculateOutgoingOcclusion(&rv, rs_source, dir);
+            if (rv[0] == 0 and rv[1] == 0 and rv[2] == 0) continue;
             const absorb = BlockState.absorption(n_block);
-            const nr = if (sun_col) @as(u8, 255) -| absorb[0] else val2[0] -| ATTENUATION -| absorb[0];
-            const ng = if (sun_col) @as(u8, 255) -| absorb[1] else val2[1] -| ATTENUATION -| absorb[1];
-            const nb = if (sun_col) @as(u8, 255) -| absorb[2] else val2[2] -| ATTENUATION -| absorb[2];
+            const nr = rv[0] -| absorb[0];
+            const ng = rv[1] -| absorb[1];
+            const nb = rv[2] -| absorb[2];
 
             if (nr == 0 and ng == 0 and nb == 0) continue;
 

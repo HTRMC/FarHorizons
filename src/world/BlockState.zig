@@ -526,6 +526,22 @@ pub inline fn emittedLight(state: StateId) [3]u8 {
 pub inline fn absorption(state: StateId) [3]u8 {
     return state_props[state.toRaw()].absorption;
 }
+/// Per-face occlusion check (Cubyz model().isNeighborOccluded[face]).
+/// Returns true if the block's geometry fully covers the given face,
+/// meaning light passing through this face should have absorption applied.
+/// Face indices match BFS_OFFSETS: 0=+X, 1=-X, 2=+Y, 3=-Y, 4=+Z, 5=-Z.
+pub inline fn isNeighborOccluded(state: StateId, face: u3) bool {
+    _ = face;
+    // Full-cube blocks (solid, glass, water, leaves): all faces occluded.
+    // Partial-geometry blocks (slabs, stairs, etc.): no faces fully
+    // occluded for lighting purposes. When per-face model data is
+    // available, this should be refined per block type and orientation.
+    const block = getBlock(state);
+    return switch (block) {
+        .air, .stick, .torch, .ladder, .oak_fence, .oak_door, .oak_slab, .oak_stairs => false,
+        else => true,
+    };
+}
 pub inline fn getHitbox(state: StateId) ?AABB {
     return state_props[state.toRaw()].hitbox;
 }
