@@ -837,26 +837,25 @@ fn sampleTrilinearLight(
     bz: usize,
     face: usize,
     corner: usize,
-    padded: *const [PADDED_BLOCKS]StateId,
+    _: *const [PADDED_BLOCKS]StateId,
     light_map: ?*LightMap,
     neighbor_lights: [27]?*LightMap,
 ) LightVector {
     const samples = trilinear_light_samples[face][corner];
     const face_normal = face_neighbor_offsets[face];
-    const base: i32 = @intCast(paddedIndex(bx + 1, by + 1, bz + 1));
     const base_px: i32 = @intCast(bx + 1);
     const base_py: i32 = @intCast(by + 1);
     const base_pz: i32 = @intCast(bz + 1);
     var light_sum: @Vector(8, u32) = @splat(0);
-    var total_weight: u32 = 0;
 
     for (0..4) |s| {
         const sample = samples[s];
         if (sample.weight == 0) continue;
-        const sample_idx: usize = @intCast(base + sample.delta);
-        if (BlockState.isOpaque(padded[sample_idx])) continue;
+        // Cubyz: opaque blocks are NOT skipped — they contribute 0 light but
+        // their weight counts in the divisor (always 256). This makes corners
+        // near walls correctly darker. getLightAt returns 0 for opaque blocks
+        // naturally (light doesn't propagate into them).
         const w: u32 = sample.weight;
-        total_weight += w;
 
         const spx = base_px + sample.dx;
         const spy = base_py + sample.dy;
@@ -872,11 +871,8 @@ fn sampleTrilinearLight(
         light_sum += wide * @as(@Vector(8, u32), @splat(w));
     }
 
-    if (total_weight == 0) {
-        return getLightAt(base_px + face_normal[0], base_py + face_normal[1], base_pz + face_normal[2], light_map, neighbor_lights);
-    }
-
-    return @intCast(light_sum / @as(@Vector(8, u32), @splat(total_weight)));
+    // Cubyz: always divide by 256 (sum of all trilinear weights)
+    return @intCast(light_sum / @as(@Vector(8, u32), @splat(256)));
 }
 
 pub fn isFullyHidden(chunk: *const Chunk, neighbors: [6]?*const Chunk) bool {
