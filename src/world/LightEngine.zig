@@ -806,40 +806,36 @@ pub fn applyBlockChange(
 
     var boundary_mask: u6 = 0;
 
-    // ── Block light ──
+    // ── Block light (Cubyz propagateLightsDestructive pattern) ──
 
     const current_light = light_map.block_light.get(idx);
     const has_current_light = current_light[0] > 0 or current_light[1] > 0 or current_light[2] > 0;
     const had_emission = old_emit[0] > 0 or old_emit[1] > 0 or old_emit[2] > 0;
 
-    // STEP 1: Remove block light if the position is becoming opaque or losing an emitter.
-    // Seed the destructive BFS with the current light value. Do NOT pre-zero —
-    // propagateDestructive reads and zeros the value during iteration (Cubyz pattern).
+    // Destructive pass: remove light from removed/blocked source.
+    // Uses deferred reseeds — batch reconstruction after destructive completes.
     if (has_current_light and (new_opaque or had_emission)) {
+        var reseeds = ReseedBuffer{};
         const seed = [1]LightQueueEntry{.{
             .x = @intCast(lx), .y = @intCast(ly), .z = @intCast(lz),
             .dir = 6, .r = current_light[0], .g = current_light[1], .b = current_light[2],
             .active = 0b111,
         }};
-        boundary_mask |= propagateDestructive(false, light_map, chunk, &seed, border_spill, null);
+        boundary_mask |= propagateDestructive(false, light_map, chunk, &seed, border_spill, &reseeds);
+
+        // Batch reconstruction from reseed positions (Cubyz pattern)
+        if (reseeds.count > 0) {
+            boundary_mask |= reseedLight(false, light_map, chunk, reseeds.positions[0..reseeds.count]);
+        }
     }
 
-    // STEP 2: Set the position's own light value.
-    if (new_opaque) {
-        light_map.block_light.set(idx, new_emit);
-    }
-
-    // STEP 3: Propagate new block light outward.
+    // Constructive pass: propagate new emission or fill opened space.
     const has_new_emit = new_emit[0] > 0 or new_emit[1] > 0 or new_emit[2] > 0;
     if (has_new_emit) {
-        // New emitter placed — propagate its light.
         light_map.block_light.set(idx, new_emit);
         boundary_mask |= additiveLight(false, light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), new_emit);
     } else if (old_opaque and !new_opaque and !had_emission) {
-        // Opened up (was opaque, now transparent, NOT an emitter) — seed from
-        // neighbors' block light. Skip this for emitter removal because
-        // neighbors still have stale light values from the removed source,
-        // which would immediately re-fill the cleared position.
+        // Opened up (was opaque, now transparent, NOT an emitter) — seed from neighbors.
         var seed_val: [3]u8 = .{ 0, 0, 0 };
         for (0..6) |dir| {
             const nx = @as(i32, lx) + BFS_OFFSETS[dir][0];
@@ -857,19 +853,25 @@ pub fn applyBlockChange(
         }
     }
 
-    // ── Sky light (destructive, avoids full recompute) ──
+    // ── Sky light (same destructive + constructive pattern) ──
 
     if (old_opaque != new_opaque) {
         const current_sky = light_map.sky_light.get(idx);
         if (new_opaque) {
-            // Placing opaque block — destructively remove sky light flowing through here.
+            // Placing opaque block — destructively remove sky light.
             if (current_sky > 0) {
+                var sky_reseeds = ReseedBuffer{};
                 const sky_seed = [1]LightQueueEntry{.{
                     .x = @intCast(lx), .y = @intCast(ly), .z = @intCast(lz),
                     .dir = 6, .r = current_sky, .g = current_sky, .b = current_sky,
-                    .active = 0b001, // only R channel for sky
+                    .active = 0b111,
                 }};
-                boundary_mask |= propagateDestructive(true, light_map, chunk, &sky_seed, null, null);
+                boundary_mask |= propagateDestructive(true, light_map, chunk, &sky_seed, null, &sky_reseeds);
+
+                // Batch reconstruction for sky
+                if (sky_reseeds.count > 0) {
+                    boundary_mask |= reseedLight(true, light_map, chunk, sky_reseeds.positions[0..sky_reseeds.count]);
+                }
             }
         } else {
             // Breaking opaque block — seed sky light from neighbors.
