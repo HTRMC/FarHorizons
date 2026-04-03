@@ -300,23 +300,53 @@ pub const MeshWorker = struct {
                 const surface_heights = self.surface_height_map.getHeights(key.cx, key.cz);
                 const boundary_mask = LightEngine.computeChunkLight(chunk, neighbors, neighbor_borders, lm, key.cy, surface_heights);
 
-                // Initial load / full recompute: light-only refresh for neighbors.
+                // Synchronous cross-chunk propagation (Cubyz propagateDirect pattern).
+                // Unlock source before cross-chunk work to avoid deadlock.
                 if (boundary_mask != 0) {
-                    var lo_keys: [6]ChunkKey = undefined;
-                    var lo_count: usize = 0;
+                    lm.mutex.unlock(io);
+
+                    var secondary_lo_keys: [6]ChunkKey = undefined;
+                    var secondary_lo_count: usize = 0;
+
                     for (0..6) |i| {
-                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                            lo_keys[lo_count] = .{
-                                .cx = key.cx + offsets[i][0],
-                                .cy = key.cy + offsets[i][1],
-                                .cz = key.cz + offsets[i][2],
-                            };
-                            lo_count += 1;
+                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) == 0) continue;
+                        const nk = ChunkKey{
+                            .cx = key.cx + offsets[i][0],
+                            .cy = key.cy + offsets[i][1],
+                            .cz = key.cz + offsets[i][2],
+                        };
+                        const nlm = self.light_maps.get(nk) orelse continue;
+                        if (nlm.dirty) continue; // neighbor not yet computed — async fallback
+                        const nchunk = self.chunk_map.get(nk) orelse continue;
+
+                        // Snapshot this neighbor's borders (source is unlocked, readable)
+                        var n_neighbor_lights: [6]?*LightMap = .{null} ** 6;
+                        for (0..6) |j| {
+                            n_neighbor_lights[j] = self.light_maps.get(.{
+                                .cx = nk.cx + offsets[j][0],
+                                .cy = nk.cy + offsets[j][1],
+                                .cz = nk.cz + offsets[j][2],
+                            });
                         }
+                        const n_borders = LightMapMod.snapshotNeighborBorders(n_neighbor_lights);
+
+                        nlm.mutex.lockUncancelable(io);
+                        if (LightEngine.needsPropagation(nchunk, n_borders, nlm)) {
+                            LightEngine.propagateFromNeighbor(nchunk, n_borders, nlm);
+                        }
+                        nlm.mutex.unlock(io);
+
+                        // Submit mesh refresh for the neighbor we just updated
+                        secondary_lo_keys[secondary_lo_count] = nk;
+                        secondary_lo_count += 1;
                     }
-                    if (lo_count > 0) {
-                        if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
+
+                    // Submit mesh tasks for synchronously updated neighbors
+                    if (secondary_lo_count > 0) {
+                        if (self.pool) |p| p.submitMeshLightOnlyBatch(secondary_lo_keys[0..secondary_lo_count]);
                     }
+
+                    lm.mutex.lockUncancelable(io);
                 }
             } else if (lm.incremental) |update| {
                 lm.incremental = null;
@@ -387,23 +417,42 @@ pub const MeshWorker = struct {
                     }
                 }
 
-                // Additive cross-chunk: if BFS reached chunk boundaries (e.g.
-                // placing a light emitter), submit light-only refresh for
-                // affected neighbor faces so they pull in the new light via
-                // propagateFromNeighbor.
+                // Synchronous cross-chunk additive propagation (Cubyz pattern).
+                // Source is already unlocked — propagate directly into neighbors.
                 if (boundary_mask != 0) {
                     var lo_keys: [6]ChunkKey = undefined;
                     var lo_count: usize = 0;
                     for (0..6) |i| {
-                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) != 0) {
-                            lo_keys[lo_count] = .{
-                                .cx = key.cx + offsets[i][0],
-                                .cy = key.cy + offsets[i][1],
-                                .cz = key.cz + offsets[i][2],
-                            };
-                            lo_count += 1;
+                        if (boundary_mask & (@as(u6, 1) << @intCast(i)) == 0) continue;
+                        const nk = ChunkKey{
+                            .cx = key.cx + offsets[i][0],
+                            .cy = key.cy + offsets[i][1],
+                            .cz = key.cz + offsets[i][2],
+                        };
+                        const nlm = self.light_maps.get(nk) orelse continue;
+                        if (nlm.dirty) continue;
+                        const nchunk = self.chunk_map.get(nk) orelse continue;
+
+                        var n_neighbor_lights: [6]?*LightMap = .{null} ** 6;
+                        for (0..6) |j| {
+                            n_neighbor_lights[j] = self.light_maps.get(.{
+                                .cx = nk.cx + offsets[j][0],
+                                .cy = nk.cy + offsets[j][1],
+                                .cz = nk.cz + offsets[j][2],
+                            });
                         }
+                        const n_borders = LightMapMod.snapshotNeighborBorders(n_neighbor_lights);
+
+                        nlm.mutex.lockUncancelable(io);
+                        if (LightEngine.needsPropagation(nchunk, n_borders, nlm)) {
+                            LightEngine.propagateFromNeighbor(nchunk, n_borders, nlm);
+                        }
+                        nlm.mutex.unlock(io);
+
+                        lo_keys[lo_count] = nk;
+                        lo_count += 1;
                     }
+                    // Submit mesh refresh for synchronously updated neighbors
                     if (lo_count > 0) {
                         if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
                     }
