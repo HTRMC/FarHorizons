@@ -130,17 +130,29 @@ pub const MeshWorker = struct {
         // the main thread, and workers only read via .get(). Write access to
         // LightMap data is serialized by the per-LightMap mutex below.
         const light_map: ?*LightMap = self.light_maps.get(key);
-        var neighbor_lights: [6]?*LightMap = .{null} ** 6;
+        // Face neighbors for border snapshots (light propagation — 6 faces)
+        var face_neighbor_lights: [6]?*LightMap = .{null} ** 6;
         for (0..6) |i| {
             const nk = ChunkKey{
                 .cx = key.cx + face_offsets[i][0],
                 .cy = key.cy + face_offsets[i][1],
                 .cz = key.cz + face_offsets[i][2],
             };
-            neighbor_lights[i] = self.light_maps.get(nk);
+            face_neighbor_lights[i] = self.light_maps.get(nk);
+        }
+        // All 27 neighbors for mesh light sampling (Cubyz: getMesh finds any chunk)
+        const offsets_27 = WorldState.neighbor_offsets_27;
+        var neighbor_lights: [27]?*LightMap = .{null} ** 27;
+        for (0..27) |i| {
+            if (offsets_27[i][0] == 0 and offsets_27[i][1] == 0 and offsets_27[i][2] == 0) continue; // self
+            neighbor_lights[i] = self.light_maps.get(.{
+                .cx = key.cx + offsets_27[i][0],
+                .cy = key.cy + offsets_27[i][1],
+                .cz = key.cz + offsets_27[i][2],
+            });
         }
 
-        const neighbor_borders = LightMapMod.snapshotNeighborBorders(neighbor_lights);
+        const neighbor_borders = LightMapMod.snapshotNeighborBorders(face_neighbor_lights);
 
         // Compute light under mutex, then UNLOCK before bitmask iteration
         // to avoid AB/BA deadlock with concurrent neighbor light tasks.
@@ -277,17 +289,28 @@ pub const MeshWorker = struct {
         // Write access serialized by per-LightMap mutex below.
         const offsets = WorldState.face_neighbor_offsets;
         const light_map: ?*LightMap = self.light_maps.get(key);
-        var neighbor_lights: [6]?*LightMap = .{null} ** 6;
+        var face_neighbor_lights: [6]?*LightMap = .{null} ** 6;
         for (0..6) |i| {
             const nk = ChunkKey{
                 .cx = key.cx + offsets[i][0],
                 .cy = key.cy + offsets[i][1],
                 .cz = key.cz + offsets[i][2],
             };
-            neighbor_lights[i] = self.light_maps.get(nk);
+            face_neighbor_lights[i] = self.light_maps.get(nk);
+        }
+        // All 27 neighbors for mesh light sampling (Cubyz: getMesh finds any chunk)
+        const offsets_27 = WorldState.neighbor_offsets_27;
+        var neighbor_lights: [27]?*LightMap = .{null} ** 27;
+        for (0..27) |i| {
+            if (offsets_27[i][0] == 0 and offsets_27[i][1] == 0 and offsets_27[i][2] == 0) continue;
+            neighbor_lights[i] = self.light_maps.get(.{
+                .cx = key.cx + offsets_27[i][0],
+                .cy = key.cy + offsets_27[i][1],
+                .cz = key.cz + offsets_27[i][2],
+            });
         }
 
-        const neighbor_borders = LightMapMod.snapshotNeighborBorders(neighbor_lights);
+        const neighbor_borders = LightMapMod.snapshotNeighborBorders(face_neighbor_lights);
 
         if (light_map) |lm| lm.mutex.lockUncancelable(io);
         defer {

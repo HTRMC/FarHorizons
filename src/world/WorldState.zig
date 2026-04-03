@@ -792,57 +792,41 @@ fn lightBlockBrightness(v: LightVector) u8 {
 }
 
 /// Read light at a padded-space position, like Cubyz's getLightAt.
-/// Returns a LightVector for SIMD operations. Interior positions read from
-/// the chunk's own LightMap (locked by caller). Border positions read directly
-/// from the neighbor's LightMap via RCU-safe atomic get(). Returns LIGHT_ZERO
-/// if the neighbor doesn't exist.
+/// Returns a LightVector for SIMD operations. Cubyz uses mesh_storage.getMesh()
+/// which can find ANY chunk by world position — including diagonal/edge/corner
+/// neighbors. We replicate this by accepting all 27 neighbor LightMaps indexed
+/// via neighborBitIndex (face, edge, and corner neighbors).
 inline fn getLightAt(
     px: i32,
     py: i32,
     pz: i32,
     light_map: ?*LightMap,
-    neighbor_lights: [6]?*LightMap,
+    neighbor_lights: [27]?*LightMap,
 ) LightVector {
     const S = @as(i32, CHUNK_SIZE);
     const cx = px - 1;
     const cy = py - 1;
     const cz = pz - 1;
 
-    if (cx >= 0 and cx < S and cy >= 0 and cy < S and cz >= 0 and cz < S) {
+    // Determine which of the 27 chunks this position falls in
+    const dx: i32 = if (cx < 0) @as(i32, -1) else if (cx >= S) @as(i32, 1) else @as(i32, 0);
+    const dy: i32 = if (cy < 0) @as(i32, -1) else if (cy >= S) @as(i32, 1) else @as(i32, 0);
+    const dz: i32 = if (cz < 0) @as(i32, -1) else if (cz >= S) @as(i32, 1) else @as(i32, 0);
+
+    if (dx == 0 and dy == 0 and dz == 0) {
+        // Current chunk
         const lm = light_map orelse return LIGHT_ZERO;
         const ci = chunkIndex(@intCast(cx), @intCast(cy), @intCast(cz));
         return lightVectorFrom(lm.block_light.get(ci), lm.sky_light.get(ci));
     }
 
-    const face: ?usize = if (cx < 0 and cy >= 0 and cy < S and cz >= 0 and cz < S)
-        @as(usize, 2)
-    else if (cx >= S and cy >= 0 and cy < S and cz >= 0 and cz < S)
-        @as(usize, 3)
-    else if (cy < 0 and cx >= 0 and cx < S and cz >= 0 and cz < S)
-        @as(usize, 5)
-    else if (cy >= S and cx >= 0 and cx < S and cz >= 0 and cz < S)
-        @as(usize, 4)
-    else if (cz < 0 and cx >= 0 and cx < S and cy >= 0 and cy < S)
-        @as(usize, 1)
-    else if (cz >= S and cx >= 0 and cx < S and cy >= 0 and cy < S)
-        @as(usize, 0)
-    else
-        null;
-
-    const f = face orelse {
-        const lm = light_map orelse return LIGHT_ZERO;
-        const ci = chunkIndex(
-            @intCast(std.math.clamp(cx, 0, S - 1)),
-            @intCast(std.math.clamp(cy, 0, S - 1)),
-            @intCast(std.math.clamp(cz, 0, S - 1)),
-        );
-        return lightVectorFrom(lm.block_light.get(ci), lm.sky_light.get(ci));
-    };
-
-    const lm = neighbor_lights[f] orelse return LIGHT_ZERO;
-    const lx: usize = @intCast(if (f == 2) S - 1 else if (f == 3) @as(i32, 0) else cx);
-    const ly: usize = @intCast(if (f == 5) S - 1 else if (f == 4) @as(i32, 0) else cy);
-    const lz: usize = @intCast(if (f == 1) S - 1 else if (f == 0) @as(i32, 0) else cz);
+    // Face, edge, or corner neighbor — look up via the 27-chunk index
+    const ni = neighborBitIndex(dx, dy, dz);
+    const lm = neighbor_lights[ni] orelse return LIGHT_ZERO;
+    // Local position within the neighbor chunk (wrap: -1 → S-1, S → 0)
+    const lx: usize = @intCast(cx - dx * S);
+    const ly: usize = @intCast(cy - dy * S);
+    const lz: usize = @intCast(cz - dz * S);
     const ci = chunkIndex(lx, ly, lz);
     return lightVectorFrom(lm.block_light.get(ci), lm.sky_light.get(ci));
 }
@@ -855,7 +839,7 @@ fn sampleTrilinearLight(
     corner: usize,
     padded: *const [PADDED_BLOCKS]StateId,
     light_map: ?*LightMap,
-    neighbor_lights: [6]?*LightMap,
+    neighbor_lights: [27]?*LightMap,
 ) LightVector {
     const samples = trilinear_light_samples[face][corner];
     const face_normal = face_neighbor_offsets[face];
@@ -960,7 +944,7 @@ pub fn generateChunkMesh(
     chunk: *const Chunk,
     neighbors: [6]?*const Chunk,
     light_map: ?*LightMap,
-    neighbor_lights: [6]?*LightMap,
+    neighbor_lights: [27]?*LightMap,
 ) !ChunkMeshResult {
     const tz = tracy.zone(@src(), "generateChunkMesh");
     defer tz.end();
@@ -1159,7 +1143,7 @@ pub fn generateChunkLightOnly(
     chunk: *const Chunk,
     neighbors: [6]?*const Chunk,
     light_map: ?*LightMap,
-    neighbor_lights: [6]?*LightMap,
+    neighbor_lights: [27]?*LightMap,
 ) !ChunkLightResult {
     const tz = tracy.zone(@src(), "generateChunkLightOnly");
     defer tz.end();
@@ -1337,8 +1321,8 @@ fn makeEmptyChunk() Chunk {
 }
 
 const no_neighbors: [6]?*const Chunk = .{ null, null, null, null, null, null };
-const no_neighbor_lights: [6]?*LightMap = .{ null, null, null, null, null, null };
-const no_light_neighbors: [6]?*LightMap = .{ null, null, null, null, null, null };
+const no_neighbor_lights: [27]?*LightMap = .{null} ** 27;
+const no_light_neighbors: [6]?*LightMap = .{null} ** 6;
 
 test "single block in air produces 6 faces" {
     var chunk = makeEmptyChunk();
