@@ -35,8 +35,9 @@ fn measureWidget(tree: *WidgetTree, id: WidgetId, text_renderer: *const TextRend
         .label => {
             const label = &data.label;
             const scale: f32 = @floatFromInt(label.font_size);
-            w.intrinsic_width = text_renderer.measureText(label.getText()) * scale + w.padding.horizontal();
-            w.intrinsic_height = 16.0 * scale + w.padding.vertical();
+            const shadow_extra: f32 = if (label.shadow) 2.0 * scale else 0.0;
+            w.intrinsic_width = text_renderer.measureText(label.getText()) * scale + shadow_extra + w.padding.horizontal();
+            w.intrinsic_height = 16.0 * scale + shadow_extra + w.padding.vertical();
         },
         .button => {
             const btn = &data.button;
