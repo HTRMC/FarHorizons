@@ -364,9 +364,12 @@ fn seedBoundaryLight(
     dir: u3,
     nl: [3]u8,
 ) void {
-    const nr = nl[0] -| ATTENUATION;
-    const ng = nl[1] -| ATTENUATION;
-    const nb = nl[2] -| ATTENUATION;
+    // Sun column rule: no attenuation for sunlight coming from above at max brightness
+    // (Cubyz: `if (!self.isSun or neighbor != .dirUp or value[0] != 255 ...)`)
+    const sun_col = is_sun and dir == 3 and nl[0] == 255 and nl[1] == 255 and nl[2] == 255;
+    const nr = if (sun_col) @as(u8, 255) else nl[0] -| ATTENUATION;
+    const ng = if (sun_col) @as(u8, 255) else nl[1] -| ATTENUATION;
+    const nb = if (sun_col) @as(u8, 255) else nl[2] -| ATTENUATION;
     if (nr == 0 and ng == 0 and nb == 0) return;
 
     const ux: usize = @intCast(x);
@@ -581,9 +584,11 @@ fn checkBorderExceeds(
     idx: usize,
 ) bool {
     const nl = getNeighborLight(is_sun, neighbor_borders, face, bi);
-    const nr = nl[0] -| ATTENUATION;
-    const ng = nl[1] -| ATTENUATION;
-    const nb = nl[2] -| ATTENUATION;
+    // Sun column rule: face 4 (+Y) = above neighbor, light travels -Y (downward)
+    const sun_col = is_sun and face == 4 and nl[0] == 255 and nl[1] == 255 and nl[2] == 255;
+    const nr = if (sun_col) @as(u8, 255) else nl[0] -| ATTENUATION;
+    const ng = if (sun_col) @as(u8, 255) else nl[1] -| ATTENUATION;
+    const nb = if (sun_col) @as(u8, 255) else nl[2] -| ATTENUATION;
     if (nr == 0 and ng == 0 and nb == 0) return false;
     if (BlockState.isOpaque(chunk.blocks.get(idx))) return false;
     const ex = getStoredLight(is_sun, light_map, idx);
@@ -1093,8 +1098,11 @@ pub fn propagateDestructive(
     return boundary_mask;
 }
 
-/// Re-propagates block light from a list of reseed positions using additive BFS.
-/// Re-propagates light from reseed positions using additive BFS (ChannelChunk pattern).
+/// Re-propagates light from reseed positions using Cubyz's constructive BFS pattern.
+/// Zeros stored values, enqueues with the reconstruction value, then runs a BFS
+/// that processes the entry position at dequeue time (max-merge + write) before
+/// propagating to neighbors. This matches Cubyz's propagateLightsDestructive
+/// constructive phase exactly.
 pub fn reseedLight(
     comptime is_sun: bool,
     light_map: *LightMap,
@@ -1118,14 +1126,74 @@ pub fn reseedLight(
         };
         if (val[0] == 0 and val[1] == 0 and val[2] == 0) continue;
 
-        setStoredLight(is_sun, light_map, rs_idx, val);
+        // Zero stored value before enqueuing — BFS max-merge will re-write it
+        // (Cubyz propagateLightsDestructive constructive phase pattern)
+        setStoredLight(is_sun, light_map, rs_idx, .{ 0, 0, 0 });
         if (tail < MAX_QUEUE) {
             queue[tail] = .{ .x = rs.x, .y = rs.y, .z = rs.z, .dir = 6, .r = val[0], .g = val[1], .b = val[2] };
             tail += 1;
         }
     }
 
-    return propagateLightBFS(is_sun, &queue, &head, &tail, chunk, light_map, true);
+    // Cubyz propagateDirect-style BFS: process entry position at dequeue
+    // (read existing, max-merge, write, then propagate to neighbors).
+    var boundary_mask: u6 = 0;
+
+    while (head < tail) {
+        const e = queue[head];
+        head += 1;
+
+        const eidx = chunkIndex(@intCast(e.x), @intCast(e.y), @intCast(e.z));
+        const existing = getStoredLight(is_sun, light_map, eidx);
+        const val2 = [3]u8{
+            @max(e.r, existing[0]),
+            @max(e.g, existing[1]),
+            @max(e.b, existing[2]),
+        };
+        if (val2[0] == existing[0] and val2[1] == existing[1] and val2[2] == existing[2]) continue;
+        setStoredLight(is_sun, light_map, eidx, val2);
+
+        for (0..6) |dir| {
+            if (e.dir < 6 and dir == OPPOSITE_DIR[e.dir]) continue;
+
+            const nx = @as(i32, e.x) + BFS_OFFSETS[dir][0];
+            const ny = @as(i32, e.y) + BFS_OFFSETS[dir][1];
+            const nz = @as(i32, e.z) + BFS_OFFSETS[dir][2];
+
+            if (nx < 0 or nx >= CHUNK_SIZE or ny < 0 or ny >= CHUNK_SIZE or nz < 0 or nz >= CHUNK_SIZE) {
+                boundary_mask |= @as(u6, 1) << faceBit(dir);
+                continue;
+            }
+
+            const ux: usize = @intCast(nx);
+            const uy: usize = @intCast(ny);
+            const uz: usize = @intCast(nz);
+
+            if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
+
+            const sun_col = is_sun and dir == 3 and val2[0] == 255 and val2[1] == 255 and val2[2] == 255;
+            const nr = if (sun_col) @as(u8, 255) else val2[0] -| ATTENUATION;
+            const ng = if (sun_col) @as(u8, 255) else val2[1] -| ATTENUATION;
+            const nb = if (sun_col) @as(u8, 255) else val2[2] -| ATTENUATION;
+
+            if (nr == 0 and ng == 0 and nb == 0) continue;
+
+            if (tail < queue.len) {
+                queue[tail] = .{
+                    .x = @intCast(nx),
+                    .y = @intCast(ny),
+                    .z = @intCast(nz),
+                    .dir = @intCast(dir),
+                    .r = nr,
+                    .g = ng,
+                    .b = nb,
+                };
+                tail += 1;
+            }
+        }
+    }
+
+    return boundary_mask;
 }
 
 /// Additive light BFS: propagates light outward from a single position (ChannelChunk pattern).
