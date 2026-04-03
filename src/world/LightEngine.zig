@@ -70,7 +70,7 @@ fn getNeighborLight(comptime is_sun: bool, neighbor_borders: [6]LightBorderSnaps
     if (!neighbor_borders[face].valid) return .{ 0, 0, 0 };
     if (is_sun) {
         const v = neighbor_borders[face].sky[border_idx];
-        return .{ v, 0, 0 };
+        return .{ v, v, v };
     } else {
         return neighbor_borders[face].block[border_idx];
     }
@@ -91,10 +91,12 @@ const LightQueueEntry = struct {
 };
 
 /// Comptime helper: read light value from the appropriate storage channel.
+/// Sky light returns {v, v, v} to match Cubyz's LightValue representation
+/// where sunlight is (255, 255, 255) for the column rule check.
 fn getStoredLight(comptime is_sun: bool, light_map: *const LightMap, idx: usize) [3]u8 {
     if (is_sun) {
         const v = light_map.sky_light.get(idx);
-        return .{ v, 0, 0 };
+        return .{ v, v, v };
     } else {
         return light_map.block_light.get(idx);
     }
@@ -280,7 +282,7 @@ fn computeSkyLight(
                 if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(x, uy, z)))) break;
                 light_map.sky_light.set(chunkIndex(x, uy, z), 255);
                 if (tail < MAX_QUEUE) {
-                    queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = @intCast(z), .dir = 6, .r = 255, .g = 0, .b = 0 };
+                    queue[tail] = .{ .x = @intCast(x), .y = @intCast(y), .z = @intCast(z), .dir = 6, .r = 255, .g = 255, .b = 255 };
                     tail += 1;
                 }
             }
@@ -484,9 +486,10 @@ fn propagateLightBFS(
             if (BlockState.isOpaque(chunk.blocks.get(chunkIndex(ux, uy, uz)))) continue;
 
             // Column rule: no attenuation going downward (-Y, dir=3) at max brightness (sky only).
-            const nr = if (is_sun and dir == 3 and e.r == 255) @as(u8, 255) else e.r -| ATTENUATION;
-            const ng = e.g -| ATTENUATION;
-            const nb = e.b -| ATTENUATION;
+            const sun_col = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
+            const nr = if (sun_col) @as(u8, 255) else e.r -| ATTENUATION;
+            const ng = if (sun_col) @as(u8, 255) else e.g -| ATTENUATION;
+            const nb = if (sun_col) @as(u8, 255) else e.b -| ATTENUATION;
 
             if (nr == 0 and ng == 0 and nb == 0) continue;
 
@@ -863,7 +866,7 @@ pub fn applyBlockChange(
             if (current_sky > 0) {
                 const sky_seed = [1]LightQueueEntry{.{
                     .x = @intCast(lx), .y = @intCast(ly), .z = @intCast(lz),
-                    .dir = 6, .r = current_sky, .g = 0, .b = 0,
+                    .dir = 6, .r = current_sky, .g = current_sky, .b = current_sky,
                     .active = 0b001, // only R channel for sky
                 }};
                 boundary_mask |= propagateDestructive(true, light_map, chunk, &sky_seed, null, null);
@@ -883,7 +886,7 @@ pub fn applyBlockChange(
             }
             if (seed_sky > 0) {
                 light_map.sky_light.set(idx, seed_sky);
-                boundary_mask |= additiveLight(true, light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), .{ seed_sky, 0, 0 });
+                boundary_mask |= additiveLight(true, light_map, chunk, @intCast(lx), @intCast(ly), @intCast(lz), .{ seed_sky, seed_sky, seed_sky });
             }
         }
     }
