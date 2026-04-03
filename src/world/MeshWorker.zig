@@ -323,18 +323,28 @@ pub const MeshWorker = struct {
 
                 // Source chunk: incremental update with border spill collection
                 var spill = LightEngine.BorderSpill{};
-                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block, &spill);
+                var sky_spill = LightEngine.BorderSpill{};
+                const boundary_mask = LightEngine.applyBlockChange(chunk, lm, update.local, update.old_block, &spill, &sky_spill);
 
                 // UNLOCK source mutex before cross-chunk processing
                 lm.mutex.unlock(io);
 
                 // Cubyz-style: LightEngine handles recursive cross-chunk
-                // destructive BFS + deferred batch reconstruction internally.
+                // destructive BFS + deferred batch reconstruction for both channels.
                 var affected_keys: [24]ChunkKey = undefined;
                 const n_count = LightEngine.processNeighborSpill(
-                    &spill, key, self.light_maps, self.chunk_map, &affected_keys,
+                    false, &spill, key, self.light_maps, self.chunk_map, &affected_keys,
                 );
                 for (affected_keys[0..n_count]) |nk| {
+                    if (self.pool) |p| p.submitMesh(nk);
+                }
+
+                // Sky light cross-chunk destructive
+                var sky_affected_keys: [24]ChunkKey = undefined;
+                const sky_n_count = LightEngine.processNeighborSpill(
+                    true, &sky_spill, key, self.light_maps, self.chunk_map, &sky_affected_keys,
+                );
+                for (sky_affected_keys[0..sky_n_count]) |nk| {
                     if (self.pool) |p| p.submitMesh(nk);
                 }
 

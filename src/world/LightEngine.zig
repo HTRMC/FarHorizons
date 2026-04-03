@@ -678,6 +678,7 @@ const SpillContext = struct {
 /// Returns the number of affected neighbor chunk keys written to `affected_keys_out`.
 /// The caller should submit mesh tasks for each affected key.
 pub fn processNeighborSpill(
+    comptime is_sun: bool,
     initial_spill: *const BorderSpill,
     source_key: ChunkKey,
     light_maps: *const LightMaps,
@@ -689,13 +690,13 @@ pub fn processNeighborSpill(
         .chunk_map = chunk_map,
     };
 
-    processSpillRecursive(initial_spill, source_key, &ctx, 0);
+    processSpillRecursive(is_sun, initial_spill, source_key, &ctx, 0);
 
     // Batch reconstruction — all stale values cleared, reseeds safe
     const io = Io.Threaded.global_single_threaded.io();
     for (0..ctx.affected_count) |ai| {
         ctx.affected_lms[ai].mutex.lockUncancelable(io);
-        _ = reseedLight(false, ctx.affected_lms[ai], ctx.affected_chunks[ai], ctx.affected_reseeds[ai].positions[0..ctx.affected_reseeds[ai].count]);
+        _ = reseedLight(is_sun, ctx.affected_lms[ai], ctx.affected_chunks[ai], ctx.affected_reseeds[ai].positions[0..ctx.affected_reseeds[ai].count]);
         ctx.affected_lms[ai].mutex.unlock(io);
     }
 
@@ -712,6 +713,7 @@ pub fn processNeighborSpill(
 /// Recursive cross-chunk destructive BFS. Each call correctly uses `from_key`
 /// (the chunk that produced the spill) to compute neighbor keys.
 fn processSpillRecursive(
+    comptime is_sun: bool,
     spill: *const BorderSpill,
     from_key: ChunkKey,
     ctx: *SpillContext,
@@ -736,7 +738,7 @@ fn processSpillRecursive(
         var new_spill = BorderSpill{};
         var reseeds = ReseedBuffer{};
         nlm.mutex.lockUncancelable(io);
-        _ = propagateDestructive(false, nlm, nchunk, spill.entries[face][0..spill.counts[face]], &new_spill, &reseeds);
+        _ = propagateDestructive(is_sun, nlm, nchunk, spill.entries[face][0..spill.counts[face]], &new_spill, &reseeds);
         nlm.mutex.unlock(io);
 
         ctx.record(nk, nlm, nchunk, reseeds);
@@ -747,7 +749,7 @@ fn processSpillRecursive(
             if (c > 0) { has_next = true; break; }
         }
         if (has_next) {
-            processSpillRecursive(&new_spill, nk, ctx, depth + 1);
+            processSpillRecursive(is_sun, &new_spill, nk, ctx, depth + 1);
         }
     }
 }
@@ -790,6 +792,7 @@ pub fn applyBlockChange(
     local: WorldState.ChunkLocalPos,
     old_block: StateId,
     border_spill: ?*BorderSpill,
+    sky_border_spill: ?*BorderSpill,
 ) u6 {
     const tz = tracy.zone(@src(), "applyBlockChange");
     defer tz.end();
@@ -866,7 +869,7 @@ pub fn applyBlockChange(
                     .dir = 6, .r = current_sky, .g = current_sky, .b = current_sky,
                     .active = 0b111,
                 }};
-                boundary_mask |= propagateDestructive(true, light_map, chunk, &sky_seed, null, &sky_reseeds);
+                boundary_mask |= propagateDestructive(true, light_map, chunk, &sky_seed, sky_border_spill, &sky_reseeds);
 
                 // Batch reconstruction for sky
                 if (sky_reseeds.count > 0) {
@@ -953,22 +956,26 @@ pub fn propagateDestructive(
         var active: u3 = 0;
         var need_reseed = false;
 
+        // Cubyz isFirstBlock: initial seed entries (dir=6) force all channels
+        // active regardless of match, ensuring the origin is always fully cleared.
+        const is_first = (e.dir >= 6);
+
         if (e.active & 1 != 0) {
-            if (e.r > 0 and actual[0] == e.r) {
+            if (is_first or (e.r > 0 and actual[0] == e.r)) {
                 active |= 1;
             } else if (actual[0] > 0) {
                 need_reseed = true;
             }
         }
         if (e.active & 2 != 0) {
-            if (e.g > 0 and actual[1] == e.g) {
+            if (is_first or (e.g > 0 and actual[1] == e.g)) {
                 active |= 2;
             } else if (actual[1] > 0) {
                 need_reseed = true;
             }
         }
         if (e.active & 4 != 0) {
-            if (e.b > 0 and actual[2] == e.b) {
+            if (is_first or (e.b > 0 and actual[2] == e.b)) {
                 active |= 4;
             } else if (actual[2] > 0) {
                 need_reseed = true;
@@ -1011,9 +1018,10 @@ pub fn propagateDestructive(
                         const face = faceBit(dir);
                         if (spill.counts[face] < BorderSpill.MAX_PER_FACE) {
                             // Column rule: no attenuation going downward at max brightness (sky only)
-                            const exp_r = if (is_sun and dir == 3 and e.r == 255) @as(u8, 255) else e.r -| ATTENUATION;
-                            const exp_g = e.g -| ATTENUATION;
-                            const exp_b = e.b -| ATTENUATION;
+                            const sc = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
+                            const exp_r = if (sc) @as(u8, 255) else e.r -| ATTENUATION;
+                            const exp_g = if (sc) @as(u8, 255) else e.g -| ATTENUATION;
+                            const exp_b = if (sc) @as(u8, 255) else e.b -| ATTENUATION;
                             if (exp_r > 0 or exp_g > 0 or exp_b > 0) {
                                 const pos = borderEntryPos(dir, e.x, e.y, e.z);
                                 spill.entries[face][spill.counts[face]] = .{
@@ -1031,9 +1039,10 @@ pub fn propagateDestructive(
             }
 
             // Column rule: no attenuation going downward at max brightness (sky only)
-            const exp_r = if (is_sun and dir == 3 and e.r == 255) @as(u8, 255) else e.r -| ATTENUATION;
-            const exp_g = e.g -| ATTENUATION;
-            const exp_b = e.b -| ATTENUATION;
+            const sc2 = is_sun and dir == 3 and e.r == 255 and e.g == 255 and e.b == 255;
+            const exp_r = if (sc2) @as(u8, 255) else e.r -| ATTENUATION;
+            const exp_g = if (sc2) @as(u8, 255) else e.g -| ATTENUATION;
+            const exp_b = if (sc2) @as(u8, 255) else e.b -| ATTENUATION;
 
             if (exp_r == 0 and exp_g == 0 and exp_b == 0) continue;
 
@@ -1511,7 +1520,7 @@ test "incremental: remove glowstone clears its light" {
 
     const old_block = chunk.blocks.get(chunkIndex(16, 16, 16));
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, old_block, null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, old_block, null, null);
 
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
@@ -1534,7 +1543,7 @@ test "incremental: place opaque block blocks light" {
     try testing.expectEqual(@as(u8, 255 - 2 * ATTENUATION), lm.block_light.get(chunkIndex(18, 16, 16))[0]);
 
     chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, AIR, null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, AIR, null, null);
 
     try testing.expectEqual(@as(u8, 0), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
     const behind = lm.block_light.get(chunkIndex(18, 16, 16));
@@ -1560,7 +1569,7 @@ test "incremental: break opaque block lets light through" {
 
     // Break the wall
     chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null);
 
     // (17, 16, 16) should now have light from glowstone
     try testing.expectEqual(@as(u8, 255 - ATTENUATION), lm.block_light.get(chunkIndex(17, 16, 16))[0]);
@@ -1585,7 +1594,7 @@ test "incremental: two glowstones, remove one preserves other" {
     try testing.expect(mid_before[0] > 0);
 
     chunk.blocks.set(chunkIndex(10, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm, .{ .x = 10, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 10, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null, null);
 
     try testing.expectEqual(@as(u8, 255 - 10 * ATTENUATION), lm.block_light.get(chunkIndex(10, 16, 16))[0]);
     try testing.expectEqual(@as(u8, 255), lm.block_light.get(chunkIndex(20, 16, 16))[0]);
@@ -1609,7 +1618,7 @@ test "incremental: place glowstone adds light" {
 
     // Place glowstone
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.glowstone));
-    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR, null);
+    _ = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null);
 
     // Should now have light
     try testing.expectEqual(@as(u8, 255), lm.block_light.get(chunkIndex(16, 16, 16))[0]);
@@ -1633,7 +1642,7 @@ test "incremental: matches full recompute for remove glowstone" {
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
 
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.glowstone), null, null);
 
     const lm_full = try allocLightMap();
     defer freeLightMap(lm_full);
@@ -1661,7 +1670,7 @@ test "incremental: matches full recompute for place wall" {
     _ = computeChunkLight(chunk, no_neighbors, no_borders, lm_inc, 0, &underground_surface);
 
     chunk.blocks.set(chunkIndex(17, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, AIR, null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, AIR, null, null);
 
     const lm_full = try allocLightMap();
     defer freeLightMap(lm_full);
@@ -1691,7 +1700,7 @@ test "incremental: matches full recompute for break wall" {
 
     // Break the wall
     chunk.blocks.set(chunkIndex(17, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 17, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null);
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -1721,7 +1730,7 @@ test "incremental: place stone in sky light removes sky destructively" {
 
     // Place stone in a sky-lit area: should handle destructively (not null)
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
-    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR, null);
+    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null);
     try testing.expect(result != 0); // boundary reached
 
     // Stone block should have no sky light
@@ -1747,7 +1756,7 @@ test "incremental: sky light matches full recompute for place stone" {
 
     // Incremental place
     chunk.blocks.set(chunkIndex(16, 16, 16), BlockState.defaultState(.stone));
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, AIR, null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, AIR, null, null);
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -1783,7 +1792,7 @@ test "incremental: break stone in sky column matches full recompute" {
 
     // Incremental break
     chunk.blocks.set(chunkIndex(16, 16, 16), AIR);
-    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null);
+    _ = applyBlockChange(chunk, lm_inc, .{ .x = 16, .y = 16, .z = 16 }, BlockState.defaultState(.stone), null, null);
 
     // Full recompute
     const lm_full = try allocLightMap();
@@ -1809,6 +1818,6 @@ test "incremental: no-op change in dark area" {
 
     // Place and break stone in a completely dark interior area
     chunk.blocks.set(chunkIndex(16, 10, 16), BlockState.defaultState(.stone));
-    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 10, .z = 16 }, AIR, null);
+    const result = applyBlockChange(chunk, lm, .{ .x = 16, .y = 10, .z = 16 }, AIR, null, null);
     try testing.expectEqual(@as(u6, 0), result);
 }
