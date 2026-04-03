@@ -325,6 +325,7 @@ pub const MeshWorker = struct {
 
                 // Synchronous cross-chunk propagation (Cubyz propagateDirect pattern).
                 // Unlock source before cross-chunk work to avoid deadlock.
+                // Two-hop cascade ensures diagonal chunks receive propagated light.
                 if (boundary_mask != 0) {
                     lm.mutex.unlock(io);
 
@@ -359,14 +360,60 @@ pub const MeshWorker = struct {
                         }
                         nlm.mutex.unlock(io);
 
-                        // Submit mesh refresh for the neighbor we just updated
                         secondary_lo_keys[secondary_lo_count] = nk;
                         secondary_lo_count += 1;
                     }
 
-                    // Submit mesh tasks for synchronously updated neighbors
+                    // Second hop: cascade from each updated face neighbor to its
+                    // face neighbors (diagonal chunks relative to source).
+                    var secondary_lo_keys2: [36]ChunkKey = undefined;
+                    var secondary_lo_count2: usize = 0;
+                    for (secondary_lo_keys[0..secondary_lo_count]) |nk| {
+                        const nlm = self.light_maps.get(nk) orelse continue;
+                        nlm.mutex.lockUncancelable(io);
+                        const nb_mask = LightEngine.computeBoundaryMask(nlm);
+                        nlm.mutex.unlock(io);
+                        if (nb_mask == 0) continue;
+
+                        for (0..6) |j| {
+                            if (nb_mask & (@as(u6, 1) << @intCast(j)) == 0) continue;
+                            const nnk = ChunkKey{
+                                .cx = nk.cx + offsets[j][0],
+                                .cy = nk.cy + offsets[j][1],
+                                .cz = nk.cz + offsets[j][2],
+                            };
+                            if (nnk.cx == key.cx and nnk.cy == key.cy and nnk.cz == key.cz) continue;
+                            const nnlm = self.light_maps.get(nnk) orelse continue;
+                            if (nnlm.dirty) continue;
+                            const nnchunk = self.chunk_map.get(nnk) orelse continue;
+
+                            var nn_nl: [6]?*LightMap = .{null} ** 6;
+                            for (0..6) |k| {
+                                nn_nl[k] = self.light_maps.get(.{
+                                    .cx = nnk.cx + offsets[k][0],
+                                    .cy = nnk.cy + offsets[k][1],
+                                    .cz = nnk.cz + offsets[k][2],
+                                });
+                            }
+                            const nn_borders = LightMapMod.snapshotNeighborBorders(nn_nl);
+
+                            nnlm.mutex.lockUncancelable(io);
+                            if (LightEngine.needsPropagation(nnchunk, nn_borders, nnlm)) {
+                                LightEngine.propagateFromNeighbor(nnchunk, nn_borders, nnlm);
+                                if (secondary_lo_count2 < secondary_lo_keys2.len) {
+                                    secondary_lo_keys2[secondary_lo_count2] = nnk;
+                                    secondary_lo_count2 += 1;
+                                }
+                            }
+                            nnlm.mutex.unlock(io);
+                        }
+                    }
+
                     if (secondary_lo_count > 0) {
                         if (self.pool) |p| p.submitMeshLightOnlyBatch(secondary_lo_keys[0..secondary_lo_count]);
+                    }
+                    if (secondary_lo_count2 > 0) {
+                        if (self.pool) |p| p.submitMeshLightOnlyBatch(secondary_lo_keys2[0..secondary_lo_count2]);
                     }
 
                     lm.mutex.lockUncancelable(io);
@@ -483,6 +530,10 @@ pub const MeshWorker = struct {
 
                 // Synchronous cross-chunk additive propagation (Cubyz pattern).
                 // Source is already unlocked — propagate directly into neighbors.
+                // Two-hop cascade: after propagating to face neighbor B, also
+                // propagate to B's face neighbors (diagonal to source A). This
+                // matches Cubyz's inline propagateDirect which recursively crosses
+                // chunk boundaries without depth limit.
                 if (boundary_mask != 0) {
                     var lo_keys: [6]ChunkKey = undefined;
                     var lo_count: usize = 0;
@@ -516,9 +567,59 @@ pub const MeshWorker = struct {
                         lo_keys[lo_count] = nk;
                         lo_count += 1;
                     }
-                    // Submit mesh refresh for synchronously updated neighbors
+
+                    // Second hop: cascade from each updated face neighbor B to B's
+                    // face neighbors (which include diagonal chunks relative to A).
+                    var lo_keys2: [36]ChunkKey = undefined;
+                    var lo_count2: usize = 0;
+                    for (lo_keys[0..lo_count]) |nk| {
+                        const nlm = self.light_maps.get(nk) orelse continue;
+                        nlm.mutex.lockUncancelable(io);
+                        const nb_mask = LightEngine.computeBoundaryMask(nlm);
+                        nlm.mutex.unlock(io);
+                        if (nb_mask == 0) continue;
+
+                        for (0..6) |j| {
+                            if (nb_mask & (@as(u6, 1) << @intCast(j)) == 0) continue;
+                            const nnk = ChunkKey{
+                                .cx = nk.cx + offsets[j][0],
+                                .cy = nk.cy + offsets[j][1],
+                                .cz = nk.cz + offsets[j][2],
+                            };
+                            // Skip source chunk (avoid re-propagating back)
+                            if (nnk.cx == key.cx and nnk.cy == key.cy and nnk.cz == key.cz) continue;
+                            const nnlm = self.light_maps.get(nnk) orelse continue;
+                            if (nnlm.dirty) continue;
+                            const nnchunk = self.chunk_map.get(nnk) orelse continue;
+
+                            var nn_neighbor_lights: [6]?*LightMap = .{null} ** 6;
+                            for (0..6) |k| {
+                                nn_neighbor_lights[k] = self.light_maps.get(.{
+                                    .cx = nnk.cx + offsets[k][0],
+                                    .cy = nnk.cy + offsets[k][1],
+                                    .cz = nnk.cz + offsets[k][2],
+                                });
+                            }
+                            const nn_borders = LightMapMod.snapshotNeighborBorders(nn_neighbor_lights);
+
+                            nnlm.mutex.lockUncancelable(io);
+                            if (LightEngine.needsPropagation(nnchunk, nn_borders, nnlm)) {
+                                LightEngine.propagateFromNeighbor(nnchunk, nn_borders, nnlm);
+                                if (lo_count2 < lo_keys2.len) {
+                                    lo_keys2[lo_count2] = nnk;
+                                    lo_count2 += 1;
+                                }
+                            }
+                            nnlm.mutex.unlock(io);
+                        }
+                    }
+
+                    // Submit mesh refresh for all affected neighbors
                     if (lo_count > 0) {
                         if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys[0..lo_count]);
+                    }
+                    if (lo_count2 > 0) {
+                        if (self.pool) |p| p.submitMeshLightOnlyBatch(lo_keys2[0..lo_count2]);
                     }
                 }
 
@@ -536,6 +637,53 @@ pub const MeshWorker = struct {
             if (light_map) |lm| {
                 if (LightEngine.needsPropagation(chunk, neighbor_borders, lm)) {
                     LightEngine.propagateFromNeighbor(chunk, neighbor_borders, lm);
+
+                    // Cascade: if propagated light reaches our boundaries, synchronously
+                    // push it into face neighbors (Cubyz propagateDirect pattern).
+                    // Without this, light that needs 2+ face-hops (diagonal chunks)
+                    // never receives propagated values.
+                    const boundary_mask = LightEngine.computeBoundaryMask(lm);
+                    if (boundary_mask != 0) {
+                        lm.mutex.unlock(io);
+
+                        var cascade_keys: [6]ChunkKey = undefined;
+                        var cascade_count: usize = 0;
+                        for (0..6) |i| {
+                            if (boundary_mask & (@as(u6, 1) << @intCast(i)) == 0) continue;
+                            const nk = ChunkKey{
+                                .cx = key.cx + offsets[i][0],
+                                .cy = key.cy + offsets[i][1],
+                                .cz = key.cz + offsets[i][2],
+                            };
+                            const nlm = self.light_maps.get(nk) orelse continue;
+                            if (nlm.dirty) continue;
+                            const nchunk = self.chunk_map.get(nk) orelse continue;
+
+                            var n_neighbor_lights2: [6]?*LightMap = .{null} ** 6;
+                            for (0..6) |j| {
+                                n_neighbor_lights2[j] = self.light_maps.get(.{
+                                    .cx = nk.cx + offsets[j][0],
+                                    .cy = nk.cy + offsets[j][1],
+                                    .cz = nk.cz + offsets[j][2],
+                                });
+                            }
+                            const n_borders2 = LightMapMod.snapshotNeighborBorders(n_neighbor_lights2);
+
+                            nlm.mutex.lockUncancelable(io);
+                            if (LightEngine.needsPropagation(nchunk, n_borders2, nlm)) {
+                                LightEngine.propagateFromNeighbor(nchunk, n_borders2, nlm);
+                                cascade_keys[cascade_count] = nk;
+                                cascade_count += 1;
+                            }
+                            nlm.mutex.unlock(io);
+                        }
+
+                        if (cascade_count > 0) {
+                            if (self.pool) |p| p.submitMeshLightOnlyBatch(cascade_keys[0..cascade_count]);
+                        }
+
+                        lm.mutex.lockUncancelable(io);
+                    }
                 }
             }
             const light_result = WorldState.generateChunkLightOnly(self.allocator, chunk, neighbors, light_map, neighbor_lights) catch |err| {
